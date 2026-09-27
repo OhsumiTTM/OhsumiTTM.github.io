@@ -42,10 +42,11 @@ GitHub Pages で公開する静的Webアプリです。
 > **用語: Fork（フォーク）とは?**  
 > GitHub 上の公開リポジトリ（プログラムの倉庫）を、自分のアカウントにコピーする操作です。
 
-1. [Orbit のリポジトリページ](https://github.com/fsifofficial/orbit) を開く
+1. このリポジトリ（Ohsumi）の GitHub ページを開く
 2. 右上の **「Fork」** ボタンをクリック
 3. 「Owner」に自分のアカウント（または団体の Organization）が表示されていることを確認
-4. 「Repository name」は変えなくてもよい（変える場合は後の設定にも反映してください）
+4. 「Repository name」を `<GitHubユーザー名または組織名>.github.io` にする  
+   （アプリはドメインのルートで動く前提のため。独自ドメインを使う場合は任意の名前で構いません）
 5. **「Create fork」** をクリック
 
 これで自分のアカウントに Orbit のコピーができました。
@@ -197,22 +198,7 @@ GitHubリポジトリに URL などを登録します。
 
 ---
 
-## ステップ 7: リポジトリ名を設定する
-
-`next.config.mjs` を編集してリポジトリ名を合わせます。
-
-> **用語: リポジトリ名とは?**  
-> GitHub の URL に含まれる名前です。`https://github.com/myteam/orbit-myteam` であれば `orbit-myteam` です。
-
-1. リポジトリの `next.config.mjs` をクリックして開く
-2. 右上の鉛筆アイコン（「Edit this file」）をクリック
-3. `const repoName = 'orbit'` という行を探して、`orbit` の部分を実際のリポジトリ名に変更する  
-   例: `const repoName = 'orbit-myteam'`
-4. 「Commit changes」→「Commit changes」で保存
-
----
-
-## ステップ 8: デプロイする
+## ステップ 7: デプロイする
 
 GitHub Actions が自動的にビルド・デプロイします。
 
@@ -221,11 +207,11 @@ GitHub Actions が自動的にビルド・デプロイします。
    - まだ実行されていない場合は、**「Deploy to GitHub Pages」→「Run workflow」** をクリック
 3. ✅ のマークが付いたら成功
 4. **「Settings」→「Pages」** を開いて公開URLを確認する  
-   例: `https://myteam.github.io/orbit-myteam/`
+   例: `https://myteam.github.io/`
 
 ---
 
-## ステップ 9: 動作確認
+## ステップ 8: 動作確認
 
 1. 公開URLにアクセスする
 2. **「Googleでサインイン」** で代表アカウントのGoogleアカウントでログインする
@@ -235,7 +221,7 @@ GitHub Actions が自動的にビルド・デプロイします。
 
 ---
 
-## ステップ 10: 初期設定を行う
+## ステップ 9: 初期設定を行う
 
 ### 役職レベルの調整
 

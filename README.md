@@ -49,9 +49,9 @@ GitHubリポジトリを共用することはできません／してはいけ�
 このリポジトリを Fork するか、`git clone` した上で新しい GitHub リポジトリとして
 push してください。
 
-> **重要**: `next.config.mjs` の `repoName` 定数（現在 `'Orbit'`）は GitHub Pages の
-> 公開パス（`https://<org>.github.io/<repoName>/`）に使われます。リポジトリ名を
-> 変えた場合は、この定数もリポジトリ名に合わせて書き換えてください。
+> **重要**: アプリはドメインのルート（`https://<org>.github.io/` または独自ドメイン）で
+> 動く前提です（`next.config.mjs` に basePath は設定していません）。GitHub Pages で
+> 公開する場合は、リポジトリ名を `<org>.github.io` にするか、独自ドメインを設定してください。
 
 ### 2. Google Spreadsheet を用意する
 
