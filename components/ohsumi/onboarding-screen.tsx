@@ -1,14 +1,14 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Button } from '@/components/ui/button'
-import { OrbitMark } from './primitives'
+import { OhsumiMark } from './primitives'
 import { Plus, X } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 export function OnboardingScreen() {
-  const { currentUser, completeOnboarding, skipOnboarding } = useOrbit()
+  const { currentUser, completeOnboarding, skipOnboarding } = useOhsumi()
   const { t: tr } = useI18n()
   const [will, setWill] = useState<string[]>([])
   const [draft, setDraft] = useState('')
@@ -23,7 +23,7 @@ export function OnboardingScreen() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-[0_1px_3px_rgba(16,24,40,0.06)]">
         <div className="flex items-center gap-2">
-          <OrbitMark size={26} />
+          <OhsumiMark size={26} />
           <span className="text-lg font-semibold tracking-tight">
             {tr('onboarding.welcome', { name: currentUser?.name ?? '' })}
           </span>

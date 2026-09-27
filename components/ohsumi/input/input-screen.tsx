@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '../toast'
 import { Modal } from '../modal'
@@ -24,7 +24,7 @@ import type {
 import { ParsedTaskCard } from './parsed-task-card'
 import { ExcelColumnMapping } from './excel-column-mapping'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
-import { Avatar, OrbitMark, SectionLabel, StatusBadge } from '../primitives'
+import { Avatar, OhsumiMark, SectionLabel, StatusBadge } from '../primitives'
 import { useI18n, DEPARTMENT_KEY, DIFFICULTY_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
 import type { TranslationKey } from '@/lib/ohsumi/i18n'
 import { formatDateTime, findSimilarTasks } from '@/lib/ohsumi/utils'
@@ -63,7 +63,7 @@ type Phase = 'input' | 'parsing' | 'mapping' | 'result'
 // whenever the user navigates away), scoped per-user so it doesn't leak
 // between demo accounts on the same browser.
 function draftKey(userId: string | null | undefined): string {
-  return `orbit-input-draft-${userId ?? 'anon'}`
+  return `ohsumi-input-draft-${userId ?? 'anon'}`
 }
 function loadDraft(userId: string | null | undefined): string {
   if (typeof window === 'undefined') return ''
@@ -89,7 +89,7 @@ export function InputScreen() {
     createScheduleTask,
     createFormTask,
     isFullAdmin,
-  } = useOrbit()
+  } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()
@@ -343,7 +343,7 @@ export function InputScreen() {
                 >
                   {phase === 'parsing' ? (
                     <>
-                      <OrbitMark size={15} />
+                      <OhsumiMark size={15} />
                       {t('input.parsing')}
                     </>
                   ) : (
@@ -1026,7 +1026,7 @@ function ScheduleQuickAdd({
 
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">{t('input.scheduleQuickAdd.inviteesLabel')}</p>
-          <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 orbit-scroll">
+          <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 ohsumi-scroll">
             {members.map((m) => {
               const checked = invitedIds.includes(m.id)
               return (
@@ -1387,7 +1387,7 @@ function FormQuickAdd({
 
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">{tr('input.formQuickAdd.respondersLabel')}</p>
-          <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 orbit-scroll">
+          <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 ohsumi-scroll">
             {members.map((m) => {
               const checked = invitedIds.includes(m.id)
               return (

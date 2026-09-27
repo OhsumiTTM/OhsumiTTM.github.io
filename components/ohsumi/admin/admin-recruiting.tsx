@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
@@ -26,7 +26,7 @@ const STATUS_BADGE_CLASS: Record<Candidate['status'], string> = {
 // このコンポーネント単体で直接マウントされるケース（将来的な変更）に備えて
 // 二重にガードしておく
 function useCanAccessRecruiting(): boolean {
-  const { isFullAdmin, currentUser } = useOrbit()
+  const { isFullAdmin, currentUser } = useOhsumi()
   return (
     isFullAdmin ||
     (currentUser?.permissionOverrides ?? []).some(
@@ -42,7 +42,7 @@ function CandidateEditor({
   candidate: Candidate | null
   onClose: () => void
 }) {
-  const { addCandidate, updateCandidate, currentUser } = useOrbit()
+  const { addCandidate, updateCandidate, currentUser } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const isDaihyo = currentUser?.role === '代表'
@@ -140,7 +140,7 @@ function CandidateEditor({
 
 export function AdminRecruiting() {
   const canAccess = useCanAccessRecruiting()
-  const { candidates, removeCandidate, convertCandidateToMember, currentUser } = useOrbit()
+  const { candidates, removeCandidate, convertCandidateToMember, currentUser } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [editorOpen, setEditorOpen] = useState(false)

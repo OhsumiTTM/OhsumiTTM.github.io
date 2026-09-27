@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { STATUS_LABEL } from '@/lib/ohsumi/types'
 import { Crown, AlertTriangle, Users, TrendingUp, CheckCircle2, Clock, UserCheck } from 'lucide-react'
@@ -13,7 +13,7 @@ import { useI18n } from '@/lib/ohsumi/i18n'
 // item 21: 幹部が見れるダッシュボードページ。
 // 組織全体の運用状況（承認待ち・期限超過・停滞タスク・稼働率）を1画面で把握。
 export function AdminLeadership() {
-  const { visibleTasks, pendingTasks, members, projects, archivedTasks, currentUser } = useOrbit()
+  const { visibleTasks, pendingTasks, members, projects, archivedTasks, currentUser } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const tz = currentUser?.timezone ?? DEFAULT_TIMEZONE

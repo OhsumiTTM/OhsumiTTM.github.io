@@ -198,7 +198,7 @@ export async function syncTasksToSheet(
 // ---- localStorage helpers (per-user, browser-only) -----------------------
 
 function personalSheetKey(userId: string) {
-  return `orbit-personal-sheet-id-${userId}`
+  return `ohsumi-personal-sheet-id-${userId}`
 }
 
 export function loadPersonalSheetId(userId: string): string {

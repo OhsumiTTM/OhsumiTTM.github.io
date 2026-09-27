@@ -20,7 +20,7 @@ export const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
 
 export const DEFAULT_TIMEZONE = 'Asia/Tokyo'
 
-const TIMEZONE_STORAGE_KEY = 'orbit-timezone'
+const TIMEZONE_STORAGE_KEY = 'ohsumi-timezone'
 
 // currentUser.timezone が未設定のとき（未ログイン、または本人が一度も
 // 設定していない）に使うフォールバック。ブラウザに保存した最後の選択値

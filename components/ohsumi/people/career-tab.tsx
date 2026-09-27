@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { SectionLabel, Avatar } from '@/components/ohsumi/primitives'
 import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Button } from '@/components/ui/button'
@@ -601,7 +601,7 @@ function QuizSection({
         {activeQuiz && (
           <>
             <h3 className="mb-3 font-semibold">{activeQuiz.title}</h3>
-            <div className="flex flex-col gap-4 max-h-[60vh] overflow-y-auto orbit-scroll pr-1">
+            <div className="flex flex-col gap-4 max-h-[60vh] overflow-y-auto ohsumi-scroll pr-1">
               {activeQuiz.questions.map((q, qi) => (
                 <div key={q.id}>
                   <p className="mb-2 text-sm font-medium">Q{qi + 1}. {q.text}</p>
@@ -989,7 +989,7 @@ function TrainingHistorySection({
   onDecide: CareerTabProps['notifyTrainingDecision']
   rid: () => string
 }) {
-  const { currentUser, trainingPrograms } = useOrbit()
+  const { currentUser, trainingPrograms } = useOhsumi()
   const { t: trHint } = useI18n()
   // notifyTrainingDecisionはGAS側で常にisDaihyo固定（研修承認の記録自体
   // =updateTrainingHistoryはselfOrAdminで成功するが、通知メールだけ失敗する）
@@ -1394,7 +1394,7 @@ function EvaluationHistorySection({
   const { t } = useI18n()
   // ANL-004: 実績ベースの参考スコア — 評価入力欄は自動で埋めない、あくまで
   // 評価者向けの参考表示
-  const { visibleTasks } = useOrbit()
+  const { visibleTasks } = useOhsumi()
   const perf = editable ? computeTaskPerformanceScore(member.id, visibleTasks) : null
 
   return (

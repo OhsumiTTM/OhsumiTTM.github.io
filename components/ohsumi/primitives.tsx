@@ -11,7 +11,7 @@ import {
 } from '@/lib/ohsumi/types'
 import type { Member, Department, Task } from '@/lib/ohsumi/types'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, DEPARTMENT_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 
 export function Avatar({
   member,
@@ -240,7 +240,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 // - daihyo: 常にisDaihyo固定のアクション（メンバー削除・ロール変更・
 //   権限例外編集・採用管理など）。isFullAdminとは無関係に代表のみ。
 export function AdminAccessNote({ level, className }: { level: 'fullAdmin' | 'daihyo'; className?: string }) {
-  const { isFullAdmin, currentUser } = useOrbit()
+  const { isFullAdmin, currentUser } = useOhsumi()
   const { t } = useI18n()
   const blocked = level === 'fullAdmin' ? !isFullAdmin : currentUser?.role !== '代表'
   if (!blocked) return null
@@ -290,7 +290,7 @@ export function SimilarTaskSummary({ task }: { task: Task }) {
   )
 }
 
-export function OrbitMark({ size = 22 }: { size?: number }) {
+export function OhsumiMark({ size = 22 }: { size?: number }) {
   return (
     <svg
       width={size}

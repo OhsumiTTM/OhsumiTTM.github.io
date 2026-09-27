@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import type { Task, TaskStatus } from '@/lib/ohsumi/types'
 import { STATUS_COLOR, STATUS_ORDER, isAdminRole } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '../toast'
 import { KanbanCard, KANBAN_CARD_FIELDS, type KanbanCardField } from './kanban-card'
 import { incompletePrerequisites } from '@/lib/ohsumi/utils'
@@ -19,7 +19,7 @@ export function KanbanBoard({
   onOpenTask: (id: string) => void
   fields?: Set<KanbanCardField>
 }) {
-  const { updateTaskStatus, currentUser, visibleTasks } = useOrbit()
+  const { updateTaskStatus, currentUser, visibleTasks } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -52,7 +52,7 @@ export function KanbanBoard({
     // scroll to reach. auto-cols shrinks every column to fit the available
     // width down to a 180px floor, and only falls back to horizontal
     // scroll below that (narrow/mobile viewports).
-    <div className="grid auto-cols-[minmax(180px,1fr)] grid-flow-col gap-3 overflow-x-auto orbit-scroll pb-4">
+    <div className="grid auto-cols-[minmax(180px,1fr)] grid-flow-col gap-3 overflow-x-auto ohsumi-scroll pb-4">
       {STATUS_ORDER.map((status) => {
         const columnTasks = tasks.filter((t) => t.status === status)
         return (
@@ -85,7 +85,7 @@ export function KanbanBoard({
                 {columnTasks.length}
               </span>
             </div>
-            <div className="orbit-scroll flex min-h-[120px] max-h-[65vh] flex-col gap-2 overflow-y-auto px-2 pb-2">
+            <div className="ohsumi-scroll flex min-h-[120px] max-h-[65vh] flex-col gap-2 overflow-y-auto px-2 pb-2">
               {columnTasks.map((task) => (
                 <KanbanCard
                   key={task.id}

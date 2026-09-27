@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { useNav } from '@/lib/ohsumi/nav'
 import { exportProjectTasksToExcel } from '@/lib/ohsumi/export-excel'
@@ -33,10 +33,10 @@ function ProjectCard({
   children,
 }: {
   p: Project
-  tasks: ReturnType<typeof useOrbit>['visibleTasks']
+  tasks: ReturnType<typeof useOhsumi>['visibleTasks']
   activeProjects: Project[]
-  members: ReturnType<typeof useOrbit>['members']
-  getProjectMembers: ReturnType<typeof useOrbit>['getProjectMembers']
+  members: ReturnType<typeof useOhsumi>['members']
+  getProjectMembers: ReturnType<typeof useOhsumi>['getProjectMembers']
   go: ReturnType<typeof useNav>['go']
   depth: number
   childProjects: Project[]
@@ -152,10 +152,10 @@ function ProjectTree({
 }: {
   projects: Project[]
   allProjects: Project[]
-  tasks: ReturnType<typeof useOrbit>['visibleTasks']
+  tasks: ReturnType<typeof useOhsumi>['visibleTasks']
   activeProjects: Project[]
-  members: ReturnType<typeof useOrbit>['members']
-  getProjectMembers: ReturnType<typeof useOrbit>['getProjectMembers']
+  members: ReturnType<typeof useOhsumi>['members']
+  getProjectMembers: ReturnType<typeof useOhsumi>['getProjectMembers']
   go: ReturnType<typeof useNav>['go']
   depth: number
   fields: Set<ProjectCardField>
@@ -202,7 +202,7 @@ export function ProjectView({
 }: {
   fields?: Set<ProjectCardField>
 }) {
-  const { activeProjects, visibleTasks: tasks, members, getProjectMembers } = useOrbit()
+  const { activeProjects, visibleTasks: tasks, members, getProjectMembers } = useOhsumi()
   const { go } = useNav()
 
   const topLevel = activeProjects.filter((p) => !p.parentId)
@@ -211,7 +211,7 @@ export function ProjectView({
   // するようにする(プロジェクト追加ボタンなどページ上部の操作は常に見える
   // 位置に残る)
   return (
-    <div className="max-h-[70vh] overflow-y-auto orbit-scroll pr-1">
+    <div className="max-h-[70vh] overflow-y-auto ohsumi-scroll pr-1">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <ProjectTree
           projects={topLevel}

@@ -26,7 +26,7 @@ export const PROJECTS: Project[] = [
     description: 'リアル／オンラインイベントの企画・運営・渉外。',
   },
   {
-    id: 'p-orbit',
+    id: 'p-ohsumi',
     name: 'Orbit',
     description: '組織運営プロダクト Orbit 自体の開発。',
   },
@@ -301,10 +301,10 @@ export const SEED_TASKS: Task[] = [
     progressHistory: [],
   },
   {
-    id: 't-orbit-req',
+    id: 't-ohsumi-req',
     name: 'Orbit要件整理',
     description: '次期リリースの要件を整理しドキュメント化する。',
-    projectId: 'p-orbit',
+    projectId: 'p-ohsumi',
     department: '開発',
     assigneeIds: ['m-manabe'],
     deadline: daysFromNow(7),

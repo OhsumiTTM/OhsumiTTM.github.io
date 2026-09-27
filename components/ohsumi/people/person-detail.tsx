@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, StatusBadge, DifficultyBadge, SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
@@ -134,7 +134,7 @@ export function PersonDetail({ id }: { id: string }) {
     submitQuizResult,
     oneOnOneQuestions,
     notifications,
-  } = useOrbit()
+  } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
   const { t, locale, setLocale } = useI18n()

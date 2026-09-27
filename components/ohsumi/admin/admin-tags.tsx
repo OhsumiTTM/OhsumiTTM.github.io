@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Tag, SectionLabel, Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
@@ -42,7 +42,7 @@ export function AdminTags() {
     skillFieldThreshold,
     setSkillFieldThreshold,
     isFullAdmin,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   // item 17: ポジション要件 — every role, including 一般, has a position
@@ -414,7 +414,7 @@ function TagGroup({
 
 // item 20: 1on1ワークシート質問項目エディタ
 function OneOnOneQuestionsEditor() {
-  const { oneOnOneQuestions, setOneOnOneQuestions } = useOrbit()
+  const { oneOnOneQuestions, setOneOnOneQuestions } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
@@ -477,7 +477,7 @@ function OneOnOneQuestionsEditor() {
 // 「保存」する構造にする（キー入力ごとに通信が飛ぶのを避けるため）。
 // 空配列(未設定)ならsurvey-screen.tsxが既存の固定6問にフォールバックする。
 function SurveyQuestionsEditor() {
-  const { surveyQuestions, updateSurveyQuestions } = useOrbit()
+  const { surveyQuestions, updateSurveyQuestions } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draft, setDraft] = useState<SurveyQuestion[]>(surveyQuestions)
@@ -603,7 +603,7 @@ function SurveyQuestionImageInput({
   imageUrl?: string
   onChange: (url: string) => void
 }) {
-  const { uploadSurveyImage, driveEnabled } = useOrbit()
+  const { uploadSurveyImage, driveEnabled } = useOhsumi()
   const { t } = useI18n()
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -664,7 +664,7 @@ function SurveyQuestionImageInput({
 
 // item 26: 通知種別・頻度選択UIをlocalStorageに保存する
 // GAS側との連携は将来対応。現時点ではUIの設定値をフロント側の表示制御に利用する想定。
-const NOTIFY_SETTINGS_KEY = 'orbit-notify-settings'
+const NOTIFY_SETTINGS_KEY = 'ohsumi-notify-settings'
 
 type NotifyFrequency = 'immediate' | 'daily' | 'weekly' | 'off'
 
@@ -751,7 +751,7 @@ function NotifySettingsEditor() {
 // アンケートの回答対象者限定（item 3） — 選択したメンバーのみが
 // survey-screen.tsxの経験値アンケートに回答できる。空選択=全員回答可。
 function SurveyInviteEditor() {
-  const { members, surveyInvitedIds, updateSurveyInvitedIds } = useOrbit()
+  const { members, surveyInvitedIds, updateSurveyInvitedIds } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
 
@@ -800,7 +800,7 @@ function SurveyInviteEditor() {
 // 既存キーの削除は表示上外れるだけで、Members側のcustom_fields_jsonに
 // 残ったデータを一括削除する必要はない（仕様通り）。
 function CustomMemberColumnsEditor() {
-  const { customMemberColumns, updateCustomMemberColumns } = useOrbit()
+  const { customMemberColumns, updateCustomMemberColumns } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draftKey, setDraftKey] = useState('')

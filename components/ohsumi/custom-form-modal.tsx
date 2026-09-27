@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import type { CustomFormDef } from '@/lib/ohsumi/types'
 import { Modal } from '@/components/ohsumi/modal'
 import { ChevronLeft } from 'lucide-react'
@@ -120,7 +120,7 @@ function FormFillStep({
 }
 
 export function CustomFormModal({ onClose }: { onClose: () => void }) {
-  const { customFormDefs, submitCustomForm } = useOrbit()
+  const { customFormDefs, submitCustomForm } = useOhsumi()
   const { t } = useI18n()
   const [selectedForm, setSelectedForm] = useState<CustomFormDef | null>(null)
   const [submitted, setSubmitted] = useState(false)

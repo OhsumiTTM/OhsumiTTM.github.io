@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { MessageSquare, TrendingUp, CheckCircle2, Filter } from 'lucide-react'
@@ -20,7 +20,7 @@ const KIND_LABEL_KEY: Record<ActivityKind, TranslationKey> = {
 // item 6: 個人が発言したコメント・進捗報告を、タスクをまたいで横断的に一覧表示。
 // currentUser の発言のみデフォルト表示。フィルタで他メンバーも見られる。
 export function ActivityScreen() {
-  const { currentUser, members, visibleTasks } = useOrbit()
+  const { currentUser, members, visibleTasks } = useOhsumi()
   const { goBack } = useNav()
   const { openTask } = useTaskDrawer()
   const { t } = useI18n()

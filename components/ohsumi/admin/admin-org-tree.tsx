@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar } from '@/components/ohsumi/primitives'
@@ -172,7 +172,7 @@ function DepartmentTreeEditorModal({
       <p className="mt-1 text-sm text-muted-foreground">{t('admin.orgTree.editModal.desc')}</p>
       <p className="mt-1 text-xs text-muted-foreground">{t('admin.orgTree.editModal.deleteNote')}</p>
 
-      <div className="mt-4 max-h-72 overflow-auto orbit-scroll rounded-lg border border-border">
+      <div className="mt-4 max-h-72 overflow-auto ohsumi-scroll rounded-lg border border-border">
         {flatRows.length === 0 ? (
           <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('admin.orgTree.editModal.empty')}</p>
         ) : (
@@ -399,7 +399,7 @@ function TreeNodeRow({
 }
 
 export function AdminOrgTree() {
-  const { members, departmentTreeConfig, updateDepartmentTreeConfig, updateMemberDepartmentPaths, isFullAdmin } = useOrbit()
+  const { members, departmentTreeConfig, updateDepartmentTreeConfig, updateMemberDepartmentPaths, isFullAdmin } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const toast = useToast()

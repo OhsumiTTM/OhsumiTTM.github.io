@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { ArrowLeft, Video, FileText, Link2, BookOpen, GraduationCap, Layers, ChevronRight } from 'lucide-react'
 import type { LearningContent, LearningCourse } from '@/lib/ohsumi/types'
@@ -80,7 +80,7 @@ function ContentCard({
 // LRN-002: コースにまとめられた資料はコース単位でも表示できるようにし、
 // どのコースにも属さない単発資料は従来通り一覧表示する。
 export function LearningContentScreen() {
-  const { learningContents, learningCourses, quizDefinitions, currentUser } = useOrbit()
+  const { learningContents, learningCourses, quizDefinitions, currentUser } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null)

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import type { DailyReportEntry, DailyReportType } from '@/lib/ohsumi/types'
 import { Loader2, RefreshCw } from 'lucide-react'
@@ -11,7 +11,7 @@ import { Loader2, RefreshCw } from 'lucide-react'
 // 画面を開いたタイミング(と再読み込みボタン)で明示的にfetchDailyReports
 // を呼び、常に最新のDailyReportsシートの内容を表示する。
 export function AdminDailyReports() {
-  const { fetchDailyReports, members, getMember } = useOrbit()
+  const { fetchDailyReports, members, getMember } = useOhsumi()
   const { t } = useI18n()
   const [reports, setReports] = useState<DailyReportEntry[]>([])
   const [loading, setLoading] = useState(true)

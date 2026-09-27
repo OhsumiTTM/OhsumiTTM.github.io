@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, DifficultyBadge, ProjectTag, Tag, SimilarTaskSummary } from '@/components/ohsumi/primitives'
@@ -23,7 +23,7 @@ export function AdminApprovals() {
     rejectTask,
     currentUser,
     isFullAdmin,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const { openTask } = useTaskDrawer()
   const { t: tr } = useI18n()

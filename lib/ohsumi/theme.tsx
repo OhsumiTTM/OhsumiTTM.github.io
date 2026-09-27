@@ -16,7 +16,7 @@ interface ThemeValue {
 }
 
 const ThemeContext = createContext<ThemeValue | null>(null)
-const STORAGE_KEY = 'orbit-theme'
+const STORAGE_KEY = 'ohsumi-theme'
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>('light')

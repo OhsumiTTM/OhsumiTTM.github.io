@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useTheme } from '@/lib/ohsumi/theme'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { isAdminRole } from '@/lib/ohsumi/types'
-import { Avatar, OrbitMark } from './primitives'
+import { Avatar, OhsumiMark } from './primitives'
 import { cn } from '@/lib/utils'
 import {
   ArrowLeft,
@@ -53,7 +53,7 @@ export function Header() {
     orgLogoUrl,
     isFullAdmin,
     surveyInvitedIds,
-  } = useOrbit()
+  } = useOhsumi()
   const canAccessSurvey =
     surveyInvitedIds.length === 0 ||
     isFullAdmin ||
@@ -155,7 +155,7 @@ export function Header() {
             onClick={() => handleMode('output')}
             className="flex shrink-0 items-center gap-2"
           >
-            <OrbitMark size={22} />
+            <OhsumiMark size={22} />
             <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Orbit</span>
             {(orgLogoUrl || orgName) && (
               <>
@@ -173,7 +173,7 @@ export function Header() {
         </div>
 
         {/* center: mode switch */}
-        <div className="flex min-w-0 items-center justify-center overflow-x-auto rounded-lg border border-border bg-secondary p-0.5 orbit-scroll">
+        <div className="flex min-w-0 items-center justify-center overflow-x-auto rounded-lg border border-border bg-secondary p-0.5 ohsumi-scroll">
           <ModeButton
             active={isInputActive}
             onClick={() => handleMode('input')}
@@ -219,7 +219,7 @@ export function Header() {
             {notifOpen && (
               <div className="absolute right-0 top-full mt-1.5 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1">
                 <div className="border-b border-border px-3 py-2 text-sm font-semibold">{t('header.notifications')}</div>
-                <div className="max-h-96 overflow-y-auto orbit-scroll">
+                <div className="max-h-96 overflow-y-auto ohsumi-scroll">
                   {notifications.length === 0 && (
                     <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                       <CheckCheck className="size-4" />
@@ -323,7 +323,7 @@ export function Header() {
                     )}
                   </div>
                   {query.trim() && (
-                    <div className="mt-1 max-h-56 overflow-y-auto orbit-scroll rounded-lg">
+                    <div className="mt-1 max-h-56 overflow-y-auto ohsumi-scroll rounded-lg">
                       {searchResults.length === 0 ? (
                         <div className="px-2 py-3 text-center text-xs text-muted-foreground">
                           {t('header.search.empty')}

@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, Radar, Users } from 'lucide-react'
@@ -12,7 +12,7 @@ import { AdminAccessNote, Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 export function AdminRadarAxes() {
-  const { radarAxes, updateRadarAxes, skillOptions, members, currentUser, projects, getProjectMembers } = useOrbit()
+  const { radarAxes, updateRadarAxes, skillOptions, members, currentUser, projects, getProjectMembers } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [axes, setAxes] = useState<RadarAxis[]>(radarAxes)

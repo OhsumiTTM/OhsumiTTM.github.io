@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, ExpenseApplication, ExpenseCategory } from '@/lib/ohsumi/types'
 import { Plus, Trash2, CheckCircle, XCircle, ChevronDown, ChevronUp, Undo2 } from 'lucide-react'
 import { Modal } from '@/components/ohsumi/modal'
@@ -419,7 +419,7 @@ export function AdminExpenses() {
     members,
     roleLevels,
     getMember,
-  } = useOrbit()
+  } = useOhsumi()
 
   const { t } = useI18n()
   const [tab, setTab] = useState<'categories' | 'applications'>('applications')

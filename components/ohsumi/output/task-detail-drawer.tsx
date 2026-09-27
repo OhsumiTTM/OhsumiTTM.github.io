@@ -6,7 +6,7 @@ import { createCalendarEvent } from '@/lib/ohsumi/google-calendar'
 import { Drawer, Modal } from '../modal'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Button } from '@/components/ui/button'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '../toast'
 import { EditableTags } from '../editable-tags'
@@ -178,7 +178,7 @@ export function TaskDetailDrawer({
     members,
     awardSkillPoints,
     isFullAdmin,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const [confirmTake, setConfirmTake] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -396,7 +396,7 @@ export function TaskDetailDrawer({
             : []
           const topIds = new Set(deptTops.map((m) => m.id))
           return (
-            <div className="flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+            <div className="flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
               <button
                 onClick={() => {
                   if (task) assignTask(task.id, [])
@@ -571,7 +571,7 @@ export function TaskDetailDrawer({
             className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-2.5 text-sm outline-none focus:border-primary"
           />
         </div>
-        <div className="flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+        <div className="flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
           {(() => {
             const filtered = tasks
               .filter((t) => t.id !== task?.id)
@@ -629,7 +629,7 @@ export function TaskDetailDrawer({
             : []
           roleTreeManagers.forEach((m) => topIds.add(m.id))
           return (
-            <div className="flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+            <div className="flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
               {deptTops.length > 0 && (
                 <>
                   <div className="px-1 pb-0.5 pt-1 text-xs font-medium text-muted-foreground">{tr('taskDrawer.deptTopsRecommended')}</div>
@@ -1291,7 +1291,7 @@ function DrawerBody({
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto orbit-scroll px-5 py-4">
+      <div className="flex-1 overflow-auto ohsumi-scroll px-5 py-4">
         <div className="flex items-center gap-2">
           <h2 id="task-drawer-title" className="min-w-0 flex-1 text-lg font-semibold tracking-tight text-balance">
             {isAdmin ? (
@@ -2356,7 +2356,7 @@ interface TimerState {
 }
 
 function timerStorageKey(taskId: string, userId: string): string {
-  return `orbit-timer-${taskId}-${userId}`
+  return `ohsumi-timer-${taskId}-${userId}`
 }
 
 function loadTimerState(taskId: string, userId: string): TimerState {
@@ -2673,7 +2673,7 @@ function ScheduleSection({
             </div>
           )}
 
-          <div className="overflow-x-auto orbit-scroll">
+          <div className="overflow-x-auto ohsumi-scroll">
             <table className="w-full min-w-[320px] border-collapse text-xs">
               <thead>
                 <tr>
@@ -2752,7 +2752,7 @@ function ScheduleSection({
           </div>
 
           <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('taskDrawer.schedule.inviteMembersLabel')}</p>
-          <div className="mb-3 flex max-h-40 flex-col gap-1 overflow-y-auto orbit-scroll">
+          <div className="mb-3 flex max-h-40 flex-col gap-1 overflow-y-auto ohsumi-scroll">
             {members.map((m) => {
               const checked = inviteDraft.includes(m.id)
               return (
@@ -3020,7 +3020,7 @@ function FormSection({
             </div>
           )}
 
-          <div className="overflow-x-auto orbit-scroll">
+          <div className="overflow-x-auto ohsumi-scroll">
             <table className="w-full min-w-[320px] border-collapse text-xs">
               <thead>
                 <tr>
@@ -3142,7 +3142,7 @@ function FormSection({
           </div>
 
           <p className="mb-1.5 text-xs font-medium text-muted-foreground">{tr('taskDrawer.form.inviteMembersLabel')}</p>
-          <div className="mb-3 flex max-h-40 flex-col gap-1 overflow-y-auto orbit-scroll">
+          <div className="mb-3 flex max-h-40 flex-col gap-1 overflow-y-auto ohsumi-scroll">
             {members.map((m) => {
               const checked = inviteDraft.includes(m.id)
               return (

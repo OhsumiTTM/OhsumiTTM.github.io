@@ -393,7 +393,7 @@ export async function fetchRemoteData(): Promise<RemoteData> {
     // harmless, and the CSV value wins (overrides the local one) once it's set.
     if (!m.avatarUrl) {
       try {
-        const cached = localStorage.getItem(`orbit-avatar-url-${m.id}`)
+        const cached = localStorage.getItem(`ohsumi-avatar-url-${m.id}`)
         if (cached) m.avatarUrl = cached
       } catch {}
     }

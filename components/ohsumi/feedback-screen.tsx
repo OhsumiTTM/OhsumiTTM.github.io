@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState, useEffect } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { MessageSquare, Send, CheckCircle2, ImagePlus, X } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -86,10 +86,10 @@ const SCREEN_OPTION_KEY: Record<string, TranslationKey> = {
   'その他': 'feedback.feature.other',
 }
 
-const ORG_NAME_KEY = 'orbit_feedback_org_name'
+const ORG_NAME_KEY = 'ohsumi_feedback_org_name'
 
 export function FeedbackScreen() {
-  const { currentUser, myEmail } = useOrbit()
+  const { currentUser, myEmail } = useOhsumi()
   const { goBack } = useNav()
   const { t } = useI18n()
 

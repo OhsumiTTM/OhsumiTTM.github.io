@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { ArrowLeft, ClipboardList, Check, ChevronRight } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -29,7 +29,7 @@ export function buildDefaultQuestions(t: (key: import('@/lib/ohsumi/i18n').Trans
 }
 
 export function SurveyScreen() {
-  const { currentUser, members, surveyInvitedIds, surveyResponses, submitSurveyResponse, surveyQuestions } = useOrbit()
+  const { currentUser, members, surveyInvitedIds, surveyResponses, submitSurveyResponse, surveyQuestions } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const DEFAULT_QUESTIONS = surveyQuestions.length > 0 ? surveyQuestions : buildDefaultQuestions(t)

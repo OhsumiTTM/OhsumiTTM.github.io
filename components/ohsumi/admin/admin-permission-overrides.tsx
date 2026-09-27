@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
@@ -30,7 +30,7 @@ interface OverrideEditorProps {
 }
 
 function OverrideEditor({ member, onClose }: OverrideEditorProps) {
-  const { updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOrbit()
+  const { updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOhsumi()
   const toast = useToast()
   const { t: tr } = useI18n()
   // updatePermissionOverridesはGAS側で常にisDaihyo固定（人事機密のため）。

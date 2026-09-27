@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { BookOpen, Send, CheckCircle2, CalendarDays } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -18,7 +18,7 @@ interface SavedReport {
   createdAt: string
 }
 
-const REPORTS_KEY = 'orbit-daily-reports'
+const REPORTS_KEY = 'ohsumi-daily-reports'
 
 function loadReports(userId: string): SavedReport[] {
   if (typeof window === 'undefined') return []
@@ -40,7 +40,7 @@ function saveReports(userId: string, reports: SavedReport[]) {
 // REP-004: GAS連携が設定されている場合はsubmitDailyReportでDailyReports
 // シートにも送信し、管理者側(admin-daily-reports.tsx)から閲覧できるようにする。
 export function DailyReportScreen() {
-  const { currentUser, submitDailyReport } = useOrbit()
+  const { currentUser, submitDailyReport } = useOhsumi()
   const { goBack } = useNav()
   const { t } = useI18n()
   const [type, setType] = useState<ReportType>('daily')

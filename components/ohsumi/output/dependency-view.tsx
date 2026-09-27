@@ -14,7 +14,7 @@
 // prerequisite of the one dropped on. A quick tap (no hold, no drag) still
 // opens the task drawer as before.
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import type { Task } from '@/lib/ohsumi/types'
 import { STATUS_COLOR } from '@/lib/ohsumi/types'
@@ -63,7 +63,7 @@ export function DependencyView({
   onOpenTask: (id: string) => void
   fields?: Set<KanbanCardField>
 }) {
-  const { updateDependsOn, getMember, getProject, currentUser } = useOrbit()
+  const { updateDependsOn, getMember, getProject, currentUser } = useOhsumi()
   const toast = useToast()
   const { t: tr } = useI18n()
   const cardH = cardHeightFor(fields)
@@ -283,7 +283,7 @@ export function DependencyView({
           {tr('dependency.hint')}
         </div>
       )}
-      <div className="relative overflow-auto orbit-scroll rounded-xl border border-border bg-secondary/30 p-6">
+      <div className="relative overflow-auto ohsumi-scroll rounded-xl border border-border bg-secondary/30 p-6">
         <div
           ref={canvasRef}
           className="relative"

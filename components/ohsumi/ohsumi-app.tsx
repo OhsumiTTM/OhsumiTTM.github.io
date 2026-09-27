@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { OrbitProvider, useOrbit } from '@/lib/ohsumi/store'
+import { OhsumiProvider, useOhsumi } from '@/lib/ohsumi/store'
 import { NavProvider, useNav } from '@/lib/ohsumi/nav'
 import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
@@ -23,7 +23,7 @@ import { OrgSettingsScreen } from './org-settings-screen'
 import { SkillGridScreen } from './skill-grid-screen'
 import { LearningContentScreen } from './learning-content-screen'
 import { TaskDetailDrawer } from './output/task-detail-drawer'
-import { OrbitMark } from './primitives'
+import { OhsumiMark } from './primitives'
 import { TriangleAlert } from 'lucide-react'
 
 // shown while a persisted session (currentUserId from localStorage) is
@@ -32,7 +32,7 @@ function RemoteLoadingScreen() {
   const { t } = useI18n()
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-      <OrbitMark size={30} />
+      <OhsumiMark size={30} />
       <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <span className="relative flex size-3">
           <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/40" />
@@ -50,7 +50,7 @@ function RemoteLoadErrorScreen({ message }: { message: string | null }) {
   const { t } = useI18n()
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-      <OrbitMark size={30} />
+      <OhsumiMark size={30} />
       <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
         <TriangleAlert className="size-4 shrink-0" />
         {t('app.syncFailed')}
@@ -70,7 +70,7 @@ function RemoteLoadErrorScreen({ message }: { message: string | null }) {
 // lives inside ToastProvider so it can surface store-level events that
 // don't have a specific screen to render into (skill auto-certification)
 function SkillCertifiedWatcher() {
-  const { skillCertifiedEvent, clearSkillCertifiedEvent } = useOrbit()
+  const { skillCertifiedEvent, clearSkillCertifiedEvent } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
 
@@ -99,7 +99,7 @@ function hexToForeground(hex: string): string {
 }
 
 function ThemeColorWatcher() {
-  const { themeColor } = useOrbit()
+  const { themeColor } = useOhsumi()
 
   useEffect(() => {
     const root = document.documentElement
@@ -122,7 +122,7 @@ function ThemeColorWatcher() {
 // 本人が言語を変更した場合は setMemberLocale が両方を更新するので
 // ここでの上書きとは競合しない。
 function LocaleSyncWatcher() {
-  const { currentUser } = useOrbit()
+  const { currentUser } = useOhsumi()
   const { locale, setLocale } = useI18n()
 
   useEffect(() => {
@@ -137,7 +137,7 @@ function LocaleSyncWatcher() {
 
 function Router() {
   const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, dataReady } =
-    useOrbit()
+    useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
   const { t } = useI18n()
@@ -187,11 +187,11 @@ function Router() {
   )
 }
 
-export function OrbitApp() {
+export function OhsumiApp() {
   return (
     <ThemeProvider>
       <I18nProvider>
-        <OrbitProvider>
+        <OhsumiProvider>
           <ToastProvider>
             <SkillCertifiedWatcher />
             <LocaleSyncWatcher />
@@ -202,7 +202,7 @@ export function OrbitApp() {
               </TaskDrawerProvider>
             </NavProvider>
           </ToastProvider>
-        </OrbitProvider>
+        </OhsumiProvider>
       </I18nProvider>
     </ThemeProvider>
   )

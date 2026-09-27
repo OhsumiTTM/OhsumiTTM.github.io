@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Modal } from '@/components/ohsumi/modal'
 import { ExpenseApplicationModal } from '@/components/ohsumi/expense-application-modal'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -11,7 +11,7 @@ import type { ExpenseApplication } from '@/lib/ohsumi/types'
 // (withdrawExpense — これまで呼び出し箇所がなかったdead code)と、
 // returned申請の編集・再提出(EXP-008のresubmitExpense)ができる画面。
 export function ExpenseHistoryModal({ onClose }: { onClose: () => void }) {
-  const { expenseApplications, expenseCategories, withdrawExpense, currentUser } = useOrbit()
+  const { expenseApplications, expenseCategories, withdrawExpense, currentUser } = useOhsumi()
   const { t } = useI18n()
   const [editing, setEditing] = useState<ExpenseApplication | null>(null)
 

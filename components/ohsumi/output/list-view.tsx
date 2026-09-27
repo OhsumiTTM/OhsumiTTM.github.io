@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, FileSpreadsheet, SlidersHorizontal, Check } from 'lucide-react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { STATUS_ORDER, DEPARTMENTS } from '@/lib/ohsumi/types'
 import type { Task } from '@/lib/ohsumi/types'
@@ -48,7 +48,7 @@ const LIST_COLUMN_KEY: Record<ListColumn, TranslationKey> = {
 
 // 列の表示/非表示もブラウザごとの個人的な好みなのでlocalStorageに保存する
 function listColumnsKey(userId: string | null | undefined): string {
-  return `orbit-list-columns-${userId ?? 'anon'}`
+  return `ohsumi-list-columns-${userId ?? 'anon'}`
 }
 function loadListColumns(userId: string | null | undefined): Set<ListColumn> {
   if (typeof window === 'undefined') return new Set(LIST_COLUMNS)
@@ -69,7 +69,7 @@ export function ListView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { projects, members, updateTaskStatus, currentUser, isFullAdmin } = useOrbit()
+  const { projects, members, updateTaskStatus, currentUser, isFullAdmin } = useOhsumi()
   const { go } = useNav()
   const { t: tr } = useI18n()
   const [query, setQuery] = useState('')

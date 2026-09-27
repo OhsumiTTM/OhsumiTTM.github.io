@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { SectionLabel, Avatar } from '@/components/ohsumi/primitives'
 import { DIFFICULTY_LABEL, type Member } from '@/lib/ohsumi/types'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -166,7 +166,7 @@ const WORKLOAD_LABEL_KEY: Record<WorkloadCapacity, TranslationKey> = {
 }
 
 export function AdminAnalytics() {
-  const { members, visibleTasks, archivedTasks, surveyResponses, surveyQuestions } = useOrbit()
+  const { members, visibleTasks, archivedTasks, surveyResponses, surveyQuestions } = useOhsumi()
   const { t } = useI18n()
 
   // ANL-012/014/015: カスタム設問も組み合わせ分析の対象に含めるため、

@@ -19,8 +19,8 @@ import { AdminMemberDb } from './admin-member-db'
 import { AdminLeadership } from './admin-leadership'
 import { AdminRecruiting } from './admin-recruiting'
 import { AdminDailyReports } from './admin-daily-reports'
-import { useOrbit } from '@/lib/ohsumi/store'
-import { OrbitMark } from '../primitives'
+import { useOhsumi } from '@/lib/ohsumi/store'
+import { OhsumiMark } from '../primitives'
 import type { AdminSection } from '@/lib/ohsumi/types'
 import { LayoutDashboard, UserPlus, FileClock, FolderPlus, Users, BarChart3, Tags, Network, GraduationCap, BookOpen, Radar, Receipt, FileText, Database, Crown, Briefcase, NotebookPen } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -51,7 +51,7 @@ function buildNav(t: (key: TranslationKey) => string): { key: Section; label: st
 export function AdminScreen({ section }: { section: Section }) {
   const { go } = useNav()
   const { t } = useI18n()
-  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser } = useOrbit()
+  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser } = useOhsumi()
   // 採用（recruiting）はrolePermissions/visibleAdminSectionsのロール単位制御
   // とは独立に、permission_overrides(targetType:'recruiting')を個別に持つ
   // メンバーだけがアクセスできる（ロール自体には一切依存しない）
@@ -79,7 +79,7 @@ export function AdminScreen({ section }: { section: Section }) {
   if (!dataReady) {
     return (
       <div className="flex min-h-[calc(100vh-3.5rem)] flex-col items-center justify-center gap-3">
-        <OrbitMark size={28} />
+        <OhsumiMark size={28} />
         <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
           <span className="relative flex size-3">
             <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/40" />

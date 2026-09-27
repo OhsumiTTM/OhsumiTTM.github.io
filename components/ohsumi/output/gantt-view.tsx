@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react'
 import type { Task } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -31,7 +31,7 @@ export function GanttView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { members, getProject } = useOrbit()
+  const { members, getProject } = useOhsumi()
   const { t: tr } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [today] = useState(() => new Date())
@@ -152,7 +152,7 @@ export function GanttView({
         </div>
 
         {/* 右ペイン: チャート（横スクロール） */}
-        <div ref={scrollRef} className="overflow-x-auto orbit-scroll flex-1">
+        <div ref={scrollRef} className="overflow-x-auto ohsumi-scroll flex-1">
           <div style={{ width: totalWidth, minWidth: totalWidth }} className="relative">
             {/* ヘッダー: 月ラベル */}
             <div className="sticky top-0 z-10 flex h-12 items-end border-b border-border bg-secondary/50">

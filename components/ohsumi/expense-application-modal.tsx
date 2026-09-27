@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Modal } from '@/components/ohsumi/modal'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
@@ -29,7 +29,7 @@ export function ExpenseApplicationModal({
   onClose: () => void
   editApplication?: ExpenseApplication
 }) {
-  const { expenseCategories, submitExpenseApplication, resubmitExpense, uploadExpenseReceipt, driveEnabled, currentUser } = useOrbit()
+  const { expenseCategories, submitExpenseApplication, resubmitExpense, uploadExpenseReceipt, driveEnabled, currentUser } = useOhsumi()
   const { t } = useI18n()
 
   const [categoryId, setCategoryId] = useState(editApplication?.categoryId ?? expenseCategories[0]?.id ?? '')

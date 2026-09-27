@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar, Tag, ProjectTag, DifficultyBadge } from '@/components/ohsumi/primitives'
 import { rankCandidates, matchSkills, formatDeadline } from '@/lib/ohsumi/utils'
 import { useToast } from '@/components/ohsumi/toast'
@@ -11,7 +11,7 @@ import type { Task, Member } from '@/lib/ohsumi/types'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 export function AdminAssignments() {
-  const { adminTasks: tasks, members, getProject, assignTask } = useOrbit()
+  const { adminTasks: tasks, members, getProject, assignTask } = useOhsumi()
   const { t: tr } = useI18n()
   const unassigned = tasks.filter((t) => t.assigneeIds.length === 0 && t.status !== 'done')
   const [selectedId, setSelectedId] = useState<string | null>(unassigned[0]?.id ?? null)
@@ -37,7 +37,7 @@ export function AdminAssignments() {
             <div className="border-b border-border px-4 py-3 text-xs font-medium text-muted-foreground">
               {tr('admin.assignments.unassignedCount', { count: unassigned.length })}
             </div>
-            <ul className="max-h-[calc(100vh-14rem)] divide-y divide-border overflow-y-auto orbit-scroll">
+            <ul className="max-h-[calc(100vh-14rem)] divide-y divide-border overflow-y-auto ohsumi-scroll">
               {unassigned.map((t) => (
                 <li key={t.id}>
                   <button

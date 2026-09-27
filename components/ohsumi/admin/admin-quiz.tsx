@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
 import { AdminAccessNote } from '@/components/ohsumi/primitives'
@@ -214,7 +214,7 @@ function QuizEditor({ initial, skillOptions, onSave, onCancel }: QuizEditorProps
 }
 
 export function AdminQuiz() {
-  const { quizDefinitions, updateQuizDefinitions, skillOptions } = useOrbit()
+  const { quizDefinitions, updateQuizDefinitions, skillOptions } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [editorTarget, setEditorTarget] = useState<Partial<QuizDefinition> | null>(null)

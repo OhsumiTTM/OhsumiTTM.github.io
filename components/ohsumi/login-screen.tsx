@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { OrbitMark } from './primitives'
+import { OhsumiMark } from './primitives'
 import { TriangleAlert } from 'lucide-react'
 import {
   isGoogleOAuthConfigured,
@@ -14,7 +14,7 @@ import {
 } from '@/lib/ohsumi/google-sheet-sync'
 
 export function LoginScreen() {
-  const { login, resolveLoginMember } = useOrbit()
+  const { login, resolveLoginMember } = useOhsumi()
   const { t } = useI18n()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
@@ -68,7 +68,7 @@ export function LoginScreen() {
 
       <div className="relative z-10 flex w-full max-w-sm flex-col items-center text-center">
         <div className="flex items-center gap-2">
-          <OrbitMark size={30} />
+          <OhsumiMark size={30} />
           <span className="text-2xl font-semibold tracking-tight">Orbit</span>
         </div>
         <p className="mt-4 text-[15px] leading-relaxed text-muted-foreground text-balance">

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
@@ -62,7 +62,7 @@ export function AdminMembers() {
     isFullAdmin,
     toggleMemberInactive,
     currentUser,
-  } = useOrbit()
+  } = useOhsumi()
   // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
   // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
   const isDaihyo = currentUser?.role === '代表'
@@ -573,7 +573,7 @@ export function AdminMembers() {
         <p className="mt-1 text-sm text-muted-foreground">
           {t('admin.members.assignProjectsDesc')}
         </p>
-        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
           {projects.map((p) => {
             const checked = !!assigningProjects?.projectIds?.includes(p.id)
             return (

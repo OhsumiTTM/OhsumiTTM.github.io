@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react'
 import { remoteApi, isRemoteConfigured } from './remote'
 
-const CACHE_KEY = 'orbit-translate-cache'
+const CACHE_KEY = 'ohsumi-translate-cache'
 type Cache = Record<string, string> // `${targetLang}::${text}` -> translated text
 
 let memoryCache: Cache | null = null

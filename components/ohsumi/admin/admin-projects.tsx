@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
@@ -93,7 +93,7 @@ export function AdminProjects() {
     setProjectOrder,
     isFullAdmin,
     currentUser,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   // removeProjectはGAS側で常にisDaihyo固定（isFullAdminとは無関係）
@@ -618,7 +618,7 @@ export function AdminProjects() {
         <p className="mt-1 text-xs text-muted-foreground">
           {t('admin.projects.applyModal.approvalNote')}
         </p>
-        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
           {taskSetTemplates.map((tst) => (
             <button
               key={tst.id}
@@ -665,7 +665,7 @@ export function AdminProjects() {
           </select>
         </div>
         {importSourceId && (
-          <div className="mt-3 max-h-72 overflow-auto orbit-scroll rounded-lg border border-border">
+          <div className="mt-3 max-h-72 overflow-auto ohsumi-scroll rounded-lg border border-border">
             {importSourceTasks.length === 0 ? (
               <p className="px-3 py-4 text-center text-sm text-muted-foreground">{t('admin.projects.importModal.empty')}</p>
             ) : (
@@ -717,7 +717,7 @@ export function AdminProjects() {
         <p className="mt-1 text-sm text-muted-foreground">
           {t('admin.projects.membersModal.desc')}
         </p>
-        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
           {members.map((m) => {
             const checked = !!managingMembersOf?.memberIds?.includes(m.id)
             return (
@@ -754,7 +754,7 @@ export function AdminProjects() {
 
       <Modal open={!!managingOwnerOf} onClose={() => setManagingOwnerOf(null)}>
         <h2 className="text-base font-semibold">{t('admin.projects.ownerModal.title', { name: managingOwnerOf?.name ?? '' })}</h2>
-        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto orbit-scroll">
+        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
           <button
             onClick={() => {
               if (!managingOwnerOf) return

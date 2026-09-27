@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from './toast'
 import { Avatar } from './primitives'
@@ -39,7 +39,7 @@ function setMemberSkillLevel(existing: SkillLevel[], skill: string, level: Skill
 }
 
 export function SkillGridScreen() {
-  const { members, skillOptions, currentUser, visibleTasks, updateSkillLevels, bulkUpdateSkills } = useOrbit()
+  const { members, skillOptions, currentUser, visibleTasks, updateSkillLevels, bulkUpdateSkills } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()

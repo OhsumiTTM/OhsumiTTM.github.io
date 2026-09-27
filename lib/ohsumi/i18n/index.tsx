@@ -27,7 +27,7 @@ export type TranslationKey = keyof typeof ja
 
 const DICTS: Record<Locale, Record<TranslationKey, string>> = { ja, en }
 
-const LOCALE_STORAGE_KEY = 'orbit-locale'
+const LOCALE_STORAGE_KEY = 'ohsumi-locale'
 
 // TaskStatus（内部enum、GAS/シートにもこのまま保存される）から翻訳キーへの
 // マッピング。types.ts の STATUS_LABEL（日本語固定）と役割が重複するが、

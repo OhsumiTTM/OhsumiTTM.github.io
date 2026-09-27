@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Task, Priority, Difficulty } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { KanbanBoard } from './kanban-board'
 import { CalendarView } from './calendar-view'
@@ -96,7 +96,7 @@ function sortTasksBy(tasks: Task[], sort: TaskSort): Task[] {
 
 // 並び順もブラウザごとの個人的な好みなのでlocalStorageに保存する
 function taskSortKeyFor(userId: string | null | undefined): string {
-  return `orbit-task-sort-${userId ?? 'anon'}`
+  return `ohsumi-task-sort-${userId ?? 'anon'}`
 }
 function loadTaskSort(userId: string | null | undefined): TaskSort {
   if (typeof window === 'undefined') return 'deadline'
@@ -120,7 +120,7 @@ const TARGET_KEY: Record<Target, TranslationKey> = {
 // 対象タブの並び順もブラウザごとの個人的な好みなので localStorage に保存する。
 // 一番左（先頭）が既定表示になる
 function targetOrderKey(userId: string | null | undefined): string {
-  return `orbit-target-order-${userId ?? 'anon'}`
+  return `ohsumi-target-order-${userId ?? 'anon'}`
 }
 function loadTargetOrder(userId: string | null | undefined): Target[] {
   if (typeof window === 'undefined') return DEFAULT_TARGET_ORDER
@@ -141,7 +141,7 @@ function loadTargetOrder(userId: string | null | undefined): Target[] {
 // localStorageに保存する。デモ環境で同じブラウザから複数ユーザーを切り替える
 // ことがあるため、ユーザーIDでスコープしておく
 function cardFieldsKey(userId: string | null | undefined): string {
-  return `orbit-card-fields-${userId ?? 'anon'}`
+  return `ohsumi-card-fields-${userId ?? 'anon'}`
 }
 function loadCardFields(userId: string | null | undefined): Set<KanbanCardField> {
   if (typeof window === 'undefined') return new Set(KANBAN_CARD_FIELDS)
@@ -158,7 +158,7 @@ function loadCardFields(userId: string | null | undefined): Set<KanbanCardField>
 // プロジェクト表示（対象=プロジェクト）のカードに出す項目も、同じ考え方で
 // ブラウザごとの個人設定として保存する
 function projectCardFieldsKey(userId: string | null | undefined): string {
-  return `orbit-project-card-fields-${userId ?? 'anon'}`
+  return `ohsumi-project-card-fields-${userId ?? 'anon'}`
 }
 function loadProjectCardFields(userId: string | null | undefined): Set<ProjectCardField> {
   if (typeof window === 'undefined') return new Set(PROJECT_CARD_FIELDS)
@@ -177,7 +177,7 @@ function loadProjectCardFields(userId: string | null | undefined): Set<ProjectCa
 // 依存関係ツリーはプロジェクトが混在すると見づらくなるので、プロジェクト単位で
 // 表示/非表示を切り替えられるようにしている。これもブラウザごとの個人設定
 function hiddenProjectsKey(userId: string | null | undefined): string {
-  return `orbit-dependency-hidden-projects-${userId ?? 'anon'}`
+  return `ohsumi-dependency-hidden-projects-${userId ?? 'anon'}`
 }
 function loadHiddenProjects(userId: string | null | undefined): Set<string> {
   if (typeof window === 'undefined') return new Set()
@@ -202,7 +202,7 @@ export function OutputScreen() {
     isFullAdmin,
     addProject,
     projectTypes,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const { go } = useNav()
   const { t: tr } = useI18n()
@@ -716,7 +716,7 @@ export function OutputScreen() {
                   <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
                     {tr('output.projectVisibility.hint')}
                   </p>
-                  <div className="max-h-72 overflow-y-auto orbit-scroll">
+                  <div className="max-h-72 overflow-y-auto ohsumi-scroll">
                     {projects.map((p) => {
                       const checked = !hiddenProjectIds.has(p.id)
                       return (
@@ -911,7 +911,7 @@ function Segment({ label, children }: { label: string; children: React.ReactNode
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="orbit-scroll inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-secondary/60 p-0.5">
+      <div className="ohsumi-scroll inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-secondary/60 p-0.5">
         {children}
       </div>
     </div>

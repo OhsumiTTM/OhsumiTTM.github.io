@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Task } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '../primitives'
 import { todayStr } from '@/lib/ohsumi/utils'
 import { Button } from '@/components/ui/button'
@@ -128,7 +128,7 @@ function MonthView({
   onDayClick: (date: string) => void
   onToggleAbsent: (date: string) => void
 }) {
-  const { getMember } = useOrbit()
+  const { getMember } = useOhsumi()
   const { t: tr } = useI18n()
   const today = todayStr()
   const weekdays = tr('taskDrawer.schedule.weekdayShort').split(',')
@@ -248,7 +248,7 @@ function WeekView({
   weekStart: Date
   onOpenTask: (id: string) => void
 }) {
-  const { getMember } = useOrbit()
+  const { getMember } = useOhsumi()
   const { t: tr } = useI18n()
   const today = todayStr()
   const weekdays = tr('taskDrawer.schedule.weekdayShort').split(',')
@@ -283,7 +283,7 @@ function WeekView({
   const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 
   return (
-    <div className="overflow-auto orbit-scroll">
+    <div className="overflow-auto ohsumi-scroll">
       <div className="grid" style={{ gridTemplateColumns: '3rem repeat(7, 1fr)', minWidth: 640 }}>
         {/* Header */}
         <div className="border-b border-r border-border" />
@@ -351,13 +351,13 @@ function DayView({
   date: Date
   onOpenTask: (id: string) => void
 }) {
-  const { getMember } = useOrbit()
+  const { getMember } = useOhsumi()
   const ds = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`
   const dayTasks = useMemo(() => tasks.filter((t) => t.deadline === ds), [tasks, ds])
   const dayGcal = useMemo(() => gcalEvents.filter((e) => gcalEventDate(e) === ds), [gcalEvents, ds])
 
   return (
-    <div className="overflow-auto orbit-scroll">
+    <div className="overflow-auto ohsumi-scroll">
       <div className="grid" style={{ gridTemplateColumns: '3rem 1fr', minWidth: 320 }}>
         {HOURS.map((h) => {
           const hTasks = dayTasks.filter((t) => (t.dueTime ? parseInt(t.dueTime.slice(0, 2)) : -1) === h)
@@ -404,7 +404,7 @@ export function CalendarView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { currentUser, updateAbsentDates } = useOrbit()
+  const { currentUser, updateAbsentDates } = useOhsumi()
   const { t: tr } = useI18n()
   const myAbsentDates = currentUser?.absentDates ?? []
   const weekdays = tr('taskDrawer.schedule.weekdayShort').split(',')

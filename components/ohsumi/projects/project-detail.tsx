@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { KanbanBoard } from '../output/kanban-board'
 import { CalendarView } from '../output/calendar-view'
@@ -21,7 +21,7 @@ import { useI18n } from '@/lib/ohsumi/i18n'
 type Tab = 'workflow' | 'list' | 'calendar' | 'difficulty' | 'dependency' | 'gantt' | 'openbid' | 'overview'
 
 export function ProjectDetail({ id }: { id: string }) {
-  const { getProject, visibleTasks: tasks, members, getProjectMembers, currentUser } = useOrbit()
+  const { getProject, visibleTasks: tasks, members, getProjectMembers, currentUser } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('workflow')

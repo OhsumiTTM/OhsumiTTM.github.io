@@ -2,7 +2,7 @@
 
 import type { Task } from '@/lib/ohsumi/types'
 import { PRIORITY_LINE } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { Avatar, DifficultyBadge, DepartmentTag } from '../primitives'
 import { TranslatedText } from '../translated-text'
@@ -53,7 +53,7 @@ export function KanbanCard({
   dragging?: boolean
   fields?: Set<KanbanCardField>
 }) {
-  const { getMember, getProject, currentUser } = useOrbit()
+  const { getMember, getProject, currentUser } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const assignees = task.assigneeIds.map((id) => getMember(id)).filter(Boolean) as Array<

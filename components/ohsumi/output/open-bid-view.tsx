@@ -1,6 +1,6 @@
 'use client'
 
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '../toast'
 import { formatDeadline } from '@/lib/ohsumi/utils'
 import { Avatar, DifficultyBadge, ProjectTag, DepartmentTag, Tag } from '@/components/ohsumi/primitives'
@@ -20,7 +20,7 @@ export function OpenBidView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { getProject, currentUser, applyToOpenBid, withdrawOpenBidApplication } = useOrbit()
+  const { getProject, currentUser, applyToOpenBid, withdrawOpenBidApplication } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
 

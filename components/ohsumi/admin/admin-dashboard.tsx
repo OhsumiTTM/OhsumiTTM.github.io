@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, ProjectTag } from '@/components/ohsumi/primitives'
@@ -40,7 +40,7 @@ export function AdminDashboard() {
     triggerOverdueReminders,
     awardSkillPoints,
     assignTask,
-  } = useOrbit()
+  } = useOhsumi()
   const { openTask } = useTaskDrawer()
   const toast = useToast()
   const { t: tr } = useI18n()

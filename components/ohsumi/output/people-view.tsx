@@ -1,13 +1,13 @@
 'use client'
 
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { useNav } from '@/lib/ohsumi/nav'
 import { BASE_ROLE } from '@/lib/ohsumi/types'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 export function PeopleView() {
-  const { members, visibleTasks: tasks } = useOrbit()
+  const { members, visibleTasks: tasks } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
 

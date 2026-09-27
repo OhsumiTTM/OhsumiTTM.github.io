@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
 import { useToast } from '@/components/ohsumi/toast'
 import { Tag, SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
@@ -42,7 +42,7 @@ export function OrgSettingsScreen() {
     setDiscordWebhookUrl,
     setSlackWebhookUrl,
     isFullAdmin,
-  } = useOrbit()
+  } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
 

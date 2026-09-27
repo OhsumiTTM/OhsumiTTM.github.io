@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import type { Difficulty, Task } from '@/lib/ohsumi/types'
 import { DIFFICULTY_LABEL } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { KanbanCard, KANBAN_CARD_FIELDS, type KanbanCardField } from './kanban-card'
 import { cn } from '@/lib/utils'
 import { useI18n, DIFFICULTY_KEY } from '@/lib/ohsumi/i18n'
@@ -17,7 +17,7 @@ export function DifficultyBoard({
   onOpenTask: (id: string) => void
   fields?: Set<KanbanCardField>
 }) {
-  const { updateDifficulty } = useOrbit()
+  const { updateDifficulty } = useOhsumi()
   const { t } = useI18n()
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [overColumn, setOverColumn] = useState<Difficulty | null>(null)
@@ -29,7 +29,7 @@ export function DifficultyBoard({
   }
 
   return (
-    <div className="flex gap-3 overflow-x-auto orbit-scroll pb-4">
+    <div className="flex gap-3 overflow-x-auto ohsumi-scroll pb-4">
       {DIFFICULTY_LABEL.map((difficulty) => {
         const columnTasks = tasks.filter((t) => t.difficulty === difficulty)
         return (

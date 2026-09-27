@@ -137,7 +137,7 @@ function isArchived(t: Task): boolean {
   return d !== null && d >= ARCHIVE_AFTER_DAYS
 }
 
-interface OrbitState {
+interface OhsumiState {
   currentUserId: string | null
   // 自分自身の登録メール(カンマ区切り、無ければ''）。他メンバーのメールは
   // Membersの公開CSVから分離済みで、どこからも取得できない(意図的)
@@ -149,7 +149,7 @@ interface OrbitState {
   mode: Mode
 }
 
-interface OrbitContextValue extends OrbitState {
+interface OhsumiContextValue extends OhsumiState {
   currentUser: Member | null
   // tasks with pendingApproval and archived tasks stripped out — what the
   // normal workspace (kanban/list/calendar/people/project views) renders
@@ -491,45 +491,45 @@ interface OrbitContextValue extends OrbitState {
   ) => void
 }
 
-const OrbitContext = createContext<OrbitContextValue | null>(null)
+const OhsumiContext = createContext<OhsumiContextValue | null>(null)
 
-const STORAGE_KEY = 'orbit-state-v2'
-const TAGS_STORAGE_KEY = 'orbit-tag-options'
-const ONBOARDED_STORAGE_KEY = 'orbit-onboarded-ids'
-const TEMPLATES_STORAGE_KEY = 'orbit-project-templates'
-const ROLE_PERMS_STORAGE_KEY = 'orbit-role-permissions'
-const TASK_SET_TEMPLATES_STORAGE_KEY = 'orbit-task-set-templates'
-const RECURRING_RULES_STORAGE_KEY = 'orbit-recurring-rules'
+const STORAGE_KEY = 'ohsumi-state-v2'
+const TAGS_STORAGE_KEY = 'ohsumi-tag-options'
+const ONBOARDED_STORAGE_KEY = 'ohsumi-onboarded-ids'
+const TEMPLATES_STORAGE_KEY = 'ohsumi-project-templates'
+const ROLE_PERMS_STORAGE_KEY = 'ohsumi-role-permissions'
+const TASK_SET_TEMPLATES_STORAGE_KEY = 'ohsumi-task-set-templates'
+const RECURRING_RULES_STORAGE_KEY = 'ohsumi-recurring-rules'
 // item 17: ポジション要件 — localStorage fallback for when the optional
 // Settings sheet isn't configured, same as the other option pools below
-const JOB_REQUIREMENTS_STORAGE_KEY = 'orbit-job-requirements'
+const JOB_REQUIREMENTS_STORAGE_KEY = 'ohsumi-job-requirements'
 // 要求分野 — the field name pool lives alongside skill/category in
 // TAGS_STORAGE_KEY; the field->skills mapping and threshold get their own
 // keys, same pattern as jobRequirements
-const SKILL_FIELD_SKILLS_STORAGE_KEY = 'orbit-skill-field-skills'
-const SKILL_FIELD_THRESHOLD_STORAGE_KEY = 'orbit-skill-field-threshold'
+const SKILL_FIELD_SKILLS_STORAGE_KEY = 'ohsumi-skill-field-skills'
+const SKILL_FIELD_THRESHOLD_STORAGE_KEY = 'ohsumi-skill-field-threshold'
 // 団体メール — org_notification_emails のローカルフォールバック
-const ORG_NOTIFICATION_EMAILS_STORAGE_KEY = 'orbit-org-notification-emails'
+const ORG_NOTIFICATION_EMAILS_STORAGE_KEY = 'ohsumi-org-notification-emails'
 // アンケート回答対象者の限定 — survey_invited_ids のローカルフォールバック（空=全員可）
-const SURVEY_INVITED_IDS_STORAGE_KEY = 'orbit-survey-invited-ids'
+const SURVEY_INVITED_IDS_STORAGE_KEY = 'ohsumi-survey-invited-ids'
 // プロジェクトの表示順 — project_order のローカルフォールバック
-const PROJECT_ORDER_STORAGE_KEY = 'orbit-project-order'
+const PROJECT_ORDER_STORAGE_KEY = 'ohsumi-project-order'
 // 制限付きロール — restricted_roles のローカルフォールバック
-const RESTRICTED_ROLES_STORAGE_KEY = 'orbit-restricted-roles'
+const RESTRICTED_ROLES_STORAGE_KEY = 'ohsumi-restricted-roles'
 // メンション通知の既読管理 — 端末ローカルのみ（サーバーには保存しない）。
 // currentUserId -> 既読にしたコメントID配列、で複数メンバーを同一端末で
 // 切り替えて使う場合にも既読状態が混ざらないようにする
-const SEEN_MENTIONS_STORAGE_KEY = 'orbit-seen-mention-ids'
-const DISMISSED_NOTIFICATIONS_STORAGE_KEY = 'orbit-dismissed-notifications'
-const ORG_NAME_STORAGE_KEY = 'orbit-org-name'
-const ORG_LOGO_URL_STORAGE_KEY = 'orbit-org-logo-url'
-const THEME_COLOR_STORAGE_KEY = 'orbit-theme-color'
+const SEEN_MENTIONS_STORAGE_KEY = 'ohsumi-seen-mention-ids'
+const DISMISSED_NOTIFICATIONS_STORAGE_KEY = 'ohsumi-dismissed-notifications'
+const ORG_NAME_STORAGE_KEY = 'ohsumi-org-name'
+const ORG_LOGO_URL_STORAGE_KEY = 'ohsumi-org-logo-url'
+const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
 
-function loadState(): Partial<OrbitState> | null {
+function loadState(): Partial<OhsumiState> | null {
   if (typeof window === 'undefined') return null
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Partial<OrbitState>) : null
+    return raw ? (JSON.parse(raw) as Partial<OhsumiState>) : null
   } catch {
     return null
   }
@@ -702,7 +702,7 @@ function uniq(list: string[]): string[] {
   return Array.from(new Set(list.map((s) => s.trim()).filter(Boolean)))
 }
 
-export function OrbitProvider({ children }: { children: React.ReactNode }) {
+export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const { t } = useI18n()
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   // when a remote spreadsheet is configured, the local seed data is never
@@ -821,7 +821,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
   // localStorageに保存、Settingsシート設定時はGAS同期あり
   const [oneOnOneQuestions, setOneOnOneQuestionsState] = useState<string[]>(() => {
     try {
-      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('orbit-1on1-questions') : null
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('ohsumi-1on1-questions') : null
       return raw ? JSON.parse(raw) : ['今月の良かったことは？', '困っていることや課題は？', '次回までのアクションは？']
     } catch {
       return ['今月の良かったことは？', '困っていることや課題は？', '次回までのアクションは？']
@@ -838,7 +838,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
 
   const reportRemoteError = useCallback((err: unknown) => {
     // eslint-disable-next-line no-console
-    console.error('[orbit] リモートとの同期に失敗しました', err)
+    console.error('[ohsumi] リモートとの同期に失敗しました', err)
     setRemoteError(err instanceof Error ? err.message : String(err))
   }, [])
 
@@ -2101,7 +2101,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
 
   // item 1: 初ログイン時（既存タスクが0件）に初期タスクセットを自動付与。
   // Settingsシートの initial_tasks_json キーで上書き可能。未設定時はハードコードの3件。
-  const INITIAL_TASKS_KEY = 'orbit-initial-tasks-given'
+  const INITIAL_TASKS_KEY = 'ohsumi-initial-tasks-given'
   const HARDCODED_INITIAL_TASKS = [
     { name: 'Orbitの使い方を確認する', description: 'まずINPUT画面で「今日やること」を入力し、承認を受けてみましょう。' },
     { name: 'プロフィールを設定する', description: 'ヘッダーのアカウントメニュー →「プロフィール」でWillとスキルを登録しましょう。' },
@@ -4156,7 +4156,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
             : m,
         ),
       )
-      try { localStorage.removeItem(`orbit-avatar-url-${memberId}`) } catch {}
+      try { localStorage.removeItem(`ohsumi-avatar-url-${memberId}`) } catch {}
       if (isRemoteConfigured) runRemote(remoteApi.updateAvatar(memberId, avatarColor, trimmedInitials))
     },
     [runRemote],
@@ -4177,7 +4177,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
           // CSV cache can lag several minutes after GAS writes the URL to the
           // sheet — persist the URL locally so it survives page reloads until
           // the CSV catches up.
-          try { localStorage.setItem(`orbit-avatar-url-${memberId}`, url) } catch {}
+          try { localStorage.setItem(`ohsumi-avatar-url-${memberId}`, url) } catch {}
           setRemoteError(null)
         })
         .catch((err) => {
@@ -4304,7 +4304,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
   // item 20: 1on1質問項目を更新
   const setOneOnOneQuestions = useCallback((questions: string[]) => {
     setOneOnOneQuestionsState(questions)
-    try { window.localStorage.setItem('orbit-1on1-questions', JSON.stringify(questions)) } catch {}
+    try { window.localStorage.setItem('ohsumi-1on1-questions', JSON.stringify(questions)) } catch {}
     if (isSettingsConfigured) runRemote(remoteApi.updateSetting('one_on_one_questions', JSON.stringify(questions)))
   }, [runRemote])
 
@@ -4693,7 +4693,7 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
     })
   }, [members, tasks])
 
-  const value: OrbitContextValue = {
+  const value: OhsumiContextValue = {
     currentUserId,
     myEmail,
     tasks,
@@ -4919,11 +4919,11 @@ export function OrbitProvider({ children }: { children: React.ReactNode }) {
     submitSurveyResponse,
   }
 
-  return <OrbitContext.Provider value={value}>{children}</OrbitContext.Provider>
+  return <OhsumiContext.Provider value={value}>{children}</OhsumiContext.Provider>
 }
 
-export function useOrbit() {
-  const ctx = useContext(OrbitContext)
-  if (!ctx) throw new Error('useOrbit must be used within OrbitProvider')
+export function useOhsumi() {
+  const ctx = useContext(OhsumiContext)
+  if (!ctx) throw new Error('useOhsumi must be used within OhsumiProvider')
   return ctx
 }

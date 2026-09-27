@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import type { ParsedTask } from '@/lib/ohsumi/types'
 import { DIFFICULTY_LABEL, TASK_IMPORTANCE } from '@/lib/ohsumi/types'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n, DIFFICULTY_KEY } from '@/lib/ohsumi/i18n'
 import { Card, DifficultyBadge, Tag, Avatar, SimilarTaskSummary } from '../primitives'
 import { cn } from '@/lib/utils'
@@ -33,7 +33,7 @@ export function ParsedTaskCard({
     categoryOptions,
     addSkillOption,
     addCategoryOption,
-  } = useOrbit()
+  } = useOhsumi()
   const { t } = useI18n()
   const [skillDraft, setSkillDraft] = useState('')
   const [addingCategory, setAddingCategory] = useState(false)

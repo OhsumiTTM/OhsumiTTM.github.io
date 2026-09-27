@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Download, Upload, Eye, Search } from 'lucide-react'
@@ -185,7 +185,7 @@ export function AdminMemberDb() {
     adminProjects,
     customMemberColumns,
     updateCustomField,
-  } = useOrbit()
+  } = useOhsumi()
   const { t } = useI18n()
 
   // true for any admin role (代表・班長 etc.), false for 一般
@@ -401,7 +401,7 @@ export function AdminMemberDb() {
               {t('admin.memberDb.colVisibility')}
             </button>
             {colPanelOpen && (
-              <div className="absolute right-0 top-full z-50 mt-1 max-h-80 overflow-auto orbit-scroll rounded-md border border-border bg-card shadow-md p-3 space-y-1 min-w-[160px]">
+              <div className="absolute right-0 top-full z-50 mt-1 max-h-80 overflow-auto ohsumi-scroll rounded-md border border-border bg-card shadow-md p-3 space-y-1 min-w-[160px]">
                 {allowedCols.map((col) => {
                   const isSkill = col.key.startsWith(SKILL_COL_PREFIX)
                   const checked = isSkill ? isSkillColVisible(col.key) : !hiddenCols.has(col.key)

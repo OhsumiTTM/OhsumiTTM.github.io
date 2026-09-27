@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useOrbit } from '@/lib/ohsumi/store'
+import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, CustomFormDef, CustomFormField, CustomFormFieldType } from '@/lib/ohsumi/types'
 import { Plus, Trash2, GripVertical } from 'lucide-react'
 import { Modal } from '@/components/ohsumi/modal'
@@ -297,7 +297,7 @@ export function AdminFormBuilder() {
     members,
     roleLevels,
     getMember,
-  } = useOrbit()
+  } = useOhsumi()
 
   const { t } = useI18n()
   const [tab, setTab] = useState<'submissions' | 'forms'>('submissions')
