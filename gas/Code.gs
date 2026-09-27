@@ -210,7 +210,7 @@ function ensureSheetHeaders(ss, sheetName, requiredHeaders) {
 
 // A member is completing a certain number of same-category tasks and
 // auto-certifying isn't something this file does — that check runs
-// client-side (lib/orbit/store.tsx) since it only needs data already in
+// client-side (lib/ohsumi/store.tsx) since it only needs data already in
 // hand. This file only handles writes coming from the browser.
 
 function doGet(e) {
@@ -458,7 +458,7 @@ function computeAutoLevels(currentLevels, cumulativePoints, thresholds) {
 /**
  * 他団体で積んだ実績(共通スキルのポイント・資格)の持ち込み。本人が自分の
  * ページからエクスポートしたファイルを、新しい団体で自分のページから
- * インポートする想定(lib/orbit/portable-record.ts)。awardSkillPointsと同じ
+ * インポートする想定(lib/ohsumi/portable-record.ts)。awardSkillPointsと同じ
  * 「累計加算→レベル自動繰り上げ」ロジックだが、タスクには紐付けない。
  * 資格は名前+取得日が一致するものは重複とみなしスキップして追記する。
  */
@@ -614,7 +614,7 @@ function submitQuizResult(quizId, memberId, answers, acting) {
  *   本人のみ        — acting on body.memberId === self only
  *   誰でも          — any logged-in member (with extra checks where noted)
  */
-// lib/orbit/permissions.ts の isFullAdminRole と同じ基準:
+// lib/ohsumi/permissions.ts の isFullAdminRole と同じ基準:
 // role が空または '一般' なら false、Settings の restricted_roles に含まれていれば false、それ以外は true。
 // 代表は authorizeAction の先頭で早期 return するため、実質的には「restrictedRoles に含まれない班長」を判定する。
 function isActingFullAdmin(acting) {
@@ -782,7 +782,7 @@ function authorizeAction(acting, action, body) {
       }
     }
 
-    // approveTask: importance に応じた承認者チェック（lib/orbit/permissions.ts の canApproveTask と同じロジック）
+    // approveTask: importance に応じた承認者チェック（lib/ohsumi/permissions.ts の canApproveTask と同じロジック）
     if (action === 'approveTask') {
       var taskForApprove = null
       try { taskForApprove = findRow(SHEET_TASKS, String(body.taskId || '')) } catch(e) {}
@@ -1001,7 +1001,7 @@ function authorizeAction(acting, action, body) {
 
     // 仕様変更(レビュー指摘対応1): updateComments は「タスクを閲覧できる人
     // なら誰でもコメント追加可」に緩和する(担当者・確認者・作成者に限らな
-    // い)。閲覧可否はフロント(lib/orbit/types.ts の canSeeExecTasks /
+    // い)。閲覧可否はフロント(lib/ohsumi/types.ts の canSeeExecTasks /
     // store.tsx の visibleTasks)と同じ基準 = 幹部限定タスク
     // (visibility === '幹部')は role が '一般' のメンバーには見えない、
     // それ以外は誰でも見える、をそのままGAS側で再現する。既存コメントの
@@ -1058,7 +1058,7 @@ function authorizeAction(acting, action, body) {
   }
 }
 
-// lib/orbit/store.tsx の appendHistory と同じ値。history_json は
+// lib/ohsumi/store.tsx の appendHistory と同じ値。history_json は
 // [新しい変更, ...既存].slice(0, HISTORY_CAP) という形で常に先頭に追記される
 // ため、この値がずれるとキャップ落ちの正当な範囲が誤判定される。
 var HISTORY_CAP = 50
@@ -2740,7 +2740,7 @@ function createProject(name, description, type, parentId) {
 }
 
 // Deletes a project and cascades: a task can't exist without a project
-// (see lib/orbit/types.ts's Task.projectId, which is required), so its
+// (see lib/ohsumi/types.ts's Task.projectId, which is required), so its
 // tasks are removed too, not just unassigned like removeMember does for
 // members. Any admin scoped to this project (see project_ids) has it
 // dropped from their scope so they don't end up referencing a dead id.
@@ -2801,7 +2801,7 @@ function removeProject(projectId) {
 
 // Deletes a task outright — distinct from the automatic archive that
 // happens client-side 14 days after completion (see visibleTasks/
-// archivedTasks in lib/orbit/store.tsx), which just hides it, not this,
+// archivedTasks in lib/ohsumi/store.tsx), which just hides it, not this,
 // which removes the row. Any other task that listed this one in
 // depends_on_ids has that reference scrubbed so 依存関係 doesn't point at
 // a dead id.
@@ -3456,7 +3456,7 @@ function getSettingValue(key) {
 // item 2/TSK-051の修正: RecurringTaskRule (Admin > Projects の定期タスク) の
 // 生成要否判定・実際の生成をこのLockService付き関数に一本化する。以前は
 // サーバー側の日次トリガー(dailyMaintenance)と、クライアント側
-// (lib/orbit/store.tsx、誰かがOrbitを開いた時に走る)の両方が、それぞれ
+// (lib/ohsumi/store.tsx、誰かがOrbitを開いた時に走る)の両方が、それぞれ
 // 独立に「今日まだ生成していないか」を判定・生成していた。公開CSVの
 // キャッシュ反映には数分のラグがある(gas/README.mdの既知の制約)ため、
 // クライアント側がlastGeneratedDateを更新した直後にサーバー側トリガーが
@@ -3859,7 +3859,7 @@ function testSlackWebhook() {
 // タスク名・説明など自由入力テキストの自動翻訳（多言語対応、item: i18n）。
 // Google組み込みの LanguageApp.translate() を使うため追加のAPIキー・課金
 // 設定は不要。1件ずつ呼ぶとレイテンシが積み上がるため、フロント側
-// (lib/orbit/translate.ts) が複数テキストをまとめて渡し、ここでバッチ処理
+// (lib/ohsumi/translate.ts) が複数テキストをまとめて渡し、ここでバッチ処理
 // する。1件の翻訳失敗が他の件に波及しないよう、テキストごとに個別に
 // try/catchし、失敗時はその要素だけ原文を返す。
 // 無料枠のクォータ超過時もLanguageAppは例外を投げるため、同様に原文

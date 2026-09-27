@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import Script from 'next/script'
-import { FrameGuard } from '@/components/orbit/frame-guard'
+import { FrameGuard } from '@/components/ohsumi/frame-guard'
 import './globals.css'
 
 const geistSans = Geist({

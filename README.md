@@ -98,7 +98,7 @@ Google アカウントでの本人認証（Google Identity Services）に置き�
 cp .env.local.example .env.local
 ```
 
-すべて空欄のままにすると、`lib/orbit/seed.ts` のローカルモックデータで動作します
+すべて空欄のままにすると、`lib/ohsumi/seed.ts` のローカルモックデータで動作します
 （動作確認・開発用）。
 
 ### 6. ローカルで動作確認する
@@ -135,8 +135,8 @@ pnpm dev
 | パス | 内容 |
 |---|---|
 | `app/` | Next.js App Router のエントリポイント |
-| `components/orbit/` | 画面ごとのReactコンポーネント（INPUT / OUTPUT / Admin / 個人ページなど） |
-| `lib/orbit/` | 状態管理（`store.tsx`）、型定義（`types.ts`）、スプレッドシート連携（`remote.ts`）、ローカルモックデータ（`seed.ts`） |
+| `components/ohsumi/` | 画面ごとのReactコンポーネント（INPUT / OUTPUT / Admin / 個人ページなど） |
+| `lib/ohsumi/` | 状態管理（`store.tsx`）、型定義（`types.ts`）、スプレッドシート連携（`remote.ts`）、ローカルモックデータ（`seed.ts`） |
 | `gas/` | Google Apps Script（`Code.gs`）とスプレッドシート連携のセットアップ手順 |
 | `database.xlsx` | シート構成のサンプルスプレッドシート |
 | `docs/onboarding.md` | 新規団体向けの初期化チェックリスト |

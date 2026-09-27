@@ -1,0 +1,206 @@
+'use client'
+
+import { useState } from 'react'
+import { useOrbit } from '@/lib/ohsumi/store'
+import { useNav } from '@/lib/ohsumi/nav'
+import { KanbanBoard } from '../output/kanban-board'
+import { CalendarView } from '../output/calendar-view'
+import { ListView } from '../output/list-view'
+import { DifficultyBoard } from '../output/difficulty-board'
+import { DependencyView } from '../output/dependency-view'
+import { GanttView } from '../output/gantt-view'
+import { OpenBidView } from '../output/open-bid-view'
+import { TaskDetailDrawer } from '../output/task-detail-drawer'
+import { Avatar } from '@/components/ohsumi/primitives'
+import { isOverdue } from '@/lib/ohsumi/utils'
+import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
+import { cn } from '@/lib/utils'
+import { ArrowLeft, Target } from 'lucide-react'
+import { useI18n } from '@/lib/ohsumi/i18n'
+
+type Tab = 'workflow' | 'list' | 'calendar' | 'difficulty' | 'dependency' | 'gantt' | 'openbid' | 'overview'
+
+export function ProjectDetail({ id }: { id: string }) {
+  const { getProject, visibleTasks: tasks, members, getProjectMembers, currentUser } = useOrbit()
+  const { go } = useNav()
+  const { t } = useI18n()
+  const [tab, setTab] = useState<Tab>('workflow')
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
+
+  const project = getProject(id)
+  if (!project) {
+    return (
+      <div className="mx-auto max-w-3xl px-6 py-10">
+        <p className="text-sm text-muted-foreground">{t('project.detail.notFound')}</p>
+      </div>
+    )
+  }
+
+  const pt = tasks.filter((t) => t.projectId === id)
+  const done = pt.filter((t) => t.status === 'done').length
+  const waiting = pt.filter((t) => t.status === 'review').length
+  const overdue = pt.filter((t) => isOverdue(t, currentUser?.timezone ?? DEFAULT_TIMEZONE)).length
+  const completion = pt.length ? Math.round((done / pt.length) * 100) : 0
+  const projMembers = getProjectMembers(id)
+  const owner = members.find((m) => m.id === project.ownerId)
+
+  return (
+    <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
+      <button
+        onClick={() => go({ name: 'output' })}
+        className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" />
+        {t('survey.back')}
+      </button>
+
+      {/* Header */}
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="size-2.5 rounded-full bg-primary/60" />
+              <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
+            </div>
+            {project.goal && (
+              <div className="mt-2 flex items-start gap-1.5 rounded-md bg-primary-muted px-2.5 py-1.5 text-sm text-primary">
+                <Target className="mt-0.5 size-3.5 shrink-0" />
+                <span className="max-w-xl">{project.goal}</span>
+              </div>
+            )}
+            {project.description && (
+              <p className="mt-1.5 max-w-xl text-sm text-muted-foreground">{project.description}</p>
+            )}
+            {(project.startDate || project.endDate) && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t('project.detail.periodLabel', { start: project.startDate || '?', end: project.endDate || '?' })}
+              </p>
+            )}
+            {owner && (
+              <button
+                onClick={() => go({ name: 'person', id: owner.id })}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-xs hover:bg-secondary"
+              >
+                <Avatar member={owner} size={18} />
+                <span className="text-muted-foreground">{t('project.detail.ownerLabel')}</span>
+                {owner.displayName || owner.name}
+              </button>
+            )}
+            <div className="mt-3 flex -space-x-1.5">
+              {projMembers.slice(0, 6).map((m) => (
+                <span key={m.id} className="rounded-full ring-2 ring-card">
+                  <Avatar member={m} size={26} />
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-3xl font-semibold tabular-nums">{completion}%</p>
+            <p className="text-xs text-muted-foreground">{t('project.detail.completionRate')}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="mt-5 flex items-center gap-1 border-b border-border">
+        {(
+          [
+            ['workflow', t('output.view.workflow')],
+            ['list', t('output.view.list')],
+            ['calendar', t('output.view.calendar')],
+            ['difficulty', t('output.view.difficulty')],
+            ['dependency', t('output.view.dependency')],
+            ['gantt', t('output.view.gantt')],
+            ['openbid', t('output.view.openbid')],
+            ['overview', t('project.detail.tab.overview')],
+          ] as [Tab, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              '-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+              tab === key
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5">
+        {tab === 'overview' && (
+          <div className="flex flex-col gap-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Metric label={t('project.detail.metric.totalTasks')} value={pt.length} />
+              <Metric label={t('project.detail.metric.done')} value={done} />
+              <Metric label={t('admin.leadership.kpi.reviewing')} value={waiting} accent={waiting > 0 ? 'warning' : undefined} />
+              <Metric label={t('admin.leadership.kpi.overdue')} value={overdue} accent={overdue > 0 ? 'danger' : undefined} />
+            </div>
+            <div>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {t('project.detail.membersHeading')}
+              </p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {projMembers.map((m) => {
+                  if (!m) return null
+                  const count = pt.filter((t) => t.assigneeIds.includes(m.id)).length
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => go({ name: 'person', id: m.id })}
+                      className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:bg-secondary/50"
+                    >
+                      <Avatar member={m} size={32} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{m.displayName || m.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">{m.affiliation}</p>
+                      </div>
+                      <span className="text-xs text-muted-foreground">{t('project.detail.taskCount', { count })}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+        {tab === 'workflow' && <KanbanBoard tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'list' && <ListView tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'calendar' && <CalendarView tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'difficulty' && <DifficultyBoard tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'dependency' && <DependencyView tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'gantt' && <GanttView tasks={pt} onOpenTask={setOpenTaskId} />}
+        {tab === 'openbid' && <OpenBidView tasks={pt} onOpenTask={setOpenTaskId} />}
+      </div>
+
+      <TaskDetailDrawer taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
+    </div>
+  )
+}
+
+function Metric({
+  label,
+  value,
+  accent,
+}: {
+  label: string
+  value: number
+  accent?: 'warning' | 'danger'
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <p
+        className={cn(
+          'text-2xl font-semibold tabular-nums',
+          accent === 'warning' && 'text-amber-600',
+          accent === 'danger' && 'text-destructive',
+        )}
+      >
+        {value}
+      </p>
+      <p className="mt-0.5 text-xs text-muted-foreground">{label}</p>
+    </div>
+  )
+}
