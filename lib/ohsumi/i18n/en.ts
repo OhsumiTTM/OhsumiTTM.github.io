@@ -1037,6 +1037,7 @@ export const en = {
   'feedback.error.severity': 'Please select how urgent this is',
   'feedback.error.wantReply': 'Please choose whether you want a reply',
   'feedback.error.submitFailed': 'Submission failed. Please check your network connection and try again.',
+  'feedback.error.notConfigured': 'No feedback destination is configured',
   'feedback.contactType.bugReport': 'Bug report',
   'feedback.contactType.improvement': 'Feature improvement request',
   'feedback.contactType.newFeature': 'New feature proposal',
