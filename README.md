@@ -1,9 +1,9 @@
-# Orbit
+# Ohsumi
 
 タスクを打ち上げ、組織を軌道に乗せる。学生団体向けのタスク管理×人材管理ツールです。
 
-Orbitはもともと FSIF（学生団体）向けに作られましたが、コードはそのまま他団体でも
-セルフホストして使えるように設計されています。**Orbitチーム側が複数団体を横断的に
+Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コードはそのまま他団体でも
+セルフホストして使えるように設計されています。**Ohsumiチーム側が複数団体を横断的に
 運用することはありません** — 導入する団体ごとに、自分たちの Google Spreadsheet・
 Google アカウント・GitHub リポジトリの上で、完全に独立した1インスタンスとして動きます。
 
@@ -40,7 +40,7 @@ Spreadsheet・Apps Script はすべて無料枠で完結します）。
 
 ## セットアップ（新規団体向け）
 
-他団体がOrbitを自分たちの団体用に導入する場合の手順です。すべて団体ごとに
+他団体がOhsumiを自分たちの団体用に導入する場合の手順です。すべて団体ごとに
 **自分たちのアカウントで新規に作成**してください（他団体のSpreadsheet・Apps Script・
 GitHubリポジトリを共用することはできません／してはいけません）。
 
@@ -49,9 +49,9 @@ GitHubリポジトリを共用することはできません／してはいけ�
 このリポジトリを Fork するか、`git clone` した上で新しい GitHub リポジトリとして
 push してください。
 
-> **重要**: `next.config.mjs` の `repoName` 定数（現在 `'Orbit'`）は GitHub Pages の
-> 公開パス（`https://<org>.github.io/<repoName>/`）に使われます。リポジトリ名を
-> 変えた場合は、この定数もリポジトリ名に合わせて書き換えてください。
+> **重要**: アプリはドメインのルート（`https://<org>.github.io/` または独自ドメイン）で
+> 動く前提です（`next.config.mjs` に basePath は設定していません）。GitHub Pages で
+> 公開する場合は、リポジトリ名を `<org>.github.io` にするか、独自ドメインを設定してください。
 
 ### 2. Google Spreadsheet を用意する
 
@@ -98,7 +98,7 @@ Google アカウントでの本人認証（Google Identity Services）に置き�
 cp .env.local.example .env.local
 ```
 
-すべて空欄のままにすると、`lib/orbit/seed.ts` のローカルモックデータで動作します
+すべて空欄のままにすると、`lib/ohsumi/seed.ts` のローカルモックデータで動作します
 （動作確認・開発用）。
 
 ### 6. ローカルで動作確認する
@@ -135,8 +135,8 @@ pnpm dev
 | パス | 内容 |
 |---|---|
 | `app/` | Next.js App Router のエントリポイント |
-| `components/orbit/` | 画面ごとのReactコンポーネント（INPUT / OUTPUT / Admin / 個人ページなど） |
-| `lib/orbit/` | 状態管理（`store.tsx`）、型定義（`types.ts`）、スプレッドシート連携（`remote.ts`）、ローカルモックデータ（`seed.ts`） |
+| `components/ohsumi/` | 画面ごとのReactコンポーネント（INPUT / OUTPUT / Admin / 個人ページなど） |
+| `lib/ohsumi/` | 状態管理（`store.tsx`）、型定義（`types.ts`）、スプレッドシート連携（`remote.ts`）、ローカルモックデータ（`seed.ts`） |
 | `gas/` | Google Apps Script（`Code.gs`）とスプレッドシート連携のセットアップ手順 |
 | `database.xlsx` | シート構成のサンプルスプレッドシート |
 | `docs/onboarding.md` | 新規団体向けの初期化チェックリスト |
@@ -151,5 +151,5 @@ pnpm build                           # 本番ビルド（ローカルモック�
 
 ## ライセンス
 
-[MIT License](LICENSE) — 自由に使用・改変・再配布できます。Orbitチームは、配布された
+[MIT License](LICENSE) — 自由に使用・改変・再配布できます。Ohsumiチームは、配布された
 コードの利用によって生じたいかなる損害についても責任を負いません（詳細はLICENSE参照）。

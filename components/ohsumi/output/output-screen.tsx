@@ -1,0 +1,977 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Task, Priority, Difficulty } from '@/lib/ohsumi/types'
+import { useOhsumi } from '@/lib/ohsumi/store'
+import { useNav } from '@/lib/ohsumi/nav'
+import { KanbanBoard } from './kanban-board'
+import { CalendarView } from './calendar-view'
+import { ListView } from './list-view'
+import { PeopleView } from './people-view'
+import { ProjectView } from './project-view'
+import { DifficultyBoard } from './difficulty-board'
+import { DependencyView } from './dependency-view'
+import { GanttView } from './gantt-view'
+import { OpenBidView } from './open-bid-view'
+import { TaskDetailDrawer } from './task-detail-drawer'
+import { KANBAN_CARD_FIELDS, KANBAN_CARD_FIELD_KEY, type KanbanCardField } from './kanban-card'
+import { PROJECT_CARD_FIELDS, PROJECT_CARD_FIELD_KEY, type ProjectCardField } from './project-view'
+import { cn } from '@/lib/utils'
+import {
+  ArrowUpDown,
+  Check,
+  Columns3,
+  LayoutList,
+  CalendarDays,
+  FolderKanban,
+  GaugeCircle,
+  GitBranch,
+  GripVertical,
+  Inbox,
+  Archive,
+  SlidersHorizontal,
+  User,
+  X,
+  Receipt,
+  FileText,
+  BarChart2,
+  Megaphone,
+  ListOrdered,
+  Plus,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { ExpenseApplicationModal } from '@/components/ohsumi/expense-application-modal'
+import { ExpenseHistoryModal } from '@/components/ohsumi/expense-history-modal'
+import { CustomFormModal } from '@/components/ohsumi/custom-form-modal'
+import { Modal } from '@/components/ohsumi/modal'
+import { useToast } from '@/components/ohsumi/toast'
+import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+
+type Target = 'mine' | 'all' | 'people' | 'projects' | 'archive'
+type View = 'workflow' | 'list' | 'calendar' | 'difficulty' | 'dependency' | 'gantt' | 'openbid'
+
+// item: タスクの表示順切替 — ワークフロー/難易度ボード内のカード順は元々
+// tasks配列の並び(=入力順)のままだったので、締切/優先度/難易度/作成日で
+// 切り替えられるようにした。deadline/createdAt無しのタスクは末尾に回す
+type TaskSort = 'deadline' | 'priority' | 'difficulty' | 'created'
+const TASK_SORT_ORDER: TaskSort[] = ['deadline', 'priority', 'difficulty', 'created']
+const TASK_SORT_KEY: Record<TaskSort, TranslationKey> = {
+  deadline: 'output.sort.deadline',
+  priority: 'output.sort.priority',
+  difficulty: 'output.sort.difficulty',
+  created: 'output.sort.created',
+}
+const PRIORITY_RANK: Record<Priority, number> = { '高': 0, '中': 1, '低': 2 }
+const DIFFICULTY_RANK: Record<Difficulty, number> = {
+  '誰でも可': 0,
+  '新人歓迎': 1,
+  '少し経験必要': 2,
+  '経験者向け': 3,
+  '上級者向け': 4,
+}
+
+function sortTasksBy(tasks: Task[], sort: TaskSort): Task[] {
+  const arr = [...tasks]
+  switch (sort) {
+    case 'deadline':
+      arr.sort((a, b) => {
+        if (!a.deadline && !b.deadline) return 0
+        if (!a.deadline) return 1
+        if (!b.deadline) return -1
+        return a.deadline.localeCompare(b.deadline)
+      })
+      break
+    case 'priority':
+      arr.sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority])
+      break
+    case 'difficulty':
+      arr.sort((a, b) => DIFFICULTY_RANK[a.difficulty] - DIFFICULTY_RANK[b.difficulty])
+      break
+    case 'created':
+      arr.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+      break
+  }
+  return arr
+}
+
+// 並び順もブラウザごとの個人的な好みなのでlocalStorageに保存する
+function taskSortKeyFor(userId: string | null | undefined): string {
+  return `ohsumi-task-sort-${userId ?? 'anon'}`
+}
+function loadTaskSort(userId: string | null | undefined): TaskSort {
+  if (typeof window === 'undefined') return 'deadline'
+  try {
+    const raw = window.localStorage.getItem(taskSortKeyFor(userId))
+    return raw && TASK_SORT_ORDER.includes(raw as TaskSort) ? (raw as TaskSort) : 'deadline'
+  } catch {
+    return 'deadline'
+  }
+}
+
+const DEFAULT_TARGET_ORDER: Target[] = ['mine', 'all', 'people', 'projects', 'archive']
+const TARGET_KEY: Record<Target, TranslationKey> = {
+  mine: 'output.target.mine',
+  all: 'output.target.all',
+  people: 'output.target.people',
+  projects: 'output.target.projects',
+  archive: 'output.target.archive',
+}
+
+// 対象タブの並び順もブラウザごとの個人的な好みなので localStorage に保存する。
+// 一番左（先頭）が既定表示になる
+function targetOrderKey(userId: string | null | undefined): string {
+  return `ohsumi-target-order-${userId ?? 'anon'}`
+}
+function loadTargetOrder(userId: string | null | undefined): Target[] {
+  if (typeof window === 'undefined') return DEFAULT_TARGET_ORDER
+  try {
+    const raw = window.localStorage.getItem(targetOrderKey(userId))
+    if (!raw) return DEFAULT_TARGET_ORDER
+    const parsed = JSON.parse(raw) as string[]
+    const valid = parsed.filter((t): t is Target => DEFAULT_TARGET_ORDER.includes(t as Target))
+    // 将来的に対象が増えた場合に備え、保存済みの並びに無いものは末尾に補完する
+    const missing = DEFAULT_TARGET_ORDER.filter((t) => !valid.includes(t))
+    return valid.length > 0 ? [...valid, ...missing] : DEFAULT_TARGET_ORDER
+  } catch {
+    return DEFAULT_TARGET_ORDER
+  }
+}
+
+// カードの表示項目はブラウザごとの個人的な好み（組織のデータではない）なので
+// localStorageに保存する。デモ環境で同じブラウザから複数ユーザーを切り替える
+// ことがあるため、ユーザーIDでスコープしておく
+function cardFieldsKey(userId: string | null | undefined): string {
+  return `ohsumi-card-fields-${userId ?? 'anon'}`
+}
+function loadCardFields(userId: string | null | undefined): Set<KanbanCardField> {
+  if (typeof window === 'undefined') return new Set(KANBAN_CARD_FIELDS)
+  try {
+    const raw = window.localStorage.getItem(cardFieldsKey(userId))
+    if (!raw) return new Set(KANBAN_CARD_FIELDS)
+    const parsed = JSON.parse(raw) as string[]
+    return new Set(parsed.filter((f): f is KanbanCardField => KANBAN_CARD_FIELDS.includes(f as KanbanCardField)))
+  } catch {
+    return new Set(KANBAN_CARD_FIELDS)
+  }
+}
+
+// プロジェクト表示（対象=プロジェクト）のカードに出す項目も、同じ考え方で
+// ブラウザごとの個人設定として保存する
+function projectCardFieldsKey(userId: string | null | undefined): string {
+  return `ohsumi-project-card-fields-${userId ?? 'anon'}`
+}
+function loadProjectCardFields(userId: string | null | undefined): Set<ProjectCardField> {
+  if (typeof window === 'undefined') return new Set(PROJECT_CARD_FIELDS)
+  try {
+    const raw = window.localStorage.getItem(projectCardFieldsKey(userId))
+    if (!raw) return new Set(PROJECT_CARD_FIELDS)
+    const parsed = JSON.parse(raw) as string[]
+    return new Set(
+      parsed.filter((f): f is ProjectCardField => PROJECT_CARD_FIELDS.includes(f as ProjectCardField)),
+    )
+  } catch {
+    return new Set(PROJECT_CARD_FIELDS)
+  }
+}
+
+// 依存関係ツリーはプロジェクトが混在すると見づらくなるので、プロジェクト単位で
+// 表示/非表示を切り替えられるようにしている。これもブラウザごとの個人設定
+function hiddenProjectsKey(userId: string | null | undefined): string {
+  return `ohsumi-dependency-hidden-projects-${userId ?? 'anon'}`
+}
+function loadHiddenProjects(userId: string | null | undefined): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(hiddenProjectsKey(userId))
+    if (!raw) return new Set()
+    return new Set(JSON.parse(raw) as string[])
+  } catch {
+    return new Set()
+  }
+}
+
+export function OutputScreen() {
+  const {
+    visibleTasks,
+    archivedTasks,
+    projects,
+    currentUser,
+    pendingTasks,
+    expenseCategories,
+    customFormDefs,
+    isFullAdmin,
+    addProject,
+    projectTypes,
+  } = useOhsumi()
+  const toast = useToast()
+  const { go } = useNav()
+  const { t: tr } = useI18n()
+  const [targetOrder, setTargetOrder] = useState<Target[]>(() => loadTargetOrder(currentUser?.id))
+  const [target, setTarget] = useState<Target>(() => loadTargetOrder(currentUser?.id)[0])
+  const [view, setView] = useState<View>('workflow')
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null)
+  const [projectFilter, setProjectFilter] = useState('')
+  const [expenseModalOpen, setExpenseModalOpen] = useState(false)
+  const [expenseHistoryOpen, setExpenseHistoryOpen] = useState(false)
+  const [formModalOpen, setFormModalOpen] = useState(false)
+  // プロジェクト表示ページ側でもプロジェクトを追加できるように(item: プロジェクト
+  // カード一覧を独立スクロールにした際、下までスクロールしても追加操作に
+  // 迷わないよう、スクロール領域の外にこのボタンを置く)
+  const [addProjectOpen, setAddProjectOpen] = useState(false)
+  const [newProjectName, setNewProjectName] = useState('')
+  const [newProjectType, setNewProjectType] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [cardFields, setCardFields] = useState<Set<KanbanCardField>>(() =>
+    loadCardFields(currentUser?.id),
+  )
+  const [fieldsOpen, setFieldsOpen] = useState(false)
+  const fieldsRef = useRef<HTMLDivElement>(null)
+  const [orderOpen, setOrderOpen] = useState(false)
+  const orderRef = useRef<HTMLDivElement>(null)
+  const [taskSort, setTaskSort] = useState<TaskSort>(() => loadTaskSort(currentUser?.id))
+  const [sortOpen, setSortOpen] = useState(false)
+  const sortRef = useRef<HTMLDivElement>(null)
+  const [projectCardFields, setProjectCardFields] = useState<Set<ProjectCardField>>(() =>
+    loadProjectCardFields(currentUser?.id),
+  )
+  const [projectFieldsOpen, setProjectFieldsOpen] = useState(false)
+  const projectFieldsRef = useRef<HTMLDivElement>(null)
+  const [draggingTarget, setDraggingTarget] = useState<Target | null>(null)
+  const [hiddenProjectIds, setHiddenProjectIds] = useState<Set<string>>(() =>
+    loadHiddenProjects(currentUser?.id),
+  )
+  const [projectVisibilityOpen, setProjectVisibilityOpen] = useState(false)
+  const projectVisibilityRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (fieldsRef.current && !fieldsRef.current.contains(e.target as Node)) {
+        setFieldsOpen(false)
+      }
+      if (orderRef.current && !orderRef.current.contains(e.target as Node)) {
+        setOrderOpen(false)
+      }
+      if (
+        projectVisibilityRef.current &&
+        !projectVisibilityRef.current.contains(e.target as Node)
+      ) {
+        setProjectVisibilityOpen(false)
+      }
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
+        setSortOpen(false)
+      }
+      if (projectFieldsRef.current && !projectFieldsRef.current.contains(e.target as Node)) {
+        setProjectFieldsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  const toggleCardField = (field: KanbanCardField) => {
+    setCardFields((prev) => {
+      const next = new Set(prev)
+      if (next.has(field)) next.delete(field)
+      else next.add(field)
+      try {
+        window.localStorage.setItem(cardFieldsKey(currentUser?.id), JSON.stringify([...next]))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
+
+  const toggleProjectCardField = (field: ProjectCardField) => {
+    setProjectCardFields((prev) => {
+      const next = new Set(prev)
+      if (next.has(field)) next.delete(field)
+      else next.add(field)
+      try {
+        window.localStorage.setItem(projectCardFieldsKey(currentUser?.id), JSON.stringify([...next]))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
+
+  const changeTaskSort = (sort: TaskSort) => {
+    setTaskSort(sort)
+    setSortOpen(false)
+    try {
+      window.localStorage.setItem(taskSortKeyFor(currentUser?.id), sort)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const toggleProjectVisibility = (projectId: string) => {
+    setHiddenProjectIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(projectId)) next.delete(projectId)
+      else next.add(projectId)
+      try {
+        window.localStorage.setItem(hiddenProjectsKey(currentUser?.id), JSON.stringify([...next]))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
+
+  // dragged を dropOn の位置に差し込む形で並び替える（一番左が既定表示になる）
+  const reorderTarget = (dragged: Target, dropOn: Target) => {
+    if (dragged === dropOn) return
+    setTargetOrder((prev) => {
+      const next = prev.filter((t) => t !== dragged)
+      next.splice(next.indexOf(dropOn), 0, dragged)
+      try {
+        window.localStorage.setItem(targetOrderKey(currentUser?.id), JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
+
+  // 自分が担当者に含まれるタスクだけを抜き出したもの。「自分」対象の土台になる
+  // 自分だけがアサインされている承認待ちタスクは、まだ組織全体には出さず
+  // 本人の「自分」タブにだけ先出しする（承認されれば visibleTasks に載り、
+  // ここでの二重表示は起きない）
+  const myTasks = useMemo(() => {
+    if (!currentUser) return []
+    const approved = visibleTasks.filter((t) => t.assigneeIds.includes(currentUser.id))
+    const mySelfAssignedPending = pendingTasks.filter((t) => t.assigneeIds.includes(currentUser.id))
+    // 自分が確認者に指定されていて、実際に確認が必要な(確認待ちの)タスク。
+    // 担当者としても確認者としても対象になりうるので、下のMapで重複除去する。
+    const myReviewTasks = visibleTasks.filter((t) => {
+      if (t.status !== 'review') return false
+      const reviewerIds = t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])
+      return reviewerIds.includes(currentUser.id)
+    })
+    const merged = new Map<string, Task>()
+    ;[...approved, ...mySelfAssignedPending, ...myReviewTasks].forEach((t) => merged.set(t.id, t))
+    return [...merged.values()]
+  }, [visibleTasks, pendingTasks, currentUser])
+
+  // choosing a 表示 (view) jumps to whichever of 自分/一覧 was last active,
+  // since the workflow/list/calendar/difficulty/dependency views only apply
+  // to those two targets
+  const selectView = (v: View) => {
+    setView(v)
+    setTarget((t) =>
+      t === 'all' || t === 'mine' ? t : targetOrder.find((x) => x === 'mine' || x === 'all') ?? 'mine',
+    )
+  }
+
+  // project-unit / schedule-unit filtering, applied to the 自分/一覧 targets' views
+  const filteredTasks = useMemo(() => {
+    const base = target === 'mine' ? myTasks : visibleTasks
+    return base.filter((t) => {
+      if (projectFilter && t.projectId !== projectFilter) return false
+      if (fromDate || toDate) {
+        const ref = t.deadline ?? t.startDate
+        if (!ref) return false
+        if (fromDate && ref < fromDate) return false
+        if (toDate && ref > toDate) return false
+      }
+      return true
+    })
+  }, [target, myTasks, visibleTasks, projectFilter, fromDate, toDate])
+
+  // ワークフロー/難易度ボードのカード順（並び替え非対応のガント/依存関係/
+  // 公募ビューはfilteredTasksをそのまま使う）
+  const sortedTasks = useMemo(() => sortTasksBy(filteredTasks, taskSort), [filteredTasks, taskSort])
+
+  // 依存関係ツリー専用の追加絞り込み（プロジェクト単位の表示/非表示）
+  const dependencyTasks = useMemo(
+    () => filteredTasks.filter((t) => !hiddenProjectIds.has(t.projectId)),
+    [filteredTasks, hiddenProjectIds],
+  )
+
+  // 公募タブは対象/絞り込みタブとは独立に、visibleTasks全体から
+  // 未アサインの公募タスクだけを抜き出す
+  const openBidTasks = useMemo(
+    () => visibleTasks.filter((t) => t.assigneeIds.length === 0 && (t.assignType ?? 'open_bid') === 'open_bid'),
+    [visibleTasks],
+  )
+
+  const hasActiveFilter = !!(projectFilter || fromDate || toDate)
+
+  return (
+    <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-5 flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">{tr('output.title')}</h1>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {target === 'mine'
+                ? tr('output.subtitle.mine')
+                : tr('output.subtitle.all')}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {expenseCategories.length > 0 && (
+              <>
+                <button
+                  onClick={() => setExpenseModalOpen(true)}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <Receipt className="size-3.5" />
+                  {tr('output.expenseApply')}
+                </button>
+                <button
+                  onClick={() => setExpenseHistoryOpen(true)}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <FileText className="size-3.5" />
+                  {tr('output.expenseHistory')}
+                </button>
+              </>
+            )}
+            {customFormDefs.length > 0 && (
+              <button
+                onClick={() => setFormModalOpen(true)}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <FileText className="size-3.5" />
+                {tr('output.formApply')}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <Segment label={tr('output.target.label')}>
+            {targetOrder.map((tg) => (
+              <Seg key={tg} active={target === tg} onClick={() => setTarget(tg)}>
+                {tg === 'mine' && <User className="size-3.5" />}
+                {tg === 'archive' && <Archive className="size-3.5" />}
+                {tr(TARGET_KEY[tg])}
+                {tg === 'mine' && myTasks.length > 0 && (
+                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                    {myTasks.length}
+                  </span>
+                )}
+                {tg === 'archive' && archivedTasks.length > 0 && (
+                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                    {archivedTasks.length}
+                  </span>
+                )}
+              </Seg>
+            ))}
+          </Segment>
+
+          <div className="relative" ref={orderRef}>
+            <button
+              type="button"
+              onClick={() => setOrderOpen((o) => !o)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+              aria-expanded={orderOpen}
+              title={tr('output.reorder.title')}
+            >
+              <ArrowUpDown className="size-3.5" />
+              {tr('output.reorder')}
+            </button>
+            {orderOpen && (
+              <div className="absolute left-0 top-full z-10 mt-1.5 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
+                <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                  {tr('output.reorder.hint')}
+                </p>
+                {targetOrder.map((tg) => (
+                  <div
+                    key={tg}
+                    draggable
+                    onDragStart={() => setDraggingTarget(tg)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (draggingTarget) reorderTarget(draggingTarget, tg)
+                      setDraggingTarget(null)
+                    }}
+                    onDragEnd={() => setDraggingTarget(null)}
+                    className={cn(
+                      'flex cursor-grab items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-secondary',
+                      draggingTarget === tg && 'opacity-40',
+                    )}
+                  >
+                    <GripVertical className="size-3.5 shrink-0 text-muted-foreground" />
+                    {tr(TARGET_KEY[tg])}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <Segment label={tr('output.view.label')}>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'workflow'}
+              onClick={() => selectView('workflow')}
+            >
+              <Columns3 className="size-3.5" />
+              {tr('output.view.workflow')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'list'}
+              onClick={() => selectView('list')}
+            >
+              <LayoutList className="size-3.5" />
+              {tr('output.view.list')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'calendar'}
+              onClick={() => selectView('calendar')}
+            >
+              <CalendarDays className="size-3.5" />
+              {tr('output.view.calendar')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'difficulty'}
+              onClick={() => selectView('difficulty')}
+            >
+              <GaugeCircle className="size-3.5" />
+              {tr('output.view.difficulty')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'dependency'}
+              onClick={() => selectView('dependency')}
+            >
+              <GitBranch className="size-3.5" />
+              {tr('output.view.dependency')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'gantt'}
+              onClick={() => selectView('gantt')}
+            >
+              <BarChart2 className="size-3.5" />
+              {tr('output.view.gantt')}
+            </Seg>
+            <Seg
+              active={(target === 'all' || target === 'mine') && view === 'openbid'}
+              onClick={() => selectView('openbid')}
+            >
+              <Megaphone className="size-3.5" />
+              {tr('output.view.openbid')}
+              {openBidTasks.length > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                  {openBidTasks.length}
+                </span>
+              )}
+            </Seg>
+          </Segment>
+
+          {target === 'projects' && isFullAdmin && (
+            <Button className="h-8" onClick={() => setAddProjectOpen(true)}>
+              <Plus className="size-3.5" />
+              {tr('admin.projects.form.submit')}
+            </Button>
+          )}
+
+          {target === 'projects' && (
+            <div className="relative" ref={projectFieldsRef}>
+              <button
+                type="button"
+                onClick={() => setProjectFieldsOpen((o) => !o)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                aria-expanded={projectFieldsOpen}
+              >
+                <SlidersHorizontal className="size-3.5" />
+                {tr('output.fields.button')}
+              </button>
+              {projectFieldsOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1.5 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
+                  <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                    {tr('output.fields.hint')}
+                  </p>
+                  {PROJECT_CARD_FIELDS.map((f) => {
+                    const checked = projectCardFields.has(f)
+                    return (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => toggleProjectCardField(f)}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-secondary"
+                      >
+                        <span
+                          className={cn(
+                            'flex size-4 shrink-0 items-center justify-center rounded border',
+                            checked
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border-strong text-transparent',
+                          )}
+                        >
+                          <Check className="size-3" strokeWidth={3} />
+                        </span>
+                        {tr(PROJECT_CARD_FIELD_KEY[f])}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(target === 'all' || target === 'mine') &&
+            (view === 'workflow' || view === 'difficulty' || view === 'dependency') && (
+            <div className="relative" ref={fieldsRef}>
+              <button
+                type="button"
+                onClick={() => setFieldsOpen((o) => !o)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                aria-expanded={fieldsOpen}
+              >
+                <SlidersHorizontal className="size-3.5" />
+                {tr('output.fields.button')}
+              </button>
+              {fieldsOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1.5 w-44 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
+                  <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                    {tr('output.fields.hint')}
+                  </p>
+                  {KANBAN_CARD_FIELDS.map((f) => {
+                    const checked = cardFields.has(f)
+                    return (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => toggleCardField(f)}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-secondary"
+                      >
+                        <span
+                          className={cn(
+                            'flex size-4 shrink-0 items-center justify-center rounded border',
+                            checked
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border-strong text-transparent',
+                          )}
+                        >
+                          <Check className="size-3" strokeWidth={3} />
+                        </span>
+                        {tr(KANBAN_CARD_FIELD_KEY[f])}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(target === 'all' || target === 'mine') && (view === 'workflow' || view === 'difficulty') && (
+            <div className="relative" ref={sortRef}>
+              <button
+                type="button"
+                onClick={() => setSortOpen((o) => !o)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                aria-expanded={sortOpen}
+              >
+                <ListOrdered className="size-3.5" />
+                {tr('output.sort.button')}
+              </button>
+              {sortOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1.5 w-44 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
+                  {TASK_SORT_ORDER.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => changeTaskSort(s)}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-secondary"
+                    >
+                      <span
+                        className={cn(
+                          'flex size-4 shrink-0 items-center justify-center rounded-full border',
+                          taskSort === s
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border-strong text-transparent',
+                        )}
+                      >
+                        <Check className="size-3" strokeWidth={3} />
+                      </span>
+                      {tr(TASK_SORT_KEY[s])}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {(target === 'all' || target === 'mine') && view === 'dependency' && (
+            <div className="relative" ref={projectVisibilityRef}>
+              <button
+                type="button"
+                onClick={() => setProjectVisibilityOpen((o) => !o)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
+                aria-expanded={projectVisibilityOpen}
+              >
+                <FolderKanban className="size-3.5" />
+                {tr('output.projectVisibility.button')}
+                {hiddenProjectIds.size > 0 && (
+                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                    {projects.length - hiddenProjectIds.size}/{projects.length}
+                  </span>
+                )}
+              </button>
+              {projectVisibilityOpen && (
+                <div className="absolute left-0 top-full z-10 mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
+                  <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+                    {tr('output.projectVisibility.hint')}
+                  </p>
+                  <div className="max-h-72 overflow-y-auto ohsumi-scroll">
+                    {projects.map((p) => {
+                      const checked = !hiddenProjectIds.has(p.id)
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => toggleProjectVisibility(p.id)}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-secondary"
+                        >
+                          <span
+                            className={cn(
+                              'flex size-4 shrink-0 items-center justify-center rounded border',
+                              checked
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border-strong text-transparent',
+                            )}
+                          >
+                            <Check className="size-3" strokeWidth={3} />
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                        </button>
+                      )
+                    })}
+                    {projects.length === 0 && (
+                      <p className="px-2.5 py-1.5 text-xs text-muted-foreground">
+                        {tr('output.projectVisibility.empty')}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(target === 'all' || target === 'mine') && view !== 'openbid' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                className="h-8 cursor-pointer rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"
+              >
+                <option value="">{tr('output.filter.allProjects')}</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                title={tr('output.filter.fromTitle')}
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"
+              />
+              <span className="text-xs text-muted-foreground">{tr('output.filter.tilde')}</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                title={tr('output.filter.toTitle')}
+                className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"
+              />
+              {hasActiveFilter && (
+                <button
+                  onClick={() => {
+                    setProjectFilter('')
+                    setFromDate('')
+                    setToDate('')
+                  }}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                  {tr('output.filter.clear')}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {target === 'archive' ? (
+        archivedTasks.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card py-20 text-center">
+            <Archive className="mx-auto size-6 text-muted-foreground" />
+            <p className="mt-3 text-sm font-medium">{tr('output.archive.empty.title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {tr('output.archive.empty.desc')}
+            </p>
+          </div>
+        ) : (
+          <ListView tasks={archivedTasks} onOpenTask={setOpenTaskId} />
+        )
+      ) : visibleTasks.length === 0 ? (
+        <EmptyState onInput={() => go({ name: 'input' })} />
+      ) : target === 'mine' && myTasks.length === 0 ? (
+        <MineEmptyState onShowAll={() => setTarget('all')} />
+      ) : (
+        <>
+          {target === 'people' && <PeopleView />}
+          {target === 'projects' && <ProjectView fields={projectCardFields} />}
+          {(target === 'all' || target === 'mine') && view === 'workflow' && (
+            <KanbanBoard tasks={sortedTasks} onOpenTask={setOpenTaskId} fields={cardFields} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'list' && (
+            <ListView tasks={filteredTasks} onOpenTask={setOpenTaskId} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'calendar' && (
+            <CalendarView tasks={filteredTasks} onOpenTask={setOpenTaskId} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'difficulty' && (
+            <DifficultyBoard tasks={sortedTasks} onOpenTask={setOpenTaskId} fields={cardFields} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'dependency' && (
+            <DependencyView tasks={dependencyTasks} onOpenTask={setOpenTaskId} fields={cardFields} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'gantt' && (
+            <GanttView tasks={filteredTasks} onOpenTask={setOpenTaskId} />
+          )}
+          {(target === 'all' || target === 'mine') && view === 'openbid' && (
+            <OpenBidView tasks={openBidTasks} onOpenTask={setOpenTaskId} />
+          )}
+        </>
+      )}
+
+      <TaskDetailDrawer taskId={openTaskId} onClose={() => setOpenTaskId(null)} />
+      {expenseModalOpen && <ExpenseApplicationModal onClose={() => setExpenseModalOpen(false)} />}
+      {expenseHistoryOpen && <ExpenseHistoryModal onClose={() => setExpenseHistoryOpen(false)} />}
+      {formModalOpen && <CustomFormModal onClose={() => setFormModalOpen(false)} />}
+
+      <Modal open={addProjectOpen} onClose={() => setAddProjectOpen(false)} labelledBy="add-project-title">
+        <h2 id="add-project-title" className="text-base font-semibold">
+          {tr('output.projects.addModalTitle')}
+        </h2>
+        <div className="mt-3 flex flex-col gap-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {tr('admin.projects.form.nameLabel')}
+            </label>
+            <input
+              autoFocus
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder={tr('admin.projects.form.namePlaceholder')}
+              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {tr('admin.projects.form.typeLabel')}
+            </label>
+            <select
+              value={newProjectType}
+              onChange={(e) => setNewProjectType(e.target.value)}
+              className="h-9 w-full cursor-pointer rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+            >
+              <option value="">{tr('common.notSet')}</option>
+              {projectTypes.map((pt) => (
+                <option key={pt} value={pt}>
+                  {pt}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" className="h-9" onClick={() => setAddProjectOpen(false)}>
+            {tr('common.cancel')}
+          </Button>
+          <Button
+            className="h-9"
+            disabled={!newProjectName.trim()}
+            onClick={() => {
+              const trimmed = newProjectName.trim()
+              if (!trimmed) return
+              addProject(trimmed, '', newProjectType || undefined)
+              toast(tr('admin.projects.createToast', { name: trimmed }))
+              setNewProjectName('')
+              setNewProjectType('')
+              setAddProjectOpen(false)
+            }}
+          >
+            {tr('admin.projects.form.submit')}
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  )
+}
+
+function Segment({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="ohsumi-scroll inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-secondary/60 p-0.5">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function Seg({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
+        active
+          ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(16,24,40,0.06)]'
+          : 'text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function EmptyState({ onInput }: { onInput: () => void }) {
+  const { t } = useI18n()
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card py-20 text-center">
+      <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-secondary">
+        <Inbox className="size-6 text-muted-foreground" />
+      </div>
+      <h2 className="text-base font-semibold">{t('output.empty.title')}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">{t('output.empty.desc')}</p>
+      <Button className="mt-5 h-9" onClick={onInput}>
+        {t('output.empty.cta')}
+      </Button>
+    </div>
+  )
+}
+
+function MineEmptyState({ onShowAll }: { onShowAll: () => void }) {
+  const { t } = useI18n()
+  return (
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card py-20 text-center">
+      <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-secondary">
+        <User className="size-6 text-muted-foreground" />
+      </div>
+      <h2 className="text-base font-semibold">{t('output.mineEmpty.title')}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {t('output.mineEmpty.desc')}
+      </p>
+      <Button variant="ghost" className="mt-5 h-9" onClick={onShowAll}>
+        {t('output.mineEmpty.cta')}
+      </Button>
+    </div>
+  )
+}

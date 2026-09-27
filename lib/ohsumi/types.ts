@@ -1,0 +1,1021 @@
+export type TaskStatus = 'todo' | 'hold' | 'progress' | 'support' | 'review' | 'fix' | 'done'
+
+export type Difficulty = '誰でも可' | '新人歓迎' | '少し経験必要' | '経験者向け' | '上級者向け'
+
+// 一般 is the fixed, implicit baseline every member starts at — it carries
+// no admin access. Everything above it is an admin-defined permission
+// level (default 班長/代表, but admins can add/remove levels freely — see
+// store.tsx's roleLevels/addRoleLevel/removeRoleLevel), so Role is just a
+// free-form string rather than a fixed union.
+export type Role = string
+
+export const BASE_ROLE = '一般'
+
+export function isAdminRole(role: Role): boolean {
+  return role !== BASE_ROLE
+}
+
+// admin-screen sidebar sections — used by store.tsx's rolePermissions to
+// gate which sections each non-top admin role level can see (Admin → Tags)
+export type AdminSection =
+  | 'dashboard'
+  | 'assignments'
+  | 'approvals'
+  | 'projects'
+  | 'members'
+  | 'tags'
+  | 'analytics'
+  | 'org'
+  | 'quiz'
+  | 'learning'
+  | 'radar'
+  | 'expenses'
+  | 'forms'
+  | 'memberdb'
+  | 'leadership'
+  // REP-005: 日報・週報の管理者閲覧
+  | 'dailyReports'
+  // 'recruiting' はrolePermissions/visibleAdminSectionsのロール単位制御とは
+  // 独立に、Member.permissionOverrides(targetType:'recruiting')の個別付与
+  // だけでアクセス可否を決める（admin-screen.tsxのcanAccessRecruiting参照）。
+  // そのためADMIN_SECTIONS/DEFAULT_NON_TOP_SECTIONSには意図的に含めない。
+  | 'recruiting'
+
+export const ADMIN_SECTIONS: { key: AdminSection; label: string }[] = [
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'leadership', label: '幹部 View' },
+  { key: 'approvals', label: 'Approvals' },
+  { key: 'assignments', label: 'Assignments' },
+  { key: 'projects', label: 'Projects' },
+  { key: 'members', label: 'Members' },
+  { key: 'analytics', label: 'Analytics' },
+  { key: 'tags', label: 'Tags' },
+  { key: 'org', label: 'Org Tree' },
+  { key: 'quiz', label: 'Quiz' },
+  { key: 'learning', label: 'Learning' },
+  { key: 'radar', label: 'Radar' },
+  { key: 'expenses', label: 'Expenses' },
+  { key: 'forms', label: 'Forms' },
+  { key: 'memberdb', label: '人材DB' },
+  { key: 'dailyReports', label: 'Daily Reports' },
+]
+
+// Members/Tags manage org-wide config (roles, notification routing, the
+// shared skill/category/role-level pools) — not "this project's" scope, so
+// a non-top admin role doesn't get them unless explicitly granted.
+export const DEFAULT_NON_TOP_SECTIONS: AdminSection[] = [
+  'dashboard',
+  'approvals',
+  'assignments',
+  'projects',
+  'memberdb',
+]
+
+// visibility gate for 幹部 (leadership)-only tasks — see Task.visibility
+export function canSeeExecTasks(role: Role): boolean {
+  return role !== BASE_ROLE
+}
+
+export type Priority = '高' | '中' | '低'
+
+export const PRIORITIES: Priority[] = ['高', '中', '低']
+
+// item 9: 承認ルートの拡張 — 重要/対外公開のタスクは最上位管理者のみが
+// 承認できる（Task.importance / admin-approvals.tsx）
+export type TaskImportance = '一般' | '重要' | '対外公開'
+
+export const TASK_IMPORTANCE: TaskImportance[] = ['一般', '重要', '対外公開']
+
+export const DEPARTMENTS = [
+  '運営',
+  '広報',
+  '開発',
+  'デザイン',
+  '渉外',
+  'イベント',
+  'リサーチ',
+  '未分類',
+] as const
+
+export type Department = (typeof DEPARTMENTS)[number]
+
+export interface ProgressEntry {
+  id: string
+  text: string
+  at: string // ISO datetime
+  byId: string
+}
+
+// A single natural-language input, before it is split into tasks
+export interface TaskInput {
+  id: string
+  text: string
+  createdById: string
+  createdAt: string // ISO datetime
+  generatedTaskIds: string[]
+}
+
+export interface Member {
+  id: string
+  name: string
+  affiliation: string
+  role: Role
+  avatarColor: string
+  initials: string
+  // uploaded profile picture (Google Drive-hosted, see gas/README.md's
+  // DRIVE_FOLDER_ID setup) — shown instead of the color+initials circle
+  // when set
+  avatarUrl?: string
+  will: string[]
+  judgment: string[]
+  facts: { label: string; count: number }[]
+  skills: string[]
+  // one or more addresses, comma-separated (MailApp/CalendarApp on the GAS
+  // side accept a comma-joined "to" string natively, so no backend changes
+  // are needed to support multiple notification recipients per member)
+  email?: string
+  // whether this member should receive an email when a new task is
+  // registered and needs approval — see store.tsx's notifyRecipients
+  notify?: boolean
+  // per-notification-kind email frequency settings (see NotifyFrequency /
+  // NotifyKind below). Absent keys fall back to 'immediate' for admins,
+  // 'immediate' for mention/rejected, 'none' for others.
+  notifySettings?: Partial<Record<NotifyKind, NotifyFrequency>>
+  // shown instead of `name` throughout the UI when set (item: display name)
+  displayName?: string
+  // dates (YYYY-MM-DD) this member has marked themselves unavailable on
+  unavailableDates?: string[]
+  // "admin of admins": which member notifications about this member's tasks
+  // should be routed to (e.g. a 班長's 事業部長/代表) — falls back to the
+  // default 代表 recipients when unset, see store.tsx's notifyTargetsFor
+  reportsToId?: string
+  // projects this member is scoped to manage as an admin (design doc §3).
+  // Only meaningful for a non-top admin role — see store.tsx's isFullAdmin.
+  // A 代表-equivalent (the highest-ranked role level) always sees/manages
+  // everything regardless of this list.
+  projectIds?: string[]
+  // item 14: メンター/サポート担当の設定 — another member assigned to help
+  // this one grow. Set by an admin from the person page's 人材育成 tab.
+  mentorId?: string
+  // 所属開始日（YYYY-MM-DD）— 「経験年数」（社会人経験など、団体外の経験も
+  // 含む自己申告の数値）とは別物で、この団体に所属してからの正確な期間を
+  // 表示するために使う（person-detail.tsx の「所属歴」）
+  joinedAt?: string
+  // 活動休止中フラグ — true のときタスクのおすすめ対象から除外される
+  // (store.tsx の recommendedAssignees/taskRecommendations で inactive 除外)
+  inactive?: boolean
+  // Ohsumiへの最終アクセス日時（ISO datetime）— GAS側でlogin actionを
+  // 受け取ったときに更新。25日間アクセスなしで管理者に通知（item 25）
+  lastLogin?: string
+  // 不在日リスト（YYYY-MM-DD）— カレンダービューで自分で登録し、
+  // Googleカレンダーとも同期する
+  absentDates?: string[]
+  // CAL-009: 日々の稼働可能時間帯(任意)。absentDatesは「その日は稼働不可」
+  // という日単位のフラグだが、こちらは「稼働する日は何時から何時まで
+  // 動けるか」という時間帯の目安。あくまで参考情報として表示するのみで、
+  // スケジュール調整の自動判定には使わない(タイムゾーン処理の複雑化を
+  // 避けるため、現状は文字列としてシンプルに保持する)
+  availableHours?: { start: string; end: string } // HH:MM形式
+  // 本人のタイムゾーン（IANA名、例: 'Asia/Tokyo'）— コメントの投稿日時など
+  // 時刻を含む表示のみに使う。日付のみのフィールド（deadline等）はTZに
+  // 関係ないカレンダー日として扱うため対象外（lib/ohsumi/timezone.ts）
+  timezone?: string
+  // 本人の表示言語（'ja' | 'en' など、lib/ohsumi/i18n の Locale）。ブラウザの
+  // localStorageにも保存されるが、それとは別に他デバイス/ブラウザでも
+  // 同じ言語で開けるよう、こちらはサーバー側（スプレッドシート）の値
+  locale?: string
+
+  // ---- talent-management fields (タレントマネジメント) --------------------
+  // 人材DB／スキル管理／人材検索／育成・キャリア — wired end-to-end (store.tsx
+  // actions, remote.ts mapping, gas/Code.gs columns) and surfaced on the
+  // person page's 経歴・キャリア tab, Admin → Membersの人材検索フィルタ, and
+  // Admin → Analytics (people/skill/evaluation aggregates — see
+  // components/ohsumi/admin/admin-analytics.tsx). See JobTypeSkillRequirement
+  // below for the org-wide (not per-member) job-position requirement
+  // config, used by 人材育成タブ.
+
+  // 人材検索: filterable attributes
+  // 経験年数は従来ここに自己申告の数値として持っていたが、所属日
+  // (joinedAt)からの自動計算に統一したため削除した。表示・検索が
+  // 必要な箇所は utils.ts の computeYearsOfExperience(joinedAt) を使う
+  hasManagementExperience?: boolean
+  // desired growth areas/skills ("成長したい領域やスキル"), distinct from
+  // Will (what they want to do) and skills (what they already have)
+  desiredAreas?: string[]
+  // DEV-002: 本人が取得したい具体的なスキル(desiredAreasより粒度が細かい、
+  // skillOptionsの個別スキル名の配列)。成長したい「領域」とは別に、
+  // 具体的に習得したい「スキル」を個別設定できるようにする。
+  desiredSkills?: string[]
+
+  // 人材データベース
+  careerHistory?: CareerHistoryEntry[]
+  qualifications?: Qualification[]
+  evaluationHistory?: EvaluationRecord[]
+  transferHistory?: TransferRecord[]
+
+  // スキル管理: per-skill proficiency level and role-relevant competencies,
+  // in addition to the existing flat `skills` list
+  skillLevels?: SkillLevel[]
+  competencies?: Competency[]
+
+  // 育成・キャリア
+  careerAspiration?: string
+  desiredFutureRole?: string
+  careerPlan?: string
+  trainingHistory?: TrainingRecord[]
+  developmentPlan?: DevelopmentPlanEntry[]
+  oneOnOnes?: OneOnOneRecord[]
+
+  // ---- 組織階層・権限・スキルポイント ----------------------------------------
+
+  // 所属パス ("事業本部A>事業部1>グループX") — ">" 区切りで最上位から記述。
+  // affiliation（プロジェクトから動的導出）とは独立した静的な組織階層情報。
+  // メンバーは複数の部署に同時に所属できるため配列で持つ（1つだけの場合も
+  // 要素数1の配列になる）。スプレッドシート上ではカンマ区切りの1セルで
+  // 保持する（remote.tsのsplitTags/join参照）。
+  departmentPaths?: string[]
+
+  // 個別の例外許可。たとえば「一般メンバーだが特定タスクだけ閲覧可」など
+  // ロールベースの権限チェックに重ねて適用する。
+  permissionOverrides?: PermissionOverride[]
+
+  // スキルごとの累計ポイント。skill_levels_json（確定レベル）とは別で、
+  // レベルアップのベースになる生の累計点を保持する。
+  // 例: { "デザイン": 120, "プログラミング": 340 }
+  skillPoints?: SkillPoints
+
+  // ---- 学歴情報 ------------------------------------------------------------
+  // 本人が入力し管理者が確認・修正する（updateEducationInfo, selfOrAdmin）。
+  // admin-member-db.tsxではemailと同じくADMIN_ONLY_COL_KEYS扱いにする。
+  university?: string
+  faculty?: string
+  // 既存のdepartmentPath（組織所属パス）と紛らわしいため departmentName とする
+  departmentName?: string
+  gradeYear?: string
+
+  // 団体ごとにAdmin > Tagsで追加できるカスタム列（人材DB）の値。
+  // 列定義自体はSettingsのcustomMemberColumnsに持ち、ここは値のみ。
+  customFields?: Record<string, string>
+
+  // item 22/30: このメンバー自身の全アンケート回答履歴。新規シートを
+  // 増やさず、Membersシートの1列にJSON配列として持たせている。
+  surveyResponses?: { id: string; submittedAt: string; answers: Record<string, number | string> }[]
+}
+
+/** 採用支援（入会前の候補者）— Candidatesシート */
+export interface Candidate {
+  id: string
+  name: string
+  email?: string
+  phone?: string
+  resumeText?: string
+  interviewNotes?: string
+  status: 'candidate' | 'hired' | 'rejected'
+  createdAt: string
+  updatedAt: string
+}
+
+/** 個別例外許可エントリ (Member.permissionOverrides の要素) */
+export interface PermissionOverride {
+  targetType: 'task' | 'project' | 'department' | 'recruiting'
+  targetId: string
+  access: 'view' | 'edit' | 'approve'
+}
+
+/** スキル名 → 累計ポイント のマップ */
+export type SkillPoints = Record<string, number>
+
+export interface CareerHistoryEntry {
+  id: string
+  startDate: string // YYYY-MM-DD
+  endDate?: string // absent = current
+  affiliation: string
+  role: string
+  description?: string
+}
+
+export interface Qualification {
+  id: string
+  name: string
+  acquiredDate?: string // YYYY-MM-DD
+  issuer?: string
+  // スキルポイント制度のレベル4/5判定に使う(utils.tsのcomputeSkillLevel)。
+  // レベル4「タスク以外で1つ以上認定される」はrelatedSkillsに紐づく件数、
+  // レベル5「外部での実績や外部検定で3つ以上評価される」はexternal=trueの
+  // 件数で判定する
+  relatedSkills?: string[]
+  external?: boolean
+}
+
+export interface EvaluationRecord {
+  id: string
+  date: string // YYYY-MM-DD
+  evaluatorId: string
+  rating: string
+  comment?: string
+}
+
+export interface TransferRecord {
+  id: string
+  date: string // YYYY-MM-DD
+  fromAffiliation: string
+  toAffiliation: string
+  reason?: string
+}
+
+// 1 (beginner) – 5 (expert), matching the common skill-map convention
+export type SkillLevelValue = 1 | 2 | 3 | 4 | 5
+
+export interface SkillLevel {
+  skill: string
+  level: SkillLevelValue
+  acquiredAt?: string // ISO date — set when skill is first added
+}
+
+export interface Competency {
+  name: string
+  level: SkillLevelValue
+}
+
+export interface TrainingRecord {
+  id: string
+  name: string
+  date: string // YYYY-MM-DD
+  provider?: string
+  // 研修申請の承認フロー — 未設定（過去に直接記録された既存データ）は
+  // 承認済み扱い。自己申請すると 'pending' で作成され、管理者の承認/却下
+  // を待つ（person-detail.tsx の人材育成タブ／career-tab.tsx）
+  status?: 'pending' | 'approved' | 'rejected'
+  // LRN-007: 承認された研修について、実際に参加したかどうかの記録
+  attendanceStatus?: 'attended' | 'absent'
+}
+
+// LRN-006: 管理者が定義する研修プログラム。対象層を区分できる
+// (Settings キー: "training_programs" の配列要素)
+export interface TrainingProgram {
+  id: string
+  name: string
+  description?: string
+  targetSegments: string[] // 例: ['新人', '経験者', '管理職候補']。空なら全員対象
+}
+
+export interface DevelopmentPlanEntry {
+  id: string
+  goal: string
+  targetDate?: string // YYYY-MM-DD
+  status: 'not_started' | 'in_progress' | 'done'
+}
+
+export interface OneOnOneRecord {
+  id: string
+  date: string // YYYY-MM-DD
+  withId: string // the other participant (usually reportsToId's member)
+  notes: string
+}
+
+// スキル管理: 職種ごとの必要スキルとの比較 — an org-wide config (not
+// per-member), mapping a job type to the skills/levels it expects.
+export interface JobTypeSkillRequirement {
+  jobType: string
+  requiredSkills: { skill: string; level: SkillLevelValue }[]
+}
+
+export interface Project {
+  id: string
+  name: string
+  description: string
+  // project "kind" (e.g. コンテンツ開発) — drives which template tasks get
+  // auto-created for it, see store.tsx's projectTemplates
+  type?: string
+  // members assigned to this project (set from Admin → Projects, and
+  // grown automatically whenever someone is assigned a task in this
+  // project who isn't already on the list — see store.tsx's assignTask)
+  memberIds?: string[]
+  // 責任者 — the member accountable for this project overall
+  ownerId?: string
+  // 上位プロジェクト — n段階の親子関係を実現するための親プロジェクトID
+  parentId?: string
+  // アーカイブ — 終了したプロジェクトを一覧から隠す（削除とは異なり、
+  // タスク履歴などのデータは残したまま非表示にするだけ）
+  archived?: boolean
+  // 目標 — descriptionは概要欄として維持しつつ、目標専用の欄を別に持つ
+  goal?: string
+  // item 26: 幹部による手動上書き。未設定なら自動判定
+  // (lib/ohsumi/utils.tsのcomputeProjectAutoHealth)に従う。
+  healthOverride?: ProjectHealthLevel
+  // item 26: 直近に通知を送った時点の実効的な健康状態。自動判定が同じ
+  // 'attention'状態を維持している間の重複通知を防ぐために使う。
+  lastNotifiedHealth?: ProjectHealthLevel
+  // PRJ-003: プロジェクトの期間(開始日/終了予定日)。任意項目
+  startDate?: string // YYYY-MM-DD
+  endDate?: string // YYYY-MM-DD
+}
+
+export type ProjectHealthLevel = 'good' | 'watch' | 'attention'
+
+// A template task an admin defines for a Project type (store.tsx's
+// projectTemplates), auto-created whenever a new project of that type
+// is added. Like TaskSetTemplateItem, an item can depend on other items
+// in the same template (dependsOn, by template-local id) so the tasks
+// generated at project creation come out pre-wired with dependsOnIds.
+export interface ProjectTemplateTask {
+  id: string // template-local id — referenced by dependsOn within this template
+  name: string
+  department: Department
+  category: string
+  skills: string[]
+  difficulty: Difficulty
+  priority: Priority
+  dependsOn?: string[] // template-local ids of prerequisite tasks in this template
+}
+
+// A reusable named task-set template (item 1: タスクのテンプレート化, e.g.
+// "イベント開催") — distinct from ProjectTemplateTask/projectTemplates
+// (which auto-apply once, at project creation, keyed by project type).
+// This kind can be applied on demand to any existing project, and each
+// item can depend on other items in the same template so the generated
+// tasks come out pre-wired with dependsOnIds (item 1's "前提タスク構造も
+// テンプレート化").
+export interface TaskSetTemplateItem {
+  id: string // template-local id — referenced by dependsOn within this template
+  name: string
+  department: Department
+  category: string
+  skills: string[]
+  difficulty: Difficulty
+  priority: Priority
+  dependsOn?: string[] // template-local ids of prerequisite items in this template
+}
+
+export interface TaskSetTemplate {
+  id: string
+  name: string
+  description?: string
+  items: TaskSetTemplateItem[]
+}
+
+// 定期タスク (item 2) — an admin-defined rule that auto-generates one task
+// on a weekly/monthly cadence. There's no server-side cron available in
+// this GAS + static-export architecture, so generation is checked
+// client-side on load (store.tsx) against lastGeneratedDate.
+export type RecurrenceFrequency = 'weekly' | 'monthly'
+
+// ---- Settings シートのキー型 -----------------------------------------------
+
+/**
+ * スキルごとのレベルアップ閾値マップ (Settings キー: "skill_level_thresholds")
+ * 例: { "デフォルト": 100, "デザイン": 150, "プログラミング": 200 }
+ * キーが存在しないスキルは "デフォルト" の値を使う。
+ */
+export type SkillLevelThresholds = Record<string, number>
+
+/**
+ * 部署ツリー設定 (Settings キー: "department_tree_config", 省略可)
+ * 省略時は Members.departmentPaths の実データから動的導出される。
+ * 例: [{ "path": "事業本部A>事業部1>グループX" }]
+ */
+export interface DepartmentTreeNode {
+  path: string        // ">" 区切りのフルパス
+  label?: string      // 表示名（省略時は path の末尾ノード名を使う）
+}
+
+// ---- アンケート設問 (FRM-006/FRM-007) --------------------------------------
+
+/**
+ * アンケート設問定義 (Settings キー: "survey_questions" の配列要素)。
+ * 未設定(空配列)の団体は survey-screen.tsx の buildDefaultQuestions
+ * (従来のq1〜q6固定6問)にフォールバックする。
+ */
+export interface SurveyQuestion {
+  id: string
+  text: string
+  type: 'scale' | 'text'
+  scaleMinLabel?: string
+  scaleMaxLabel?: string
+  // FRM-007: 設問に添える画像(任意)
+  imageUrl?: string
+}
+
+// ---- 検定（クイズ） -------------------------------------------------------
+
+export interface QuizQuestion {
+  id: string
+  text: string
+  choices: string[]
+  correctIndex: number
+}
+
+/**
+ * 検定定義 (Settings キー: "quiz_definitions" の配列要素)
+ * targetSkill に対応する skillLevels エントリのレベルを
+ * 合格時に targetLevel に引き上げる（それ以上の場合は据え置き）。
+ */
+export interface QuizDefinition {
+  id: string
+  title: string
+  targetSkill: string
+  targetLevel: SkillLevelValue
+  passRate: number // 合格ライン: 0–100 (%)
+  questions: QuizQuestion[]
+}
+
+// ---- 学習コンテンツ (LRN-001) ---------------------------------------------
+
+/**
+ * 学習コンテンツ(動画・マニュアル・外部リンク等) (Settings キー:
+ * "learning_contents" の配列要素)
+ */
+export interface LearningContent {
+  id: string
+  title: string
+  description?: string
+  url: string
+  contentType: 'video' | 'manual' | 'link' | 'other'
+  relatedSkill?: string // skillOptionsのいずれか、任意
+  relatedQuizId?: string // QuizDefinition.id、任意(この資料で学んだ後この検定を受ける、等の紐付け)
+  createdAt: string
+}
+
+// LRN-002: 複数のLearningContentを順序付きでまとめたコース
+// (Settings キー: "learning_courses" の配列要素)
+export interface LearningCourse {
+  id: string
+  title: string
+  description?: string
+  contentIds: string[] // LearningContent.idの配列、この順序で表示する
+  relatedQuizId?: string // コース修了後に受ける検定(任意)
+}
+
+// ---- レーダーチャート軸 ---------------------------------------------------
+
+/**
+ * レーダーチャートの軸定義 (Settings キー: "radar_axes")
+ * 各軸は skill_levels_json のスキル名に対応する。
+ */
+export interface RadarAxis {
+  skill: string
+  label?: string // 表示名（省略時は skill をそのまま使う）
+}
+
+/**
+ * 人材DBのカスタム列定義 (Settings キー: "custom_member_columns_json")。
+ * typeはまず'text'のみ対応（number等への拡張は将来対応）。
+ * 実際の値はMember.customFields[key]に保持する。
+ */
+export interface CustomMemberColumn {
+  key: string
+  label: string
+  type: 'text'
+}
+
+export interface RecurringTaskRule {
+  id: string
+  name: string
+  projectId: string
+  department: Department
+  category: string
+  skills: string[]
+  difficulty: Difficulty
+  priority: Priority
+  frequency: RecurrenceFrequency
+  dayOfWeek?: number // 0 (Sun) – 6 (Sat), for frequency 'weekly'
+  dayOfMonth?: number // 1–28, for frequency 'monthly' (capped to stay valid in every month)
+  dueInDays?: number // deadline offset in days from the generated task's creation date
+  active: boolean
+  lastGeneratedDate?: string // YYYY-MM-DD — the last date this rule generated a task for
+  // 「状態起点」— 前回生成されたタスクがこのステータスになったときに次を生成。
+  // 未設定の場合は従来どおり日付起点（毎日/毎週/毎月）で生成する。
+  triggerOnStatus?: TaskStatus
+  // 「例外スキップ日」— これらの日付（YYYY-MM-DD）はタスクを生成しない
+  skipDates?: string[]
+}
+
+export interface Task {
+  id: string
+  name: string
+  description?: string
+  projectId: string
+  department: Department
+  assigneeIds: string[]
+  // Tasksシートのassign_type列 — 現状は常に'open_bid'（createTasksで固定設定）。
+  // assigneeIdsが空 かつ assignType==='open_bid' のタスクが「公募」タブに並ぶ。
+  assignType?: string
+  // TSK-027: 公募タスクへの応募者(承認制)。「応募する」は即座にassigneeIdsへ
+  // 追加せず、ここに自分のIDを積むだけにする。管理者がこの中から選んで
+  // 既存のassignTaskを呼ぶと正式に担当者になる。不採用の応募者はここに
+  // 残ったままでよい(明示的な却下操作は無い)
+  openBidApplicantIds?: string[]
+  startDate?: string | null // YYYY-MM-DD, when work is expected to begin
+  deadline: string | null // YYYY-MM-DD
+  dueTime?: string | null // HH:MM, optional time-of-day on top of deadline
+  category: string
+  skills: string[]
+  difficulty: Difficulty
+  priority: Priority
+  status: TaskStatus
+  role?: string
+  completedDate?: string | null
+  lastActivity?: string // YYYY-MM-DD, for "no progress" detection
+  // provenance
+  originalInputId?: string
+  createdById?: string
+  createdAt?: string // ISO datetime
+  // progress tracking
+  progress?: string // latest progress snapshot
+  // TSK-010: 0-100の数値進捗率。自由記述メモ(progress/progressHistory)とは
+  // 役割分担で併存させる(数値は「今どのくらいか」、メモは「何をしたか」)
+  progressPercent?: number
+  progressHistory: ProgressEntry[]
+  // tasks created from an INPUT submission start out awaiting an admin's
+  // approval, and are hidden from the normal workspace views until then
+  pendingApproval?: boolean
+  // ids of tasks that must happen before this one can start — powers the
+  // 依存関係 (dependency tree) view, separate from the ワークフロー kanban
+  dependsOnIds?: string[]
+  // '幹部' restricts visibility to 班長/代表 (see canSeeExecTasks); undefined/'all' = everyone
+  visibility?: 'all' | '幹部'
+  // タスクの重要度（item 9: 承認ルートの拡張）— 重要/対外公開のタスクは
+  // 登録者の報告先ではなく、最上位の管理者（isFullAdmin）のみ承認できる。
+  // 未設定/一般は既存どおり報告先チェーンで承認できる。
+  importance?: TaskImportance
+  // distinct from assigneeIds — who signs off on this task (pairs with the
+  // 'review' status). Unset = no particular reviewer, any admin can review.
+  reviewerId?: string // deprecated — kept for backward compat read
+  reviewerIds?: string[] // replaces reviewerId; multiple reviewers can all confirm
+  // 確認待ちに必要な承認数: number = 指定人数, 'all' = 全員
+  requiredApprovals?: number | 'all'
+  // 複数確認者(item: 確認フロー)— 誰が・いつ承認したかの記録。
+  // requiredApprovals(必要承認数)に達すると自動的にstatus: 'done'になる。
+  // TSK-062+TSK-067統合: 確認者が承認する際に残すコメント。レビュー
+  // フィードバックであると同時に、次回への申し送りメモとしても機能する。
+  // COM-004(activity-screen.tsxの'review'フィルタ)でそのまま時系列表示
+  // されるため、専用の蓄積先を別途作る必要はない。
+  reviewApprovals?: { memberId: string; at: string; comment?: string }[]
+  // APR-007: このタスクが「◯◯の確認待ち」タスクである場合、確認対象の
+  // 元タスクのID。通常のタスクではundefined
+  relatedReviewTaskId?: string
+  // "困っている/作業が止まっている" — separate from status so a task can be
+  // flagged blocked without losing its in-progress status; cleared (undefined)
+  // once resolved
+  blocker?: {
+    note: string
+    since: string // YYYY-MM-DD
+  }
+  // ステータスが「保留」のときの理由。他の項目と同じくstatusとは独立して
+  // 保持する(保留を解除して別ステータスに移っても直近の理由は残しておく)
+  holdReason?: {
+    note: string
+    since: string // YYYY-MM-DD
+  }
+  // links to where the finished work lives (Drive/Canva/GitHub/Figma/…) —
+  // also reused on the assignee's achievements page
+  deliverables?: TaskDeliverable[]
+  // audit trail of field changes (assignee/deadline/priority/status/reviewer)
+  history?: TaskHistoryEntry[]
+  // discussion thread — distinct from progressHistory (which is a status
+  // update log, not a conversation)
+  comments?: TaskComment[]
+  // 想定/実績の所要時間（時間単位）— estimatedHours is set at INPUT time
+  // (see parsed-task-card.tsx's category-average suggestion) or edited
+  // later; actualHours is filled in around completion. Together these
+  // power the Assignments page's per-member 今週の工数 indicator.
+  estimatedHours?: number
+  actualHours?: number
+  // 完了時の振り返り — shown once status is 'done', and surfaced on any
+  // future task the similar-task heuristic (findSimilarTasks) flags as
+  // related, so lessons carry over instead of being re-learned
+  retrospective?: TaskRetrospective
+  // 日程調整ツール — see TaskSchedule
+  schedule?: TaskSchedule
+  // 汎用フォームツール — see TaskForm
+  form?: TaskForm
+  // 完了時に付与されたスキルポイント（skill → points）— 推奨値の計算に使用
+  awardedPoints?: SkillPoints
+  // スキル表グリッド(item 10/11)での「このタスクをこなすにはこのスキルの
+  // このレベルが必要」という目安。キーはskillOptionsのスキル名、値は1-5。
+  // 未設定のスキルはグリッド上で通常表示(ハイライトなし)。
+  requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
+}
+
+export interface TaskRetrospective {
+  good: string
+  bad: string
+  improve: string
+}
+
+// 日程調整ツール — 候補日時を作成者が用意し、招待されたメンバーそれぞれが
+// 候補ごとに〇×△で回答する。全員が全候補に回答し終えると自動的に
+// status: 'done' になり、作成者へ結果とともに通知が飛ぶ
+// （store.tsx の respondToSchedule / gas/Code.gs の notifyScheduleResult）
+export type ScheduleResponseValue = '○' | '×' | '△'
+
+export interface ScheduleCandidate {
+  id: string
+  label: string // 表示用。日付+時刻入力からの自動生成、または自由記述の手動入力
+  // 「調整さん」的な日付+開始/終了時刻の個別入力(任意 — 自由記述のみの
+  // 候補には設定されない。labelの自動生成元として使う)
+  date?: string // YYYY-MM-DD
+  startTime?: string // HH:MM
+  endTime?: string // HH:MM
+}
+
+export interface TaskSchedule {
+  candidates: ScheduleCandidate[]
+  invitedIds: string[]
+  // memberId -> candidateId -> response
+  responses: Record<string, Record<string, ScheduleResponseValue>>
+}
+
+// 汎用フォームツール — 作成者が自由に質問項目を用意し、招待した特定の
+// メンバーに回答してもらう。招待者全員が回答し終えると自動的に
+// status: 'done' になり、作成者へ回答結果とともに通知が飛ぶ
+// （store.tsx の respondToForm / gas/Code.gs の notifyFormResult）
+export type FormFieldType = 'text' | 'textarea' | 'select' | 'checkbox' | 'image'
+
+export interface FormFieldDef {
+  id: string
+  label: string
+  type: FormFieldType
+  // 'select'（単一選択）・'checkbox'（複数選択）で使う選択肢
+  options?: string[]
+  required?: boolean
+}
+
+// 'text'/'textarea'/'select' は単一の文字列、'checkbox' は複数選択なので文字列配列
+export type FormAnswerValue = string | string[]
+
+export interface TaskForm {
+  fields: FormFieldDef[]
+  invitedIds: string[]
+  // memberId -> fieldId -> answer
+  responses: Record<string, Record<string, FormAnswerValue>>
+}
+
+export interface TaskDeliverable {
+  id: string
+  label: string
+  url: string
+}
+
+export interface TaskHistoryEntry {
+  id: string
+  at: string // ISO datetime
+  byId: string
+  field:
+    | 'assignee'
+    | 'deadline'
+    | 'startDate'
+    | 'priority'
+    | 'status'
+    | 'reviewer'
+    | 'title'
+    | 'description'
+    | 'project'
+    | 'department'
+    | 'category'
+    | 'skills'
+    | 'difficulty'
+    | 'visibility'
+    | 'importance'
+  from: string
+  to: string
+}
+
+export interface TaskComment {
+  id: string
+  text: string
+  byId: string
+  at: string // ISO datetime
+  // @表示名/@氏名 表記から自動抽出されたメンバーID（任意）— コメント投稿時に
+  // メール通知される（gas/Code.gs の notifyMention）
+  mentionedIds?: string[]
+}
+
+// Result of natural-language parsing, before approval
+export interface ParsedTask {
+  id: string
+  name: string
+  projectId: string
+  department: Department
+  startDate?: string | null
+  deadline: string | null
+  dueTime?: string | null
+  category: string
+  skills: string[]
+  difficulty: Difficulty
+  priority: Priority
+  assigneeIds: string[]
+  approved: boolean
+  visibility?: 'all' | '幹部'
+  // suggested/entered estimate at registration time — see Task.estimatedHours
+  estimatedHours?: number
+  // see Task.importance
+  importance?: TaskImportance
+}
+
+export const STATUS_ORDER: TaskStatus[] = [
+  'todo',
+  'hold',
+  'progress',
+  'support',
+  'review',
+  'fix',
+  'done',
+]
+
+export const STATUS_LABEL: Record<TaskStatus, string> = {
+  todo: '未着手',
+  hold: '保留',
+  progress: '進行中',
+  support: 'サポート必要',
+  review: '確認待ち',
+  fix: '修正中',
+  done: '完了',
+}
+
+export const STATUS_COLOR: Record<TaskStatus, string> = {
+  todo: 'var(--status-todo)',
+  hold: 'var(--status-hold)',
+  progress: 'var(--status-progress)',
+  support: 'var(--status-support)',
+  review: 'var(--status-review)',
+  fix: 'var(--status-fix)',
+  done: 'var(--status-done)',
+}
+
+export const DIFFICULTY_LABEL: Difficulty[] = [
+  '誰でも可',
+  '新人歓迎',
+  '少し経験必要',
+  '経験者向け',
+  '上級者向け',
+]
+
+// Priority accent line color (used on card left edge). Uses CSS vars so it
+// adapts to dark mode.
+export const PRIORITY_LINE: Record<Priority, string> = {
+  高: 'var(--priority-high)',
+  中: 'var(--priority-medium)',
+  低: 'var(--priority-low)',
+}
+
+// Email notification frequency per notification kind.
+// 'immediate': send right away (current default behaviour)
+// '3h' / '6h' / '1d': batch and send at most once per window
+// 'none': never send
+export type NotifyFrequency = 'immediate' | '3h' | '6h' | '1d' | 'none'
+
+// Kinds of email notifications a member can configure independently.
+// new_task / review are primarily admin-facing; mention / rejected / deadline
+// apply to all members.
+export type NotifyKind = 'new_task' | 'review' | 'mention' | 'rejected' | 'deadline'
+
+// An in-app notification item — derived on the fly from current task/member
+// state (see store.tsx's `notifications`), not persisted.
+export interface NotificationItem {
+  id: string
+  // 'stale' = item 10 (SLA/放置アラート): 確認待ちが3日以上、または
+  // 進行中タスクの更新が7日以上ない場合に表示
+  // 'mention' = コメントで@メンションされた（未読のみ表示。store.tsxの
+  // seenMentionIds/markMentionSeen参照）
+  // 'lowWorkload' = P16: 直属の部下がタスク少なめ状態の上長への通知
+  // 'expense' = EXP-007: 経費申請の承認待ち/却下・差し戻し通知
+  kind: 'approval' | 'review' | 'deadline' | 'stale' | 'mention' | 'info' | 'lowWorkload' | 'expense'
+  title: string
+  detail: string
+  taskId: string
+  // kind: 'mention' のときだけ設定 — 既読化(markMentionSeen)に使う
+  commentId?: string
+  // kind: 'lowWorkload'(および将来のメンバー起点通知)で設定 — クリック時に
+  // そのメンバーの人物ページ(go({name:'person', id: memberId}))へ遷移する
+  memberId?: string
+  // kind: 'expense' のときだけ設定 — 該当の経費申請ID
+  applicationId?: string
+}
+
+// ---- 多段階承認 (Phase 5) -----------------------------------------------
+
+/**
+ * 承認フローの1ステップ。
+ * type='member' のときは memberId を持ち、指定の個人が承認する。
+ * type='role' のときは role（と任意で department）を持ち、
+ * 該当する役職・部署の誰か1人が承認するとそのステップは完了する。
+ */
+export interface ApprovalStep {
+  id: string
+  type: 'member' | 'role'
+  memberId?: string
+  role?: string
+  department?: string
+  // 'all' = 対象者全員の承認が必要, number = 指定人数で足りる (省略時 'any' = 1人)
+  requiredCount?: number | 'all'
+}
+
+/** 承認/却下の記録 */
+export interface ApprovalRecord {
+  stepId: string
+  memberId: string
+  at: string // ISO datetime
+  action: 'approved' | 'rejected'
+  comment?: string
+}
+
+// ---- 経費申請カテゴリ ---------------------------------------------------
+
+export interface ExpenseCategory {
+  id: string
+  label: string
+  approvalSteps: ApprovalStep[]
+  // EXP-005: このカテゴリの申請フォームに追加する独自項目
+  customFields?: { key: string; label: string; type: 'text' | 'number' | 'date' }[]
+}
+
+// ---- 経費申請 -----------------------------------------------------------
+
+// EXP-008: 'returned' = 差し戻し(却下'rejected'とは別。修正して再提出できる)
+export type ExpenseApplicationStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn' | 'returned'
+
+export interface ExpenseApplication {
+  id: string
+  applicantId: string
+  amount: number
+  categoryId: string
+  receiptUrl?: string
+  justification?: string
+  purpose?: string
+  // EXP-005: カテゴリのcustomFieldsへの回答 {key: 回答値}
+  customFieldAnswers?: Record<string, string>
+  // 作成時点のステップ定義のスナップショット
+  approvalSteps: ApprovalStep[]
+  approvals: ApprovalRecord[]
+  currentStepIndex: number
+  status: ExpenseApplicationStatus
+  createdAt: string
+  updatedAt?: string
+  rejectionReason?: string
+}
+
+// ---- 団体カスタムフォーム -----------------------------------------------
+
+export type CustomFormFieldType = 'text' | 'number' | 'select' | 'date'
+
+export interface CustomFormField {
+  id: string
+  label: string
+  type: CustomFormFieldType
+  options?: string[] // type='select' 用
+  required: boolean
+  // FRM-003: 項目単位の補足説明(例: 「領収書がない場合は上長に確認済みの
+  // 旨を記載してください」等)。フォーム全体のdescriptionとは別に、
+  // 項目ごとに個別の説明を出せるようにする
+  description?: string
+}
+
+export interface CustomFormDef {
+  id: string
+  title: string
+  description?: string
+  fields: CustomFormField[]
+  approvalSteps: ApprovalStep[]
+}
+
+export type CustomFormSubmissionStatus = 'pending' | 'approved' | 'rejected'
+
+export interface CustomFormSubmission {
+  id: string
+  formId: string
+  submitterId: string
+  answers: Record<string, string | number>
+  approvals: ApprovalRecord[]
+  currentStepIndex: number
+  status: CustomFormSubmissionStatus
+  createdAt: string
+  rejectionReason?: string
+}
+
+// ---- アンケート回答（item 22の団体全体同期、item 30の組み合わせ分析）----
+
+export interface SurveyResponse {
+  id: string
+  memberId: string
+  submittedAt: string // ISO datetime
+  answers: Record<string, number | string>
+}
+
+// ---- 日報・週報 (REP-004/REP-005) -----------------------------------------
+// daily-report-screen.tsxが書く/読む単位。GAS(DailyReportsシート)経由で
+// 団体全体に共有される — 経費申請と同じく保存はsubmitDailyReport、
+// 読み取りは管理者閲覧画面が明示的に呼ぶfetchDailyReportsで取得する。
+
+export type DailyReportType = 'daily' | 'weekly'
+
+export interface DailyReportEntry {
+  id: string
+  memberId: string
+  type: DailyReportType
+  date: string // YYYY-MM-DD
+  done: string
+  todo: string
+  issues: string
+  createdAt: string // ISO datetime
+}

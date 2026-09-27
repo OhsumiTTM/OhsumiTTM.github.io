@@ -1,5 +1,5 @@
-import { OrbitApp } from '@/components/orbit/orbit-app'
+import { OhsumiApp } from '@/components/ohsumi/ohsumi-app'
 
 export default function Page() {
-  return <OrbitApp />
+  return <OhsumiApp />
 }

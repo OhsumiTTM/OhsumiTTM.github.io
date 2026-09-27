@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 FSIF / Orbit contributors
+Copyright (c) 2026 FSIF / Ohsumi contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,9 +22,9 @@ SOFTWARE.
 
 ---
 
-Orbit is distributed as source code for other organizations to self-host their
+Ohsumi is distributed as source code for other organizations to self-host their
 own independent instance (their own copy of the Spreadsheet, their own Apps
-Script deployment, their own hosting). The Orbit team does not operate, host,
+Script deployment, their own hosting). The Ohsumi team does not operate, host,
 or have access to any deploying organization's data, and provides no uptime,
 support, or data-handling guarantees beyond what this license already states.
 Each deploying organization is solely responsible for its own deployment,

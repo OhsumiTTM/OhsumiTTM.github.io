@@ -1,8 +1,5 @@
-// GitHub Pages serves the project under /<repo-name>/, so the build needs a
-// matching basePath. GITHUB_ACTIONS is set automatically by GitHub Actions
-// runners, so local `next dev` / `next build` are unaffected.
-const repoName = 'Orbit'
-const isGithubActions = process.env.GITHUB_ACTIONS === 'true'
+// The site is served from the root of its domain (a <user>.github.io site or a
+// custom domain), so no basePath / assetPrefix is needed.
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -14,12 +11,6 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  ...(isGithubActions
-    ? {
-        basePath: `/${repoName}`,
-        assetPrefix: `/${repoName}/`,
-      }
-    : {}),
 }
 
 export default nextConfig

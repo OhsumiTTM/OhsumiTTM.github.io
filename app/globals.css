@@ -183,17 +183,17 @@
 }
 
 @layer utilities {
-  .orbit-scroll::-webkit-scrollbar {
+  .ohsumi-scroll::-webkit-scrollbar {
     height: 10px;
     width: 10px;
   }
-  .orbit-scroll::-webkit-scrollbar-thumb {
+  .ohsumi-scroll::-webkit-scrollbar-thumb {
     background-color: var(--border-strong);
     border-radius: 9999px;
     border: 3px solid transparent;
     background-clip: content-box;
   }
-  .orbit-scroll::-webkit-scrollbar-track {
+  .ohsumi-scroll::-webkit-scrollbar-track {
     background: transparent;
   }
 }

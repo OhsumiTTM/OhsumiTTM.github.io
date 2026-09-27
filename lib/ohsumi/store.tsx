@@ -1,0 +1,4929 @@
+'use client'
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from 'react'
+import type {
+  AdminSection,
+  ApprovalRecord,
+  ApprovalStep,
+  Candidate,
+  CareerHistoryEntry,
+  Competency,
+  CustomFormDef,
+  CustomFormSubmission,
+  CustomMemberColumn,
+  DailyReportEntry,
+  Department,
+  DepartmentTreeNode,
+  DevelopmentPlanEntry,
+  EvaluationRecord,
+  ExpenseApplication,
+  ExpenseCategory,
+  LearningContent,
+  LearningCourse,
+  Member,
+  OneOnOneRecord,
+  Project,
+  ProjectTemplateTask,
+  RecurringTaskRule,
+  Qualification,
+  QuizDefinition,
+  RadarAxis,
+  Role,
+  FormAnswerValue,
+  FormFieldDef,
+  ScheduleCandidate,
+  ScheduleResponseValue,
+  SkillLevel,
+  SkillLevelThresholds,
+  SkillLevelValue,
+  SkillPoints,
+  SurveyQuestion,
+  SurveyResponse,
+  Task,
+  TaskComment,
+  TaskDeliverable,
+  TaskForm,
+  TaskHistoryEntry,
+  TaskRetrospective,
+  TaskSchedule,
+  TaskSetTemplate,
+  TaskSetTemplateItem,
+  TaskStatus,
+  TrainingProgram,
+  TrainingRecord,
+  TransferRecord,
+  Priority,
+  Difficulty,
+  TaskImportance,
+  TaskInput,
+  ParsedTask,
+  ProgressEntry,
+  NotifyKind,
+  NotifyFrequency,
+  PermissionOverride,
+} from './types'
+import { canSeeExecTasks, BASE_ROLE, STATUS_LABEL } from './types'
+import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
+import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
+import {
+  colorForId,
+  fetchRemoteData,
+  fetchSettings,
+  initialsForName,
+  isDriveConfigured,
+  isRemoteConfigured,
+  isSettingsConfigured,
+  remoteApi,
+  toCreatePayload,
+} from './remote'
+import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from './utils'
+import { useI18n } from './i18n'
+import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
+import { setGasAuthToken, setCalendarToken } from './google-sheet-sync'
+
+type Mode = 'input' | 'output'
+type RemoteStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+// A member auto-certifies a skill after this many completed tasks in the
+// same category.
+const SKILL_CERT_THRESHOLD = 3
+
+// A 完了 task older than this (by completedDate) is treated as archived —
+// hidden from the normal workspace, visible only under the Archive tab.
+const ARCHIVE_AFTER_DAYS = 14
+
+// FSIF側で配布する「共通スキル」の固定リスト。団体は自由に追加(addSkillOption)
+// できるが、この基本リストは団体側で削除・改名できない前提とする。
+// lib/ohsumi/portable-record.ts の実績エクスポート/インポートで、他団体でも
+// 通用するスキルかどうかの判定にそのまま使う(このリストに載っているスキル
+// のポイントだけを持ち出し・持ち込みの対象にする)
+export const DEFAULT_SKILL_OPTIONS = [
+  'デザイン', 'Canva', 'PowerPoint', 'ライティング', 'リサーチ', 'SNS', '広報', 'コミュニケーション',
+  'イベント運営', 'メール', 'UI/UX', '実装', '企画', '要件定義', 'プロダクト設計', '校閲', 'Claude', 'V0',
+]
+const DEFAULT_CATEGORY_OPTIONS = [
+  '未分類', 'デザイン', '渉外', 'イベント', '広報', 'ライティング', '企画', 'リサーチ', '開発', '物品調達',
+]
+
+// 要求分野（デザイン/営業/AI活用など）は要求スキル（Canva/PowerPoint/Claude/V0など）
+// の上位グルーピング。メンバーに直接割り当てるのはスキルのみで、分野は
+// 「その分野のスキルをどれだけ保有しているか」から自動的に導出される
+// （見出し取得の判定に使う割合— see utils.ts の memberAcquiredFields）
+const DEFAULT_SKILL_FIELD_OPTIONS = ['デザイン', '営業', 'AI活用']
+const DEFAULT_SKILL_FIELD_SKILLS: Record<string, string[]> = {
+  デザイン: ['Canva', 'UI/UX'],
+  営業: ['コミュニケーション'],
+  AI活用: ['Claude', 'V0'],
+}
+// 数字は仮 — Admin → Tagsから変更可能
+const DEFAULT_SKILL_FIELD_THRESHOLD = 0.8
+
+// Admin-defined permission levels above the fixed 一般 baseline (see
+// types.ts's BASE_ROLE/isAdminRole) — freely add/removable from Admin →
+// Tags, same pattern as skill/category option pools.
+const DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
+
+function isArchived(t: Task): boolean {
+  if (t.status !== 'done' || !t.completedDate) return false
+  const d = daysSince(t.completedDate)
+  return d !== null && d >= ARCHIVE_AFTER_DAYS
+}
+
+interface OhsumiState {
+  currentUserId: string | null
+  // 自分自身の登録メール(カンマ区切り、無ければ''）。他メンバーのメールは
+  // Membersの公開CSVから分離済みで、どこからも取得できない(意図的)
+  myEmail: string
+  tasks: Task[]
+  members: Member[]
+  projects: Project[]
+  inputs: TaskInput[]
+  mode: Mode
+}
+
+interface OhsumiContextValue extends OhsumiState {
+  currentUser: Member | null
+  // tasks with pendingApproval and archived tasks stripped out — what the
+  // normal workspace (kanban/list/calendar/people/project views) renders
+  visibleTasks: Task[]
+  // the admin's approval queue
+  pendingTasks: Task[]
+  // 完了 tasks old enough to be archived — see Archive tab
+  archivedTasks: Task[]
+  // whether the app is backed by the live spreadsheet (via GAS/CSV) or the
+  // local mock data — surfaced so the UI can show sync state.
+  remoteEnabled: boolean
+  // whether profile-picture uploads are usable (remote configured AND a
+  // Drive folder id is set) — see gas/README.md's DRIVE_FOLDER_ID setup
+  driveEnabled: boolean
+  remoteStatus: RemoteStatus
+  remoteError: string | null
+  // true once every configured remote source (spreadsheet + optional
+  // Settings sheet) has resolved or given up — see store.tsx's dataReady
+  dataReady: boolean
+  // manual re-fetch for the header's 情報更新 button — see refreshAll
+  refreshing: boolean
+  refreshAll: () => void
+  skillOptions: string[]
+  categoryOptions: string[]
+  addSkillOption: (name: string) => void
+  removeSkillOption: (name: string) => void
+  addCategoryOption: (name: string) => void
+  removeCategoryOption: (name: string) => void
+  roleLevels: string[]
+  addRoleLevel: (name: string) => void
+  removeRoleLevel: (name: string) => void
+  reorderRoleLevel: (name: string, direction: 'up' | 'down') => void
+  // roles with restricted section visibility — all others are full admin
+  restrictedRoles: string[]
+  toggleRestrictedRole: (role: string) => void
+  // per-role-level admin-screen section visibility (see types.ts's
+  // AdminSection/DEFAULT_NON_TOP_SECTIONS); only roles in restrictedRoles
+  // are affected; full-admin roles always see everything
+  rolePermissions: Record<string, AdminSection[]>
+  setRolePermissions: (role: string, sections: AdminSection[]) => void
+  // admin-screen sections currentUser's role is allowed to see
+  visibleAdminSections: AdminSection[]
+  projectTemplates: Record<string, ProjectTemplateTask[]>
+  projectTypes: string[]
+  setProjectTemplateTasks: (type: string, tasks: ProjectTemplateTask[]) => void
+  removeProjectType: (type: string) => void
+  taskSetTemplates: TaskSetTemplate[]
+  addTaskSetTemplate: (name: string, description: string) => void
+  updateTaskSetTemplateItems: (templateId: string, items: TaskSetTemplateItem[]) => void
+  removeTaskSetTemplate: (templateId: string) => void
+  applyTaskSetTemplate: (templateId: string, projectId: string) => void
+  importTasksFromProject: (sourceProjectId: string, targetProjectId: string, taskIds: string[]) => void
+  recurringRules: RecurringTaskRule[]
+  // item 17: ポジション要件 — jobType (role level string) -> required skills
+  jobRequirements: Record<string, string[]>
+  setJobRequirements: (jobType: string, skills: string[]) => void
+  // 要求分野 — a field (デザイン/営業/AI活用...) groups several 要求スキル;
+  // members are only ever assigned individual skills, and a field counts as
+  // "acquired" once skillFieldThreshold's share of its skills is held
+  // (see utils.ts's memberAcquiredFields)
+  skillFieldOptions: string[]
+  addSkillFieldOption: (name: string) => void
+  removeSkillFieldOption: (name: string) => void
+  skillFieldSkills: Record<string, string[]>
+  setSkillFieldSkills: (field: string, skills: string[]) => void
+  skillFieldThreshold: number
+  setSkillFieldThreshold: (threshold: number) => void
+  departmentTreeConfig: DepartmentTreeNode[]
+  updateDepartmentTreeConfig: (nodes: DepartmentTreeNode[]) => void
+  orgNotificationEmails: string[]
+  addOrgNotificationEmail: (email: string) => void
+  removeOrgNotificationEmail: (email: string) => void
+  surveyInvitedIds: string[]
+  updateSurveyInvitedIds: (ids: string[]) => void
+  orgName: string
+  setOrgName: (name: string) => void
+  orgLogoUrl: string
+  setOrgLogoUrl: (url: string) => void
+  themeColor: string
+  setThemeColor: (color: string) => void
+  // 保存だけでなく実際にテストメッセージを送って接続確認する
+  // (「保存しました」表示だけでは本当に届くかは分からないため)
+  setDiscordWebhookUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
+  addRecurringRule: (rule: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>) => void
+  removeRecurringRule: (ruleId: string) => void
+  toggleRecurringRule: (ruleId: string) => void
+  updateRecurringRule: (
+    ruleId: string,
+    fields: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>,
+  ) => void
+  needsOnboarding: boolean
+  completeOnboarding: (will: string[]) => void
+  skipOnboarding: () => void
+  skillCertifiedEvent: { memberName: string; skill: string } | null
+  clearSkillCertifiedEvent: () => void
+  markMentionSeen: (commentId: string) => void
+  dismissNotification: (notificationId: string) => void
+  setSlackWebhookUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
+  toggleMemberInactive: (memberId: string) => void
+  updateMemberDepartmentPaths: (memberId: string, departmentPaths: string[]) => void
+  updateAbsentDates: (memberId: string, dates: string[]) => void
+  // item 20: 1on1ワークシート質問項目
+  oneOnOneQuestions: string[]
+  setOneOnOneQuestions: (questions: string[]) => void
+  login: (userId: string) => void
+  logout: () => void
+  // ログイン画面専用: Googleでログインしたメールアドレスから該当メンバーの
+  // idを解決する(見つからなければnull)。isRemoteConfiguredなら非公開の
+  // MemberEmailsシートをGAS経由で照合し、そうでなければローカルデモの
+  // members配列を直接見る
+  resolveLoginMember: (email: string) => Promise<string | null>
+  setMode: (m: Mode) => void
+  // Register approved parsed tasks as a single natural-language input.
+  addTasksFromInput: (text: string, parsed: ParsedTask[]) => void
+  updateTaskStatus: (id: string, status: TaskStatus) => void
+  updatePriority: (id: string, priority: Priority) => void
+  updateDifficulty: (id: string, difficulty: Difficulty) => void
+  updateTaskDetails: (
+    id: string,
+    details: {
+      name: string
+      description: string
+      projectId: string
+      department: Department
+      category: string
+      skills: string[]
+      difficulty: Difficulty
+      priority: Priority
+      visibility: 'all' | '幹部'
+      importance: TaskImportance
+      requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
+    },
+  ) => void
+  updateProgress: (id: string, text: string) => void
+  updateProgressPercent: (id: string, percent: number) => void
+  assignTask: (id: string, memberIds: string[]) => void
+  applyToOpenBid: (taskId: string) => void
+  withdrawOpenBidApplication: (taskId: string) => void
+  updateWill: (memberId: string, will: string[]) => void
+  updateJudgment: (memberId: string, judgment: string[]) => void
+  approveTask: (id: string) => void
+  removeTask: (id: string) => void
+  rejectTask: (id: string, reason?: string) => void
+  addProject: (name: string, description: string, type?: string, parentId?: string) => void
+  updateProjectParent: (projectId: string, parentId: string | null) => void
+  removeProject: (projectId: string) => void
+  updateProjectMembers: (projectId: string, memberIds: string[]) => void
+  updateProjectOwner: (projectId: string, ownerId: string | null) => void
+  updateProjectDetails: (
+    projectId: string,
+    fields: { name: string; description: string; type?: string; goal?: string; startDate?: string | null; endDate?: string | null },
+  ) => void
+  activeProjects: Project[]
+  setProjectArchived: (projectId: string, archived: boolean) => void
+  setProjectOrder: (orderedIds: string[]) => void
+  updateProjectHealth: (projectId: string, override: import('./types').ProjectHealthLevel | null) => void
+  addMember: (name: string, email: string, affiliation: string, role: string) => Promise<void>
+  removeMember: (memberId: string) => void
+  updateNotify: (memberId: string, notify: boolean) => void
+  updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => void
+  updateEmail: (memberId: string, email: string) => void
+  updateMemberProjects: (memberId: string, projectIds: string[]) => void
+  // true when currentUser holds the highest-ranked role level (unscoped
+  // admin access); false for a lower admin level, scoped to projectIds
+  isFullAdmin: boolean
+  // Dashboard/Approvals/Assignments/Projects data, filtered to the current
+  // user's own projectIds when they're a scoped (non-full) admin
+  adminProjects: Project[]
+  adminTasks: Task[]
+  adminPendingTasks: Task[]
+  updateRole: (memberId: string, role: Role) => void
+  updateReportsTo: (memberId: string, reportsToId: string | null) => void
+  updatePermissionOverrides: (memberId: string, overrides: PermissionOverride[]) => void
+  // スキルポイント・検定・レーダーチャート
+  skillLevelThresholds: SkillLevelThresholds
+  updateSkillLevelThresholds: (thresholds: SkillLevelThresholds) => void
+  quizDefinitions: QuizDefinition[]
+  radarAxes: RadarAxis[]
+  awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
+  // 他団体での実績(共通スキルのポイント・資格)の持ち込み。本人が自分の
+  // ページから実行する想定(lib/ohsumi/portable-record.tsのエクスポート/
+  // インポートとセットで使う) — awardSkillPointsと違いタスクには紐付かない
+  importPortableRecord: (
+    memberId: string,
+    skillPoints: SkillPoints,
+    qualifications: Qualification[],
+  ) => void
+  updateQuizDefinitions: (quizzes: QuizDefinition[]) => void
+  updateRadarAxes: (axes: RadarAxis[]) => void
+  // LRN-001: 学習コンテンツ
+  learningContents: LearningContent[]
+  updateLearningContents: (contents: LearningContent[]) => void
+  // LRN-002: 学習コース
+  learningCourses: LearningCourse[]
+  updateLearningCourses: (courses: LearningCourse[]) => void
+  // LRN-006: 研修プログラム
+  trainingPrograms: TrainingProgram[]
+  updateTrainingPrograms: (programs: TrainingProgram[]) => void
+  // FRM-006: アンケート設問（未設定なら固定6問にフォールバック）
+  surveyQuestions: SurveyQuestion[]
+  updateSurveyQuestions: (questions: SurveyQuestion[]) => void
+  submitQuizResult: (quizId: string, memberId: string, answers: number[]) => Promise<{ passed: boolean; score: number }>
+  // 人材DBのカスタム列（団体ごとに追加可能）
+  customMemberColumns: import('./types').CustomMemberColumn[]
+  updateCustomMemberColumns: (columns: import('./types').CustomMemberColumn[]) => void
+  updateCustomField: (memberId: string, key: string, value: string) => void
+  updateMentor: (memberId: string, mentorId: string | null) => void
+  // ---- タレントマネジメント ----
+  updateSearchProfile: (
+    memberId: string,
+    profile: {
+      hasManagementExperience: boolean
+      desiredAreas: string[]
+      desiredSkills: string[]
+    },
+  ) => void
+  updateCareerHistory: (memberId: string, entries: CareerHistoryEntry[]) => void
+  updateQualifications: (memberId: string, entries: Qualification[]) => void
+  updateEvaluationHistory: (memberId: string, entries: EvaluationRecord[]) => void
+  updateTransferHistory: (memberId: string, entries: TransferRecord[]) => void
+  updateSkillLevels: (memberId: string, levels: SkillLevel[]) => void
+  updateCompetencies: (memberId: string, competencies: Competency[]) => void
+  updateCareerGoals: (
+    memberId: string,
+    goals: { careerAspiration: string; desiredFutureRole: string; careerPlan: string },
+  ) => void
+  updateTrainingHistory: (memberId: string, entries: TrainingRecord[]) => void
+  notifyTrainingRequest: (memberId: string, trainingName: string) => void
+  triggerOverdueReminders: () => Promise<void>
+  notifyTrainingDecision: (memberId: string, trainingName: string, approved: boolean) => void
+  updateDevelopmentPlan: (memberId: string, entries: DevelopmentPlanEntry[]) => void
+  updateOneOnOnes: (memberId: string, entries: OneOnOneRecord[]) => void
+  updateDisplayName: (memberId: string, displayName: string) => void
+  updateJoinedAt: (memberId: string, joinedAt: string | null) => void
+  setMemberTimezone: (memberId: string, timezone: string) => void
+  setMemberLocale: (memberId: string, locale: string) => void
+  toggleUnavailableDate: (memberId: string, date: string) => void
+  updateAvailableHours: (memberId: string, hours: { start: string; end: string } | null) => void
+  updateSchedule: (id: string, startDate: string | null, deadline: string | null) => void
+  updateDependsOn: (id: string, dependsOnIds: string[]) => void
+  updateReviewer: (id: string, reviewerId: string | null) => void
+  setBlocker: (id: string, note: string | null) => void
+  setHoldReason: (id: string, note: string | null) => void
+  updateEstimatedHours: (id: string, hours: number | null) => void
+  updateActualHours: (id: string, hours: number | null) => void
+  updateRetrospective: (id: string, retrospective: TaskRetrospective | null) => void
+  setTaskSchedule: (id: string, candidates: ScheduleCandidate[], invitedIds: string[]) => void
+  createScheduleTask: (
+    projectId: string,
+    name: string,
+    candidates: ScheduleCandidate[],
+    invitedIds: string[],
+  ) => void
+  respondToSchedule: (id: string, memberId: string, responses: Record<string, ScheduleResponseValue>) => void
+  setTaskForm: (id: string, fields: FormFieldDef[], invitedIds: string[]) => void
+  createFormTask: (
+    projectId: string,
+    name: string,
+    fields: FormFieldDef[],
+    invitedIds: string[],
+  ) => void
+  respondToForm: (id: string, memberId: string, responses: Record<string, FormAnswerValue>) => void
+  addDeliverable: (id: string, label: string, url: string) => void
+  removeDeliverable: (id: string, deliverableId: string) => void
+  addComment: (id: string, text: string) => void
+  removeComment: (id: string, commentId: string) => void
+  updateAvatar: (memberId: string, avatarColor: string, initials: string) => void
+  uploadAvatarImage: (memberId: string, dataUrl: string, filename: string) => Promise<void>
+  uploadOrgLogo: (dataUrl: string, filename: string) => Promise<void>
+  notifications: import('./types').NotificationItem[]
+  getMember: (id: string | null) => Member | undefined
+  getProject: (id: string) => Project | undefined
+  getInput: (id: string | undefined) => TaskInput | undefined
+  // union of explicitly-assigned members (Project.memberIds) and whoever's
+  // actually assigned to one of the project's tasks — the same "who's on
+  // this project" definition admin-projects.tsx uses, so the workspace
+  // (project-view/project-detail) shows the same assignments as Admin does
+  getProjectMembers: (projectId: string) => Member[]
+  // ---- Phase 5: 経費申請・カスタムフォーム --------------------------------
+  expenseCategories: import('./types').ExpenseCategory[]
+  expenseApplications: import('./types').ExpenseApplication[]
+  customFormDefs: import('./types').CustomFormDef[]
+  customFormSubmissions: import('./types').CustomFormSubmission[]
+  updateExpenseCategories: (categories: import('./types').ExpenseCategory[]) => void
+  submitExpenseApplication: (
+    application: Omit<import('./types').ExpenseApplication, 'id' | 'approvals' | 'currentStepIndex' | 'status' | 'createdAt'>,
+  ) => void
+  approveExpenseStep: (applicationId: string, stepId: string, comment?: string) => void
+  rejectExpense: (applicationId: string, reason: string) => void
+  withdrawExpense: (applicationId: string) => void
+  // EXP-008: 差し戻し(修正して再提出できる却下)と、その再提出
+  returnExpense: (applicationId: string, reason: string) => void
+  resubmitExpense: (
+    applicationId: string,
+    fields: {
+      amount: number
+      categoryId: string
+      receiptUrl?: string
+      justification?: string
+      purpose?: string
+      customFieldAnswers?: Record<string, string>
+    },
+  ) => void
+  // EXP-003: 経費領収書のDriveアップロード
+  uploadExpenseReceipt: (dataUrl: string, filename: string) => Promise<string>
+  // FRM-007: アンケート設問画像のDriveアップロード
+  uploadSurveyImage: (dataUrl: string, filename: string) => Promise<string>
+  updateCustomFormDefs: (forms: import('./types').CustomFormDef[]) => void
+  submitCustomForm: (
+    formId: string,
+    answers: Record<string, string | number>,
+  ) => void
+  approveFormStep: (submissionId: string, stepId: string, comment?: string) => void
+  rejectFormSubmission: (submissionId: string, reason: string) => void
+  // REP-004/REP-005: 日報・週報
+  submitDailyReport: (report: DailyReportEntry) => void
+  fetchDailyReports: () => Promise<DailyReportEntry[]>
+  // タスク確認ターゲット更新
+  updateReviewers: (id: string, reviewerIds: string[], requiredApprovals?: number | 'all') => void
+  approveTaskReview: (taskId: string, comment?: string) => void
+  // Phase 6: スキル一括更新
+  bulkUpdateSkills: (updates: { memberId: string; skill: string; level: number }[]) => void
+  // ---- 採用支援（候補者） --------------------------------------------------
+  candidates: import('./types').Candidate[]
+  addCandidate: (candidate: Omit<import('./types').Candidate, 'id' | 'status' | 'createdAt' | 'updatedAt'>) => void
+  updateCandidate: (
+    candidateId: string,
+    fields: Partial<Pick<import('./types').Candidate, 'name' | 'email' | 'phone' | 'resumeText' | 'interviewNotes' | 'status'>>,
+  ) => void
+  removeCandidate: (candidateId: string) => void
+  convertCandidateToMember: (candidateId: string, role?: string) => void
+  // ---- アンケート（item 22/30） -------------------------------------------
+  surveyResponses: import('./types').SurveyResponse[]
+  submitSurveyResponse: (answers: Record<string, number | string>) => void
+  // ---- 学歴情報 --------------------------------------------------------
+  updateEducationInfo: (
+    memberId: string,
+    info: { university: string; faculty: string; departmentName: string; gradeYear: string },
+  ) => void
+}
+
+const OhsumiContext = createContext<OhsumiContextValue | null>(null)
+
+const STORAGE_KEY = 'ohsumi-state-v2'
+const TAGS_STORAGE_KEY = 'ohsumi-tag-options'
+const ONBOARDED_STORAGE_KEY = 'ohsumi-onboarded-ids'
+const TEMPLATES_STORAGE_KEY = 'ohsumi-project-templates'
+const ROLE_PERMS_STORAGE_KEY = 'ohsumi-role-permissions'
+const TASK_SET_TEMPLATES_STORAGE_KEY = 'ohsumi-task-set-templates'
+const RECURRING_RULES_STORAGE_KEY = 'ohsumi-recurring-rules'
+// item 17: ポジション要件 — localStorage fallback for when the optional
+// Settings sheet isn't configured, same as the other option pools below
+const JOB_REQUIREMENTS_STORAGE_KEY = 'ohsumi-job-requirements'
+// 要求分野 — the field name pool lives alongside skill/category in
+// TAGS_STORAGE_KEY; the field->skills mapping and threshold get their own
+// keys, same pattern as jobRequirements
+const SKILL_FIELD_SKILLS_STORAGE_KEY = 'ohsumi-skill-field-skills'
+const SKILL_FIELD_THRESHOLD_STORAGE_KEY = 'ohsumi-skill-field-threshold'
+// 団体メール — org_notification_emails のローカルフォールバック
+const ORG_NOTIFICATION_EMAILS_STORAGE_KEY = 'ohsumi-org-notification-emails'
+// アンケート回答対象者の限定 — survey_invited_ids のローカルフォールバック（空=全員可）
+const SURVEY_INVITED_IDS_STORAGE_KEY = 'ohsumi-survey-invited-ids'
+// プロジェクトの表示順 — project_order のローカルフォールバック
+const PROJECT_ORDER_STORAGE_KEY = 'ohsumi-project-order'
+// 制限付きロール — restricted_roles のローカルフォールバック
+const RESTRICTED_ROLES_STORAGE_KEY = 'ohsumi-restricted-roles'
+// メンション通知の既読管理 — 端末ローカルのみ（サーバーには保存しない）。
+// currentUserId -> 既読にしたコメントID配列、で複数メンバーを同一端末で
+// 切り替えて使う場合にも既読状態が混ざらないようにする
+const SEEN_MENTIONS_STORAGE_KEY = 'ohsumi-seen-mention-ids'
+const DISMISSED_NOTIFICATIONS_STORAGE_KEY = 'ohsumi-dismissed-notifications'
+const ORG_NAME_STORAGE_KEY = 'ohsumi-org-name'
+const ORG_LOGO_URL_STORAGE_KEY = 'ohsumi-org-logo-url'
+const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
+
+function loadState(): Partial<OhsumiState> | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Partial<OhsumiState>) : null
+  } catch {
+    return null
+  }
+}
+
+function loadTagOptions(): {
+  skills: string[]
+  categories: string[]
+  roleLevels?: string[]
+  skillFieldOptions?: string[]
+} | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(TAGS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function loadOnboardedIds(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(ONBOARDED_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadSeenMentionIds(): Record<string, string[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(SEEN_MENTIONS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadProjectTemplates(): Record<string, ProjectTemplateTask[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(TEMPLATES_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadRolePermissions(): Record<string, AdminSection[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(ROLE_PERMS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadRestrictedRoles(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(RESTRICTED_ROLES_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadTaskSetTemplates(): TaskSetTemplate[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(TASK_SET_TEMPLATES_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadRecurringRules(): RecurringTaskRule[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(RECURRING_RULES_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadJobRequirements(): Record<string, string[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(JOB_REQUIREMENTS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadSkillFieldSkills(): Record<string, string[]> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(SKILL_FIELD_SKILLS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function loadSkillFieldThreshold(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(SKILL_FIELD_THRESHOLD_STORAGE_KEY)
+    if (!raw) return null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+function loadOrgNotificationEmails(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(ORG_NOTIFICATION_EMAILS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadSurveyInvitedIds(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(SURVEY_INVITED_IDS_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function loadProjectOrder(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(PROJECT_ORDER_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+// order に載っているIDを先にその順序で、載っていないものは元の並びのまま
+// 末尾に追加する（新規プロジェクトが並び替え未設定でも自然に一覧に出るように）
+function sortByOrder<T extends { id: string }>(list: T[], order: string[]): T[] {
+  if (order.length === 0) return list
+  const byId = new Map(list.map((item) => [item.id, item]))
+  const ordered: T[] = []
+  order.forEach((id) => {
+    const item = byId.get(id)
+    if (item) {
+      ordered.push(item)
+      byId.delete(id)
+    }
+  })
+  return [...ordered, ...byId.values()]
+}
+
+function uniq(list: string[]): string[] {
+  return Array.from(new Set(list.map((s) => s.trim()).filter(Boolean)))
+}
+
+export function OhsumiProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n()
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  // when a remote spreadsheet is configured, the local seed data is never
+  // actually correct (wrong ids, wrong org) — starting from it anyway just
+  // means every reload briefly shows the wrong members/tasks/projects (and
+  // can resolve currentUserId, a real remote id, to nobody) until the fetch
+  // below replaces it. Start empty instead and let the loading gates in
+  // ohsumi-app.tsx / admin-screen.tsx cover the wait.
+  const [tasks, setTasks] = useState<Task[]>(isRemoteConfigured ? [] : SEED_TASKS)
+  // GAS書き込み直後は公開CSV(fetchRemoteData)側の反映に数分ラグがあるため
+  // (下のavatarUrlフォールバックと同種の問題)、承認/却下した直後に情報更新
+  // すると古いCSVスナップショットでtasksが丸ごと上書きされ、「承認したのに
+  // 一覧に残り続ける／却下したのに復活する」ように見えてしまう。このセッ
+  // ション内で承認・却下したタスクIDを覚えておき、以後の再取得でも結果を
+  // 上書きされないようにする
+  const locallyApprovedTaskIdsRef = useRef<Set<string>>(new Set())
+  const locallyRejectedTaskIdsRef = useRef<Set<string>>(new Set())
+  const applyLocalApprovalOverrides = useCallback((remoteTasks: Task[]) => {
+    if (
+      locallyApprovedTaskIdsRef.current.size === 0 &&
+      locallyRejectedTaskIdsRef.current.size === 0
+    ) {
+      return remoteTasks
+    }
+    return remoteTasks
+      .filter((t) => !locallyRejectedTaskIdsRef.current.has(t.id))
+      .map((t) =>
+        t.pendingApproval && locallyApprovedTaskIdsRef.current.has(t.id)
+          ? { ...t, pendingApproval: false }
+          : t,
+      )
+  }, [])
+  const [members, setMembers] = useState<Member[]>(isRemoteConfigured ? [] : MEMBERS)
+  const [projects, setProjects] = useState<Project[]>(isRemoteConfigured ? [] : PROJECTS)
+  // 自分自身の登録メール(カンマ区切り)。セキュリティ対応でMembers(公開CSV)
+  // からemailを分離したため、members[].emailはもう誰にも入っていない —
+  // 自分の分だけこれで別管理する(下のuseEffectで認証済みGAS経由で取得)
+  const [myEmail, setMyEmail] = useState<string>('')
+  const [inputs, setInputs] = useState<TaskInput[]>(SEED_INPUTS)
+  const [mode, setModeState] = useState<Mode>('output')
+  const [hydrated, setHydrated] = useState(false)
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>('idle')
+  const [remoteError, setRemoteError] = useState<string | null>(null)
+  // mirrors remoteStatus but for the separate, optional Settings-sheet
+  // fetch (role levels/permissions/pools) — true immediately when that
+  // sheet isn't configured, so dataReady below doesn't wait on it forever
+  const [settingsReady, setSettingsReady] = useState(!isSettingsConfigured)
+  const [skillOptions, setSkillOptions] = useState<string[]>(DEFAULT_SKILL_OPTIONS)
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(DEFAULT_CATEGORY_OPTIONS)
+  const [roleLevels, setRoleLevels] = useState<string[]>(DEFAULT_ROLE_LEVELS)
+  const [restrictedRoles, setRestrictedRolesState] = useState<string[]>([])
+  const [rolePermissions, setRolePermissionsState] = useState<Record<string, AdminSection[]>>({})
+  const [projectTemplates, setProjectTemplates] = useState<Record<string, ProjectTemplateTask[]>>({})
+  const [taskSetTemplates, setTaskSetTemplates] = useState<TaskSetTemplate[]>([])
+  const [recurringRules, setRecurringRules] = useState<RecurringTaskRule[]>([])
+  // item 17: ポジション要件 — jobType (role level string) -> required skills
+  const [jobRequirements, setJobRequirementsState] = useState<Record<string, string[]>>({})
+  // 要求分野: field name pool + field -> constituent skills + acquisition threshold
+  const [skillFieldOptions, setSkillFieldOptions] = useState<string[]>(DEFAULT_SKILL_FIELD_OPTIONS)
+  const [skillFieldSkills, setSkillFieldSkillsState] =
+    useState<Record<string, string[]>>(DEFAULT_SKILL_FIELD_SKILLS)
+  const [skillFieldThreshold, setSkillFieldThresholdState] = useState<number>(
+    DEFAULT_SKILL_FIELD_THRESHOLD,
+  )
+  // ORG-002: 部署ツリー構成。空配列(=未設定)ならMembers.departmentPathsから
+  // 動的導出するフォールバックのまま(admin-org-tree.tsx側で判定)
+  const [departmentTreeConfig, setDepartmentTreeConfigState] = useState<DepartmentTreeNode[]>([])
+  // 団体メール — 幹部/事業責任者(=full admin)がAdmin > Tagsから登録する共有
+  // 配信先。個々のメンバーのnotify_new_task設定に関わらず常に通知される
+  // （gas/Code.gsのnotifyAdmins()参照）
+  const [orgNotificationEmails, setOrgNotificationEmails] = useState<string[]>([])
+  // アンケート回答対象者の限定。空配列=全員回答可
+  const [surveyInvitedIds, setSurveyInvitedIds] = useState<string[]>([])
+  // 団体名・ロゴ — SettingsCSV + localStorageキャッシュで復元
+  const [orgName, setOrgNameState] = useState<string>(() => {
+    try { return typeof window !== 'undefined' ? (window.localStorage.getItem(ORG_NAME_STORAGE_KEY) ?? '') : '' } catch { return '' }
+  })
+  const [orgLogoUrl, setOrgLogoUrlState] = useState<string>(() => {
+    try { return typeof window !== 'undefined' ? (window.localStorage.getItem(ORG_LOGO_URL_STORAGE_KEY) ?? '') : '' } catch { return '' }
+  })
+  // テーマカラー（プライマリカラー、16進コード）— 未設定時はデフォルトのまま
+  const [themeColor, setThemeColorState] = useState<string>(() => {
+    try { return typeof window !== 'undefined' ? (window.localStorage.getItem(THEME_COLOR_STORAGE_KEY) ?? '') : '' } catch { return '' }
+  })
+  // プロジェクトの表示順（プロジェクトIDの配列）— Admin > Projectsのドラッグ
+  // 並び替えで設定する、org全体で共有の表示順
+  const [projectOrder, setProjectOrderState] = useState<string[]>([])
+  const [onboardedIds, setOnboardedIds] = useState<Set<string>>(new Set())
+  const [seenMentionIds, setSeenMentionIds] = useState<Record<string, string[]>>({})
+  // 通知の個別dismiss — userId -> 無視した通知IDの配列。通知はMemoで動的生成
+  // されるので、dismissedは端末ローカルのlocalStorageで管理する（item 7）
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY) : null
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
+  const [skillCertifiedEvent, setSkillCertifiedEvent] = useState<{
+    memberName: string
+    skill: string
+  } | null>(null)
+  const [quizDefinitions, setQuizDefinitions] = useState<QuizDefinition[]>([])
+  const [learningContents, setLearningContents] = useState<LearningContent[]>([])
+  const [learningCourses, setLearningCourses] = useState<LearningCourse[]>([])
+  const [trainingPrograms, setTrainingPrograms] = useState<TrainingProgram[]>([])
+  // FRM-006: アンケート設問リスト — 空ならsurvey-screen.tsxが固定6問にフォールバックする
+  const [surveyQuestions, setSurveyQuestions] = useState<SurveyQuestion[]>([])
+  const [radarAxes, setRadarAxes] = useState<RadarAxis[]>([])
+  const [customMemberColumns, setCustomMemberColumns] = useState<CustomMemberColumn[]>([])
+  // Slack Incoming Webhook URL — 書き込み専用（Discordと同様、GAS PropertiesServiceに保存）
+  const [slackWebhookUrl, setSlackWebhookUrlState] = useState<string>('')
+  // Settingsシートから取得した初期タスク定義（initial_tasks_json）
+  const [initialTasksFromSettings, setInitialTasksFromSettings] = useState<{ name: string; description: string }[]>([])
+
+  // item 20: 1on1ワークシート質問項目 — org管理者が設定できる質問のリスト
+  // localStorageに保存、Settingsシート設定時はGAS同期あり
+  const [oneOnOneQuestions, setOneOnOneQuestionsState] = useState<string[]>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('ohsumi-1on1-questions') : null
+      return raw ? JSON.parse(raw) : ['今月の良かったことは？', '困っていることや課題は？', '次回までのアクションは？']
+    } catch {
+      return ['今月の良かったことは？', '困っていることや課題は？', '次回までのアクションは？']
+    }
+  })
+  const [skillLevelThresholds, setSkillLevelThresholds] = useState<SkillLevelThresholds>({})
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
+  const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
+  const [customFormSubmissions, setCustomFormSubmissions] = useState<CustomFormSubmission[]>([])
+  // 採用支援（候補者）— Expenses/FormSubmissionsと同じくローカルstateのみで
+  // 管理し、書き込みはGASへfire-and-forget。読み取り専用の一覧取得APIは無い。
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+
+  const reportRemoteError = useCallback((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error('[ohsumi] リモートとの同期に失敗しました', err)
+    setRemoteError(err instanceof Error ? err.message : String(err))
+  }, [])
+
+  // fire a remote write; clears a stale error banner on success, reports on failure
+  const runRemote = useCallback(
+    (promise: Promise<unknown>) => {
+      promise.then(() => setRemoteError(null)).catch(reportRemoteError)
+    },
+    [reportRemoteError],
+  )
+
+  // currentUserIdが変わるたび(ログイン・ログアウト・localStorageからの復元)、
+  // 自分自身の登録メールを取得し直す。members配列自体の更新(定期的な公開CSV
+  // 再取得)には反応させない — membersにはもうemailが載っていないので、
+  // 依存すると無関係な再取得ループになるだけ
+  useEffect(() => {
+    if (!currentUserId) {
+      setMyEmail('')
+      return
+    }
+    if (!isRemoteConfigured) {
+      setMyEmail(MEMBERS.find((m) => m.id === currentUserId)?.email ?? '')
+      return
+    }
+    let cancelled = false
+    remoteApi
+      .getMyEmails()
+      .then((res) => {
+        if (!cancelled) setMyEmail(res.email ?? '')
+      })
+      .catch(() => {
+        // サイレントに諦める — 未ログイン状態のGoogleセッション切れ等。
+        // person-detail.tsx側の「自分」セクションを開き直せば再試行される
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentUserId])
+
+  // hydrate from localStorage once (only meaningful without a remote DB —
+  // when the spreadsheet is configured it's fetched fresh below and wins)
+  useEffect(() => {
+    const saved = loadState()
+    if (saved) {
+      if (saved.currentUserId) setCurrentUserId(saved.currentUserId)
+      if (!isRemoteConfigured) {
+        if (saved.tasks) setTasks(saved.tasks)
+        if (saved.members) setMembers(saved.members)
+        if (saved.projects) setProjects(saved.projects)
+      }
+      if (saved.inputs) setInputs(saved.inputs)
+      if (saved.mode) setModeState(saved.mode)
+    }
+    if (!isSettingsConfigured) {
+      const tags = loadTagOptions()
+      if (tags) {
+        if (tags.skills?.length) setSkillOptions(uniq([...DEFAULT_SKILL_OPTIONS, ...tags.skills]))
+        if (tags.categories?.length)
+          setCategoryOptions(uniq([...DEFAULT_CATEGORY_OPTIONS, ...tags.categories]))
+        if (tags.roleLevels) setRoleLevels(uniq(tags.roleLevels))
+        if (tags.skillFieldOptions?.length)
+          setSkillFieldOptions(uniq([...DEFAULT_SKILL_FIELD_OPTIONS, ...tags.skillFieldOptions]))
+      }
+      setProjectTemplates(loadProjectTemplates())
+      setRolePermissionsState(loadRolePermissions())
+      setRestrictedRolesState(loadRestrictedRoles())
+      setTaskSetTemplates(loadTaskSetTemplates())
+      setRecurringRules(loadRecurringRules())
+      setJobRequirementsState(loadJobRequirements())
+      const savedFieldSkills = loadSkillFieldSkills()
+      if (Object.keys(savedFieldSkills).length) setSkillFieldSkillsState(savedFieldSkills)
+      const savedThreshold = loadSkillFieldThreshold()
+      if (savedThreshold !== null) setSkillFieldThresholdState(savedThreshold)
+      const savedOrgEmails = loadOrgNotificationEmails()
+      if (savedOrgEmails.length) setOrgNotificationEmails(savedOrgEmails)
+      const savedSurveyInvitedIds = loadSurveyInvitedIds()
+      if (savedSurveyInvitedIds.length) setSurveyInvitedIds(savedSurveyInvitedIds)
+      const savedProjectOrder = loadProjectOrder()
+      if (savedProjectOrder.length) setProjectOrderState(savedProjectOrder)
+    }
+    setOnboardedIds(new Set(loadOnboardedIds()))
+    setSeenMentionIds(loadSeenMentionIds())
+    setHydrated(true)
+  }, [])
+
+  // fetch the live spreadsheet (Members/Projects/Tasks) once, when configured
+  useEffect(() => {
+    if (!isRemoteConfigured) return
+    setRemoteStatus('loading')
+    fetchRemoteData()
+      .then(({ members: m, projects: p, tasks: t }) => {
+        setMembers(m)
+        setProjects(p)
+        setTasks(applyLocalApprovalOverrides(t))
+        setRemoteStatus('ready')
+        setRemoteError(null)
+      })
+      .catch((err) => {
+        reportRemoteError(err)
+        setRemoteStatus('error')
+      })
+  }, [reportRemoteError, applyLocalApprovalOverrides])
+
+  // fetch the optional Settings sheet once, when configured — this is the
+  // source of truth for the skill/category/role-level pools and project
+  // templates instead of each browser's own localStorage copy
+  useEffect(() => {
+    if (!isSettingsConfigured) return
+    fetchSettings()
+      .then((s) => {
+        setSkillOptions(s.skillOptions.length ? uniq(s.skillOptions) : DEFAULT_SKILL_OPTIONS)
+        setCategoryOptions(
+          s.categoryOptions.length ? uniq(s.categoryOptions) : DEFAULT_CATEGORY_OPTIONS,
+        )
+        setRoleLevels(s.roleLevels.length ? uniq(s.roleLevels) : DEFAULT_ROLE_LEVELS)
+        setProjectTemplates(s.projectTemplates)
+        setRolePermissionsState(s.rolePermissions)
+        setRestrictedRolesState(s.restrictedRoles)
+        setTaskSetTemplates(s.taskSetTemplates)
+        setRecurringRules(s.recurringRules)
+        setJobRequirementsState(s.jobRequirements)
+        setSkillFieldOptions(
+          s.skillFieldOptions.length ? uniq(s.skillFieldOptions) : DEFAULT_SKILL_FIELD_OPTIONS,
+        )
+        setSkillFieldSkillsState(s.skillFieldSkills)
+        setSkillFieldThresholdState(s.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
+        setOrgNotificationEmails(s.orgNotificationEmails)
+        setSurveyInvitedIds(s.surveyInvitedIds)
+        if (s.orgName) { setOrgNameState(s.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, s.orgName) } catch {} }
+        if (s.orgLogoUrl) { setOrgLogoUrlState(s.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, s.orgLogoUrl) } catch {} }
+        if (s.themeColor) { setThemeColorState(s.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, s.themeColor) } catch {} }
+        setProjectOrderState(s.projectOrder)
+        if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
+        if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
+        if (s.radarAxes) setRadarAxes(s.radarAxes)
+        if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
+        if (s.expenseCategories) setExpenseCategories(s.expenseCategories)
+        if (s.customFormDefs) setCustomFormDefs(s.customFormDefs)
+        if (s.oneOnOneQuestions.length) setOneOnOneQuestionsState(s.oneOnOneQuestions)
+        if (s.initialTasks.length) setInitialTasksFromSettings(s.initialTasks)
+        if (s.departmentTreeConfig.length) setDepartmentTreeConfigState(s.departmentTreeConfig)
+        if (s.learningContents.length) setLearningContents(s.learningContents)
+        if (s.learningCourses.length) setLearningCourses(s.learningCourses)
+        if (s.trainingPrograms.length) setTrainingPrograms(s.trainingPrograms)
+        if (s.surveyQuestions.length) setSurveyQuestions(s.surveyQuestions)
+        setRemoteError(null)
+        setSettingsReady(true)
+      })
+      .catch((err) => {
+        reportRemoteError(err)
+        // an error still means "stop waiting" — fall back to defaults
+        // rather than blocking dataReady forever
+        setSettingsReady(true)
+      })
+  }, [reportRemoteError])
+
+  // manual refresh for the header's 情報更新 button. Deliberately doesn't
+  // touch remoteStatus/settingsReady (those flipping to non-ready is what
+  // gates the Router/AdminScreen loading screens) — a refresh the user asks
+  // for while already looking at data should update in place, not bounce
+  // them to a loading screen or off the page they're on.
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshAll = useCallback(() => {
+    if (!isRemoteConfigured && !isSettingsConfigured) return
+    setRefreshing(true)
+    Promise.all([
+      isRemoteConfigured ? fetchRemoteData() : null,
+      isSettingsConfigured ? fetchSettings() : null,
+    ])
+      .then(([remote, settings]) => {
+        if (remote) {
+          setMembers(remote.members)
+          setProjects(remote.projects)
+          setTasks(applyLocalApprovalOverrides(remote.tasks))
+        }
+        if (settings) {
+          setSkillOptions(settings.skillOptions.length ? uniq(settings.skillOptions) : DEFAULT_SKILL_OPTIONS)
+          setCategoryOptions(
+            settings.categoryOptions.length
+              ? uniq(settings.categoryOptions)
+              : DEFAULT_CATEGORY_OPTIONS,
+          )
+          setRoleLevels(settings.roleLevels.length ? uniq(settings.roleLevels) : DEFAULT_ROLE_LEVELS)
+          setProjectTemplates(settings.projectTemplates)
+          setRolePermissionsState(settings.rolePermissions)
+          setRestrictedRolesState(settings.restrictedRoles)
+          setTaskSetTemplates(settings.taskSetTemplates)
+          setRecurringRules(settings.recurringRules)
+          setJobRequirementsState(settings.jobRequirements)
+          setSkillFieldOptions(
+            settings.skillFieldOptions.length
+              ? uniq(settings.skillFieldOptions)
+              : DEFAULT_SKILL_FIELD_OPTIONS,
+          )
+          setSkillFieldSkillsState(settings.skillFieldSkills)
+          setSkillFieldThresholdState(settings.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
+          setOrgNotificationEmails(settings.orgNotificationEmails)
+          setSurveyInvitedIds(settings.surveyInvitedIds)
+          if (settings.orgName) { setOrgNameState(settings.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, settings.orgName) } catch {} }
+          if (settings.orgLogoUrl) { setOrgLogoUrlState(settings.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, settings.orgLogoUrl) } catch {} }
+          if (settings.themeColor) { setThemeColorState(settings.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, settings.themeColor) } catch {} }
+          setProjectOrderState(settings.projectOrder)
+          if (settings.skillLevelThresholds) setSkillLevelThresholds(settings.skillLevelThresholds)
+          if (settings.quizDefinitions) setQuizDefinitions(settings.quizDefinitions)
+          if (settings.radarAxes) setRadarAxes(settings.radarAxes)
+          if (settings.customMemberColumns) setCustomMemberColumns(settings.customMemberColumns)
+          if (settings.expenseCategories) setExpenseCategories(settings.expenseCategories)
+          if (settings.customFormDefs) setCustomFormDefs(settings.customFormDefs)
+          if (settings.oneOnOneQuestions.length) setOneOnOneQuestionsState(settings.oneOnOneQuestions)
+          if (settings.initialTasks.length) setInitialTasksFromSettings(settings.initialTasks)
+          if (settings.departmentTreeConfig.length) setDepartmentTreeConfigState(settings.departmentTreeConfig)
+          if (settings.learningContents.length) setLearningContents(settings.learningContents)
+          if (settings.learningCourses.length) setLearningCourses(settings.learningCourses)
+          if (settings.trainingPrograms.length) setTrainingPrograms(settings.trainingPrograms)
+          if (settings.surveyQuestions.length) setSurveyQuestions(settings.surveyQuestions)
+        }
+        setRemoteError(null)
+      })
+      .catch(reportRemoteError)
+      .finally(() => setRefreshing(false))
+  }, [reportRemoteError, applyLocalApprovalOverrides])
+
+  // 定期タスク generation check (item 2/TSK-051の修正) — 生成の要否判定・
+  // 実際の生成はGAS側のLockService付き関数(generateRecurringTasksLocked)
+  // に一本化した。以前はここで独自に同じ判定・生成をクライアント側でも
+  // 行っており、サーバー側の日次トリガー(dailyMaintenance)と競合して
+  // 同じルールから同日中に2件生成されることがあった(公開CSVのキャッシュ
+  // 反映には数分のラグがあり、クライアントがlastGeneratedDateを更新した
+  // 直後にサーバー側トリガーが古い値を読んでしまうため)。さらに期限計算が
+  // toISOString()(UTC基準)である一方、曜日/日付の判定(dow/dom)はブラウザの
+  // ローカルタイムゾーン基準だったため、深夜0時〜9時台(日本時間)に実行
+  // されると期限が1日早くズレる問題もあった。
+  //
+  // recurringRulesがGASのSettingsシートへ同期されるのはisSettingsConfigured
+  // の時だけ(addRecurringRule等参照)なので、その場合のみサーバー側の関数を
+  // 呼ぶ。Settings CSVが未設定の環境(isRemoteConfigured のみでrecurring_rules
+  // はローカルにしか無い場合や、GASそのものを使わないローカルデモ環境)では
+  // サーバーに読める値が無いため、以前と同様クライアント側で生成する
+  // (この経路はブラウザが1つしか無いことが前提の簡易フォールバックなので
+  // 二重生成の心配は無いが、期限計算は曜日/日付判定と同じローカル
+  // タイムゾーン基準に統一した)。isRemoteConfiguredがtrueならMembers/
+  // Projects/Tasks自体は連携済みなので、ルール定義はローカルのままでも
+  // 生成したタスクはremoteApi.createTasksで実際のTasksシートへ書き込む
+  // (isRemoteConfiguredがfalseの完全ローカルデモ環境ではローカルstateのみ)。
+  useEffect(() => {
+    if (!hydrated || recurringRules.length === 0) return
+
+    if (isSettingsConfigured) {
+      remoteApi
+        .checkAndGenerateRecurringTasks()
+        .then(({ generated }) => {
+          if (!generated || generated.length === 0) return
+          // 生成されたタスクの詳細フィールドはrefreshAll()で丸ごと再取得
+          // すれば十分で、ここで個別に組み立て直す必要は無い
+          refreshAll()
+        })
+        .catch(reportRemoteError)
+      return
+    }
+
+    const toLocalDateStr = (date: Date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+    const now = new Date()
+    const todayStr = toLocalDateStr(now)
+    const dow = now.getDay()
+    const dom = now.getDate()
+
+    recurringRules.forEach((rule) => {
+      if (!rule.active || rule.lastGeneratedDate === todayStr) return
+      const due = rule.frequency === 'weekly' ? rule.dayOfWeek === dow : rule.dayOfMonth === dom
+      if (!due) return
+
+      const deadline =
+        rule.dueInDays != null
+          ? toLocalDateStr(new Date(now.getFullYear(), now.getMonth(), now.getDate() + rule.dueInDays))
+          : null
+      const newTask: Task = {
+        id: `t-${Math.random().toString(36).slice(2, 9)}`,
+        name: rule.name,
+        description: '',
+        projectId: rule.projectId,
+        department: rule.department,
+        assigneeIds: [],
+        deadline,
+        category: rule.category,
+        skills: rule.skills,
+        difficulty: rule.difficulty,
+        priority: rule.priority,
+        status: 'todo',
+        lastActivity: todayStr,
+        createdAt: now.toISOString(),
+        progressHistory: [],
+        pendingApproval: false,
+      }
+      setTasks((prev) => [newTask, ...prev])
+      setRecurringRules((prev) => prev.map((r) => (r.id === rule.id ? { ...r, lastGeneratedDate: todayStr } : r)))
+      // isSettingsConfiguredがfalseでもisRemoteConfigured(Tasksシート自体は
+      // 連携済み)はtrueということがあり得る(Settingsシートは任意の追加設定
+      // のため)。その場合、ルール定義はローカルのままで構わないが、生成した
+      // タスクは実際のTasksシートへ書き込む必要がある。これが無いと生成物が
+      // Reactのローカルstateにしか残らず、リロードで消え他メンバーにも
+      // 共有されない。
+      if (isRemoteConfigured) {
+        remoteApi
+          .createTasks([
+            {
+              tempId: newTask.id,
+              title: newTask.name,
+              projectId: rule.projectId,
+              department: rule.department,
+              category: rule.category,
+              skills: rule.skills,
+              difficulty: rule.difficulty,
+              priority: rule.priority,
+              deadline,
+              pendingApproval: false,
+            },
+          ])
+          .then((mapping) => {
+            const realId = mapping[0]?.id
+            if (realId) setTasks((prev) => prev.map((t) => (t.id === newTask.id ? { ...t, id: realId } : t)))
+          })
+          .catch(reportRemoteError)
+      }
+    })
+  }, [hydrated, recurringRules, reportRemoteError, refreshAll])
+
+  // keep the skill/category pools growing with whatever actually shows up
+  // on tasks (from the sheet or elsewhere), not just manually-added ones
+  useEffect(() => {
+    const seenSkills = uniq(tasks.flatMap((t) => t.skills))
+    const seenCategories = uniq(tasks.map((t) => t.category))
+    setSkillOptions((prev) => uniq([...prev, ...seenSkills]))
+    setCategoryOptions((prev) => uniq([...prev, ...seenCategories]))
+  }, [tasks])
+
+  // same for role levels actually in use on Members (e.g. from the sheet),
+  // so a custom level set elsewhere still shows up in this browser's picker
+  useEffect(() => {
+    const seenRoles = uniq(members.map((m) => m.role).filter((r) => r !== BASE_ROLE))
+    if (seenRoles.length === 0) return
+    setRoleLevels((prev) => uniq([...prev, ...seenRoles]))
+  }, [members])
+
+  // persist (local-only state: current user, input history, UI mode — the
+  // task/member/project lists themselves are never the source of truth
+  // once a remote DB is configured, so they're skipped from the cache then)
+  useEffect(() => {
+    if (!hydrated) return
+    try {
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          currentUserId,
+          inputs,
+          mode,
+          ...(isRemoteConfigured ? {} : { tasks, members, projects }),
+        }),
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [currentUserId, tasks, members, projects, inputs, mode, hydrated])
+
+  // persist skill/category/role-level option pools (device-local — see
+  // gas/README.md; skipped once the Settings sheet is the source of truth)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(
+        TAGS_STORAGE_KEY,
+        JSON.stringify({ skills: skillOptions, categories: categoryOptions, roleLevels, skillFieldOptions }),
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [skillOptions, categoryOptions, roleLevels, skillFieldOptions, hydrated])
+
+  // persist project-type templates (device-local, same caveat as tags)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(TEMPLATES_STORAGE_KEY, JSON.stringify(projectTemplates))
+    } catch {
+      /* ignore */
+    }
+  }, [projectTemplates, hydrated])
+
+  // persist per-role admin-section permissions (device-local, same caveat)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(ROLE_PERMS_STORAGE_KEY, JSON.stringify(rolePermissions))
+    } catch {
+      /* ignore */
+    }
+  }, [rolePermissions, hydrated])
+
+  // persist restricted roles (device-local, same caveat)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(RESTRICTED_ROLES_STORAGE_KEY, JSON.stringify(restrictedRoles))
+    } catch {
+      /* ignore */
+    }
+  }, [restrictedRoles, hydrated])
+
+  // persist task-set templates and recurring-task rules (device-local, same caveat)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(TASK_SET_TEMPLATES_STORAGE_KEY, JSON.stringify(taskSetTemplates))
+    } catch {
+      /* ignore */
+    }
+  }, [taskSetTemplates, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(RECURRING_RULES_STORAGE_KEY, JSON.stringify(recurringRules))
+    } catch {
+      /* ignore */
+    }
+  }, [recurringRules, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(JOB_REQUIREMENTS_STORAGE_KEY, JSON.stringify(jobRequirements))
+    } catch {
+      /* ignore */
+    }
+  }, [jobRequirements, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(SKILL_FIELD_SKILLS_STORAGE_KEY, JSON.stringify(skillFieldSkills))
+    } catch {
+      /* ignore */
+    }
+  }, [skillFieldSkills, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(SKILL_FIELD_THRESHOLD_STORAGE_KEY, String(skillFieldThreshold))
+    } catch {
+      /* ignore */
+    }
+  }, [skillFieldThreshold, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(
+        ORG_NOTIFICATION_EMAILS_STORAGE_KEY,
+        JSON.stringify(orgNotificationEmails),
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [orgNotificationEmails, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(
+        SURVEY_INVITED_IDS_STORAGE_KEY,
+        JSON.stringify(surveyInvitedIds),
+      )
+    } catch {
+      /* ignore */
+    }
+  }, [surveyInvitedIds, hydrated])
+
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(PROJECT_ORDER_STORAGE_KEY, JSON.stringify(projectOrder))
+    } catch {
+      /* ignore */
+    }
+  }, [projectOrder, hydrated])
+
+  // item 17: ポジション要件 — synced via the optional Settings sheet
+  // (job_requirements key), same pattern as role_permissions/project_templates
+  const setJobRequirements = useCallback(
+    (jobType: string, skills: string[]) => {
+      setJobRequirementsState((prev) => {
+        const next = { ...prev, [jobType]: skills }
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('job_requirements', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+
+  // 要求分野 — the field name pool (skill_field_options) and its per-field
+  // skill composition (skill_field_skills), same pattern as roleLevels/
+  // rolePermissions
+  const addSkillFieldOption = useCallback(
+    (name: string) => {
+      const v = name.trim()
+      if (!v || skillFieldOptions.includes(v)) return
+      const next = [...skillFieldOptions, v]
+      setSkillFieldOptions(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('skill_field_options', next.join(',')))
+    },
+    [skillFieldOptions, runRemote],
+  )
+  const removeSkillFieldOption = useCallback(
+    (name: string) => {
+      const next = skillFieldOptions.filter((f) => f !== name)
+      setSkillFieldOptions(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('skill_field_options', next.join(',')))
+      setSkillFieldSkillsState((prev) => {
+        if (!(name in prev)) return prev
+        const nextSkills = { ...prev }
+        delete nextSkills[name]
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('skill_field_skills', JSON.stringify(nextSkills)))
+        return nextSkills
+      })
+    },
+    [skillFieldOptions, runRemote],
+  )
+  const setSkillFieldSkills = useCallback(
+    (field: string, skills: string[]) => {
+      setSkillFieldSkillsState((prev) => {
+        const next = { ...prev, [field]: skills }
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('skill_field_skills', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  // 数字は仮 — 分野取得の判定に使う保有率のしきい値（0〜1）
+  const setSkillFieldThreshold = useCallback(
+    (threshold: number) => {
+      const v = Math.min(1, Math.max(0, threshold))
+      setSkillFieldThresholdState(v)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('skill_field_threshold', String(v)))
+    },
+    [runRemote],
+  )
+
+  // ORG-002: 部署ツリー構成の保存。空配列を渡すと明示的に「動的導出に戻す」
+  // ことになる(admin-org-tree.tsx側でconfigが空ならフォールバックする)
+  const updateDepartmentTreeConfig = useCallback(
+    (nodes: DepartmentTreeNode[]) => {
+      setDepartmentTreeConfigState(nodes)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('department_tree_config', JSON.stringify(nodes)))
+    },
+    [runRemote],
+  )
+
+  // 団体メール — 個々のメンバーの通知設定に関わらず常に通知先へ含める共有
+  // 配信先アドレス。Admin > Tagsで幹部/事業責任者(=full admin)が管理する
+  const addOrgNotificationEmail = useCallback(
+    (email: string) => {
+      const v = email.trim()
+      if (!v || orgNotificationEmails.includes(v)) return
+      const next = [...orgNotificationEmails, v]
+      setOrgNotificationEmails(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('org_notification_emails', next.join(',')))
+    },
+    [orgNotificationEmails, runRemote],
+  )
+  const removeOrgNotificationEmail = useCallback(
+    (email: string) => {
+      const next = orgNotificationEmails.filter((e) => e !== email)
+      setOrgNotificationEmails(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('org_notification_emails', next.join(',')))
+    },
+    [orgNotificationEmails, runRemote],
+  )
+  const updateSurveyInvitedIds = useCallback(
+    (ids: string[]) => {
+      setSurveyInvitedIds(ids)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('survey_invited_ids', ids.join(',')))
+    },
+    [runRemote],
+  )
+
+  const setOrgName = useCallback(
+    (name: string) => {
+      setOrgNameState(name)
+      try { localStorage.setItem(ORG_NAME_STORAGE_KEY, name) } catch {}
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('org_name', name))
+    },
+    [runRemote],
+  )
+  const setOrgLogoUrl = useCallback(
+    (url: string) => {
+      setOrgLogoUrlState(url)
+      try {
+        if (url) localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, url)
+        else localStorage.removeItem(ORG_LOGO_URL_STORAGE_KEY)
+      } catch {}
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('org_logo_url', url))
+    },
+    [runRemote],
+  )
+  // テーマカラー — 有効な16進カラーコード（#rgb/#rrggbb）以外は無視する
+  const setThemeColor = useCallback(
+    (color: string) => {
+      const trimmed = color.trim()
+      if (trimmed && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(trimmed)) return
+      setThemeColorState(trimmed)
+      try {
+        if (trimmed) localStorage.setItem(THEME_COLOR_STORAGE_KEY, trimmed)
+        else localStorage.removeItem(THEME_COLOR_STORAGE_KEY)
+      } catch {}
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('theme_color', trimmed))
+    },
+    [runRemote],
+  )
+  const uploadOrgLogo = useCallback(
+    (dataUrl: string, filename: string): Promise<void> => {
+      if (!isDriveConfigured) return Promise.resolve()
+      return remoteApi
+        .uploadOrgLogo(dataUrl, filename)
+        .then(({ url }) => {
+          setOrgLogoUrlState(url)
+          try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, url) } catch {}
+          setRemoteError(null)
+        })
+        .catch((err) => {
+          reportRemoteError(err)
+          throw err
+        })
+    },
+    [reportRemoteError, runRemote],
+  )
+
+  // EXP-003: 経費領収書をDriveにアップロードし、URLを返す。アバター/ロゴと
+  // 違って特定のメンバー/設定フィールドを直接更新するわけではないので、
+  // 呼び出し側(expense-application-modal.tsx)がreceiptUrlに反映する。
+  const uploadExpenseReceipt = useCallback(
+    (dataUrl: string, filename: string): Promise<string> => {
+      if (!isDriveConfigured) return Promise.reject(new Error('Drive is not configured'))
+      return remoteApi
+        .uploadExpenseReceipt(dataUrl, filename)
+        .then(({ url }) => {
+          setRemoteError(null)
+          return url
+        })
+        .catch((err) => {
+          reportRemoteError(err)
+          throw err
+        })
+    },
+    [reportRemoteError],
+  )
+
+  // プロジェクトの表示順 — Admin > Projectsのドラッグ並び替えから呼ばれる
+  const setProjectOrder = useCallback(
+    (orderedIds: string[]) => {
+      setProjectOrderState(orderedIds)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('project_order', orderedIds.join(',')))
+    },
+    [runRemote],
+  )
+
+  // Discord Webhook 連携 — 確認待ち/期限超過タスクの通知先。書き込み専用:
+  // Webhook URLはApps ScriptのPropertiesService（非公開）に保存され、
+  // Settingsシート（公開CSV）には一切乗らないので、クライアント側で読み
+  // 返す手段は意図的に用意していない（gas/README.md §4.7）。
+  // 保存しただけでは本当にDiscordに届くか分からない(URLの入力ミス等が
+  // 「保存しました」表示のまま気づかれない)ため、保存直後に実際にテスト
+  // メッセージを送信し、成否をUI側に返す(org-settings-screen.tsxでトースト表示)
+  const setDiscordWebhookUrl = useCallback(
+    async (url: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!isRemoteConfigured) return { ok: false, error: 'GASが未接続です' }
+      try {
+        await remoteApi.updateDiscordWebhookUrl(url)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        reportRemoteError(err)
+        return { ok: false, error: message }
+      }
+      if (!url) return { ok: true }
+      try {
+        await remoteApi.testDiscordWebhook()
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    [reportRemoteError],
+  )
+
+  // SKL-010: スキルレベルアップ閾値の設定（Admin > Tags）。awardSkillPoints・
+  // submitQuizResultの両方でこの閾値を使ってレベルを計算するため、ここで
+  // 変更すれば以降のポイント付与・検定合格のレベル計算に反映される。
+  const updateSkillLevelThresholds = useCallback(
+    (thresholds: SkillLevelThresholds) => {
+      setSkillLevelThresholds(thresholds)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('skill_level_thresholds', JSON.stringify(thresholds)))
+    },
+    [runRemote],
+  )
+
+  // スキルポイント付与 — タスク完了後に管理者が各スキルに対してポイントを付与。
+  // 累計ポイントが閾値[50,150,350,550,750]を超え、かつレベル4/5は資格
+  // (認定)条件も満たすとスキルレベルが自動で繰り上がる(computeSkillLevel)。
+  const awardSkillPoints = useCallback(
+    (taskId: string, memberId: string, points: SkillPoints) => {
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id !== memberId) return m
+          const current = { ...m.skillPoints }
+          Object.entries(points).forEach(([skill, pts]) => {
+            current[skill] = (current[skill] ?? 0) + pts
+          })
+          const qualifications = m.qualifications ?? []
+          const existingLevels = [...(m.skillLevels ?? [])]
+          Object.entries(current).forEach(([skill, pts]) => {
+            const earnedLevel = computeSkillLevel(pts, skill, qualifications)
+            if (earnedLevel == null) return
+            const idx = existingLevels.findIndex((sl) => sl.skill === skill)
+            if (idx < 0) {
+              existingLevels.push({ skill, level: earnedLevel })
+            } else if (earnedLevel > existingLevels[idx].level) {
+              existingLevels[idx] = { ...existingLevels[idx], level: earnedLevel }
+            }
+          })
+          return { ...m, skillPoints: current, skillLevels: existingLevels }
+        }),
+      )
+      setTasks((prev) => prev.map((t) => (t.id !== taskId ? t : { ...t, awardedPoints: points })))
+      if (isRemoteConfigured) runRemote(remoteApi.awardSkillPoints(taskId, memberId, points))
+    },
+    [runRemote],
+  )
+
+  // 他団体での実績の持ち込み — awardSkillPointsと同じ「累計加算→レベル
+  // 再計算」ロジックだが、タスクには紐付けない。加えて資格も重複を避けて
+  // 追記する。共通スキル(DEFAULT_SKILL_OPTIONS)以外のキーは念のため無視する
+  // (エクスポート側で既に絞り込み済みだが、手編集されたファイル対策)
+  const importPortableRecord = useCallback(
+    (memberId: string, skillPoints: SkillPoints, qualifications: Qualification[]) => {
+      const commonSkills = new Set(DEFAULT_SKILL_OPTIONS)
+      const filteredPoints = Object.fromEntries(
+        Object.entries(skillPoints).filter(([skill]) => commonSkills.has(skill)),
+      )
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id !== memberId) return m
+          const current = { ...m.skillPoints }
+          Object.entries(filteredPoints).forEach(([skill, pts]) => {
+            current[skill] = (current[skill] ?? 0) + pts
+          })
+          const existingQualifications = m.qualifications ?? []
+          const existingKeys = new Set(
+            existingQualifications.map((q) => `${q.name}|${q.acquiredDate ?? ''}`),
+          )
+          const newQualifications = qualifications.filter(
+            (q) => !existingKeys.has(`${q.name}|${q.acquiredDate ?? ''}`),
+          )
+          const mergedQualifications = [...existingQualifications, ...newQualifications]
+          const existingLevels = [...(m.skillLevels ?? [])]
+          Object.entries(current).forEach(([skill, pts]) => {
+            const earnedLevel = computeSkillLevel(pts, skill, mergedQualifications)
+            if (earnedLevel == null) return
+            const idx = existingLevels.findIndex((sl) => sl.skill === skill)
+            if (idx < 0) {
+              existingLevels.push({ skill, level: earnedLevel })
+            } else if (earnedLevel > existingLevels[idx].level) {
+              existingLevels[idx] = { ...existingLevels[idx], level: earnedLevel }
+            }
+          })
+          return {
+            ...m,
+            skillPoints: current,
+            skillLevels: existingLevels,
+            qualifications: mergedQualifications,
+          }
+        }),
+      )
+      if (isRemoteConfigured)
+        runRemote(remoteApi.importPortableRecord(memberId, filteredPoints, qualifications))
+    },
+    [runRemote],
+  )
+
+  // 検定定義の更新（Admin）
+  const updateQuizDefinitions = useCallback(
+    (quizzes: QuizDefinition[]) => {
+      setQuizDefinitions(quizzes)
+      if (isSettingsConfigured) runRemote(remoteApi.updateQuizDefinitions(quizzes))
+    },
+    [runRemote],
+  )
+
+  // LRN-001: 学習コンテンツ定義の更新（Admin）
+  const updateLearningContents = useCallback(
+    (contents: LearningContent[]) => {
+      setLearningContents(contents)
+      if (isSettingsConfigured) runRemote(remoteApi.updateLearningContents(contents))
+    },
+    [runRemote],
+  )
+
+  // LRN-002: 学習コース定義の更新（Admin）
+  const updateLearningCourses = useCallback(
+    (courses: LearningCourse[]) => {
+      setLearningCourses(courses)
+      if (isSettingsConfigured) runRemote(remoteApi.updateLearningCourses(courses))
+    },
+    [runRemote],
+  )
+
+  // LRN-006: 研修プログラム定義の更新（Admin）
+  const updateTrainingPrograms = useCallback(
+    (programs: TrainingProgram[]) => {
+      setTrainingPrograms(programs)
+      if (isSettingsConfigured) runRemote(remoteApi.updateTrainingPrograms(programs))
+    },
+    [runRemote],
+  )
+
+  // FRM-006: アンケート設問の更新（Admin）
+  const updateSurveyQuestions = useCallback(
+    (questions: SurveyQuestion[]) => {
+      setSurveyQuestions(questions)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSurveyQuestions(questions))
+    },
+    [runRemote],
+  )
+
+  // レーダーチャート軸の更新（Admin）
+  const updateRadarAxes = useCallback(
+    (axes: RadarAxis[]) => {
+      setRadarAxes(axes)
+      if (isSettingsConfigured) runRemote(remoteApi.updateRadarAxes(axes))
+    },
+    [runRemote],
+  )
+
+  // 人材DBのカスタム列定義の更新（Admin > Tags）
+  const updateCustomMemberColumns = useCallback(
+    (columns: CustomMemberColumn[]) => {
+      setCustomMemberColumns(columns)
+      if (isSettingsConfigured) runRemote(remoteApi.updateCustomMemberColumns(columns))
+    },
+    [runRemote],
+  )
+
+  // 人材DBのカスタム列の値を1件更新する。既存のcustomFieldsとマージした
+  // 完全なオブジェクトを送る（updateCareerGoals等と同じ「まとめて送る」方式）
+  const updateCustomField = useCallback(
+    (memberId: string, key: string, value: string) => {
+      const member = members.find((m) => m.id === memberId)
+      const merged = { ...(member?.customFields ?? {}), [key]: value }
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, customFields: merged } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateCustomFields(memberId, merged))
+    },
+    [members, runRemote],
+  )
+
+  // 検定を受験する（メンバー）— remote がある場合はサーバーで採点、なければ
+  // クライアント側でスコアを計算してスキルレベルを楽観的更新する。
+  const submitQuizResult = useCallback(
+    async (quizId: string, memberId: string, answers: number[]): Promise<{ passed: boolean; score: number }> => {
+      const quiz = quizDefinitions.find((q) => q.id === quizId)
+      if (!quiz) return { passed: false, score: 0 }
+
+      const localScore = () => {
+        const correct = answers.filter((ans, i) => ans === quiz.questions[i]?.correctIndex).length
+        return Math.round((correct / Math.max(1, quiz.questions.length)) * 100)
+      }
+
+      if (isRemoteConfigured) {
+        try {
+          const result = await remoteApi.submitQuizResult(quizId, memberId, answers)
+          if (result.passed && result.newLevel != null) {
+            setMembers((prev) =>
+              prev.map((m) => {
+                if (m.id !== memberId) return m
+                const existing = [...(m.skillLevels ?? [])]
+                const idx = existing.findIndex((sl) => sl.skill === quiz.targetSkill)
+                const nl = result.newLevel as SkillLevelValue
+                if (idx < 0) {
+                  existing.push({ skill: quiz.targetSkill, level: nl })
+                } else if (nl > existing[idx].level) {
+                  existing[idx] = { ...existing[idx], level: nl }
+                }
+                return { ...m, skillLevels: existing }
+              }),
+            )
+          }
+          return result
+        } catch (err) {
+          reportRemoteError(err)
+          return { passed: false, score: localScore() }
+        }
+      } else {
+        const score = localScore()
+        const passed = score >= quiz.passRate
+        if (passed) {
+          setMembers((prev) =>
+            prev.map((m) => {
+              if (m.id !== memberId) return m
+              const existing = [...(m.skillLevels ?? [])]
+              const idx = existing.findIndex((sl) => sl.skill === quiz.targetSkill)
+              if (idx >= 0 && quiz.targetLevel <= existing[idx].level) return m
+              if (idx < 0) {
+                existing.push({ skill: quiz.targetSkill, level: quiz.targetLevel })
+              } else {
+                existing[idx] = { ...existing[idx], level: quiz.targetLevel }
+              }
+              // SKL-009: skill_points_jsonもレベルと整合させる。検定合格を
+              // 「認定」の根拠として扱い、累積閾値[50,150,350,550,750]の
+              // targetLevel分まではポイントを底上げする(レベル4/5の資格
+              // 認定条件は検定合格自体で満たされるとみなしチェックしない)
+              const minPointsForLevel = SKILL_LEVEL_CUMULATIVE_THRESHOLDS[quiz.targetLevel]
+              const currentPoints = { ...m.skillPoints }
+              if ((currentPoints[quiz.targetSkill] ?? 0) < minPointsForLevel) {
+                currentPoints[quiz.targetSkill] = minPointsForLevel
+              }
+              return { ...m, skillLevels: existing, skillPoints: currentPoints }
+            }),
+          )
+        }
+        return { passed, score }
+      }
+    },
+    [quizDefinitions, reportRemoteError],
+  )
+
+  // ---- Phase 5: 経費申請・カスタムフォーム コールバック --------------------
+
+  const updateExpenseCategories = useCallback(
+    (categories: ExpenseCategory[]) => {
+      setExpenseCategories(categories)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('expense_categories', JSON.stringify(categories)))
+    },
+    [runRemote],
+  )
+
+  const submitExpenseApplication = useCallback(
+    (application: Omit<ExpenseApplication, 'id' | 'approvals' | 'currentStepIndex' | 'status' | 'createdAt'>) => {
+      const newApp: ExpenseApplication = {
+        ...application,
+        id: crypto.randomUUID(),
+        approvals: [],
+        currentStepIndex: 0,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      }
+      setExpenseApplications((prev) => [newApp, ...prev])
+      if (isRemoteConfigured) runRemote(remoteApi.submitExpenseApplication(newApp))
+    },
+    [runRemote],
+  )
+
+  const approveExpenseStep = useCallback(
+    (applicationId: string, stepId: string, comment?: string) => {
+      const actorId = currentUserId ?? ''
+      setExpenseApplications((prev) =>
+        prev.map((app) => {
+          if (app.id !== applicationId) return app
+          const record: ApprovalRecord = {
+            stepId,
+            memberId: actorId,
+            at: new Date().toISOString(),
+            action: 'approved',
+            comment,
+          }
+          const approvals = [...app.approvals, record]
+          const step = app.approvalSteps[app.currentStepIndex]
+          const stepApprovals = approvals.filter((a) => a.stepId === step?.id && a.action === 'approved')
+          const needed =
+            step?.requiredCount === 'all'
+              ? (app.approvalSteps[app.currentStepIndex] ? Infinity : 1)
+              : (typeof step?.requiredCount === 'number' ? step.requiredCount : 1)
+          const nextStepIndex = stepApprovals.length >= needed ? app.currentStepIndex + 1 : app.currentStepIndex
+          const status = nextStepIndex >= app.approvalSteps.length ? 'approved' : 'pending'
+          return { ...app, approvals, currentStepIndex: nextStepIndex, status }
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.approveExpenseStep(applicationId, stepId, actorId, comment))
+    },
+    [currentUserId, runRemote],
+  )
+
+  const rejectExpense = useCallback(
+    (applicationId: string, reason: string) => {
+      setExpenseApplications((prev) =>
+        prev.map((app) =>
+          app.id === applicationId ? { ...app, status: 'rejected', rejectionReason: reason } : app,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.rejectExpense(applicationId, reason))
+    },
+    [runRemote],
+  )
+
+  const withdrawExpense = useCallback(
+    (applicationId: string) => {
+      setExpenseApplications((prev) =>
+        prev.map((app) =>
+          app.id === applicationId ? { ...app, status: 'withdrawn' } : app,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.withdrawExpense(applicationId))
+    },
+    [runRemote],
+  )
+
+  // EXP-008: 却下と別の「差し戻し」— 申請者が修正して再提出できる
+  const returnExpense = useCallback(
+    (applicationId: string, reason: string) => {
+      setExpenseApplications((prev) =>
+        prev.map((app) =>
+          app.id === applicationId ? { ...app, status: 'returned', rejectionReason: reason } : app,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.returnExpense(applicationId, reason))
+    },
+    [runRemote],
+  )
+
+  // EXP-008: 差し戻された申請を、IDを変えずに更新して再提出する（新規作成ではない）
+  const resubmitExpense = useCallback(
+    (
+      applicationId: string,
+      fields: {
+        amount: number
+        categoryId: string
+        receiptUrl?: string
+        justification?: string
+        purpose?: string
+        customFieldAnswers?: Record<string, string>
+      },
+    ) => {
+      setExpenseApplications((prev) =>
+        prev.map((app) => {
+          if (app.id !== applicationId) return app
+          const category = expenseCategories.find((c) => c.id === fields.categoryId)
+          const approvalSteps = category?.approvalSteps ?? app.approvalSteps
+          return {
+            ...app,
+            ...fields,
+            approvalSteps,
+            approvals: [],
+            currentStepIndex: 0,
+            status: 'pending',
+            rejectionReason: '',
+          }
+        }),
+      )
+      if (isRemoteConfigured) {
+        const category = expenseCategories.find((c) => c.id === fields.categoryId)
+        runRemote(
+          remoteApi.resubmitExpense(applicationId, {
+            ...fields,
+            approvalSteps: category?.approvalSteps ?? [],
+          }),
+        )
+      }
+    },
+    [runRemote, expenseCategories],
+  )
+
+  // アンケート回答（item 22/30）— Membersシートのsurvey_responses_json列
+  // (メンバーごとの回答履歴)からderiveする。新規シートを増やさず、既存の
+  // 公開CSV(Members)だけで完結させるため、独立したstate/fetchは持たない。
+  const surveyResponses = useMemo<SurveyResponse[]>(
+    () =>
+      members.flatMap((m) =>
+        (m.surveyResponses ?? []).map((r) => ({
+          id: r.id,
+          memberId: m.id,
+          submittedAt: r.submittedAt,
+          answers: r.answers,
+        })),
+      ),
+    [members],
+  )
+
+  // アンケート回答（item 22/30）— 新規シートを増やさず、Membersシートの
+  // survey_responses_json列(そのメンバー自身の回答履歴の配列)に保存する。
+  // submitExpenseApplicationと同じく、クライアント側で仮生成したidを
+  // そのままローカルstateで使い続ける（GAS側は別途idを採番するが、次回の
+  // 公開CSV再取得までは一致させる必要がない）
+  const submitSurveyResponse = useCallback(
+    (answers: Record<string, number | string>) => {
+      if (!currentUserId) return
+      const newEntry = { id: crypto.randomUUID(), submittedAt: new Date().toISOString(), answers }
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === currentUserId
+            ? { ...m, surveyResponses: [...(m.surveyResponses ?? []), newEntry] }
+            : m,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.submitSurveyResponse(answers))
+    },
+    [currentUserId, runRemote],
+  )
+
+  const updateCustomFormDefs = useCallback(
+    (forms: CustomFormDef[]) => {
+      setCustomFormDefs(forms)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('custom_form_defs', JSON.stringify(forms)))
+    },
+    [runRemote],
+  )
+
+  const submitCustomForm = useCallback(
+    (formId: string, answers: Record<string, string | number>) => {
+      const form = customFormDefs.find((f) => f.id === formId)
+      if (!form || !currentUserId) return
+      const submission: CustomFormSubmission = {
+        id: crypto.randomUUID(),
+        formId,
+        submitterId: currentUserId,
+        answers,
+        approvals: [],
+        currentStepIndex: 0,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      }
+      setCustomFormSubmissions((prev) => [submission, ...prev])
+      if (isRemoteConfigured) runRemote(remoteApi.submitCustomForm(submission))
+    },
+    [customFormDefs, currentUserId, runRemote],
+  )
+
+  // REP-004: 日報・週報をGASへ送信する。永続化はDailyReportsシート側で
+  // 行うため、ここではグローバルstateを持たない(daily-report-screen.tsx
+  // 自身がlocalStorageでper-member履歴を管理している)。
+  const submitDailyReport = useCallback(
+    (report: DailyReportEntry) => {
+      if (isRemoteConfigured) runRemote(remoteApi.submitDailyReport(report))
+    },
+    [runRemote],
+  )
+
+  // REP-005: 管理者の日報・週報閲覧画面が開いたタイミングで明示的に呼ぶ
+  // 読み取り専用フェッチ。経費申請のように「書き込みはGASにあるが読み取りは
+  // ローカルstateのみ」という状態を繰り返さないよう、グローバルstateに
+  // キャッシュせず呼び出しのたびに最新を取得する設計にしている。
+  const fetchDailyReports = useCallback((): Promise<DailyReportEntry[]> => {
+    if (!isRemoteConfigured) return Promise.resolve([])
+    return remoteApi.fetchDailyReports().catch((err) => {
+      reportRemoteError(err)
+      throw err
+    })
+  }, [reportRemoteError])
+
+  const approveFormStep = useCallback(
+    (submissionId: string, stepId: string, comment?: string) => {
+      const actorId = currentUserId ?? ''
+      setCustomFormSubmissions((prev) =>
+        prev.map((sub) => {
+          if (sub.id !== submissionId) return sub
+          const form = customFormDefs.find((f) => f.id === sub.formId)
+          const record: ApprovalRecord = {
+            stepId,
+            memberId: actorId,
+            at: new Date().toISOString(),
+            action: 'approved',
+            comment,
+          }
+          const approvals = [...sub.approvals, record]
+          const step = form?.approvalSteps[sub.currentStepIndex]
+          const stepApprovals = approvals.filter((a) => a.stepId === step?.id && a.action === 'approved')
+          const needed =
+            step?.requiredCount === 'all'
+              ? Infinity
+              : (typeof step?.requiredCount === 'number' ? step.requiredCount : 1)
+          const nextStepIndex = stepApprovals.length >= needed ? sub.currentStepIndex + 1 : sub.currentStepIndex
+          const totalSteps = form?.approvalSteps.length ?? 0
+          const status = nextStepIndex >= totalSteps ? 'approved' : 'pending'
+          return { ...sub, approvals, currentStepIndex: nextStepIndex, status }
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.approveFormStep(submissionId, stepId, actorId, comment))
+    },
+    [currentUserId, customFormDefs, runRemote],
+  )
+
+  const rejectFormSubmission = useCallback(
+    (submissionId: string, reason: string) => {
+      setCustomFormSubmissions((prev) =>
+        prev.map((sub) =>
+          sub.id === submissionId ? { ...sub, status: 'rejected', rejectionReason: reason } : sub,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.rejectFormSubmission(submissionId, reason))
+    },
+    [runRemote],
+  )
+
+  // ---- 採用支援（候補者） ---------------------------------------------------
+
+  const addCandidate = useCallback(
+    (candidate: Omit<Candidate, 'id' | 'status' | 'createdAt' | 'updatedAt'>) => {
+      const now = new Date().toISOString()
+      const newCandidate: Candidate = {
+        ...candidate,
+        id: crypto.randomUUID(),
+        status: 'candidate',
+        createdAt: now,
+        updatedAt: now,
+      }
+      setCandidates((prev) => [newCandidate, ...prev])
+      if (isRemoteConfigured) runRemote(remoteApi.addCandidate(candidate))
+    },
+    [runRemote],
+  )
+
+  const updateCandidate = useCallback(
+    (
+      candidateId: string,
+      fields: Partial<Pick<Candidate, 'name' | 'email' | 'phone' | 'resumeText' | 'interviewNotes' | 'status'>>,
+    ) => {
+      setCandidates((prev) =>
+        prev.map((c) => (c.id === candidateId ? { ...c, ...fields, updatedAt: new Date().toISOString() } : c)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateCandidate(candidateId, fields))
+    },
+    [runRemote],
+  )
+
+  const removeCandidate = useCallback(
+    (candidateId: string) => {
+      setCandidates((prev) => prev.filter((c) => c.id !== candidateId))
+      if (isRemoteConfigured) runRemote(remoteApi.removeCandidate(candidateId))
+    },
+    [runRemote],
+  )
+
+  // 候補者を正式なMemberとして登録する。Candidatesシートの行は自動削除しない
+  // （手動でremoveCandidateするまで残る）ため、ローカルstateもここでは消さず
+  // statusを'hired'にするだけに留める。
+  const convertCandidateToMember = useCallback(
+    (candidateId: string, role?: string) => {
+      setCandidates((prev) =>
+        prev.map((c) => (c.id === candidateId ? { ...c, status: 'hired', updatedAt: new Date().toISOString() } : c)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.convertCandidateToMember(candidateId, role))
+    },
+    [runRemote],
+  )
+
+  // item 1: 初ログイン時（既存タスクが0件）に初期タスクセットを自動付与。
+  // Settingsシートの initial_tasks_json キーで上書き可能。未設定時はハードコードの3件。
+  const INITIAL_TASKS_KEY = 'ohsumi-initial-tasks-given'
+  const HARDCODED_INITIAL_TASKS = [
+    { name: 'Ohsumiの使い方を確認する', description: 'まずINPUT画面で「今日やること」を入力し、承認を受けてみましょう。' },
+    { name: 'プロフィールを設定する', description: 'ヘッダーのアカウントメニュー →「プロフィール」でWillとスキルを登録しましょう。' },
+    { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」タブで組織のタスク全体を把握しましょう。' },
+  ]
+  const login = useCallback(
+    (userId: string) => {
+      setCurrentUserId(userId)
+      setModeState('output')
+
+      // lastLogin を現在時刻で更新
+      const nowIso = new Date().toISOString()
+      setMembers((prev) => prev.map((m) => m.id === userId ? { ...m, lastLogin: nowIso } : m))
+      if (isRemoteConfigured) runRemote(remoteApi.updateLastLogin(userId))
+
+      // 既に初期タスクを付与済みか、タスクが存在する場合はスキップ
+      try {
+        const given = window.localStorage.getItem(INITIAL_TASKS_KEY)
+        const givenIds: string[] = given ? JSON.parse(given) : []
+        if (givenIds.includes(userId)) return
+      } catch { /* ignore */ }
+
+      setTasks((prevTasks) => {
+        // REC-006: 「組織にタスクが1件もない場合のみ」ではなく「このメンバーに
+        // まだ初期タスクを付与していない場合」で発火を制御する（上のgivenIds
+        // チェックが本来の判定）。他のタスクが既にあっても2人目以降の新規
+        // メンバーに初期タスクを付与できるよう、組織全体のタスク有無は見ない。
+        const now = new Date().toISOString()
+        const base = { assigneeIds: [userId], status: 'todo' as const, progressHistory: [] as import('./types').ProgressEntry[], department: '未分類' as const, category: '未分類', skills: [], priority: '中' as const, difficulty: '新人歓迎' as const, deadline: null, createdAt: now, lastActivity: now.slice(0, 10) }
+        const taskDefs = initialTasksFromSettings.length ? initialTasksFromSettings : HARDCODED_INITIAL_TASKS
+        const newTasks: import('./types').Task[] = taskDefs.map((t, i) => ({
+          ...base,
+          id: `init-${userId}-${i + 1}`,
+          name: t.name,
+          description: t.description,
+          projectId: projects[0]?.id ?? 'default',
+        }))
+        try {
+          const given = window.localStorage.getItem(INITIAL_TASKS_KEY)
+          const givenIds: string[] = given ? JSON.parse(given) : []
+          window.localStorage.setItem(INITIAL_TASKS_KEY, JSON.stringify([...givenIds, userId]))
+        } catch { /* ignore */ }
+        return [...prevTasks, ...newTasks]
+      })
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projects, runRemote, initialTasksFromSettings],
+  )
+
+  const logout = useCallback(() => {
+    setCurrentUserId(null)
+    setGasAuthToken(null)
+    setCalendarToken(null)
+  }, [])
+
+  // ログイン画面から呼ばれる。以前はここでクライアント側が保持する全メンバー分の
+  // emailと突き合わせていたが、セキュリティ対応でMembersの公開CSVからemailを
+  // 分離したため、isRemoteConfigured時は非公開のMemberEmailsシートをGAS経由で
+  // 照合する(resolveLogin — メール自体はサーバーに残したまま、一致した
+  // memberIdだけを受け取る)。ローカルデモ環境はGASが無いため従来通り
+  // membersを直接見る
+  const resolveLoginMember = useCallback(
+    async (email: string): Promise<string | null> => {
+      if (!isRemoteConfigured) {
+        const lc = email.trim().toLowerCase()
+        const found = members.find((m) =>
+          (m.email ?? '').split(',').map((e) => e.trim().toLowerCase()).includes(lc),
+        )
+        return found?.id ?? null
+      }
+      const res = await remoteApi.resolveLogin()
+      return res.memberId
+    },
+    [members],
+  )
+
+  const setMode = useCallback((m: Mode) => setModeState(m), [])
+
+  // these option pools sync to the Settings sheet when configured (see
+  // gas/README.md) — each mutator computes the full next list explicitly
+  // (rather than an opaque setState updater) so it can push that same
+  // value to remoteApi.updateSetting right alongside the local update
+  const addSkillOption = useCallback(
+    (name: string) => {
+      const v = name.trim()
+      if (!v || skillOptions.includes(v)) return
+      const next = [...skillOptions, v]
+      setSkillOptions(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('skill_options', next.join(',')))
+    },
+    [skillOptions, runRemote],
+  )
+  const removeSkillOption = useCallback(
+    (name: string) => {
+      const next = skillOptions.filter((s) => s !== name)
+      setSkillOptions(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('skill_options', next.join(',')))
+    },
+    [skillOptions, runRemote],
+  )
+  const addCategoryOption = useCallback(
+    (name: string) => {
+      const v = name.trim()
+      if (!v || categoryOptions.includes(v)) return
+      const next = [...categoryOptions, v]
+      setCategoryOptions(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('category_options', next.join(',')))
+    },
+    [categoryOptions, runRemote],
+  )
+  const removeCategoryOption = useCallback(
+    (name: string) => {
+      const next = categoryOptions.filter((c) => c !== name)
+      setCategoryOptions(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('category_options', next.join(',')))
+    },
+    [categoryOptions, runRemote],
+  )
+
+  const addRoleLevel = useCallback(
+    (name: string) => {
+      const v = name.trim()
+      if (!v || v === BASE_ROLE || roleLevels.includes(v)) return
+      const next = [...roleLevels, v]
+      setRoleLevels(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
+    },
+    [roleLevels, runRemote],
+  )
+  // removing a level demotes anyone currently holding it back to 一般 —
+  // same "reassign, don't orphan" pattern as removeMember's task unassign
+  const removeRoleLevel = useCallback(
+    (name: string) => {
+      const next = roleLevels.filter((r) => r !== name)
+      setRoleLevels(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.role !== name) return m
+          if (isRemoteConfigured) runRemote(remoteApi.updateRole(m.id, BASE_ROLE))
+          return { ...m, role: BASE_ROLE }
+        }),
+      )
+      setRolePermissionsState((prev) => {
+        if (!(name in prev)) return prev
+        const nextPerms = { ...prev }
+        delete nextPerms[name]
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('role_permissions', JSON.stringify(nextPerms)))
+        return nextPerms
+      })
+      setRestrictedRolesState((prev) => {
+        const next = prev.filter((r) => r !== name)
+        if (next.length !== prev.length && isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('restricted_roles', next.join(',')))
+        return next
+      })
+    },
+    [roleLevels, runRemote],
+  )
+
+  const reorderRoleLevel = useCallback(
+    (name: string, direction: 'up' | 'down') => {
+      const idx = roleLevels.indexOf(name)
+      if (idx === -1) return
+      const next = [...roleLevels]
+      const swap = direction === 'up' ? idx - 1 : idx + 1
+      if (swap < 0 || swap >= next.length) return
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      setRoleLevels(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
+    },
+    [roleLevels, runRemote],
+  )
+
+  const toggleRestrictedRole = useCallback(
+    (role: string) => {
+      setRestrictedRolesState((prev) => {
+        const next = prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
+        if (isSettingsConfigured) runRemote(remoteApi.updateSetting('restricted_roles', next.join(',')))
+        return next
+      })
+    },
+    [runRemote],
+  )
+
+  const setRolePermissions = useCallback(
+    (role: string, sections: AdminSection[]) => {
+      setRolePermissionsState((prev) => {
+        const next = { ...prev, [role]: sections }
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('role_permissions', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+
+  const setProjectTemplateTasks = useCallback(
+    (type: string, tasksForType: ProjectTemplateTask[]) => {
+      const next = { ...projectTemplates, [type]: tasksForType }
+      setProjectTemplates(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('project_templates', JSON.stringify(next)))
+    },
+    [projectTemplates, runRemote],
+  )
+  const removeProjectType = useCallback(
+    (type: string) => {
+      const next = { ...projectTemplates }
+      delete next[type]
+      setProjectTemplates(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('project_templates', JSON.stringify(next)))
+    },
+    [projectTemplates, runRemote],
+  )
+
+  // 業務テンプレート (item 1) — reusable, on-demand task-set templates
+  // (distinct from projectTemplates above, which only auto-apply once at
+  // project creation, keyed by project type)
+  const addTaskSetTemplate = useCallback(
+    (name: string, description: string) => {
+      const trimmed = name.trim()
+      if (!trimmed) return
+      const entry: TaskSetTemplate = {
+        id: `tst-${Math.random().toString(36).slice(2, 9)}`,
+        name: trimmed,
+        description: description.trim() || undefined,
+        items: [],
+      }
+      setTaskSetTemplates((prev) => {
+        const next = [...prev, entry]
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('task_set_templates', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  const updateTaskSetTemplateItems = useCallback(
+    (templateId: string, items: TaskSetTemplateItem[]) => {
+      setTaskSetTemplates((prev) => {
+        const next = prev.map((t) => (t.id === templateId ? { ...t, items } : t))
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('task_set_templates', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  const removeTaskSetTemplate = useCallback(
+    (templateId: string) => {
+      setTaskSetTemplates((prev) => {
+        const next = prev.filter((t) => t.id !== templateId)
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('task_set_templates', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+
+  // Generates real tasks (in the given project) from a template's items,
+  // resolving each item's template-local dependsOn ids into real task ids
+  // once the remote createTasks call (when configured) returns them.
+  const applyTaskSetTemplate = useCallback(
+    (templateId: string, projectId: string) => {
+      const template = taskSetTemplates.find((t) => t.id === templateId)
+      if (!template || template.items.length === 0) return
+
+      const today = new Date().toISOString().slice(0, 10)
+      const tempIdByItemId = new Map(
+        template.items.map((item) => [item.id, `t-${Math.random().toString(36).slice(2, 9)}`]),
+      )
+
+      const newTasks: Task[] = template.items.map((item) => ({
+        id: tempIdByItemId.get(item.id)!,
+        name: item.name,
+        description: '',
+        projectId,
+        department: item.department,
+        assigneeIds: [],
+        deadline: null,
+        category: item.category,
+        skills: item.skills,
+        difficulty: item.difficulty,
+        priority: item.priority,
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        // 業務テンプレート適用も通常のタスク登録と同様、承認フローを経由させる
+        pendingApproval: true,
+        dependsOnIds: (item.dependsOn ?? [])
+          .map((localId) => tempIdByItemId.get(localId))
+          .filter((id): id is string => !!id),
+      }))
+
+      setTasks((prev) => [...newTasks, ...prev])
+
+      if (isRemoteConfigured) {
+        const payloads = newTasks.map((t) => ({
+          tempId: t.id,
+          title: t.name,
+          projectId,
+          department: t.department,
+          category: t.category,
+          skills: t.skills,
+          difficulty: t.difficulty,
+          priority: t.priority,
+          deadline: null,
+          creatorId: currentUserId ?? undefined,
+          pendingApproval: true,
+        }))
+        remoteApi
+          .createTasks(payloads)
+          .then((mapping) => {
+            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
+            setTasks((prev) =>
+              prev.map((t) =>
+                realId.has(t.id)
+                  ? {
+                      ...t,
+                      id: realId.get(t.id)!,
+                      dependsOnIds: (t.dependsOnIds ?? []).map((depId) => realId.get(depId) ?? depId),
+                    }
+                  : t,
+              ),
+            )
+            newTasks.forEach((t) => {
+              if (!t.dependsOnIds || t.dependsOnIds.length === 0) return
+              const resolvedId = realId.get(t.id)
+              if (!resolvedId) return
+              const resolvedDeps = t.dependsOnIds.map((depId) => realId.get(depId) ?? depId)
+              runRemote(remoteApi.updateDependsOn(resolvedId, resolvedDeps))
+            })
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [taskSetTemplates, currentUserId, reportRemoteError, runRemote],
+  )
+
+  // PRJ-016/017: 過去の実プロジェクトのタスクをコピーして現在のプロジェクトに
+  // 取り込む。applyTaskSetTemplateと同じパターン(一括createTasks→id差し替え)
+  // だが、テンプレート項目ではなく既存タスクをソースにする点が異なる。
+  // 実績系フィールド(status/assigneeIds/deadline/startDate等)は新規タスクと
+  // して扱うためリセットし、分類系フィールド(name/department/category/
+  // skills/difficulty/priority/estimatedHours)のみ引き継ぐ。
+  const importTasksFromProject = useCallback(
+    (sourceProjectId: string, targetProjectId: string, taskIds: string[]) => {
+      const sourceTasks = tasks.filter((t) => t.projectId === sourceProjectId && taskIds.includes(t.id))
+      if (sourceTasks.length === 0) return
+
+      const today = new Date().toISOString().slice(0, 10)
+      const tempIdBySourceId = new Map(
+        sourceTasks.map((t) => [t.id, `t-${Math.random().toString(36).slice(2, 9)}`]),
+      )
+
+      const newTasks: Task[] = sourceTasks.map((src) => ({
+        id: tempIdBySourceId.get(src.id)!,
+        name: src.name,
+        description: '',
+        projectId: targetProjectId,
+        department: src.department,
+        assigneeIds: [],
+        deadline: null,
+        startDate: null,
+        category: src.category,
+        skills: src.skills,
+        difficulty: src.difficulty,
+        priority: src.priority,
+        estimatedHours: src.estimatedHours,
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        pendingApproval: false,
+      }))
+
+      setTasks((prev) => [...newTasks, ...prev])
+
+      if (isRemoteConfigured) {
+        const payloads = newTasks.map((t) => ({
+          tempId: t.id,
+          title: t.name,
+          projectId: targetProjectId,
+          department: t.department,
+          category: t.category,
+          skills: t.skills,
+          difficulty: t.difficulty,
+          priority: t.priority,
+          deadline: null,
+          startDate: null,
+          estimatedHours: t.estimatedHours,
+          creatorId: currentUserId ?? undefined,
+          pendingApproval: false,
+        }))
+        remoteApi
+          .createTasks(payloads)
+          .then((mapping) => {
+            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
+            setTasks((prev) =>
+              prev.map((t) => (realId.has(t.id) ? { ...t, id: realId.get(t.id)! } : t)),
+            )
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [tasks, currentUserId, reportRemoteError, runRemote],
+  )
+
+  // 定期タスク (item 2) — admin-defined recurring generation rules
+  const addRecurringRule = useCallback(
+    (rule: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>) => {
+      const entry: RecurringTaskRule = {
+        ...rule,
+        id: `rr-${Math.random().toString(36).slice(2, 9)}`,
+        active: true,
+      }
+      setRecurringRules((prev) => {
+        const next = [...prev, entry]
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  const removeRecurringRule = useCallback(
+    (ruleId: string) => {
+      setRecurringRules((prev) => {
+        const next = prev.filter((r) => r.id !== ruleId)
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  const toggleRecurringRule = useCallback(
+    (ruleId: string) => {
+      setRecurringRules((prev) => {
+        const next = prev.map((r) => (r.id === ruleId ? { ...r, active: !r.active } : r))
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+  const updateRecurringRule = useCallback(
+    (ruleId: string, fields: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>) => {
+      setRecurringRules((prev) => {
+        const next = prev.map((r) => (r.id === ruleId ? { ...r, ...fields } : r))
+        if (isSettingsConfigured)
+          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
+        return next
+      })
+    },
+    [runRemote],
+  )
+
+  const addTasksFromInput = useCallback(
+    (text: string, parsed: ParsedTask[]) => {
+      const inputId = `in-${Math.random().toString(36).slice(2, 9)}`
+      const now = new Date().toISOString()
+      const today = now.slice(0, 10)
+      const createdById = currentUserId ?? undefined
+
+      const newTasks: Task[] = parsed.map((p) => ({
+        id: `t-${Math.random().toString(36).slice(2, 9)}`,
+        name: p.name,
+        description: '',
+        projectId: p.projectId,
+        department: p.department,
+        assigneeIds: p.assigneeIds ?? [],
+        startDate: p.startDate ?? null,
+        deadline: p.deadline,
+        dueTime: p.dueTime ?? null,
+        category: p.category,
+        skills: p.skills,
+        difficulty: p.difficulty,
+        priority: p.priority,
+        status: 'todo',
+        lastActivity: today,
+        originalInputId: inputId,
+        createdById,
+        createdAt: now,
+        progressHistory: [],
+        pendingApproval: true,
+        visibility: p.visibility ?? 'all',
+        estimatedHours: p.estimatedHours,
+        importance: p.importance,
+      }))
+
+      const input: TaskInput = {
+        id: inputId,
+        text,
+        createdById: createdById ?? '',
+        createdAt: now,
+        generatedTaskIds: newTasks.map((t) => t.id),
+      }
+
+      setTasks((prev) => [...newTasks, ...prev])
+      setInputs((prev) => [input, ...prev])
+
+      if (isRemoteConfigured) {
+        const payloads = newTasks.map((t, i) =>
+          toCreatePayload(t.id, parsed[i], createdById, inputId),
+        )
+        remoteApi
+          .createTasks(payloads)
+          .then((mapping) => {
+            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
+            setTasks((prev) =>
+              prev.map((t) => (realId.has(t.id) ? { ...t, id: realId.get(t.id)! } : t)),
+            )
+            setInputs((prev) =>
+              prev.map((inp) =>
+                inp.id === inputId
+                  ? {
+                      ...inp,
+                      generatedTaskIds: inp.generatedTaskIds.map(
+                        (tid) => realId.get(tid) ?? tid,
+                      ),
+                    }
+                  : inp,
+              ),
+            )
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [currentUserId, reportRemoteError],
+  )
+
+  // records a field change onto a task's audit trail (Admin → task detail
+  // "変更履歴") — a no-op when the value didn't actually change. Capped so
+  // a churny task doesn't grow the row without bound.
+  const HISTORY_CAP = 50
+  const appendHistory = useCallback(
+    (t: Task, field: TaskHistoryEntry['field'], from: string, to: string): Task => {
+      if (from === to) return t
+      const entry: TaskHistoryEntry = {
+        id: `h-${Math.random().toString(36).slice(2, 9)}`,
+        at: new Date().toISOString(),
+        byId: currentUserId ?? '',
+        field,
+        from,
+        to,
+      }
+      const history = [entry, ...(t.history ?? [])].slice(0, HISTORY_CAP)
+      if (isRemoteConfigured) runRemote(remoteApi.updateHistory(t.id, history))
+      return { ...t, history }
+    },
+    [currentUserId, runRemote],
+  )
+
+  const updatePriority = useCallback(
+    (id: string, priority: Priority) => {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? appendHistory({ ...t, priority }, 'priority', t.priority, priority) : t)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updatePriority(id, priority))
+    },
+    [appendHistory, runRemote],
+  )
+
+  const updateDifficulty = useCallback(
+    (id: string, difficulty: Difficulty) => {
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, difficulty } : t)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateDifficulty(id, difficulty))
+    },
+    [runRemote],
+  )
+
+  // 管理者向けの一括編集（タイトル・詳細・プロジェクト・部門・カテゴリ・
+  // 要求スキル・難易度・優先度・公開範囲・重要度）— タスク登録後にこれらを
+  // 変更する手段がなかった分の対応。updateSchedule と同様、変更のあった
+  // フィールドごとに履歴へ記録する。
+  const updateTaskDetails = useCallback(
+    (
+      id: string,
+      details: {
+        name: string
+        description: string
+        projectId: string
+        department: Department
+        category: string
+        skills: string[]
+        difficulty: Difficulty
+        priority: Priority
+        visibility: 'all' | '幹部'
+        importance: TaskImportance
+        requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
+      },
+    ) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          let next: Task = {
+            ...t,
+            name: details.name,
+            description: details.description || undefined,
+            projectId: details.projectId,
+            department: details.department,
+            category: details.category,
+            skills: details.skills,
+            difficulty: details.difficulty,
+            priority: details.priority,
+            visibility: details.visibility,
+            importance: details.importance,
+            requiredSkillLevels: details.requiredSkillLevels,
+          }
+          next = appendHistory(next, 'title', t.name, details.name)
+          next = appendHistory(next, 'project', t.projectId, details.projectId)
+          next = appendHistory(next, 'department', t.department, details.department)
+          next = appendHistory(next, 'category', t.category, details.category)
+          next = appendHistory(next, 'skills', t.skills.join(','), details.skills.join(','))
+          next = appendHistory(next, 'difficulty', t.difficulty, details.difficulty)
+          next = appendHistory(next, 'priority', t.priority, details.priority)
+          next = appendHistory(next, 'visibility', t.visibility ?? 'all', details.visibility)
+          next = appendHistory(next, 'importance', t.importance ?? '一般', details.importance)
+          return next
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateTaskDetails(id, details))
+    },
+    [appendHistory, runRemote],
+  )
+
+  const updateProgress = useCallback(
+    (id: string, text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      const entry: ProgressEntry = {
+        id: `pg-${Math.random().toString(36).slice(2, 9)}`,
+        text: trimmed,
+        at: new Date().toISOString(),
+        byId: currentUserId ?? '',
+      }
+      const today = new Date().toISOString().slice(0, 10)
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const nextHistory = [entry, ...(t.progressHistory ?? [])]
+          if (isRemoteConfigured) runRemote(remoteApi.updateProgress(id, trimmed, nextHistory))
+          return { ...t, progress: trimmed, progressHistory: nextHistory, lastActivity: today }
+        }),
+      )
+    },
+    [currentUserId, runRemote],
+  )
+
+  // TSK-010: 0-100の数値進捗率。自由記述メモ(updateProgress)とは独立して、
+  // スライダー操作のたびに即座に保存する
+  const updateProgressPercent = useCallback(
+    (id: string, percent: number) => {
+      const clamped = Math.max(0, Math.min(100, Math.round(percent)))
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, progressPercent: clamped } : t)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateProgressPercent(id, clamped))
+    },
+    [runRemote],
+  )
+
+  // Auto-certify: once a member has SKILL_CERT_THRESHOLD completed tasks in
+  // the same category, that category is added to their Judgment tags.
+  const maybeCertifySkill = useCallback(
+    (allTasks: Task[], changedTaskId: string) => {
+      const changed = allTasks.find((t) => t.id === changedTaskId)
+      if (!changed || changed.assigneeIds.length === 0 || !changed.category) return
+
+      changed.assigneeIds.forEach((assigneeId) => {
+        const doneCount = allTasks.filter(
+          (t) =>
+            t.assigneeIds.includes(assigneeId) &&
+            t.status === 'done' &&
+            t.category === changed.category,
+        ).length
+        if (doneCount !== SKILL_CERT_THRESHOLD) return
+
+        const member = members.find((m) => m.id === assigneeId)
+        if (!member || member.judgment.includes(changed.category)) return
+        const nextJudgment = [...member.judgment, changed.category]
+        setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, judgment: nextJudgment } : m)))
+        if (isRemoteConfigured) runRemote(remoteApi.updateJudgment(member.id, nextJudgment))
+        setSkillCertifiedEvent({ memberName: member.name, skill: changed.category })
+      })
+    },
+    [members, runRemote],
+  )
+
+  // タスクを完了すると、そのタスクの要求スキルが担当者のスキルレベルに
+  // Lv.1（＝「やり始めたばかり」— 何もできないという意味ではない）として
+  // 自動登録される。すでに登録済みのスキルは上書きしない（本人が後から
+  // レベルを上げていける）。要求分野の認定は、この登録済みスキルの保有率
+  // （memberSkillFieldProgress）で判定される
+  const registerSkillsFromTask = useCallback(
+    (allTasks: Task[], changedTaskId: string) => {
+      const changed = allTasks.find((t) => t.id === changedTaskId)
+      if (!changed || changed.assigneeIds.length === 0 || changed.skills.length === 0) return
+
+      changed.assigneeIds.forEach((assigneeId) => {
+        const member = members.find((m) => m.id === assigneeId)
+        if (!member) return
+        const existing = member.skillLevels ?? []
+        const newSkills = changed.skills.filter((s) => !existing.some((sl) => sl.skill === s))
+        if (newSkills.length === 0) return
+        const nextLevels: SkillLevel[] = [
+          ...existing,
+          ...newSkills.map((skill) => ({ skill, level: 1 as SkillLevelValue })),
+        ]
+        setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, skillLevels: nextLevels } : m)))
+        if (isRemoteConfigured) runRemote(remoteApi.updateSkillLevels(member.id, nextLevels))
+      })
+    },
+    [members, runRemote],
+  )
+
+  // APR-007: 確認待ちになったタスクについて、確認者を担当者とする軽量な
+  // 「確認タスク」を自動生成する。applyTaskSetTemplate等と同じパターン
+  // (ローカルに仮IDで追加 → isRemoteConfigured ならcreateTasksで本登録し、
+  // 返ってきた本物のidに差し替える)
+  const createReviewConfirmTask = useCallback(
+    (original: Task, reviewerIds: string[]) => {
+      const today = new Date().toISOString().slice(0, 10)
+      const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
+      const confirmTask: Task = {
+        id: tempId,
+        name: `確認: ${original.name}`,
+        description: '',
+        projectId: original.projectId,
+        department: original.department,
+        assigneeIds: reviewerIds,
+        deadline: null,
+        category: '確認',
+        skills: [],
+        difficulty: '誰でも可',
+        priority: '中',
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        pendingApproval: false,
+        relatedReviewTaskId: original.id,
+      }
+      setTasks((prev) => [confirmTask, ...prev])
+      if (isRemoteConfigured) {
+        remoteApi
+          .createTasks([
+            {
+              tempId,
+              title: confirmTask.name,
+              projectId: confirmTask.projectId,
+              department: confirmTask.department,
+              category: confirmTask.category,
+              skills: [],
+              difficulty: confirmTask.difficulty,
+              priority: confirmTask.priority,
+              deadline: null,
+              assigneeIds: reviewerIds,
+              creatorId: currentUserId ?? undefined,
+              pendingApproval: false,
+              relatedReviewTaskId: original.id,
+            },
+          ])
+          .then((mapping) => {
+            const realId = mapping[0]?.id
+            if (!realId) return
+            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [currentUserId, reportRemoteError],
+  )
+
+  const updateTaskStatus = useCallback(
+    (id: string, status: TaskStatus) => {
+      // 前提タスクが完了していない限り、このタスクは完了にできない — UI側
+      // (task-detail-drawer/kanban-board) でも事前に防いでいるが、ここでも
+      // 最終防衛としてブロックする
+      if (status === 'done') {
+        const task = tasks.find((t) => t.id === id)
+        if (task && incompletePrerequisites(task, tasks).length > 0) return
+      }
+      const today = new Date().toISOString().slice(0, 10)
+      const updated = tasks.map((t) =>
+        t.id === id
+          ? appendHistory(
+              {
+                ...t,
+                status,
+                lastActivity: today,
+                completedDate: status === 'done' ? today : null,
+              },
+              'status',
+              STATUS_LABEL[t.status],
+              STATUS_LABEL[status],
+            )
+          : t,
+      )
+      setTasks(updated)
+      if (status === 'done') {
+        maybeCertifySkill(updated, id)
+        registerSkillsFromTask(updated, id)
+      }
+      // APR-007: 確認者が設定されているタスクが確認待ちに入ったら、確認者を
+      // 担当者とする確認タスクを自動生成する
+      if (status === 'review') {
+        const original = tasks.find((t) => t.id === id)
+        const reviewerIds = original ? original.reviewerIds ?? (original.reviewerId ? [original.reviewerId] : []) : []
+        // 同じ元タスクに紐づく未完了の確認タスクが既にあれば、新規生成しない
+        // (確認待ち→修正中→再び確認待ち、のような行き来で重複生成されるのを防ぐ)
+        const hasOpenConfirmTask = tasks.some(
+          (t) => t.relatedReviewTaskId === id && t.status !== 'done',
+        )
+        if (original && reviewerIds.length > 0 && !hasOpenConfirmTask) {
+          createReviewConfirmTask(original, reviewerIds)
+        }
+      }
+      // entering 確認待ち is the assignee's "I'm done, please confirm" signal
+      // — the admin gets emailed (gas/Code.gs) and already sees it surface
+      // in the Admin dashboard's 確認待ち panel automatically.
+      if (isRemoteConfigured) runRemote(remoteApi.updateTaskStatus(id, status))
+    },
+    [tasks, maybeCertifySkill, registerSkillsFromTask, appendHistory, runRemote, createReviewConfirmTask],
+  )
+
+  const assignTask = useCallback(
+    (id: string, memberIds: string[]) => {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? appendHistory(
+                { ...t, assigneeIds: memberIds },
+                'assignee',
+                t.assigneeIds.join(','),
+                memberIds.join(','),
+              )
+            : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.assignTask(id, memberIds))
+
+      // a newly assigned member who isn't already on the task's project
+      // gets added there too (item: プロジェクトの担当者を決めれるように)
+      const task = tasks.find((t) => t.id === id)
+      if (task) {
+        setProjects((prev) =>
+          prev.map((p) => {
+            if (p.id !== task.projectId) return p
+            const existing = new Set(p.memberIds ?? [])
+            const additions = memberIds.filter((mid) => !existing.has(mid))
+            if (additions.length === 0) return p
+            const nextMemberIds = [...(p.memberIds ?? []), ...additions]
+            if (isRemoteConfigured) runRemote(remoteApi.updateProjectMembers(p.id, nextMemberIds))
+            return { ...p, memberIds: nextMemberIds }
+          }),
+        )
+      }
+    },
+    [tasks, appendHistory, runRemote],
+  )
+
+  // TSK-027: 公募タスクへの応募(承認制)。即座にassigneeIdsへは追加せず、
+  // openBidApplicantIdsに自分のIDを積むだけ(重複追加は防ぐ)。実際に
+  // 担当者にするのは管理者がadmin-assignments.tsx等から既存のassignTaskを
+  // 呼ぶ操作。
+  const applyToOpenBid = useCallback(
+    (taskId: string) => {
+      if (!currentUserId) return
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== taskId) return t
+          if ((t.openBidApplicantIds ?? []).includes(currentUserId)) return t
+          const next = [...(t.openBidApplicantIds ?? []), currentUserId]
+          if (isRemoteConfigured) runRemote(remoteApi.applyToOpenBid(taskId, next))
+          return { ...t, openBidApplicantIds: next }
+        }),
+      )
+    },
+    [currentUserId, runRemote],
+  )
+
+  // 応募の取り下げ。管理者権限は不要で本人のみ(呼び出し元のUIで本人にしか
+  // ボタンを出さない)
+  const withdrawOpenBidApplication = useCallback(
+    (taskId: string) => {
+      if (!currentUserId) return
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== taskId) return t
+          const next = (t.openBidApplicantIds ?? []).filter((id) => id !== currentUserId)
+          if (isRemoteConfigured) runRemote(remoteApi.applyToOpenBid(taskId, next))
+          return { ...t, openBidApplicantIds: next }
+        }),
+      )
+    },
+    [currentUserId, runRemote],
+  )
+
+  const updateWill = useCallback(
+    (memberId: string, will: string[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, will } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateWill(memberId, will))
+    },
+    [runRemote],
+  )
+
+  const updateJudgment = useCallback(
+    (memberId: string, judgment: string[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, judgment } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateJudgment(memberId, judgment))
+    },
+    [runRemote],
+  )
+
+  const approveTask = useCallback(
+    (id: string) => {
+      locallyApprovedTaskIdsRef.current.add(id)
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, pendingApproval: false } : t)))
+      if (isRemoteConfigured) runRemote(remoteApi.approveTask(id))
+    },
+    [runRemote],
+  )
+
+  // distinct from the automatic archive (14 days after completion) — this
+  // is a permanent, manual delete. Any other task that lists this one in
+  // dependsOnIds has that reference scrubbed so 依存関係 doesn't point at a
+  // dead id.
+  const removeTask = useCallback(
+    (id: string) => {
+      setTasks((prev) =>
+        prev
+          .filter((t) => t.id !== id)
+          .map((t) =>
+            t.dependsOnIds?.includes(id)
+              ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) }
+              : t,
+          ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.removeTask(id))
+    },
+    [runRemote],
+  )
+
+  // 承認しない（却下） — 承認待ちタスクを削除し、登録者へメールで通知する。
+  // タスク名は削除前（クライアント側の状態がまだ残っている間）に渡す必要が
+  // あるため、removeTaskとは別に組み立てる
+  const rejectTask = useCallback(
+    (id: string, reason?: string) => {
+      const task = tasks.find((t) => t.id === id)
+      locallyRejectedTaskIdsRef.current.add(id)
+      setTasks((prev) =>
+        prev
+          .filter((t) => t.id !== id)
+          .map((t) =>
+            t.dependsOnIds?.includes(id)
+              ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) }
+              : t,
+          ),
+      )
+      if (isRemoteConfigured) {
+        runRemote(remoteApi.removeTask(id))
+        if (task) runRemote(remoteApi.notifyTaskRejected(id, task.createdById, task.name, reason))
+      }
+    },
+    [tasks, runRemote],
+  )
+
+  const addProject = useCallback(
+    (name: string, description: string, type?: string, parentId?: string) => {
+      const tempProjectId = `p-${Math.random().toString(36).slice(2, 9)}`
+      setProjects((prev) => [...prev, { id: tempProjectId, name, description, type, parentId }])
+
+      const templates = type ? projectTemplates[type] ?? [] : []
+      const today = new Date().toISOString().slice(0, 10)
+      // 業務テンプレート(applyTaskSetTemplate)と同じく、テンプレート内の
+      // dependsOnはテンプレートローカルidで書かれているので、生成した
+      // 一時idへのマップを介して実際のdependsOnIdsに変換する
+      const tempIdByItemId = new Map(
+        templates.map((t) => [t.id, `t-${Math.random().toString(36).slice(2, 9)}`]),
+      )
+      const templateTasks: Task[] = templates.map((t) => ({
+        id: tempIdByItemId.get(t.id)!,
+        name: t.name,
+        description: '',
+        projectId: tempProjectId,
+        department: t.department,
+        assigneeIds: [],
+        deadline: null,
+        category: t.category,
+        skills: t.skills,
+        difficulty: t.difficulty,
+        priority: t.priority,
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        pendingApproval: false, // admin-initiated project setup — no approval needed
+        dependsOnIds: (t.dependsOn ?? [])
+          .map((localId) => tempIdByItemId.get(localId))
+          .filter((id): id is string => !!id),
+      }))
+      if (templateTasks.length > 0) setTasks((prev) => [...templateTasks, ...prev])
+
+      if (isRemoteConfigured) {
+        remoteApi
+          .createProject(name, description, type, parentId)
+          .then(({ id }) => {
+            setProjects((prev) => prev.map((p) => (p.id === tempProjectId ? { ...p, id } : p)))
+            if (templateTasks.length > 0) {
+              setTasks((prev) =>
+                prev.map((t) => (t.projectId === tempProjectId ? { ...t, projectId: id } : t)),
+              )
+              const payloads = templateTasks.map((t) => ({
+                tempId: t.id,
+                title: t.name,
+                projectId: id,
+                department: t.department,
+                category: t.category,
+                skills: t.skills,
+                difficulty: t.difficulty,
+                priority: t.priority,
+                deadline: null,
+                creatorId: currentUserId ?? undefined,
+                pendingApproval: false,
+              }))
+              remoteApi
+                .createTasks(payloads)
+                .then((mapping) => {
+                  const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
+                  setTasks((prev) =>
+                    prev.map((t) =>
+                      realId.has(t.id)
+                        ? {
+                            ...t,
+                            id: realId.get(t.id)!,
+                            dependsOnIds: (t.dependsOnIds ?? []).map((depId) => realId.get(depId) ?? depId),
+                          }
+                        : t,
+                    ),
+                  )
+                  templateTasks.forEach((t) => {
+                    if (!t.dependsOnIds || t.dependsOnIds.length === 0) return
+                    const resolvedId = realId.get(t.id)
+                    if (!resolvedId) return
+                    const resolvedDeps = t.dependsOnIds.map((depId) => realId.get(depId) ?? depId)
+                    runRemote(remoteApi.updateDependsOn(resolvedId, resolvedDeps))
+                  })
+                })
+                .catch(reportRemoteError)
+            }
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [projectTemplates, currentUserId, reportRemoteError, runRemote],
+  )
+
+  // a task can't exist without a project (Task.projectId is required), so
+  // unlike removeMember's unassign-in-place, this cascades to delete the
+  // project's tasks too, and drops it from any scoped admin's project_ids
+  const removeProject = useCallback(
+    (projectId: string) => {
+      setProjects((prev) => prev.filter((p) => p.id !== projectId))
+      setTasks((prev) => prev.filter((t) => t.projectId !== projectId))
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.projectIds?.includes(projectId)
+            ? { ...m, projectIds: m.projectIds.filter((id) => id !== projectId) }
+            : m,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.removeProject(projectId))
+    },
+    [runRemote],
+  )
+
+  // manual project membership (Admin → Projects) — grown automatically by
+  // assignTask too, this covers explicitly adding/removing someone who
+  // isn't (yet) assigned to any of the project's tasks
+  const updateProjectMembers = useCallback(
+    (projectId: string, memberIds: string[]) => {
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, memberIds } : p)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectMembers(projectId, memberIds))
+    },
+    [runRemote],
+  )
+
+  // 責任者 — the member accountable for the project overall
+  const updateProjectOwner = useCallback(
+    (projectId: string, ownerId: string | null) => {
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, ownerId: ownerId ?? undefined } : p)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectOwner(projectId, ownerId))
+    },
+    [runRemote],
+  )
+
+  const updateProjectParent = useCallback(
+    (projectId: string, parentId: string | null) => {
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, parentId: parentId ?? undefined } : p)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectParent(projectId, parentId))
+    },
+    [runRemote],
+  )
+
+  // 概要・種類は作成後も編集できる（種類を変えても、既存タスクやテンプレートの
+  // 自動追加には影響しない — あくまで新規作成時の初期タスク生成に使われるだけ）
+  const updateProjectDetails = useCallback(
+    (
+      projectId: string,
+      fields: { name: string; description: string; type?: string; goal?: string; startDate?: string | null; endDate?: string | null },
+    ) => {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                name: fields.name,
+                description: fields.description,
+                type: fields.type || undefined,
+                goal: fields.goal || undefined,
+                startDate: fields.startDate || undefined,
+                endDate: fields.endDate || undefined,
+              }
+            : p,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectDetails(projectId, fields))
+    },
+    [runRemote],
+  )
+
+  // プロジェクトのアーカイブ — 削除とは異なり、タスク履歴等は残したまま
+  // OUTPUTの「プロジェクト」タブなど通常の一覧から隠すだけ
+  const setProjectArchived = useCallback(
+    (projectId: string, archived: boolean) => {
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, archived } : p)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectArchived(projectId, archived))
+    },
+    [runRemote],
+  )
+
+  // item 26: 幹部による健康状態の手動上書き。overrideがnullなら解除
+  // （自動判定に戻す）。値がある場合はGAS側で必ず通知が飛ぶ（結果が
+  // goodでも「変更した」という行為自体を知らせるため）。
+  const updateProjectHealth = useCallback(
+    (projectId: string, override: import('./types').ProjectHealthLevel | null) => {
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                healthOverride: override ?? undefined,
+                lastNotifiedHealth: override ?? p.lastNotifiedHealth,
+              }
+            : p,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateProjectHealth(projectId, override))
+    },
+    [runRemote],
+  )
+
+  const addMember = useCallback(
+    (name: string, email: string, affiliation: string, role: string): Promise<void> => {
+      const tempId = `m-${Math.random().toString(36).slice(2, 9)}`
+      const newMember: Member = {
+        id: tempId,
+        name,
+        affiliation,
+        role,
+        avatarColor: colorForId(tempId),
+        initials: initialsForName(name),
+        will: [],
+        judgment: [],
+        facts: [],
+        skills: [],
+        email: email || undefined,
+      }
+      setMembers((prev) => [...prev, newMember])
+
+      if (!isRemoteConfigured) return Promise.resolve()
+
+      return remoteApi
+        .addMember(name, email, affiliation, role)
+        .then(({ id }) => {
+          setMembers((prev) => prev.map((m) => (m.id === tempId ? { ...m, id } : m)))
+          setRemoteError(null)
+        })
+        .catch((err: unknown) => {
+          // Roll back the optimistic add so the local state stays consistent
+          setMembers((prev) => prev.filter((m) => m.id !== tempId))
+          reportRemoteError(err)
+          throw err
+        })
+    },
+    [reportRemoteError],
+  )
+
+  const removeMember = useCallback(
+    (memberId: string) => {
+      setMembers((prev) => prev.filter((m) => m.id !== memberId))
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.assigneeIds.includes(memberId)
+            ? { ...t, assigneeIds: t.assigneeIds.filter((a) => a !== memberId) }
+            : t,
+        ),
+      )
+      setCurrentUserId((prev) => (prev === memberId ? null : prev))
+      if (isRemoteConfigured) runRemote(remoteApi.removeMember(memberId))
+    },
+    [runRemote],
+  )
+
+  const updateNotify = useCallback(
+    (memberId: string, notify: boolean) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, notify } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateNotify(memberId, notify))
+    },
+    [runRemote],
+  )
+
+  const updateNotifySettings = useCallback(
+    (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, notifySettings: settings } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateNotifySettings(memberId, settings))
+    },
+    [runRemote],
+  )
+
+  const updateEmail = useCallback(
+    (memberId: string, email: string) => {
+      const trimmed = email.trim()
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, email: trimmed || undefined } : m)),
+      )
+      if (memberId === currentUserId) setMyEmail(trimmed)
+      if (isRemoteConfigured) runRemote(remoteApi.updateEmail(memberId, trimmed))
+    },
+    [runRemote, currentUserId],
+  )
+
+  // which projects a project-scoped admin (see isFullAdmin) manages
+  const updateMemberProjects = useCallback(
+    (memberId: string, projectIds: string[]) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, projectIds } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateMemberProjects(memberId, projectIds))
+    },
+    [runRemote],
+  )
+
+  const updateRole = useCallback(
+    (memberId: string, role: Role) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, role } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateRole(memberId, role))
+    },
+    [runRemote],
+  )
+
+  const updateReportsTo = useCallback(
+    (memberId: string, reportsToId: string | null) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, reportsToId: reportsToId ?? undefined } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateReportsTo(memberId, reportsToId))
+    },
+    [runRemote],
+  )
+
+  const updatePermissionOverrides = useCallback(
+    (memberId: string, overrides: PermissionOverride[]) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, permissionOverrides: overrides } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updatePermissionOverrides(memberId, overrides))
+    },
+    [runRemote],
+  )
+
+  // item 14: メンター/サポート担当の設定
+  const updateMentor = useCallback(
+    (memberId: string, mentorId: string | null) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, mentorId: mentorId ?? undefined } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateMentor(memberId, mentorId))
+    },
+    [runRemote],
+  )
+
+  // ---- タレントマネジメント（人材DB／スキル管理／人材検索／育成・キャリア）----
+  const updateSearchProfile = useCallback(
+    (
+      memberId: string,
+      profile: {
+        hasManagementExperience: boolean
+        desiredAreas: string[]
+        desiredSkills: string[]
+      },
+    ) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId
+            ? {
+                ...m,
+                hasManagementExperience: profile.hasManagementExperience,
+                desiredAreas: profile.desiredAreas,
+                desiredSkills: profile.desiredSkills,
+              }
+            : m,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateSearchProfile(memberId, profile))
+    },
+    [runRemote],
+  )
+
+  const updateCareerHistory = useCallback(
+    (memberId: string, entries: CareerHistoryEntry[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, careerHistory: entries } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateCareerHistory(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateQualifications = useCallback(
+    (memberId: string, entries: Qualification[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, qualifications: entries } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateQualifications(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateEvaluationHistory = useCallback(
+    (memberId: string, entries: EvaluationRecord[]) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, evaluationHistory: entries } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateEvaluationHistory(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateTransferHistory = useCallback(
+    (memberId: string, entries: TransferRecord[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, transferHistory: entries } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateTransferHistory(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateSkillLevels = useCallback(
+    (memberId: string, levels: SkillLevel[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, skillLevels: levels } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateSkillLevels(memberId, levels))
+    },
+    [runRemote],
+  )
+
+  const updateCompetencies = useCallback(
+    (memberId: string, competencies: Competency[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, competencies } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateCompetencies(memberId, competencies))
+    },
+    [runRemote],
+  )
+
+  const updateCareerGoals = useCallback(
+    (
+      memberId: string,
+      goals: { careerAspiration: string; desiredFutureRole: string; careerPlan: string },
+    ) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId
+            ? {
+                ...m,
+                careerAspiration: goals.careerAspiration || undefined,
+                desiredFutureRole: goals.desiredFutureRole || undefined,
+                careerPlan: goals.careerPlan || undefined,
+              }
+            : m,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateCareerGoals(memberId, goals))
+    },
+    [runRemote],
+  )
+
+  const updateEducationInfo = useCallback(
+    (
+      memberId: string,
+      info: { university: string; faculty: string; departmentName: string; gradeYear: string },
+    ) => {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId
+            ? {
+                ...m,
+                university: info.university || undefined,
+                faculty: info.faculty || undefined,
+                departmentName: info.departmentName || undefined,
+                gradeYear: info.gradeYear || undefined,
+              }
+            : m,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateEducationInfo(memberId, info))
+    },
+    [runRemote],
+  )
+
+  const updateTrainingHistory = useCallback(
+    (memberId: string, entries: TrainingRecord[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, trainingHistory: entries } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateTrainingHistory(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  // 研修申請の承認フロー — 通知だけを担う軽量アクション。実体の状態変更
+  // (追加/承認/却下) は career-tab.tsx から updateTrainingHistory を直接
+  // 呼んで行い、こちらは best-effort のメール通知のみを追加で発火する
+  const notifyTrainingRequest = useCallback(
+    (memberId: string, trainingName: string) => {
+      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingRequest(memberId, trainingName))
+    },
+    [runRemote],
+  )
+  const notifyTrainingDecision = useCallback(
+    (memberId: string, trainingName: string, approved: boolean) => {
+      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingDecision(memberId, trainingName, approved))
+    },
+    [runRemote],
+  )
+
+  // NTF-005: 期限超過リマインドの手動発火。ローカルデモ(isRemoteConfigured
+  // でない)ではメール送信先が無いため何もしない
+  const triggerOverdueReminders = useCallback(async () => {
+    if (!isRemoteConfigured) return
+    await remoteApi.triggerOverdueReminders()
+  }, [])
+
+  const updateDevelopmentPlan = useCallback(
+    (memberId: string, entries: DevelopmentPlanEntry[]) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, developmentPlan: entries } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateDevelopmentPlan(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateOneOnOnes = useCallback(
+    (memberId: string, entries: OneOnOneRecord[]) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, oneOnOnes: entries } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateOneOnOnes(memberId, entries))
+    },
+    [runRemote],
+  )
+
+  const updateDisplayName = useCallback(
+    (memberId: string, displayName: string) => {
+      const trimmed = displayName.trim()
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, displayName: trimmed || undefined } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateDisplayName(memberId, trimmed))
+    },
+    [runRemote],
+  )
+
+  // 所属開始日 — 「経験年数」とは別に、この団体での所属歴を正確に表示するため
+  const updateJoinedAt = useCallback(
+    (memberId: string, joinedAt: string | null) => {
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, joinedAt: joinedAt ?? undefined } : m)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateJoinedAt(memberId, joinedAt))
+    },
+    [runRemote],
+  )
+
+  // 本人のタイムゾーン設定 — コメント等の時刻表示にのみ影響する
+  // (lib/ohsumi/timezone.ts)。selfOnly（GAS側）なので本人のみ変更可能。
+  const setMemberTimezone = useCallback(
+    (memberId: string, timezone: string) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, timezone } : m)))
+      cacheTimezone(timezone)
+      if (isRemoteConfigured) runRemote(remoteApi.updateTimezone(memberId, timezone))
+    },
+    [runRemote],
+  )
+
+  // 本人の表示言語設定 — I18nProvider（ブラウザのlocalStorage）とは別に、
+  // 他デバイス/ブラウザでも同じ言語で開けるようスプレッドシートにも保存する。
+  // selfOnly（GAS側）なので本人のみ変更可能。
+  const setMemberLocale = useCallback(
+    (memberId: string, locale: string) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, locale } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateLocale(memberId, locale))
+    },
+    [runRemote],
+  )
+
+  const toggleUnavailableDate = useCallback(
+    (memberId: string, date: string) => {
+      const member = members.find((m) => m.id === memberId)
+      if (!member) return
+      const cur = member.unavailableDates ?? []
+      const next = cur.includes(date) ? cur.filter((d) => d !== date) : [...cur, date]
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, unavailableDates: next } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateUnavailableDates(memberId, next))
+    },
+    [members, runRemote],
+  )
+
+  // CAL-009: 日々の稼働可能時間帯。参考情報として表示するのみで、自動判定
+  // には使わない
+  const updateAvailableHours = useCallback(
+    (memberId: string, hours: { start: string; end: string } | null) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, availableHours: hours ?? undefined } : m)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateAvailableHours(memberId, hours))
+    },
+    [runRemote],
+  )
+
+  const updateSchedule = useCallback(
+    (id: string, startDate: string | null, deadline: string | null) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          let next: Task = { ...t, startDate, deadline }
+          next = appendHistory(next, 'deadline', t.deadline ?? '', deadline ?? '')
+          next = appendHistory(next, 'startDate', t.startDate ?? '', startDate ?? '')
+          return next
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateSchedule(id, startDate, deadline))
+    },
+    [appendHistory, runRemote],
+  )
+
+  const updateDependsOn = useCallback(
+    (id: string, dependsOnIds: string[]) => {
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, dependsOnIds } : t)))
+      if (isRemoteConfigured) runRemote(remoteApi.updateDependsOn(id, dependsOnIds))
+    },
+    [runRemote],
+  )
+
+  // "確認者" — distinct from assigneeIds, pairs with the 確認待ち status so
+  // it's clear who's expected to sign off (item 8: 確認者・レビュワー設定)
+  const updateReviewer = useCallback(
+    (id: string, reviewerId: string | null) => {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? appendHistory({ ...t, reviewerId: reviewerId ?? undefined }, 'reviewer', t.reviewerId ?? '', reviewerId ?? '')
+            : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateReviewer(id, reviewerId))
+    },
+    [appendHistory, runRemote],
+  )
+
+  const updateReviewers = useCallback(
+    (id: string, reviewerIds: string[], requiredApprovals?: number | 'all') => {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? appendHistory(
+                { ...t, reviewerIds, reviewerId: reviewerIds[0], requiredApprovals },
+                'reviewer',
+                (t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])).join('、'),
+                reviewerIds.join('、'),
+              )
+            : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateReviewers(id, reviewerIds, requiredApprovals))
+    },
+    [appendHistory, runRemote],
+  )
+
+  // 複数確認者の承認トラッキング — 経費申請のApprovalStep/ApprovalRecordと
+  // 同様、誰が・いつ承認したかを記録する。requiredApprovals(必要承認数、
+  // 'all'なら確認者全員)に達したらローカルでも楽観的にstatus: 'done'へ
+  // 進める。同じ確認者が重複して承認しても追加しない（冪等）。
+  const approveTaskReview = useCallback(
+    (taskId: string, comment?: string) => {
+      if (!currentUserId) return
+      // 元タスクがこの承認で完了に達するかを先に判定しておき、達する場合は
+      // APR-007: 対応する確認タスク(relatedReviewTaskIdが一致するもの)も
+      // 同じ更新で自動的に完了にする
+      const original = tasks.find((t) => t.id === taskId)
+      let willComplete = false
+      if (original) {
+        const already = (original.reviewApprovals ?? []).some((a) => a.memberId === currentUserId)
+        const nextCount = (original.reviewApprovals ?? []).length + (already ? 0 : 1)
+        const reviewerIds = original.reviewerIds ?? (original.reviewerId ? [original.reviewerId] : [])
+        const needed = original.requiredApprovals === 'all' ? reviewerIds.length : (original.requiredApprovals ?? 1)
+        willComplete = nextCount >= needed
+      }
+      const today = new Date().toISOString().slice(0, 10)
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id === taskId) {
+            const already = (t.reviewApprovals ?? []).some((a) => a.memberId === currentUserId)
+            const nextApprovals = already
+              ? t.reviewApprovals!
+              : [...(t.reviewApprovals ?? []), { memberId: currentUserId, at: new Date().toISOString(), comment }]
+            const reviewerIds = t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])
+            const needed = t.requiredApprovals === 'all' ? reviewerIds.length : (t.requiredApprovals ?? 1)
+            if (nextApprovals.length >= needed) {
+              return { ...t, reviewApprovals: nextApprovals, status: 'done', completedDate: today, lastActivity: today }
+            }
+            return { ...t, reviewApprovals: nextApprovals }
+          }
+          if (willComplete && t.relatedReviewTaskId === taskId && t.status !== 'done') {
+            return { ...t, status: 'done', completedDate: today, lastActivity: today }
+          }
+          return t
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.approveTaskReview(taskId, comment))
+    },
+    [currentUserId, runRemote, tasks],
+  )
+
+  const bulkUpdateSkills = useCallback(
+    (updates: { memberId: string; skill: string; level: number }[]) => {
+      setMembers((prev) =>
+        prev.map((m) => {
+          const memberUpdates = updates.filter((u) => u.memberId === m.id)
+          if (memberUpdates.length === 0) return m
+          const existing = [...(m.skillLevels ?? [])]
+          for (const u of memberUpdates) {
+            const idx = existing.findIndex((sl) => sl.skill === u.skill)
+            if (idx >= 0) existing[idx] = { ...existing[idx], level: u.level as import('./types').SkillLevelValue }
+            else existing.push({ skill: u.skill, level: u.level as import('./types').SkillLevelValue })
+          }
+          return { ...m, skillLevels: existing }
+        }),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.bulkUpdateSkills(updates))
+    },
+    [runRemote],
+  )
+
+  // "困っている/作業が止まっている" flag, independent of status (item 7:
+  // ブロッカー管理) — pass null/empty to clear
+  const setBlocker = useCallback(
+    (id: string, note: string | null) => {
+      const trimmed = note?.trim() || null
+      const since = trimmed ? new Date().toISOString().slice(0, 10) : null
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, blocker: trimmed ? { note: trimmed, since: since! } : undefined } : t)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.setBlocker(id, trimmed, since))
+    },
+    [runRemote],
+  )
+
+  // ステータスを「保留」にする際の理由。blockerと同じ形(note+since)で
+  // 独立管理し、保留を解除しても理由自体は履歴として残す
+  const setHoldReason = useCallback(
+    (id: string, note: string | null) => {
+      const trimmed = note?.trim() || null
+      const since = trimmed ? new Date().toISOString().slice(0, 10) : null
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === id ? { ...t, holdReason: trimmed ? { note: trimmed, since: since! } : undefined } : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.setHoldReason(id, trimmed, since))
+    },
+    [runRemote],
+  )
+
+  // 想定/実績の所要時間（item 5） — powers the Assignments page's
+  // per-member 今週の工数 indicator and the INPUT screen's estimate suggestion
+  const updateEstimatedHours = useCallback(
+    (id: string, hours: number | null) => {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, estimatedHours: hours ?? undefined } : t)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateEstimatedHours(id, hours))
+    },
+    [runRemote],
+  )
+  const updateActualHours = useCallback(
+    (id: string, hours: number | null) => {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, actualHours: hours ?? undefined } : t)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateActualHours(id, hours))
+    },
+    [runRemote],
+  )
+
+  // 完了時の振り返り（item 3） — pass null to clear
+  const updateRetrospective = useCallback(
+    (id: string, retrospective: TaskRetrospective | null) => {
+      setTasks((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, retrospective: retrospective ?? undefined } : t)),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.updateRetrospective(id, retrospective))
+    },
+    [runRemote],
+  )
+
+  // 日程調整ツール — 候補日時＋招待メンバーを設定する（作成者/管理者）
+  const setTaskSchedule = useCallback(
+    (id: string, candidates: ScheduleCandidate[], invitedIds: string[]) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const schedule: TaskSchedule = {
+            candidates,
+            invitedIds,
+            responses: t.schedule?.responses ?? {},
+          }
+          if (isRemoteConfigured) runRemote(remoteApi.updateTaskSchedule(id, schedule))
+          return { ...t, schedule }
+        }),
+      )
+    },
+    [runRemote],
+  )
+
+  // 招待されたメンバーが候補ごとに〇×△で回答する。招待者全員が全候補に
+  // 回答し終えたら自動的にタスクを完了にし、作成者へ結果を通知する
+  const respondToSchedule = useCallback(
+    (id: string, memberId: string, responses: Record<string, ScheduleResponseValue>) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id || !t.schedule) return t
+          const nextSchedule: TaskSchedule = {
+            ...t.schedule,
+            responses: { ...t.schedule.responses, [memberId]: responses },
+          }
+          const allDone = t.schedule.invitedIds.every((mid) => {
+            const r = nextSchedule.responses[mid]
+            return !!r && t.schedule!.candidates.every((c) => !!r[c.id])
+          })
+          if (isRemoteConfigured) runRemote(remoteApi.updateTaskSchedule(id, nextSchedule))
+          if (allDone && t.status !== 'done') {
+            const today = new Date().toISOString().slice(0, 10)
+            if (isRemoteConfigured) {
+              runRemote(remoteApi.updateTaskStatus(id, 'done'))
+              runRemote(remoteApi.notifyScheduleResult(id))
+            }
+            return appendHistory(
+              { ...t, schedule: nextSchedule, status: 'done', completedDate: today, lastActivity: today },
+              'status',
+              STATUS_LABEL[t.status],
+              STATUS_LABEL.done,
+            )
+          }
+          return { ...t, schedule: nextSchedule }
+        }),
+      )
+    },
+    [runRemote, appendHistory],
+  )
+
+  // INPUT画面の「クイック追加」から、日程調整専用のタスクを新規作成する。
+  // 承認フローは経由しない（招待メンバーが即座に回答できる必要があるため）。
+  // リモート保存は create → 実IDへの差し替え → schedule書き込み、の順で
+  // 直列に行う（createTasksとupdateTaskScheduleを並行で投げると、後者が
+  // 先にサーバーへ届いた場合に対象行がまだ存在せず失敗しうるため）
+  const createScheduleTask = useCallback(
+    (
+      projectId: string,
+      name: string,
+      candidates: { id: string; label: string }[],
+      invitedIds: string[],
+    ) => {
+      const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
+      const today = new Date().toISOString().slice(0, 10)
+      const schedule: TaskSchedule = { candidates, invitedIds, responses: {} }
+      const newTask: Task = {
+        id: tempId,
+        name,
+        description: '',
+        projectId,
+        department: '未分類',
+        assigneeIds: [],
+        deadline: null,
+        category: '日程調整',
+        skills: [],
+        difficulty: '新人歓迎',
+        priority: '中',
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        pendingApproval: false,
+        schedule,
+      }
+      setTasks((prev) => [newTask, ...prev])
+
+      if (isRemoteConfigured) {
+        remoteApi
+          .createTasks([
+            {
+              tempId,
+              title: name,
+              projectId,
+              department: '未分類',
+              category: '日程調整',
+              skills: [],
+              difficulty: '新人歓迎',
+              priority: '中',
+              deadline: null,
+              creatorId: currentUserId ?? undefined,
+              pendingApproval: false,
+            },
+          ])
+          .then((mapping) => {
+            const realId = mapping.find((m) => m.tempId === tempId)?.id
+            if (!realId) return
+            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
+            runRemote(remoteApi.updateTaskSchedule(realId, schedule))
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [currentUserId, runRemote, reportRemoteError],
+  )
+
+  // 汎用フォームツール — 質問項目＋招待メンバーを設定する（作成者/管理者）
+  const setTaskForm = useCallback(
+    (id: string, fields: FormFieldDef[], invitedIds: string[]) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const form: TaskForm = {
+            fields,
+            invitedIds,
+            responses: t.form?.responses ?? {},
+          }
+          if (isRemoteConfigured) runRemote(remoteApi.updateTaskForm(id, form))
+          return { ...t, form }
+        }),
+      )
+    },
+    [runRemote],
+  )
+
+  // 招待されたメンバーが回答する。招待者全員が回答し終えたら自動的に
+  // タスクを完了にし、作成者へ結果を通知する
+  const respondToForm = useCallback(
+    (id: string, memberId: string, responses: Record<string, FormAnswerValue>) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id || !t.form) return t
+          const nextForm: TaskForm = {
+            ...t.form,
+            responses: { ...t.form.responses, [memberId]: responses },
+          }
+          const allDone = t.form.invitedIds.every((mid) => !!nextForm.responses[mid])
+          if (isRemoteConfigured) runRemote(remoteApi.updateTaskForm(id, nextForm))
+          if (allDone && t.status !== 'done') {
+            const today = new Date().toISOString().slice(0, 10)
+            if (isRemoteConfigured) {
+              runRemote(remoteApi.updateTaskStatus(id, 'done'))
+              runRemote(remoteApi.notifyFormResult(id))
+            }
+            return appendHistory(
+              { ...t, form: nextForm, status: 'done', completedDate: today, lastActivity: today },
+              'status',
+              STATUS_LABEL[t.status],
+              STATUS_LABEL.done,
+            )
+          }
+          return { ...t, form: nextForm }
+        }),
+      )
+    },
+    [runRemote, appendHistory],
+  )
+
+  // INPUT画面の「クイック追加」から、フォーム専用のタスクを新規作成する。
+  // createScheduleTaskと同じ理由でcreate→実IDへの差し替え→form書き込み、の順で直列に行う
+  const createFormTask = useCallback(
+    (projectId: string, name: string, fields: FormFieldDef[], invitedIds: string[]) => {
+      const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
+      const today = new Date().toISOString().slice(0, 10)
+      const form: TaskForm = { fields, invitedIds, responses: {} }
+      const newTask: Task = {
+        id: tempId,
+        name,
+        description: '',
+        projectId,
+        department: '未分類',
+        assigneeIds: [],
+        deadline: null,
+        category: 'フォーム',
+        skills: [],
+        difficulty: '新人歓迎',
+        priority: '中',
+        status: 'todo',
+        lastActivity: today,
+        createdById: currentUserId ?? undefined,
+        createdAt: new Date().toISOString(),
+        progressHistory: [],
+        pendingApproval: false,
+        form,
+      }
+      setTasks((prev) => [newTask, ...prev])
+
+      if (isRemoteConfigured) {
+        remoteApi
+          .createTasks([
+            {
+              tempId,
+              title: name,
+              projectId,
+              department: '未分類',
+              category: 'フォーム',
+              skills: [],
+              difficulty: '新人歓迎',
+              priority: '中',
+              deadline: null,
+              creatorId: currentUserId ?? undefined,
+              pendingApproval: false,
+            },
+          ])
+          .then((mapping) => {
+            const realId = mapping.find((m) => m.tempId === tempId)?.id
+            if (!realId) return
+            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
+            runRemote(remoteApi.updateTaskForm(realId, form))
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [currentUserId, runRemote, reportRemoteError],
+  )
+
+  // 成果物リンク管理（item 12） — Drive/Canva/GitHub/Figma等へのリンクを
+  // タスクに複数紐付ける
+  const addDeliverable = useCallback(
+    (id: string, label: string, url: string) => {
+      const l = label.trim()
+      const u = url.trim()
+      if (!l || !u) return
+      const entry: TaskDeliverable = { id: `dl-${Math.random().toString(36).slice(2, 9)}`, label: l, url: u }
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const next = [...(t.deliverables ?? []), entry]
+          if (isRemoteConfigured) runRemote(remoteApi.updateDeliverables(id, next))
+          return { ...t, deliverables: next }
+        }),
+      )
+    },
+    [runRemote],
+  )
+  const removeDeliverable = useCallback(
+    (id: string, deliverableId: string) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const next = (t.deliverables ?? []).filter((d) => d.id !== deliverableId)
+          if (isRemoteConfigured) runRemote(remoteApi.updateDeliverables(id, next))
+          return { ...t, deliverables: next }
+        }),
+      )
+    },
+    [runRemote],
+  )
+
+  // コメント機能 — a discussion thread on the task, separate from
+  // progressHistory (a status-update log, not a conversation)
+  const addComment = useCallback(
+    (id: string, text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      // 自分自身への@メンションは通知しない
+      const mentionedIds = parseMentions(trimmed, members).filter((mid) => mid !== currentUserId)
+      const entry: TaskComment = {
+        id: `cm-${Math.random().toString(36).slice(2, 9)}`,
+        text: trimmed,
+        byId: currentUserId ?? '',
+        at: new Date().toISOString(),
+        mentionedIds: mentionedIds.length > 0 ? mentionedIds : undefined,
+      }
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const next = [...(t.comments ?? []), entry]
+          if (isRemoteConfigured) {
+            runRemote(remoteApi.updateComments(id, next))
+            if (mentionedIds.length > 0) {
+              runRemote(remoteApi.notifyMention(id, trimmed, mentionedIds))
+            }
+          }
+          return { ...t, comments: next }
+        }),
+      )
+    },
+    [currentUserId, runRemote, members],
+  )
+  const removeComment = useCallback(
+    (id: string, commentId: string) => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          const next = (t.comments ?? []).filter((c) => c.id !== commentId)
+          if (isRemoteConfigured) runRemote(remoteApi.updateComments(id, next))
+          return { ...t, comments: next }
+        }),
+      )
+    },
+    [runRemote],
+  )
+
+  const updateAvatar = useCallback(
+    (memberId: string, avatarColor: string, initials: string) => {
+      const trimmedInitials = initials.trim().slice(0, 2).toUpperCase()
+      // choosing a color+initials avatar supersedes any uploaded picture
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === memberId
+            ? { ...m, avatarColor, initials: trimmedInitials || m.initials, avatarUrl: undefined }
+            : m,
+        ),
+      )
+      try { localStorage.removeItem(`ohsumi-avatar-url-${memberId}`) } catch {}
+      if (isRemoteConfigured) runRemote(remoteApi.updateAvatar(memberId, avatarColor, trimmedInitials))
+    },
+    [runRemote],
+  )
+
+  // uploads a resized profile picture (see person-detail.tsx) to the
+  // configured Drive folder via GAS, returning a Promise so the UI can
+  // show a loading/error state. Shows the raw data URL immediately as an
+  // optimistic preview, then swaps in the real Drive-hosted URL.
+  const uploadAvatarImage = useCallback(
+    (memberId: string, dataUrl: string, filename: string) => {
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, avatarUrl: dataUrl } : m)))
+      if (!isDriveConfigured) return Promise.resolve()
+      return remoteApi
+        .uploadAvatarImage(memberId, dataUrl, filename)
+        .then(({ url }) => {
+          setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, avatarUrl: url } : m)))
+          // CSV cache can lag several minutes after GAS writes the URL to the
+          // sheet — persist the URL locally so it survives page reloads until
+          // the CSV catches up.
+          try { localStorage.setItem(`ohsumi-avatar-url-${memberId}`, url) } catch {}
+          setRemoteError(null)
+        })
+        .catch((err) => {
+          reportRemoteError(err)
+          throw err
+        })
+    },
+    [reportRemoteError],
+  )
+
+  // FRM-007: アンケート設問の画像をDriveにアップロードし、URLを返す。
+  // uploadExpenseReceiptと同じパターン — 呼び出し側(admin-tags.tsxの
+  // SurveyQuestionsEditor)がdraft上のimageUrlに反映する。
+  const uploadSurveyImage = useCallback(
+    (dataUrl: string, filename: string): Promise<string> => {
+      if (!isDriveConfigured) return Promise.reject(new Error('Drive is not configured'))
+      return remoteApi
+        .uploadSurveyImage(dataUrl, filename)
+        .then(({ url }) => {
+          setRemoteError(null)
+          return url
+        })
+        .catch((err) => {
+          reportRemoteError(err)
+          throw err
+        })
+    },
+    [reportRemoteError],
+  )
+
+  const persistOnboarded = useCallback((ids: Set<string>) => {
+    try {
+      window.localStorage.setItem(ONBOARDED_STORAGE_KEY, JSON.stringify([...ids]))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const completeOnboarding = useCallback(
+    (will: string[]) => {
+      if (!currentUserId) return
+      updateWill(currentUserId, will)
+      setOnboardedIds((prev) => {
+        const next = new Set(prev)
+        next.add(currentUserId)
+        persistOnboarded(next)
+        return next
+      })
+    },
+    [currentUserId, updateWill, persistOnboarded],
+  )
+
+  const skipOnboarding = useCallback(() => {
+    if (!currentUserId) return
+    setOnboardedIds((prev) => {
+      const next = new Set(prev)
+      next.add(currentUserId)
+      persistOnboarded(next)
+      return next
+    })
+  }, [currentUserId, persistOnboarded])
+
+  const markMentionSeen = useCallback(
+    (commentId: string) => {
+      if (!currentUserId) return
+      setSeenMentionIds((prev) => {
+        const mine = prev[currentUserId] ?? []
+        if (mine.includes(commentId)) return prev
+        const next = { ...prev, [currentUserId]: [...mine, commentId] }
+        try {
+          window.localStorage.setItem(SEEN_MENTIONS_STORAGE_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    },
+    [currentUserId],
+  )
+
+  const clearSkillCertifiedEvent = useCallback(() => setSkillCertifiedEvent(null), [])
+
+  // 通知の個別dismiss（item 7）— userId単位で管理し、端末ローカルにのみ保持
+  const dismissNotification = useCallback(
+    (notificationId: string) => {
+      if (!currentUserId) return
+      setDismissedNotificationIds((prev) => {
+        const mine = prev[currentUserId] ?? []
+        if (mine.includes(notificationId)) return prev
+        const next = { ...prev, [currentUserId]: [...mine, notificationId] }
+        try {
+          window.localStorage.setItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(next))
+        } catch { /* ignore */ }
+        return next
+      })
+    },
+    [currentUserId],
+  )
+
+  // Slack Incoming Webhook（item 8）— Discordと同様GAS PropertiesServiceに保存。
+  // 保存直後に実際にテストメッセージを送信して接続確認する（setDiscordWebhookUrlと同じ理由）
+  const setSlackWebhookUrl = useCallback(
+    async (url: string): Promise<{ ok: boolean; error?: string }> => {
+      setSlackWebhookUrlState(url)
+      if (!isRemoteConfigured) return { ok: false, error: 'GASが未接続です' }
+      try {
+        await remoteApi.updateSlackWebhookUrl(url)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        reportRemoteError(err)
+        return { ok: false, error: message }
+      }
+      if (!url) return { ok: true }
+      try {
+        await remoteApi.testSlackWebhook()
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    },
+    [reportRemoteError],
+  )
+
+  // item 20: 1on1質問項目を更新
+  const setOneOnOneQuestions = useCallback((questions: string[]) => {
+    setOneOnOneQuestionsState(questions)
+    try { window.localStorage.setItem('ohsumi-1on1-questions', JSON.stringify(questions)) } catch {}
+    if (isSettingsConfigured) runRemote(remoteApi.updateSetting('one_on_one_questions', JSON.stringify(questions)))
+  }, [runRemote])
+
+  // 活動休止トグル（item 9）— GAS側にも反映する
+  const toggleMemberInactive = useCallback(
+    (memberId: string) => {
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id !== memberId) return m
+          const next = { ...m, inactive: !m.inactive }
+          if (isRemoteConfigured) runRemote(remoteApi.updateMemberInactive(memberId, !!next.inactive))
+          return next
+        }),
+      )
+    },
+    [runRemote],
+  )
+
+  const updateMemberDepartmentPaths = useCallback(
+    (memberId: string, departmentPaths: string[]) => {
+      const next = Array.from(new Set(departmentPaths.map((p) => p.trim()).filter(Boolean)))
+      setMembers((prev) => prev.map((m) => m.id !== memberId ? m : { ...m, departmentPaths: next }))
+      if (isRemoteConfigured) runRemote(remoteApi.updateMemberDepartmentPaths(memberId, next))
+    },
+    [runRemote],
+  )
+
+  const updateAbsentDates = useCallback((memberId: string, dates: string[]) => {
+    setMembers((prev) => prev.map((m) => m.id === memberId ? { ...m, absentDates: dates } : m))
+    if (isRemoteConfigured) runRemote(remoteApi.updateAbsentDates(memberId, dates))
+  }, [runRemote])
+
+  const getMember = useCallback(
+    (id: string | null) => members.find((m) => m.id === id),
+    [members],
+  )
+  const getProject = useCallback(
+    (id: string) => projects.find((p) => p.id === id),
+    [projects],
+  )
+  const getInput = useCallback(
+    (id: string | undefined) => (id ? inputs.find((i) => i.id === id) : undefined),
+    [inputs],
+  )
+
+  const currentUser = useMemo(
+    () => members.find((m) => m.id === currentUserId) ?? null,
+    [members, currentUserId],
+  )
+
+  const visibleTasks = useMemo(() => {
+    const canSeeExec = currentUser ? canSeeExecTasks(currentUser.role) : false
+    return tasks.filter(
+      (t) =>
+        !t.pendingApproval &&
+        !isArchived(t) &&
+        (t.visibility !== '幹部' || canSeeExec),
+    )
+  }, [tasks, currentUser])
+  const pendingTasks = useMemo(() => tasks.filter((t) => t.pendingApproval), [tasks])
+  const archivedTasks = useMemo(
+    () => tasks.filter((t) => !t.pendingApproval && isArchived(t)),
+    [tasks],
+  )
+
+  const getProjectMembers = useCallback(
+    (projectId: string) => {
+      const project = projects.find((p) => p.id === projectId)
+      const ids = Array.from(
+        new Set([
+          ...(project?.memberIds ?? []),
+          ...visibleTasks.filter((t) => t.projectId === projectId).flatMap((t) => t.assigneeIds),
+        ]),
+      )
+      return ids.map((id) => members.find((m) => m.id === id)).filter(Boolean) as Member[]
+    },
+    [projects, visibleTasks, members],
+  )
+
+  // Roles in restrictedRoles have limited section visibility and scoped
+  // project/task access. All other configured roles (and any role not in the
+  // list) are full admin with unrestricted access. An empty restrictedRoles
+  // means every role is full admin.
+  const isFullAdminMember = useCallback(
+    (member: Member | null | undefined) => isFullAdminRole(member?.role, restrictedRoles),
+    [restrictedRoles],
+  )
+  const isFullAdmin = useMemo(() => isFullAdminMember(currentUser), [isFullAdminMember, currentUser])
+
+  // which admin-screen sections the current role can see — falls back to
+  // DEFAULT_NON_TOP_SECTIONS when no explicit choice was configured
+  const visibleAdminSections = useMemo<AdminSection[]>(
+    () => resolveVisibleAdminSections(currentUser?.role, restrictedRoles, rolePermissions),
+    [currentUser, restrictedRoles, rolePermissions],
+  )
+
+  // Admin > Projectsのドラッグ並び替え(projectOrder)を反映した表示順。
+  // 未設定のプロジェクトは元の並び順のまま末尾に追加される
+  const orderedProjects = useMemo(
+    () => sortByOrder(projects, projectOrder),
+    [projects, projectOrder],
+  )
+
+  const adminProjects = useMemo(() => {
+    if (isFullAdmin || !currentUser) return orderedProjects
+    const scope = new Set(currentUser.projectIds ?? [])
+    return orderedProjects.filter((p) => scope.has(p.id))
+  }, [orderedProjects, isFullAdmin, currentUser])
+
+  const adminTasks = useMemo(() => {
+    if (isFullAdmin || !currentUser) return visibleTasks
+    const scope = new Set(currentUser.projectIds ?? [])
+    return visibleTasks.filter((t) => scope.has(t.projectId))
+  }, [visibleTasks, isFullAdmin, currentUser])
+
+  const adminPendingTasks = useMemo(() => {
+    if (isFullAdmin || !currentUser) return pendingTasks
+    const scope = new Set(currentUser.projectIds ?? [])
+    return pendingTasks.filter((t) => scope.has(t.projectId))
+  }, [pendingTasks, isFullAdmin, currentUser])
+
+  // item 26: プロジェクト健康状態の自動判定変化通知 — 定期タスク生成チェック
+  // (上記)と同じく、サーバー側cronが無いためクライアント側で検知する。
+  // notifyProjectHealthはGAS側でdaihyoOrLeader認可のため、管理者ロールの
+  // 誰かのブラウザがOhsumiを開いたタイミングでのみ検知・送信する
+  // （一般ロールの閲覧では実行しない＝GAS側の権限エラーを避ける）。
+  // 手動上書き中(healthOverride)のプロジェクトは対象外、かつ前回通知した
+  // 実効状態(lastNotifiedHealth)からattentionへ新たに変化したときのみ送る。
+  // (追補) attentionから回復した際にlastNotifiedHealthを更新しないと、
+  // 「attention→回復→再attention」で2回目以降の再通知が飛ばなくなる抜け穴が
+  // あったため、attention以外に回復したタイミングでも(通知はせず)記録だけ
+  // 最新化する。これにより次に再びattentionへ悪化した際に確実に再通知される。
+  useEffect(() => {
+    if (!hydrated || !isRemoteConfigured || !currentUser || currentUser.role === BASE_ROLE) return
+    const tz = currentUser.timezone ?? DEFAULT_TIMEZONE
+    adminProjects.forEach((p) => {
+      if (p.healthOverride) return
+      const { health } = computeProjectAutoHealth(p, adminTasks, tz)
+      if (health === 'attention' && p.lastNotifiedHealth !== 'attention') {
+        // 悪化 → attentionになった: 通知を送り、記録も更新する
+        setProjects((prev) =>
+          prev.map((proj) => (proj.id === p.id ? { ...proj, lastNotifiedHealth: 'attention' } : proj)),
+        )
+        runRemote(remoteApi.notifyProjectHealth(p.id, 'attention'))
+      } else if (health !== 'attention' && p.lastNotifiedHealth === 'attention') {
+        // 回復 → attention以外に戻った: 通知は送らず、記録だけ最新状態に
+        // 更新する（次に再びattentionへ悪化した際に確実に再通知されるようにする）
+        setProjects((prev) =>
+          prev.map((proj) => (proj.id === p.id ? { ...proj, lastNotifiedHealth: health } : proj)),
+        )
+        runRemote(remoteApi.updateProjectHealthRecord(p.id, health))
+      }
+    })
+  }, [hydrated, currentUser, adminProjects, adminTasks, runRemote])
+
+  const notifications = useMemo(() => {
+    if (!currentUser) return []
+    const items: import('./types').NotificationItem[] = []
+    const isAdmin = currentUser.role !== '一般'
+    if (isAdmin) {
+      adminPendingTasks.forEach((task) => {
+        items.push({
+          id: `approval-${task.id}`,
+          kind: 'approval',
+          title: t('notification.approval.title', { name: task.name }),
+          detail: t('notification.approval.detail'),
+          taskId: task.id,
+        })
+      })
+      adminTasks
+        .filter((task) => task.status === 'review')
+        .forEach((task) => {
+          items.push({
+            id: `review-${task.id}`,
+            kind: 'review',
+            title: t('notification.review.title', { name: task.name }),
+            detail: t('notification.review.detail'),
+            taskId: task.id,
+          })
+        })
+      // item 10: SLA/放置アラート — 確認待ちが3日、進行中タスクの更新が
+      // 7日ないと通知。lastActivity は既存の「放置検知」用フィールド
+      // (types.ts) をそのまま流用
+      adminTasks.forEach((task) => {
+        const idle = daysSince(task.lastActivity)
+        if (idle === null) return
+        if (task.status === 'review' && idle >= 3) {
+          items.push({
+            id: `stale-review-${task.id}`,
+            kind: 'stale',
+            title: t('notification.staleReview.title', { days: idle, name: task.name }),
+            detail: t('notification.staleReview.detail'),
+            taskId: task.id,
+          })
+        } else if (task.status !== 'done' && task.status !== 'review' && idle >= 7) {
+          items.push({
+            id: `stale-progress-${task.id}`,
+            kind: 'stale',
+            title: t('notification.staleProgress.title', { days: idle, name: task.name }),
+            detail: t('notification.staleProgress.detail'),
+            taskId: task.id,
+          })
+        }
+      })
+    }
+    visibleTasks
+      .filter((task) => task.assigneeIds.includes(currentUser.id) && task.status !== 'done')
+      .forEach((task) => {
+        const dl = deadlineLevel(task, currentUser.timezone ?? DEFAULT_TIMEZONE)
+        const deadlineDetailKey: Partial<Record<import('./utils').DeadlineLevel, import('./i18n').TranslationKey>> = {
+          overdue: 'notification.deadline.overdue',
+          today: 'notification.deadline.today',
+          soon: 'notification.deadline.soon',
+          near: 'notification.deadline.near',
+        }
+        const detailKey = deadlineDetailKey[dl.level]
+        if (detailKey) {
+          items.push({
+            id: `deadline-${task.id}`,
+            kind: 'deadline',
+            title: task.name,
+            detail: t(detailKey, { days: dl.days ?? 0 }),
+            taskId: task.id,
+          })
+        }
+      })
+    // コメントの@メンション — 自分がメンションされていて、まだ既読にしていない
+    // ものだけ表示（既読管理は端末ローカルの seenMentionIds/markMentionSeen）
+    const seenHere = seenMentionIds[currentUser.id] ?? []
+    visibleTasks.forEach((task) => {
+      task.comments?.forEach((c) => {
+        if (!c.mentionedIds?.includes(currentUser.id)) return
+        if (seenHere.includes(c.id)) return
+        items.push({
+          id: `mention-${c.id}`,
+          kind: 'mention',
+          title: t('notification.mention.title', { name: task.name }),
+          detail: c.text.length > 40 ? `${c.text.slice(0, 40)}…` : c.text,
+          taskId: task.id,
+          commentId: c.id,
+        })
+      })
+    })
+    // item 25: 25日間未アクセスのメンバーを管理者に通知
+    if (isAdmin) {
+      const now = Date.now()
+      const INACTIVE_DAYS = 25
+      members
+        .filter((m) => !m.inactive && m.lastLogin)
+        .forEach((m) => {
+          const last = new Date(m.lastLogin!).getTime()
+          const days = Math.floor((now - last) / 86400000)
+          if (days >= INACTIVE_DAYS) {
+            items.push({
+              id: `inactive-${m.id}`,
+              kind: 'stale',
+              title: t('notification.inactive.title', { name: m.displayName || m.name, days }),
+              detail: t('notification.inactive.detail'),
+              taskId: '',
+            })
+          }
+        })
+    }
+    // P16: 直属の部下がタスク少なめ状態なら、その上長に通知する
+    // (isAdminである全管理者ではなく、その部下のreportsToIdが自分と一致
+    // する場合のみ — item 25の「25日間未アクセス」通知とは異なり、対象を
+    // 直属の上長に限定する)
+    {
+      const allTasksForWorkload = [...visibleTasks, ...archivedTasks]
+      members
+        .filter((m) => !m.inactive && m.reportsToId === currentUser.id)
+        .forEach((m) => {
+          if (isLowWorkloadMember(m.id, allTasksForWorkload)) {
+            items.push({
+              id: `low-workload-${m.id}`,
+              kind: 'lowWorkload',
+              title: t('notification.lowWorkload.title', { name: m.displayName || m.name }),
+              detail: t('notification.lowWorkload.detail'),
+              taskId: '',
+              memberId: m.id,
+            })
+          }
+        })
+    }
+    // P16/NTF-015: 本人が「タスクが少ない」状態なら、本人自身にも直接通知する
+    // (上長への通知とは別。両方に通知する方針)
+    {
+      const allTasksForWorkload = [...visibleTasks, ...archivedTasks]
+      if (isLowWorkloadMember(currentUser.id, allTasksForWorkload)) {
+        items.push({
+          id: `low-workload-self-${currentUser.id}`,
+          kind: 'lowWorkload',
+          title: t('notification.lowWorkloadSelf.title'),
+          detail: t('notification.lowWorkloadSelf.detail'),
+          taskId: '',
+          memberId: currentUser.id,
+        })
+      }
+    }
+    // EXP-007: 経費申請 — 自分が次の承認ステップの担当者になっている申請への通知
+    expenseApplications
+      .filter((app) => app.status === 'pending')
+      .forEach((app) => {
+        const step = app.approvalSteps[app.currentStepIndex]
+        if (!step) return
+        const isApprover =
+          (step.type === 'member' && step.memberId === currentUser.id) ||
+          (step.type === 'role' && step.role === currentUser.role)
+        if (!isApprover) return
+        items.push({
+          id: `expense-approval-${app.id}`,
+          kind: 'expense',
+          title: t('notification.expense.approval.title', { amount: app.amount }),
+          detail: t('notification.expense.approval.detail'),
+          taskId: '',
+          applicationId: app.id,
+        })
+      })
+    // EXP-007/EXP-008: 自分の申請が却下・差し戻しされたときの通知
+    expenseApplications
+      .filter((app) => app.applicantId === currentUser.id && (app.status === 'rejected' || app.status === 'returned'))
+      .forEach((app) => {
+        items.push({
+          id: `expense-${app.status}-${app.id}`,
+          kind: 'expense',
+          title: t(app.status === 'returned' ? 'notification.expense.returned.title' : 'notification.expense.rejected.title'),
+          detail: t(app.status === 'returned' ? 'notification.expense.returned.detail' : 'notification.expense.rejected.detail'),
+          taskId: '',
+          applicationId: app.id,
+        })
+      })
+    // カレンダースコープ追加告知 — 一度「消す」まで表示する
+    items.push({
+      id: 'calendar-scope-notice',
+      kind: 'info' as const,
+      title: t('notification.calendarScope.title'),
+      detail: t('notification.calendarScope.detail'),
+      taskId: '',
+    })
+    const dismissedHere = dismissedNotificationIds[currentUser.id] ?? []
+    return items.filter((n) => !dismissedHere.includes(n.id))
+  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, archivedTasks, seenMentionIds, dismissedNotificationIds, members, expenseApplications, t])
+
+  const projectTypes = useMemo(
+    () =>
+      uniq([
+        ...Object.keys(projectTemplates),
+        ...projects.map((p) => p.type ?? '').filter(Boolean),
+      ]),
+    [projectTemplates, projects],
+  )
+
+  // アーカイブされていないプロジェクトだけ — OUTPUT「プロジェクト」タブや
+  // プロジェクト選択欄など、通常の一覧表示で使う。Admin > Projectsだけは
+  // アーカイブ済みも自前で見せるため、そちらは adminProjects をそのまま使う
+  const activeProjects = useMemo(
+    () => orderedProjects.filter((p) => !p.archived),
+    [orderedProjects],
+  )
+
+  const needsOnboarding = !!(
+    currentUser &&
+    currentUser.will.length === 0 &&
+    !onboardedIds.has(currentUser.id)
+  )
+
+  // true once every configured remote source has either resolved or given
+  // up (error). Consumers (ohsumi-app.tsx's Router, admin-screen.tsx) use
+  // this to avoid computing permissions/redirects against the transient
+  // pre-fetch state, where members/roleLevels/rolePermissions can be empty
+  // or still at their defaults.
+  const dataReady =
+    (!isRemoteConfigured || remoteStatus === 'ready' || remoteStatus === 'error') &&
+    settingsReady
+
+  const membersWithFacts = useMemo(() => {
+    const doneTasks = tasks.filter((t) => t.status === 'done' && t.category)
+    return members.map((m) => {
+      const myDone = doneTasks.filter((t) => t.assigneeIds.includes(m.id))
+      const counts: Record<string, number> = {}
+      myDone.forEach((t) => { counts[t.category] = (counts[t.category] ?? 0) + 1 })
+      const facts = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([label, count]) => ({ label, count }))
+      return facts.length > 0 ? { ...m, facts } : m
+    })
+  }, [members, tasks])
+
+  const value: OhsumiContextValue = {
+    currentUserId,
+    myEmail,
+    tasks,
+    visibleTasks,
+    pendingTasks,
+    archivedTasks,
+    members: membersWithFacts,
+    projects: orderedProjects,
+    inputs,
+    mode,
+    currentUser,
+    remoteEnabled: isRemoteConfigured,
+    driveEnabled: isDriveConfigured,
+    remoteStatus,
+    remoteError,
+    dataReady,
+    refreshing,
+    refreshAll,
+    skillOptions,
+    categoryOptions,
+    addSkillOption,
+    removeSkillOption,
+    addCategoryOption,
+    removeCategoryOption,
+    roleLevels,
+    addRoleLevel,
+    removeRoleLevel,
+    reorderRoleLevel,
+    restrictedRoles,
+    toggleRestrictedRole,
+    rolePermissions,
+    setRolePermissions,
+    visibleAdminSections,
+    projectTemplates,
+    projectTypes,
+    setProjectTemplateTasks,
+    removeProjectType,
+    taskSetTemplates,
+    addTaskSetTemplate,
+    updateTaskSetTemplateItems,
+    removeTaskSetTemplate,
+    applyTaskSetTemplate,
+    importTasksFromProject,
+    recurringRules,
+    jobRequirements,
+    setJobRequirements,
+    skillFieldOptions,
+    addSkillFieldOption,
+    removeSkillFieldOption,
+    skillFieldSkills,
+    setSkillFieldSkills,
+    skillFieldThreshold,
+    setSkillFieldThreshold,
+    departmentTreeConfig,
+    updateDepartmentTreeConfig,
+    orgNotificationEmails,
+    addOrgNotificationEmail,
+    removeOrgNotificationEmail,
+    surveyInvitedIds,
+    updateSurveyInvitedIds,
+    orgName,
+    setOrgName,
+    orgLogoUrl,
+    setOrgLogoUrl,
+    themeColor,
+    setThemeColor,
+    setDiscordWebhookUrl,
+    addRecurringRule,
+    removeRecurringRule,
+    toggleRecurringRule,
+    updateRecurringRule,
+    needsOnboarding,
+    completeOnboarding,
+    skipOnboarding,
+    skillCertifiedEvent,
+    clearSkillCertifiedEvent,
+    markMentionSeen,
+    dismissNotification,
+    setSlackWebhookUrl,
+    toggleMemberInactive,
+    updateMemberDepartmentPaths,
+    updateAbsentDates,
+    oneOnOneQuestions,
+    setOneOnOneQuestions,
+    login,
+    logout,
+    resolveLoginMember,
+    setMode,
+    addTasksFromInput,
+    updateTaskStatus,
+    updatePriority,
+    updateDifficulty,
+    updateTaskDetails,
+    updateProgress,
+    updateProgressPercent,
+    assignTask,
+    applyToOpenBid,
+    withdrawOpenBidApplication,
+    updateWill,
+    updateJudgment,
+    approveTask,
+    removeTask,
+    rejectTask,
+    addProject,
+    removeProject,
+    updateProjectMembers,
+    updateProjectOwner,
+    updateProjectParent,
+    updateProjectDetails,
+    activeProjects,
+    setProjectArchived,
+    setProjectOrder,
+    updateProjectHealth,
+    addMember,
+    removeMember,
+    updateNotify,
+    updateNotifySettings,
+    updateEmail,
+    updateMemberProjects,
+    isFullAdmin,
+    adminProjects,
+    adminTasks,
+    adminPendingTasks,
+    updateRole,
+    updateReportsTo,
+    updatePermissionOverrides,
+    skillLevelThresholds,
+    updateSkillLevelThresholds,
+    quizDefinitions,
+    radarAxes,
+    awardSkillPoints,
+    importPortableRecord,
+    updateQuizDefinitions,
+    updateRadarAxes,
+    submitQuizResult,
+    learningContents,
+    updateLearningContents,
+    learningCourses,
+    updateLearningCourses,
+    trainingPrograms,
+    updateTrainingPrograms,
+    surveyQuestions,
+    updateSurveyQuestions,
+    customMemberColumns,
+    updateCustomMemberColumns,
+    updateCustomField,
+    updateMentor,
+    updateSearchProfile,
+    updateCareerHistory,
+    updateQualifications,
+    updateEvaluationHistory,
+    updateTransferHistory,
+    updateSkillLevels,
+    updateCompetencies,
+    updateCareerGoals,
+    updateTrainingHistory,
+    notifyTrainingRequest,
+    triggerOverdueReminders,
+    notifyTrainingDecision,
+    updateDevelopmentPlan,
+    updateOneOnOnes,
+    updateDisplayName,
+    updateJoinedAt,
+    setMemberTimezone,
+    setMemberLocale,
+    toggleUnavailableDate,
+    updateAvailableHours,
+    updateSchedule,
+    updateDependsOn,
+    updateReviewer,
+    updateReviewers,
+    approveTaskReview,
+    setBlocker,
+    setHoldReason,
+    updateEstimatedHours,
+    updateActualHours,
+    updateRetrospective,
+    setTaskSchedule,
+    createScheduleTask,
+    respondToSchedule,
+    setTaskForm,
+    createFormTask,
+    respondToForm,
+    addDeliverable,
+    removeDeliverable,
+    addComment,
+    removeComment,
+    updateAvatar,
+    uploadAvatarImage,
+    uploadOrgLogo,
+    notifications,
+    getMember,
+    getProject,
+    getInput,
+    getProjectMembers,
+    expenseCategories,
+    expenseApplications,
+    customFormDefs,
+    customFormSubmissions,
+    updateExpenseCategories,
+    submitExpenseApplication,
+    approveExpenseStep,
+    rejectExpense,
+    withdrawExpense,
+    returnExpense,
+    resubmitExpense,
+    uploadExpenseReceipt,
+    uploadSurveyImage,
+    updateCustomFormDefs,
+    submitCustomForm,
+    approveFormStep,
+    rejectFormSubmission,
+    submitDailyReport,
+    fetchDailyReports,
+    bulkUpdateSkills,
+    candidates,
+    addCandidate,
+    updateCandidate,
+    removeCandidate,
+    convertCandidateToMember,
+    updateEducationInfo,
+    surveyResponses,
+    submitSurveyResponse,
+  }
+
+  return <OhsumiContext.Provider value={value}>{children}</OhsumiContext.Provider>
+}
+
+export function useOhsumi() {
+  const ctx = useContext(OhsumiContext)
+  if (!ctx) throw new Error('useOhsumi must be used within OhsumiProvider')
+  return ctx
+}

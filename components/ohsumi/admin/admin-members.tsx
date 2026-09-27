@@ -1,0 +1,610 @@
+'use client'
+
+import { useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
+import { useOhsumi } from '@/lib/ohsumi/store'
+import { useNav } from '@/lib/ohsumi/nav'
+import { useToast } from '@/components/ohsumi/toast'
+import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { EditableTags } from '@/components/ohsumi/editable-tags'
+import { Modal } from '@/components/ohsumi/modal'
+import { Button } from '@/components/ui/button'
+import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play } from 'lucide-react'
+import { BASE_ROLE } from '@/lib/ohsumi/types'
+import type { Member, Role } from '@/lib/ohsumi/types'
+import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
+import { PermissionOverridesButton } from './admin-permission-overrides'
+import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+
+// HRD-009: CSV/xlsxのどちらも、同じ「行=[氏名,メール,所属,ロール]」の
+// 2次元配列に正規化してから、この共通ロジックでプレビュー配列に変換する
+function parseBulkMemberRows(
+  rows2d: string[][],
+  roles: Role[],
+): { name: string; email: string; affiliation: string; role: Role }[] {
+  if (rows2d.length < 2) return []
+  // detect if first row is a header (contains 氏名 or name-like text)
+  const startIdx = /氏名|name|名前/i.test(rows2d[0]?.[0] ?? '') ? 1 : 0
+  return rows2d
+    .slice(startIdx)
+    .map((cols) => {
+      const name = cols[0] ?? ''
+      const email = cols[1] ?? ''
+      const affiliation = cols[2] ?? ''
+      const role = cols[3] && roles.includes(cols[3] as Role) ? (cols[3] as Role) : BASE_ROLE
+      return { name, email, affiliation, role }
+    })
+    .filter((r) => r.name)
+}
+
+function workload(count: number, tr: (key: TranslationKey) => string): { label: string; className: string } {
+  if (count <= 2) return { label: tr('admin.members.workload.low'), className: 'text-muted-foreground' }
+  if (count <= 5) return { label: tr('admin.members.workload.normal'), className: 'text-foreground' }
+  return { label: tr('admin.members.workload.high'), className: 'text-[var(--status-review-fg)]' }
+}
+
+export function AdminMembers() {
+  const {
+    members,
+    projects,
+    visibleTasks: tasks,
+    updateNotify,
+    removeMember,
+    updateRole,
+    updateReportsTo,
+    updateMemberProjects,
+    updateJudgment,
+    skillOptions,
+    addSkillOption,
+    roleLevels,
+    restrictedRoles,
+    addMember,
+    isFullAdmin,
+    toggleMemberInactive,
+    currentUser,
+  } = useOhsumi()
+  // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
+  // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
+  const isDaihyo = currentUser?.role === '代表'
+  const { go } = useNav()
+  const toast = useToast()
+  const { t } = useI18n()
+  const [query, setQuery] = useState('')
+  const [removing, setRemoving] = useState<Member | null>(null)
+  const [assigningProjects, setAssigningProjects] = useState<Member | null>(null)
+  // 人材検索: filters beyond the free-text query, using the talent-management
+  // fields set on the person page's 経歴・キャリア tab。経験年数（自己申告の
+  // 概数）ではなく、正確な所属日(joinedAt)ベースの所属歴で絞り込む
+  const [minTenureYears, setMinTenureYears] = useState('')
+  const [managementOnly, setManagementOnly] = useState(false)
+  const [desiredArea, setDesiredArea] = useState('')
+  // MAT-003: 経歴(careerHistory)のrole/affiliation/descriptionから検索する
+  const [experienceQuery, setExperienceQuery] = useState('')
+  // HRD-006: 休止中メンバーはデフォルトで一覧から除外する
+  const [showInactive, setShowInactive] = useState(false)
+  const ROLES: Role[] = [BASE_ROLE, ...roleLevels]
+
+  const [newName, setNewName] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [newAffiliation, setNewAffiliation] = useState('')
+  const [newRole, setNewRole] = useState<Role>(BASE_ROLE)
+
+  const [csvPreview, setCsvPreview] = useState<{ name: string; email: string; affiliation: string; role: Role }[] | null>(null)
+
+  // HRD-009: 拡張子で分岐 — .xlsxはSheetJS(xlsx)で最初のシートを読み込み、
+  // .csvは既存のテキスト解析のまま。どちらも同じparseBulkMemberRowsに渡す
+  const handleBulkFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    if (/\.xlsx$/i.test(file.name)) {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const data = ev.target?.result as ArrayBuffer
+        const wb = XLSX.read(data, { type: 'array' })
+        const sheet = wb.Sheets[wb.SheetNames[0]]
+        if (!sheet) return
+        const rows2d = XLSX.utils
+          .sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
+          .map((cols) => cols.map((c) => String(c ?? '').trim()))
+        const rows = parseBulkMemberRows(rows2d, ROLES)
+        if (rows.length) setCsvPreview(rows)
+      }
+      reader.readAsArrayBuffer(file)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string
+      const rows2d = text
+        .split(/\r?\n/)
+        .filter((l) => l.trim())
+        .map((line) => line.split(',').map((c) => c.trim().replace(/^"|"$/g, '')))
+      const rows = parseBulkMemberRows(rows2d, ROLES)
+      if (rows.length) setCsvPreview(rows)
+    }
+    reader.readAsText(file)
+  }
+
+  const handleBulkAdd = () => {
+    if (!csvPreview) return
+    const rows = csvPreview
+    setCsvPreview(null)
+    Promise.allSettled(rows.map((r) => addMember(r.name, r.email, r.affiliation, r.role))).then(
+      (results) => {
+        const failed = results.filter((r) => r.status === 'rejected').length
+        if (failed > 0) {
+          const firstErr = (results.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason
+          toast(t('admin.members.bulkFailToast', { count: failed, error: firstErr instanceof Error ? firstErr.message : String(firstErr) }))
+        } else {
+          toast(t('admin.members.bulkSuccessToast', { count: rows.length }))
+        }
+      },
+    )
+  }
+
+  const handleAddMember = () => {
+    const name = newName.trim()
+    if (!name) return
+    setNewName('')
+    setNewEmail('')
+    setNewAffiliation('')
+    setNewRole(BASE_ROLE)
+    addMember(name, newEmail.trim(), newAffiliation.trim(), newRole)
+      .then(() => toast(t('admin.members.addedToast', { name })))
+      .catch((err: unknown) => {
+        toast(t('admin.members.addFailToast', { error: err instanceof Error ? err.message : String(err) }))
+      })
+  }
+
+  const activeCount = (m: Member) =>
+    tasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done').length
+
+  // 全メンバーが持つ「成長したい領域」の一覧 — 詳細検索の選択肢に使う
+  const allDesiredAreas = useMemo(
+    () => Array.from(new Set(members.flatMap((m) => m.desiredAreas ?? []))).sort(),
+    [members],
+  )
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const minTenure = minTenureYears.trim() ? Number(minTenureYears) : null
+    return members.filter((m) => {
+      if (!showInactive && m.inactive) return false
+      if (q) {
+        const matchesText = [
+          m.name,
+          m.displayName ?? '',
+          m.affiliation,
+          ...m.will,
+          ...m.judgment,
+          ...m.skills,
+        ].some((v) => v.toLowerCase().includes(q))
+        if (!matchesText) return false
+      }
+      if (minTenure !== null && (!m.joinedAt || tenureYears(m.joinedAt) < minTenure)) return false
+      if (managementOnly && !m.hasManagementExperience) return false
+      if (desiredArea && !(m.desiredAreas ?? []).includes(desiredArea)) return false
+      if (experienceQuery.trim()) {
+        const eq = experienceQuery.trim().toLowerCase()
+        const matches = (m.careerHistory ?? []).some((entry) =>
+          [entry.role, entry.affiliation, entry.description]
+            .filter((v): v is string => !!v)
+            .some((v) => v.toLowerCase().includes(eq)),
+        )
+        if (!matches) return false
+      }
+      return true
+    })
+  }, [members, query, minTenureYears, managementOnly, desiredArea, experienceQuery, showInactive])
+
+  return (
+    <div className="mx-auto max-w-6xl px-6 py-8">
+      <h1 className="text-xl font-semibold tracking-tight">Members</h1>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {t('admin.members.subtitle')}
+      </p>
+      {/* addMember/updateRole/removeMember/updateReportsTo/updateMemberProjects
+          はいずれもGAS側で常にisDaihyo固定。このページの各種操作UIは
+          isFullAdmin配下に表示されるため、代表以外の全権管理者にも見えて
+          しまう — 実行時エラーになる前にまとめて示す */}
+      <AdminAccessNote level="daihyo" className="mt-2" />
+
+      <div className="mt-6 rounded-lg border border-border bg-card p-4">
+        <div className="text-sm font-medium">{t('admin.members.register.title')}</div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {t('admin.members.register.hint')}
+        </p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-[1.2fr_1.2fr_1fr_0.8fr_auto]">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder={t('admin.members.register.namePlaceholder')}
+            className="h-9 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
+            placeholder={t('admin.members.register.emailPlaceholder')}
+            className="h-9 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={newAffiliation}
+            onChange={(e) => setNewAffiliation(e.target.value)}
+            placeholder={t('admin.members.register.affiliationPlaceholder')}
+            className="h-9 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+          />
+          <select
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+            className="h-9 cursor-pointer rounded-lg border border-border bg-background px-2 text-sm outline-none focus:border-primary"
+          >
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <Button className="h-9" disabled={!newName.trim() || !isDaihyo} onClick={handleAddMember}>
+            <UserPlus className="size-4" />
+            {t('admin.members.register.submit')}
+          </Button>
+        </div>
+        <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
+          <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-border-strong px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary">
+            <Upload className="size-3.5" />
+            {t('admin.members.register.csvBulk')}
+            <input
+              type="file"
+              accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={handleBulkFileUpload}
+            />
+          </label>
+          <span className="text-xs text-muted-foreground">{t('admin.members.register.csvFormat')}</span>
+        </div>
+      </div>
+
+      {csvPreview && (
+        <Modal open={!!csvPreview} onClose={() => setCsvPreview(null)}>
+          <div className="flex flex-col gap-4 p-5">
+            <div className="text-sm font-semibold">{t('admin.members.csv.previewTitle', { count: csvPreview.length })}</div>
+            <div className="max-h-64 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th className="pb-1 pr-3 text-left font-medium">{t('admin.members.csv.colName')}</th>
+                    <th className="pb-1 pr-3 text-left font-medium">{t('admin.members.csv.colEmail')}</th>
+                    <th className="pb-1 pr-3 text-left font-medium">{t('admin.members.csv.colAffiliation')}</th>
+                    <th className="pb-1 text-left font-medium">{t('admin.members.csv.colRole')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {csvPreview.map((r, i) => (
+                    <tr key={i} className="border-b border-border/40">
+                      <td className="py-1 pr-3">{r.name}</td>
+                      <td className="py-1 pr-3 text-muted-foreground">{r.email || '—'}</td>
+                      <td className="py-1 pr-3 text-muted-foreground">{r.affiliation || '—'}</td>
+                      <td className="py-1 text-muted-foreground">{r.role}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCsvPreview(null)}>{t('admin.members.csv.cancel')}</Button>
+              <Button onClick={handleBulkAdd} disabled={!isDaihyo}>
+                <UserPlus className="size-4" />
+                {t('admin.members.csv.submit', { count: csvPreview.length })}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <div className="relative max-w-sm flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('admin.members.search.placeholder')}
+            className="h-9 w-full rounded-lg border border-border bg-card pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+          />
+        </div>
+        <input
+          type="number"
+          min={0}
+          value={minTenureYears}
+          onChange={(e) => setMinTenureYears(e.target.value)}
+          placeholder={t('admin.members.search.tenurePlaceholder')}
+          title={t('admin.members.search.tenureTitle')}
+          className="h-9 w-28 rounded-lg border border-border bg-card px-2.5 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+        />
+        <input
+          value={experienceQuery}
+          onChange={(e) => setExperienceQuery(e.target.value)}
+          placeholder={t('admin.members.search.experiencePlaceholder')}
+          title={t('admin.members.search.experienceTitle')}
+          className="h-9 w-40 rounded-lg border border-border bg-card px-2.5 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+        />
+        <label className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={managementOnly}
+            onChange={(e) => setManagementOnly(e.target.checked)}
+            className="size-3.5 accent-primary"
+          />
+          {t('admin.members.search.managementOnly')}
+        </label>
+        <label className="flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-sm">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            className="size-3.5 accent-primary"
+          />
+          {t('admin.members.search.showInactive')}
+        </label>
+        {allDesiredAreas.length > 0 && (
+          <select
+            value={desiredArea}
+            onChange={(e) => setDesiredArea(e.target.value)}
+            className="h-9 cursor-pointer rounded-lg border border-border bg-card px-2.5 text-sm outline-none focus:border-primary"
+          >
+            <option value="">{t('admin.members.search.desiredAreaAll')}</option>
+            {allDesiredAreas.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-lg border border-border bg-card">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                <th className="px-4 py-3 font-medium">{t('admin.members.colMember')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colRole')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colReportsTo')}</th>
+                {isFullAdmin && <th className="px-4 py-3 font-medium">{t('admin.members.colProjects')}</th>}
+                <th className="px-4 py-3 font-medium">{t('admin.members.colActive')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colWill')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colJudgment')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colStatus')}</th>
+                <th className="px-4 py-3 font-medium">{t('admin.members.colNotify')}</th>
+                <th className="px-4 py-3 font-medium" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filtered.map((m) => {
+                const count = activeCount(m)
+                const wl = workload(count, t)
+                return (
+                  <tr key={m.id} className="transition-colors hover:bg-accent/40">
+                    <td className="cursor-pointer px-4 py-3" onClick={() => go({ name: 'person', id: m.id })}>
+                      <div className="flex items-center gap-2.5">
+                        <Avatar member={m} size={30} />
+                        <div>
+                          <div className="font-medium">{m.displayName || m.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {m.departmentPaths && m.departmentPaths.length > 0
+                              ? m.departmentPaths.map(formatDepartmentPath).join('　/　')
+                              : m.affiliation}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      {isFullAdmin ? (
+                        <select
+                          value={m.role}
+                          disabled={!isDaihyo}
+                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
+                          onChange={(e) => updateRole(m.id, e.target.value as Role)}
+                          className="h-8 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {r}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{m.role}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      {isFullAdmin ? (
+                        <select
+                          value={m.reportsToId ?? ''}
+                          disabled={!isDaihyo}
+                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
+                          onChange={(e) => updateReportsTo(m.id, e.target.value || null)}
+                          className="h-8 w-32 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <option value="">{t('admin.members.reportsToDefault')}</option>
+                          {members
+                            .filter((cand) => cand.id !== m.id && cand.role !== BASE_ROLE)
+                            .map((cand) => (
+                              <option key={cand.id} value={cand.id}>
+                                {cand.displayName || cand.name}
+                              </option>
+                            ))}
+                        </select>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {members.find((cand) => cand.id === m.reportsToId)?.displayName ??
+                            members.find((cand) => cand.id === m.reportsToId)?.name ??
+                            t('admin.members.reportsToDefault')}
+                        </span>
+                      )}
+                    </td>
+                    {isFullAdmin && (
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        {m.role !== BASE_ROLE && restrictedRoles.includes(m.role) ? (
+                          <button
+                            onClick={() => setAssigningProjects(m)}
+                            disabled={!isDaihyo}
+                            title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
+                            className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FolderKanban className="size-3.5" />
+                            {t('admin.members.projectsCount', { count: (m.projectIds ?? []).length })}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {m.role === BASE_ROLE ? '—' : t('admin.members.projectsAll')}
+                          </span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
+                      <span className="font-mono tabular-nums">{count}</span>
+                    </td>
+                    <td className="max-w-[200px] px-4 py-3 text-xs text-muted-foreground">
+                      {m.will.length > 0 ? m.will.join(' / ') : '—'}
+                    </td>
+                    <td className="min-w-[220px] max-w-[280px] px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <EditableTags
+                        tags={m.judgment}
+                        editable
+                        onChange={(next) => updateJudgment(m.id, next)}
+                        emptyText="—"
+                        placeholder={t('admin.members.judgmentPlaceholder')}
+                        variant="judgment"
+                        options={skillOptions}
+                        onNewOption={addSkillOption}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`text-xs font-medium ${wl.className}`}>{wl.label}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => updateNotify(m.id, !m.notify)}
+                        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                          m.notify
+                            ? 'border-primary/30 bg-primary-muted text-accent-foreground'
+                            : 'border-border text-muted-foreground hover:bg-secondary'
+                        }`}
+                      >
+                        <Bell className="size-3.5" />
+                        {m.notify ? 'ON' : 'OFF'}
+                      </button>
+                    </td>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => toggleMemberInactive(m.id)}
+                          title={m.inactive ? t('admin.members.resumeActivity') : t('admin.members.pauseActivity')}
+                          className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                            m.inactive
+                              ? 'border-amber-300/50 bg-amber-50 text-amber-600 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-400'
+                              : 'border-border text-muted-foreground hover:bg-secondary'
+                          }`}
+                        >
+                          {m.inactive ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+                          {m.inactive ? t('admin.members.resume') : t('admin.members.pause')}
+                        </button>
+                        {isFullAdmin && <PermissionOverridesButton member={m} />}
+                        <button
+                          onClick={() => setRemoving(m)}
+                          disabled={!isDaihyo}
+                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
+                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <UserMinus className="size-3.5" />
+                          {t('admin.members.remove')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+              {filtered.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={isFullAdmin ? 10 : 9}
+                    className="px-4 py-10 text-center text-sm text-muted-foreground"
+                  >
+                    {t('admin.members.empty')}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Modal open={!!removing} onClose={() => setRemoving(null)}>
+        <h2 className="text-base font-semibold">{t('admin.members.removeConfirmTitle', { name: removing?.name ?? '' })}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t('admin.members.removeConfirmDesc')}
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" className="h-9" onClick={() => setRemoving(null)}>
+            {t('admin.members.cancel')}
+          </Button>
+          <Button
+            variant="destructive"
+            className="h-9"
+            disabled={!isDaihyo}
+            onClick={() => {
+              if (removing) {
+                removeMember(removing.id)
+                toast(t('admin.members.removedToast', { name: removing.name }))
+              }
+              setRemoving(null)
+            }}
+          >
+            {t('admin.members.removeSubmit')}
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal open={!!assigningProjects} onClose={() => setAssigningProjects(null)}>
+        <h2 className="text-base font-semibold">
+          {t('admin.members.assignProjectsTitle', { name: assigningProjects?.displayName || assigningProjects?.name || '' })}
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t('admin.members.assignProjectsDesc')}
+        </p>
+        <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-auto ohsumi-scroll">
+          {projects.map((p) => {
+            const checked = !!assigningProjects?.projectIds?.includes(p.id)
+            return (
+              <button
+                key={p.id}
+                onClick={() => {
+                  if (!assigningProjects) return
+                  const cur = assigningProjects.projectIds ?? []
+                  const next = checked ? cur.filter((id) => id !== p.id) : [...cur, p.id]
+                  updateMemberProjects(assigningProjects.id, next)
+                  setAssigningProjects({ ...assigningProjects, projectIds: next })
+                }}
+                className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-secondary ${
+                  checked ? 'bg-primary-muted' : ''
+                }`}
+              >
+                {p.name}
+                {checked && <Check className="size-4 shrink-0 text-primary" strokeWidth={3} />}
+              </button>
+            )
+          })}
+          {projects.length === 0 && (
+            <p className="px-3 py-2 text-sm text-muted-foreground">{t('admin.members.noProjects')}</p>
+          )}
+        </div>
+        <div className="mt-5 flex justify-end">
+          <Button className="h-9" onClick={() => setAssigningProjects(null)}>
+            {t('admin.members.close')}
+          </Button>
+        </div>
+      </Modal>
+    </div>
+  )
+}
