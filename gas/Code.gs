@@ -44,7 +44,9 @@ var DISCORD_WEBHOOK_PROPERTY_KEY = 'discord_webhook_url'
 //   1. 全サービスの権限ダイアログをまとめて通す (Drive / Mail / Calendar / 等)
 //   2. Members / Projects / Tasks / Settings の各シートに不足しているヘッダー列を
 //      自動追加する（既存データは一切変更しない）
-//   3. 実行結果をエディタ下部のログに出力する
+//   3. 画像アップロード用のDriveフォルダがなければ作成し、IDをスクリプト
+//      プロパティに保存する（既にあれば何もしない）
+//   4. 実行結果をエディタ下部のログに出力する
 //
 // デプロイ後に一度だけ実行すればOK。再実行しても重複は起きない。
 
@@ -177,7 +179,41 @@ function setupOhsumi() {
   // 既存の全行の保護対象列を書式なしテキストにしておく(値は変更しない)。
   protectAllExistingRows()
 
+  // --- 画像アップロード用フォルダ ---
+  try { ensureUploadFolder() }
+  catch (e) { console.error('❌ アップロード用フォルダ: ' + e) }
+
   console.log('🚀 setupOhsumi 完了')
+}
+
+// ---- 画像アップロード用フォルダ ------------------------------------------------
+//
+// プロフィール画像・団体ロゴ・経費の領収書・アンケート設問の画像の保存先。
+// フォルダIDはスクリプトプロパティにだけ持ち、リクエストで渡されたフォルダIDは
+// 使わない（任意のフォルダへの書き込みを防ぐため）。
+
+var UPLOAD_FOLDER_PROPERTY_KEY = 'UPLOAD_FOLDER_ID'
+var UPLOAD_FOLDER_NAME = 'Ohsumi uploads'
+
+// スクリプトプロパティにフォルダIDがなければ、スクリプトを実行している
+// アカウントのDriveにフォルダを作成してIDを保存する。既にあれば何もしない。
+function ensureUploadFolder() {
+  var props = PropertiesService.getScriptProperties()
+  var existingId = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  if (existingId) {
+    console.log('✅ アップロード用フォルダ既存: ' + existingId)
+    return existingId
+  }
+  var folder = DriveApp.createFolder(UPLOAD_FOLDER_NAME)
+  props.setProperty(UPLOAD_FOLDER_PROPERTY_KEY, folder.getId())
+  console.log('✅ アップロード用フォルダ作成: ' + folder.getName() + ' (' + folder.getId() + ')')
+  return folder.getId()
+}
+
+function getUploadFolder() {
+  var folderId = PropertiesService.getScriptProperties().getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  if (!folderId) throw userError('Drive folder is not configured. Run setupOhsumi() in the Apps Script editor.')
+  return DriveApp.getFolderById(folderId)
 }
 
 // シートが存在しなければ作成し、不足しているヘッダー列を末尾に追加する。
@@ -1541,7 +1577,7 @@ function doPost(e) {
         })
         break
       case 'uploadAvatar':
-        result = uploadAvatar(body.memberId, body.dataUrl, body.filename, body.folderId)
+        result = uploadAvatar(body.memberId, body.dataUrl, body.filename)
         break
       case 'addMember':
         result = addMember(body.name, body.email, body.affiliation, body.role)
@@ -1586,7 +1622,7 @@ function doPost(e) {
         result = updateSetting(body.key, body.value)
         break
       case 'uploadOrgLogo':
-        result = uploadOrgLogo(body.dataUrl, body.filename, body.folderId)
+        result = uploadOrgLogo(body.dataUrl, body.filename)
         break
       case 'updateDiscordWebhookUrl':
         result = updateDiscordWebhookUrl(body.url)
@@ -1711,10 +1747,10 @@ function doPost(e) {
         result = resubmitExpense(body.applicationId, body.fields, actingMember.id)
         break
       case 'uploadExpenseReceipt':
-        result = uploadExpenseReceipt(body.dataUrl, body.filename, body.folderId)
+        result = uploadExpenseReceipt(body.dataUrl, body.filename)
         break
       case 'uploadSurveyImage':
-        result = uploadSurveyImage(body.dataUrl, body.filename, body.folderId)
+        result = uploadSurveyImage(body.dataUrl, body.filename)
         break
       case 'submitCustomForm':
         result = saveCustomFormSubmission(body.submission, actingMember)
@@ -2962,17 +2998,16 @@ function findMemberIdByEmail(email) {
 }
 
 // Saves a profile picture (sent as a data: URL, already resized client-side)
-// into the configured Drive folder, makes it link-viewable so it can be
+// into the upload folder (see getUploadFolder), makes it link-viewable so it can be
 // hotlinked from an <img> tag, replaces any previous upload for this
 // member, and records the resulting URL on their Members row.
-function uploadAvatar(memberId, dataUrl, filename, folderId) {
-  if (!folderId) throw userError('Drive folder is not configured (NEXT_PUBLIC_DRIVE_FOLDER_ID)')
+function uploadAvatar(memberId, dataUrl, filename) {
   var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
   var mimeType = match[1]
   var base64Data = match[2]
 
-  var folder = DriveApp.getFolderById(folderId)
+  var folder = getUploadFolder()
   var namePrefix = 'avatar_' + memberId + '_'
 
   // remove any previous upload for this member so the folder doesn't
@@ -3000,14 +3035,13 @@ function uploadAvatar(memberId, dataUrl, filename, folderId) {
 
 // 団体ロゴをDriveにアップロードし、Settingsシートのorg_logo_urlを更新する。
 // uploadAvatarと異なりMembersシートは変更しない。
-function uploadOrgLogo(dataUrl, filename, folderId) {
-  if (!folderId) throw userError('Drive folder is not configured (NEXT_PUBLIC_DRIVE_FOLDER_ID)')
+function uploadOrgLogo(dataUrl, filename) {
   var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
   var mimeType = match[1]
   var base64Data = match[2]
 
-  var folder = DriveApp.getFolderById(folderId)
+  var folder = getUploadFolder()
   var namePrefix = 'org_logo_'
 
   var existing = folder.getFiles()
@@ -3031,14 +3065,13 @@ function uploadOrgLogo(dataUrl, filename, folderId) {
 // アバター/ロゴと異なり1人につき何枚もアップロードされうるため、
 // 既存ファイルの削除は行わない。領収書は画像だけでなくPDFのこともあるので
 // サムネイルURLではなく汎用のDrive表示URLを返す。
-function uploadExpenseReceipt(dataUrl, filename, folderId) {
-  if (!folderId) throw userError('Drive folder is not configured (NEXT_PUBLIC_DRIVE_FOLDER_ID)')
+function uploadExpenseReceipt(dataUrl, filename) {
   var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
   var mimeType = match[1]
   var base64Data = match[2]
 
-  var folder = DriveApp.getFolderById(folderId)
+  var folder = getUploadFolder()
   var namePrefix = 'expense_receipt_'
 
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
@@ -3055,14 +3088,13 @@ function uploadExpenseReceipt(dataUrl, filename, folderId) {
 // uploadExpenseReceiptと同じパターン(複数枚アップロードされうるため
 // 既存ファイルの削除はしない)。ただしこちらは画像専用なので、
 // アバターと同じgoogleusercontent.comホットリンク形式のURLを返す。
-function uploadSurveyImage(dataUrl, filename, folderId) {
-  if (!folderId) throw userError('Drive folder is not configured (NEXT_PUBLIC_DRIVE_FOLDER_ID)')
+function uploadSurveyImage(dataUrl, filename) {
   var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
   var mimeType = match[1]
   var base64Data = match[2]
 
-  var folder = DriveApp.getFolderById(folderId)
+  var folder = getUploadFolder()
   var namePrefix = 'survey_image_'
 
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
