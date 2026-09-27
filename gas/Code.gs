@@ -1,5 +1,5 @@
 /**
- * Orbit — Apps Script Web App (write API for the spreadsheet "database").
+ * Ohsumi — Apps Script Web App (write API for the spreadsheet "database").
  *
  * Setup: open the FSIF database spreadsheet -> Extensions > Apps Script,
  * paste this whole file in as Code.gs, then Deploy > New deployment ->
@@ -39,7 +39,7 @@ var DISCORD_WEBHOOK_PROPERTY_KEY = 'discord_webhook_url'
 
 // ---- 初期セットアップ --------------------------------------------------------
 //
-// GASエディタ上部の関数ドロップダウンで "setupOrbit" を選び、▶ 実行 を押す。
+// GASエディタ上部の関数ドロップダウンで "setupOhsumi" を選び、▶ 実行 を押す。
 // これ一回で:
 //   1. 全サービスの権限ダイアログをまとめて通す (Drive / Mail / Calendar / 等)
 //   2. Members / Projects / Tasks / Settings の各シートに不足しているヘッダー列を
@@ -48,7 +48,7 @@ var DISCORD_WEBHOOK_PROPERTY_KEY = 'discord_webhook_url'
 //
 // デプロイ後に一度だけ実行すればOK。再実行しても重複は起きない。
 
-function setupOrbit() {
+function setupOhsumi() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   console.log('📋 スプレッドシート: ' + ss.getName())
 
@@ -173,11 +173,11 @@ function setupOrbit() {
 
   // F4(レビュー再確認対応): シートを作り直したり列を追加したりした際、
   // 点検関数(protectAllExistingRows/auditFormulaInjectionRisks)の手動
-  // 実行を忘れても既存行が保護されるよう、setupOrbit()の実行時にも
+  // 実行を忘れても既存行が保護されるよう、setupOhsumi()の実行時にも
   // 既存の全行の保護対象列を書式なしテキストにしておく(値は変更しない)。
   protectAllExistingRows()
 
-  console.log('🚀 setupOrbit 完了')
+  console.log('🚀 setupOhsumi 完了')
 }
 
 // シートが存在しなければ作成し、不足しているヘッダー列を末尾に追加する。
@@ -214,7 +214,7 @@ function ensureSheetHeaders(ss, sheetName, requiredHeaders) {
 // hand. This file only handles writes coming from the browser.
 
 function doGet(e) {
-  return ContentService.createTextOutput('Orbit GAS endpoint is up.').setMimeType(
+  return ContentService.createTextOutput('Ohsumi GAS endpoint is up.').setMimeType(
     ContentService.MimeType.TEXT,
   )
 }
@@ -1314,10 +1314,10 @@ function doPost(e) {
           var willMember = findRow(SHEET_MEMBERS, body.memberId)
           var willName = willMember ? (willMember.display_name || willMember.name || '不明') : '不明'
           var willTags = (body.will || []).join('、') || '（タグなし）'
-          var willSubject = '[Orbit] Will タグが更新されました'
+          var willSubject = '[Ohsumi] Will タグが更新されました'
           var willBody = willName + 'さんのWillタグが更新されました。\n\n' +
             '【設定されたWillタグ】\n' + willTags + '\n\n' +
-            'Orbitの人材画面で確認してください。'
+            'Ohsumiの人材画面で確認してください。'
           notifyAdmins(willSubject, willBody)
           notifyChat('💡 ' + willName + 'さんのWillタグが更新されました：' + willTags)
         } catch (err) {
@@ -1746,7 +1746,7 @@ function doPost(e) {
         result = saveSurveyResponse(actingMember.id, body.answers || {})
         break
       case 'checkAndGenerateRecurringTasks':
-        // item 2/TSK-051: クライアント側(誰かがOrbitを開いた時)とサーバー側
+        // item 2/TSK-051: クライアント側(誰かがOhsumiを開いた時)とサーバー側
         // 日次トリガー(dailyMaintenance)の両方からこの同じロック付き関数を
         // 呼ぶことで、定期タスクの二重生成を防ぐ
         result = generateRecurringTasksLocked()
@@ -1957,14 +1957,14 @@ function notifyProjectHealthChanged(projectId, health, note) {
     notifyAdmins(
       {
         ja: {
-          subject: '[Orbit] プロジェクト「' + project.name + '」の健康状態: ' + healthLabelJa,
+          subject: '[Ohsumi] プロジェクト「' + project.name + '」の健康状態: ' + healthLabelJa,
           body: 'プロジェクト「' + project.name + '」の健康状態が「' + healthLabelJa + '」' +
-            (note || '') + '\n\nOrbitのダッシュボードで確認してください。',
+            (note || '') + '\n\nOhsumiのダッシュボードで確認してください。',
         },
         en: {
-          subject: '[Orbit] Project "' + project.name + '" health: ' + healthLabelEn,
+          subject: '[Ohsumi] Project "' + project.name + '" health: ' + healthLabelEn,
           body: 'The health of project "' + project.name + '" is now "' + healthLabelEn + '"' +
-            noteEn + '.\n\nCheck the Orbit dashboard for details.',
+            noteEn + '.\n\nCheck the Ohsumi dashboard for details.',
         },
       },
     )
@@ -1986,16 +1986,16 @@ function notifyNewTasks(tasks) {
   })
   notifyAdmins({
     ja: {
-      subject: '[Orbit] 新しいタスクが承認待ちです（' + tasks.length + '件）',
+      subject: '[Ohsumi] 新しいタスクが承認待ちです（' + tasks.length + '件）',
       body: '以下のタスクが登録され、承認待ちです。\n\n' +
         titlesJa.join('\n') +
-        '\n\nOrbitの管理画面 > 承認 から確認してください。',
+        '\n\nOhsumiの管理画面 > 承認 から確認してください。',
     },
     en: {
-      subject: '[Orbit] New tasks awaiting approval (' + tasks.length + ')',
+      subject: '[Ohsumi] New tasks awaiting approval (' + tasks.length + ')',
       body: 'The following tasks were submitted and are awaiting approval.\n\n' +
         titlesEn.join('\n') +
-        '\n\nCheck Orbit Admin > Approvals for details.',
+        '\n\nCheck Ohsumi Admin > Approvals for details.',
     },
   })
 }
@@ -2025,12 +2025,12 @@ function notifyReview(taskId) {
     notifyAdmins(
       {
         ja: {
-          subject: '[Orbit] タスクの確認をお願いします',
-          body: '「' + task.title + '」が確認待ちになりました。\n\nOrbitで確認し、問題なければ「完了」にしてください。',
+          subject: '[Ohsumi] タスクの確認をお願いします',
+          body: '「' + task.title + '」が確認待ちになりました。\n\nOhsumiで確認し、問題なければ「完了」にしてください。',
         },
         en: {
-          subject: '[Orbit] Task ready for your review',
-          body: '"' + task.title + '" is now awaiting review.\n\nPlease check it in Orbit and mark it "Done" if everything looks good.',
+          subject: '[Ohsumi] Task ready for your review',
+          body: '"' + task.title + '" is now awaiting review.\n\nPlease check it in Ohsumi and mark it "Done" if everything looks good.',
         },
       },
       preferredEmails,
@@ -2086,7 +2086,7 @@ function debugNotifyTest() {
   }
 
   console.log('--- ここから notifyAdmins() を実行します（実際にメールが送信されます）---')
-  notifyAdmins('[Orbit] テスト通知', 'これは debugNotifyTest() からのテストメールです。届いていれば設定は正常です。')
+  notifyAdmins('[Ohsumi] テスト通知', 'これは debugNotifyTest() からのテストメールです。届いていれば設定は正常です。')
   console.log('debugNotifyTest: 完了 — 上記の宛先の受信トレイ（迷惑メールフォルダも）を確認してください')
 }
 
@@ -2197,8 +2197,8 @@ function sendBatchNotifications() {
         })
         .join('\n\n---\n\n')
       var subject = loc === 'en'
-        ? 'Orbit Notification Summary (' + toSend.length + ')'
-        : 'Orbit 通知まとめ (' + toSend.length + '件)'
+        ? 'Ohsumi Notification Summary (' + toSend.length + ')'
+        : 'Ohsumi 通知まとめ (' + toSend.length + '件)'
       MailApp.sendEmail({ to: emails.join(','), subject: subject, body: combined })
     }
     if (toKeep.length > 0) {
@@ -2409,16 +2409,16 @@ function notifyMention(taskId, commentText, memberIds) {
     if (!memberIds || memberIds.length === 0) return
     var templates = {
       ja: {
-        subject: '[Orbit] コメントでメンションされました',
+        subject: '[Ohsumi] コメントでメンションされました',
         body: 'タスク「' + task.title + '」のコメントであなたがメンションされました。\n\n' +
           (commentText || '') +
-          '\n\nOrbitで確認してください。',
+          '\n\nOhsumiで確認してください。',
       },
       en: {
-        subject: '[Orbit] You were mentioned in a comment',
+        subject: '[Ohsumi] You were mentioned in a comment',
         body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' +
           (commentText || '') +
-          '\n\nPlease check Orbit for details.',
+          '\n\nPlease check Ohsumi for details.',
       },
     }
     memberIds.forEach(function(mid) {
@@ -2441,12 +2441,12 @@ function notifyTrainingRequest(memberId, trainingName) {
     notifyAdmins(
       {
         ja: {
-          subject: '[Orbit] 研修申請の承認をお願いします',
-          body: name + 'さんから研修「' + (trainingName || '') + '」の申請がありました。\n\nOrbitの人材育成タブから承認/却下してください。',
+          subject: '[Ohsumi] 研修申請の承認をお願いします',
+          body: name + 'さんから研修「' + (trainingName || '') + '」の申請がありました。\n\nOhsumiの人材育成タブから承認/却下してください。',
         },
         en: {
-          subject: '[Orbit] Training request awaiting approval',
-          body: name + ' has requested training "' + (trainingName || '') + '".\n\nPlease approve or reject it from the Orbit Training tab.',
+          subject: '[Ohsumi] Training request awaiting approval',
+          body: name + ' has requested training "' + (trainingName || '') + '".\n\nPlease approve or reject it from the Ohsumi Training tab.',
         },
       },
       reportsToEmails([memberId]),
@@ -2470,18 +2470,18 @@ function notifyTaskRejected(creatorId, taskName, reason) {
     }
     sendLocalizedEmail(emails, {
       ja: {
-        subject: '[Orbit] タスクが承認されませんでした',
+        subject: '[Ohsumi] タスクが承認されませんでした',
         body:
           '登録した「' + (taskName || '') + '」は承認されませんでした。\n\n' +
           (reason ? '理由: ' + reason + '\n\n' : '') +
-          'Orbitで確認してください。',
+          'Ohsumiで確認してください。',
       },
       en: {
-        subject: '[Orbit] Your task was not approved',
+        subject: '[Ohsumi] Your task was not approved',
         body:
           'The task "' + (taskName || '') + '" you submitted was not approved.\n\n' +
           (reason ? 'Reason: ' + reason + '\n\n' : '') +
-          'Please check Orbit for details.',
+          'Please check Ohsumi for details.',
       },
     })
     console.log('notifyTaskRejected: 送信先 ' + emails.join(','))
@@ -2500,14 +2500,14 @@ function notifyTrainingDecision(memberId, trainingName, approved) {
     }
     sendLocalizedEmail(emails, {
       ja: {
-        subject: '[Orbit] 研修申請が' + (approved ? '承認' : '却下') + 'されました',
+        subject: '[Ohsumi] 研修申請が' + (approved ? '承認' : '却下') + 'されました',
         body:
-          '研修「' + (trainingName || '') + '」の申請が' + (approved ? '承認' : '却下') + 'されました。\n\nOrbitで確認してください。',
+          '研修「' + (trainingName || '') + '」の申請が' + (approved ? '承認' : '却下') + 'されました。\n\nOhsumiで確認してください。',
       },
       en: {
-        subject: '[Orbit] Your training request was ' + (approved ? 'approved' : 'rejected'),
+        subject: '[Ohsumi] Your training request was ' + (approved ? 'approved' : 'rejected'),
         body:
-          'Your request for training "' + (trainingName || '') + '" was ' + (approved ? 'approved' : 'rejected') + '.\n\nPlease check Orbit for details.',
+          'Your request for training "' + (trainingName || '') + '" was ' + (approved ? 'approved' : 'rejected') + '.\n\nPlease check Ohsumi for details.',
       },
     })
     console.log('notifyTrainingDecision: 送信先 ' + emails.join(','))
@@ -2559,12 +2559,12 @@ function notifyScheduleResult(taskId) {
         })
       })
     }
-    bodyJa += '\nOrbitで確認してください。'
-    bodyEn += '\nPlease check Orbit for details.'
+    bodyJa += '\nOhsumiで確認してください。'
+    bodyEn += '\nPlease check Ohsumi for details.'
 
     sendLocalizedEmail(emails, {
-      ja: { subject: '[Orbit] 日程調整の回答が揃いました', body: bodyJa },
-      en: { subject: '[Orbit] Schedule coordination responses are complete', body: bodyEn },
+      ja: { subject: '[Ohsumi] 日程調整の回答が揃いました', body: bodyJa },
+      en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
     })
     console.log('notifyScheduleResult: 送信先 ' + emails.join(','))
     notifyChat('🗓️ 「' + task.title + '」の日程調整で全員の回答が揃いました。')
@@ -2621,12 +2621,12 @@ function notifyFormResult(taskId) {
         bodyEn += '\n'
       })
     }
-    bodyJa += '\nOrbitで確認してください。'
-    bodyEn += '\nPlease check Orbit for details.'
+    bodyJa += '\nOhsumiで確認してください。'
+    bodyEn += '\nPlease check Ohsumi for details.'
 
     sendLocalizedEmail(emails, {
-      ja: { subject: '[Orbit] フォームの回答が揃いました', body: bodyJa },
-      en: { subject: '[Orbit] Form responses are complete', body: bodyEn },
+      ja: { subject: '[Ohsumi] フォームの回答が揃いました', body: bodyJa },
+      en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
     })
     console.log('notifyFormResult: 送信先 ' + emails.join(','))
     notifyChat('📝 「' + task.title + '」のフォームで全員の回答が揃いました。')
@@ -2651,20 +2651,20 @@ function notifyScheduleChange(taskId) {
     notifyAdmins(
       {
         ja: {
-          subject: '[Orbit] タスクの日程が変更されました',
+          subject: '[Ohsumi] タスクの日程が変更されました',
           body: '「' + task.title + '」の日程が変更されました。\n開始日: ' +
             (task.start_date || '未設定') +
             '\n期限: ' +
             (task.due_date || '未設定') +
-            '\n\nOrbitで確認してください。',
+            '\n\nOhsumiで確認してください。',
         },
         en: {
-          subject: '[Orbit] Task schedule changed',
+          subject: '[Ohsumi] Task schedule changed',
           body: 'The schedule for "' + task.title + '" has changed.\nStart date: ' +
             (task.start_date || 'Not set') +
             '\nDue date: ' +
             (task.due_date || 'Not set') +
-            '\n\nPlease check Orbit for details.',
+            '\n\nPlease check Ohsumi for details.',
         },
       },
       reportsToEmails(assigneeIds),
@@ -2695,7 +2695,7 @@ function syncCalendarForTask(taskId) {
     if (guests.length === 0) return
 
     var cal = CalendarApp.getDefaultCalendar()
-    var title = '[Orbit] ' + task.title
+    var title = '[Ohsumi] ' + task.title
     var existing = cal.getEvents(
       new Date(task.due_date + 'T00:00:00'),
       new Date(task.due_date + 'T23:59:59'),
@@ -3131,7 +3131,7 @@ function updateSetting(key, value) {
   for (var i = 0; i < keys.length; i++) {
     if (String(keys[i][0]) === String(key)) {
       // F4(レビュー指摘対応2): Settingsは書き込み頻度が低く性能上の懸念が
-      // ない上、setupOrbit()が初期キーを書式設定なしでappendRowするため、
+      // ない上、setupOhsumi()が初期キーを書式設定なしでappendRowするため、
       // Tasks等と違い「行作成時に必ず保護済み」という前提が成り立たない。
       // よって更新のたびに設定する。
       protectRowFromFormulaInjection(sheet, headers, i + 2, 'Settings')
@@ -3271,7 +3271,7 @@ function protectRowFromFormulaInjection(sheet, headers, rowNumber, sheetName) {
 // 既存行のうち「現時点では危険な値になっていない行」は書式なしテキスト
 // になっていない。この関数はそうした行も含めて対象列を丸ごと書式なし
 // テキストにする(値の中身を一切見ないので、確認・レビューなしで何度
-// でも安全に実行できる)。setupOrbit()実行時にも自動的に呼ばれる。
+// でも安全に実行できる)。setupOhsumi()実行時にも自動的に呼ばれる。
 function protectAllExistingRows() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   var summary = []
@@ -3410,11 +3410,11 @@ function updateRowFields(sheetName, rowId, fields) {
   // 更新しようとした列が1つも見つからなかった場合、無音で「成功」を返すと
   // フロント側は保存できたと誤認する（実際は何も書き込まれていない）。
   // 新しい列をCode.gs側に追加しただけでは既存のシートには反映されない
-  // （setupOrbit()の再実行が必要）ため、このケースは実運用で起こりうる。
+  // （setupOhsumi()の再実行が必要）ため、このケースは実運用で起こりうる。
   if (matchedCount === 0 && missingKeys.length > 0) {
     throw userError(
       sheetName + 'シートに列が見つかりません: ' + missingKeys.join(', ') +
-      '。Apps Scriptエディタで setupOrbit() を実行してヘッダー列を追加してください。',
+      '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。',
     )
   }
 
@@ -3456,7 +3456,7 @@ function getSettingValue(key) {
 // item 2/TSK-051の修正: RecurringTaskRule (Admin > Projects の定期タスク) の
 // 生成要否判定・実際の生成をこのLockService付き関数に一本化する。以前は
 // サーバー側の日次トリガー(dailyMaintenance)と、クライアント側
-// (lib/ohsumi/store.tsx、誰かがOrbitを開いた時に走る)の両方が、それぞれ
+// (lib/ohsumi/store.tsx、誰かがOhsumiを開いた時に走る)の両方が、それぞれ
 // 独立に「今日まだ生成していないか」を判定・生成していた。公開CSVの
 // キャッシュ反映には数分のラグがある(gas/README.mdの既知の制約)ため、
 // クライアント側がlastGeneratedDateを更新した直後にサーバー側トリガーが
@@ -3629,15 +3629,15 @@ function notifyInactiveMembers() {
   })
   notifyAdmins({
     ja: {
-      subject: 'Orbit: ' + staleMembers.length + '名のメンバーが' + threshold + '日以上未ログインです',
-      body: '以下のメンバーが ' + threshold + ' 日以上 Orbit にログインしていません:\n\n' + linesJa.join('\n') + '\n\nOrbit管理画面から状況を確認してください。',
+      subject: 'Ohsumi: ' + staleMembers.length + '名のメンバーが' + threshold + '日以上未ログインです',
+      body: '以下のメンバーが ' + threshold + ' 日以上 Ohsumi にログインしていません:\n\n' + linesJa.join('\n') + '\n\nOhsumi管理画面から状況を確認してください。',
     },
     en: {
-      subject: 'Orbit: ' + staleMembers.length + ' member(s) inactive for ' + threshold + '+ days',
-      body: 'The following members have not logged in to Orbit for ' + threshold + '+ days:\n\n' + linesEn.join('\n') + '\n\nPlease check the Orbit admin screen for details.',
+      subject: 'Ohsumi: ' + staleMembers.length + ' member(s) inactive for ' + threshold + '+ days',
+      body: 'The following members have not logged in to Ohsumi for ' + threshold + '+ days:\n\n' + linesEn.join('\n') + '\n\nPlease check the Ohsumi admin screen for details.',
     },
   })
-  notifyChat('⚠️ ' + staleMembers.length + '名のメンバーが' + threshold + '日以上未ログインです。Orbitで確認してください。')
+  notifyChat('⚠️ ' + staleMembers.length + '名のメンバーが' + threshold + '日以上未ログインです。Ohsumiで確認してください。')
 }
 
 // 期限超過タスクを担当者本人に個別メール通知する日次スイープ。
@@ -3690,16 +3690,16 @@ function notifyOverdueTasksToAssignees() {
         })
         queueNotification(aid, 'deadline', {
           ja: {
-            subject: '[Orbit] 期限超過タスクのお知らせ（' + tasks.length + '件）',
+            subject: '[Ohsumi] 期限超過タスクのお知らせ（' + tasks.length + '件）',
             body: '担当しているタスクのうち、期限を超過しているものが' + tasks.length + '件あります。\n\n' +
               linesJa.join('\n') +
-              '\n\nOrbitにログインして対応状況を更新してください。',
+              '\n\nOhsumiにログインして対応状況を更新してください。',
           },
           en: {
-            subject: '[Orbit] Overdue task notice (' + tasks.length + ')',
+            subject: '[Ohsumi] Overdue task notice (' + tasks.length + ')',
             body: 'You have ' + tasks.length + ' overdue task(s) assigned to you.\n\n' +
               linesEn.join('\n') +
-              '\n\nPlease log in to Orbit and update their status.',
+              '\n\nPlease log in to Ohsumi and update their status.',
           },
         })
       } catch (err) {
@@ -3740,7 +3740,7 @@ function updateDiscordWebhookUrl(url) {
   }
   PropertiesService.getScriptProperties().setProperty(DISCORD_WEBHOOK_PROPERTY_KEY, url || '')
   notifyAdmins(
-    '[Orbit] Discord Webhook URLが変更されました',
+    '[Ohsumi] Discord Webhook URLが変更されました',
     (url ? 'Discord Webhook URLが更新されました。' : 'Discord Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
   )
@@ -3760,7 +3760,7 @@ function updateSlackWebhookUrl(url) {
   }
   PropertiesService.getScriptProperties().setProperty(SLACK_WEBHOOK_PROPERTY_KEY, url || '')
   notifyAdmins(
-    '[Orbit] Slack Webhook URLが変更されました',
+    '[Ohsumi] Slack Webhook URLが変更されました',
     (url ? 'Slack Webhook URLが更新されました。' : 'Slack Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
   )
@@ -3824,7 +3824,7 @@ function testDiscordWebhook() {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
-      content: '✅ Orbitとの連携テストです。このメッセージが届いていればDiscordへの通知設定は正常です。',
+      content: '✅ Ohsumiとの連携テストです。このメッセージが届いていればDiscordへの通知設定は正常です。',
       allowed_mentions: { parse: [] },
     }),
     muteHttpExceptions: true,
@@ -3844,7 +3844,7 @@ function testSlackWebhook() {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
-      text: '✅ Orbitとの連携テストです。このメッセージが届いていればSlackへの通知設定は正常です。',
+      text: '✅ Ohsumiとの連携テストです。このメッセージが届いていればSlackへの通知設定は正常です。',
     }),
     muteHttpExceptions: true,
   })
@@ -4025,8 +4025,8 @@ function saveExpenseApplication(application, acting) {
       emails = memberEmailsByIds([firstStep.memberId])
     }
     sendLocalizedEmail(emails, {
-      ja: { subject: 'Orbit: 経費申請が届きました', body: '経費申請が届きました。Orbitから確認・承認してください。\n\n金額: ¥' + application.amount },
-      en: { subject: 'Orbit: New expense application received', body: 'A new expense application has been submitted. Please review and approve it in Orbit.\n\nAmount: ¥' + application.amount },
+      ja: { subject: 'Ohsumi: 経費申請が届きました', body: '経費申請が届きました。Ohsumiから確認・承認してください。\n\n金額: ¥' + application.amount },
+      en: { subject: 'Ohsumi: New expense application received', body: 'A new expense application has been submitted. Please review and approve it in Ohsumi.\n\nAmount: ¥' + application.amount },
     })
   }
   return { id: application.id }
@@ -4075,8 +4075,8 @@ function resubmitExpense(applicationId, fields, actorId) {
       emails = memberEmailsByIds([firstStep.memberId])
     }
     sendLocalizedEmail(emails, {
-      ja: { subject: 'Orbit: 経費申請が再提出されました', body: '差し戻された経費申請が修正のうえ再提出されました。Orbitから確認・承認してください。\n\n金額: ¥' + amount },
-      en: { subject: 'Orbit: Expense application resubmitted', body: 'A returned expense application has been revised and resubmitted. Please review and approve it in Orbit.\n\nAmount: ¥' + amount },
+      ja: { subject: 'Ohsumi: 経費申請が再提出されました', body: '差し戻された経費申請が修正のうえ再提出されました。Ohsumiから確認・承認してください。\n\n金額: ¥' + amount },
+      en: { subject: 'Ohsumi: Expense application resubmitted', body: 'A returned expense application has been revised and resubmitted. Please review and approve it in Ohsumi.\n\nAmount: ¥' + amount },
     })
   }
   return { ok: true }
@@ -4152,10 +4152,10 @@ function processExpenseStep(applicationId, stepId, actorId, action, comment) {
     if (notifyIds.length > 0) {
       var nextEmails = memberEmailsByIds(notifyIds)
       sendLocalizedEmail(nextEmails, {
-        ja: { subject: 'Orbit: 経費承認の依頼', body: '経費申請の承認依頼が届きました。Orbitにログインして確認してください。' },
-        en: { subject: 'Orbit: Expense approval requested', body: 'An expense application is waiting for your approval. Please log in to Orbit to review it.' },
+        ja: { subject: 'Ohsumi: 経費承認の依頼', body: '経費申請の承認依頼が届きました。Ohsumiにログインして確認してください。' },
+        en: { subject: 'Ohsumi: Expense approval requested', body: 'An expense application is waiting for your approval. Please log in to Ohsumi to review it.' },
       })
-      notifyChat('💴 経費申請の承認依頼が届きました（ステップ ' + (nextIdx + 1) + '）。Orbitにログインして確認してください。')
+      notifyChat('💴 経費申請の承認依頼が届きました（ステップ ' + (nextIdx + 1) + '）。Ohsumiにログインして確認してください。')
     }
   }
 
@@ -4164,8 +4164,8 @@ function processExpenseStep(applicationId, stepId, actorId, action, comment) {
     var applicantId = String(data[headers.indexOf('applicant_id')])
     var emails = memberEmailsByIds([applicantId])
     sendLocalizedEmail(emails, {
-      ja: { subject: 'Orbit: 経費申請が承認されました', body: '経費申請が承認されました。' },
-      en: { subject: 'Orbit: Expense application approved', body: 'Your expense application has been approved.' },
+      ja: { subject: 'Ohsumi: 経費申請が承認されました', body: '経費申請が承認されました。' },
+      en: { subject: 'Ohsumi: Expense application approved', body: 'Your expense application has been approved.' },
     })
   }
   return { ok: true }
@@ -4220,8 +4220,8 @@ function setExpenseStatus(applicationId, status, reason, actorId) {
         if (withdrawNotifyIds.length > 0) {
           var wEmails = memberEmailsByIds(withdrawNotifyIds)
           sendLocalizedEmail(wEmails, {
-            ja: { subject: 'Orbit: 経費申請が取り下げられました', body: '経費申請が取り下げられました。この申請への対応は不要です。' },
-            en: { subject: 'Orbit: Expense application withdrawn', body: 'The expense application has been withdrawn. No action is needed on your part.' },
+            ja: { subject: 'Ohsumi: 経費申請が取り下げられました', body: '経費申請が取り下げられました。この申請への対応は不要です。' },
+            en: { subject: 'Ohsumi: Expense application withdrawn', body: 'The expense application has been withdrawn. No action is needed on your part.' },
           })
           notifyChat('💴 経費申請が取り下げられました。この申請への対応は不要です。')
         }
@@ -4233,8 +4233,8 @@ function setExpenseStatus(applicationId, status, reason, actorId) {
   if (status === 'rejected') {
     var emails = memberEmailsByIds([applicantId])
     sendLocalizedEmail(emails, {
-      ja: { subject: 'Orbit: 経費申請が却下されました', body: '経費申請が却下されました。\n理由: ' + (reason || '—') },
-      en: { subject: 'Orbit: Expense application rejected', body: 'Your expense application has been rejected.\nReason: ' + (reason || '—') },
+      ja: { subject: 'Ohsumi: 経費申請が却下されました', body: '経費申請が却下されました。\n理由: ' + (reason || '—') },
+      en: { subject: 'Ohsumi: Expense application rejected', body: 'Your expense application has been rejected.\nReason: ' + (reason || '—') },
     })
   }
 
@@ -4242,8 +4242,8 @@ function setExpenseStatus(applicationId, status, reason, actorId) {
   if (status === 'returned') {
     var rEmails = memberEmailsByIds([applicantId])
     sendLocalizedEmail(rEmails, {
-      ja: { subject: 'Orbit: 経費申請が差し戻されました', body: '経費申請が差し戻されました。内容を修正のうえ、再提出してください。\n理由: ' + (reason || '—') },
-      en: { subject: 'Orbit: Expense application returned for revision', body: 'Your expense application has been returned for revision. Please update it and resubmit.\nReason: ' + (reason || '—') },
+      ja: { subject: 'Ohsumi: 経費申請が差し戻されました', body: '経費申請が差し戻されました。内容を修正のうえ、再提出してください。\n理由: ' + (reason || '—') },
+      en: { subject: 'Ohsumi: Expense application returned for revision', body: 'Your expense application has been returned for revision. Please update it and resubmit.\nReason: ' + (reason || '—') },
     })
   }
   return { ok: true }
@@ -4299,8 +4299,8 @@ function saveCustomFormSubmission(submission, acting) {
     }
     var formTitle = formDef ? formDef.title : ''
     sendLocalizedEmail(emails, {
-      ja: { subject: 'Orbit: 申請フォームが届きました', body: '申請フォームが届きました。Orbitから確認・承認してください。\n\nフォーム: ' + formTitle },
-      en: { subject: 'Orbit: New form submission received', body: 'A new form submission has been received. Please review and approve it in Orbit.\n\nForm: ' + formTitle },
+      ja: { subject: 'Ohsumi: 申請フォームが届きました', body: '申請フォームが届きました。Ohsumiから確認・承認してください。\n\nフォーム: ' + formTitle },
+      en: { subject: 'Ohsumi: New form submission received', body: 'A new form submission has been received. Please review and approve it in Ohsumi.\n\nForm: ' + formTitle },
     })
   }
   return { id: submission.id }
@@ -4384,9 +4384,9 @@ function processFormStep(submissionId, stepId, actorId, action, comment) {
     if (fmNotifyIds.length > 0) {
       var fmNextEmails = memberEmailsByIds(fmNotifyIds)
       if (fmNextEmails.length > 0) {
-        MailApp.sendEmail({ to: fmNextEmails.join(','), subject: 'Orbit: 申請フォーム承認の依頼', body: '申請フォームの承認依頼が届きました。Orbitにログインして確認してください。' })
+        MailApp.sendEmail({ to: fmNextEmails.join(','), subject: 'Ohsumi: 申請フォーム承認の依頼', body: '申請フォームの承認依頼が届きました。Ohsumiにログインして確認してください。' })
       }
-      notifyChat('📋 申請フォームの承認依頼が届きました（ステップ ' + (nextIdx + 1) + '）。Orbitにログインして確認してください。')
+      notifyChat('📋 申請フォームの承認依頼が届きました（ステップ ' + (nextIdx + 1) + '）。Ohsumiにログインして確認してください。')
     }
   }
 
@@ -4415,11 +4415,11 @@ function setFormSubmissionStatus(submissionId, status, reason) {
         if (emails.length > 0) {
           MailApp.sendEmail({
             to: emails.join(','),
-            subject: '[Orbit] 申請フォームが却下されました',
+            subject: '[Ohsumi] 申請フォームが却下されました',
             body:
               '申請フォームの申請が却下されました。\n\n' +
               (reason ? '理由: ' + reason + '\n\n' : '') +
-              'Orbitで確認してください。',
+              'Ohsumiで確認してください。',
           })
         }
         notifyChat('📋 申請フォームが却下されました。' + (reason ? '（理由: ' + reason + '）' : ''))
