@@ -186,15 +186,17 @@ GitHubリポジトリに URL などを登録します。
 2. **「Settings」**（右端のタブ）→ 左メニュー **「Secrets and variables」→「Actions」**
 3. **「New repository secret」** をクリックして以下を1つずつ追加:
 
-| Name（Secret名） | Value（値） |
-|---|---|
-| `MEMBERS_CSV` | 手順5でコピーした Members のURL |
-| `PROJECTS_CSV` | 手順5でコピーした Projects のURL |
-| `TASKS_CSV` | 手順5でコピーした Tasks のURL |
-| `CSV_GAS` | 手順3-3でコピーした `/exec` で終わるURL |
-| `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` | 手順4-3でコピーしたクライアントID |
+| Name（Secret名） | Value（値） | 必須 |
+|---|---|---|
+| `MEMBERS_CSV` | 手順5でコピーした Members のURL | 必須 |
+| `PROJECTS_CSV` | 手順5でコピーした Projects のURL | 必須 |
+| `TASKS_CSV` | 手順5でコピーした Tasks のURL | 必須 |
+| `CSV_GAS` | 手順3-3でコピーした `/exec` で終わるURL | 必須 |
+| `GOOGLE_OAUTH_CLIENT_ID` | 手順4-3でコピーしたクライアントID | 必須 |
+| `SETTINGS_CSV` | Settings シートの CSV 公開URL（[gas/README.md](../gas/README.md) の「4.6. 設定の全員共有」参照） | 任意 |
+| `DRIVE_FOLDER_ID` | プロフィール画像の保存先フォルダのID（[gas/README.md](../gas/README.md) の「4.5. プロフィール画像アップロード」参照） | 任意 |
 
-4. 追加後、5つの Secrets が揃っていることを確認する
+4. 追加後、必須の5つの Secrets が揃っていることを確認する
 
 ---
 
