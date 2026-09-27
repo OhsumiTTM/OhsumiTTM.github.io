@@ -156,7 +156,7 @@ export function Header() {
             className="flex shrink-0 items-center gap-2"
           >
             <OhsumiMark size={22} />
-            <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Orbit</span>
+            <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Ohsumi</span>
             {(orgLogoUrl || orgName) && (
               <>
                 <span className="hidden text-muted-foreground/40 sm:inline" aria-hidden>|</span>

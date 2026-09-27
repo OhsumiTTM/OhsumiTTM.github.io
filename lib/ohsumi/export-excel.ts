@@ -79,7 +79,7 @@ export function exportTasksToExcel(tasks: Task[], projects: Project[], members: 
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'タスク')
   const today = new Date().toISOString().slice(0, 10)
-  downloadWorkbook(wb, `Orbit_タスク一覧_${today}.xlsx`)
+  downloadWorkbook(wb, `Ohsumi_タスク一覧_${today}.xlsx`)
 }
 
 // USR-013: .xlsx出力に加えて軽量なCSV出力も選べるようにする。列はExcel版と
@@ -88,7 +88,7 @@ export function exportTasksToCsv(tasks: Task[], projects: Project[], members: Me
   const rows = taskRows(tasks, projects, members)
   const csv = rowsToCsv(rows)
   const today = new Date().toISOString().slice(0, 10)
-  downloadCsv(csv, `Orbit_タスク一覧_${today}.csv`)
+  downloadCsv(csv, `Ohsumi_タスク一覧_${today}.csv`)
 }
 
 // SKL-004: 既存のスキルCSV出力(exportSkillCsv、admin-member-db.tsx)と
@@ -107,7 +107,7 @@ export function exportSkillExcel(members: Member[], skillOptions: string[]) {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'スキル')
   const today = new Date().toISOString().slice(0, 10)
-  downloadWorkbook(wb, `Orbit_スキル一覧_${today}.xlsx`)
+  downloadWorkbook(wb, `Ohsumi_スキル一覧_${today}.xlsx`)
 }
 
 // プロジェクト単位でタスクをExcelに書き出す
@@ -119,7 +119,7 @@ export function exportProjectTasksToExcel(project: Project, tasks: Task[], proje
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'タスク')
   const today = new Date().toISOString().slice(0, 10)
-  downloadWorkbook(wb, `Orbit_${project.name}_${today}.xlsx`)
+  downloadWorkbook(wb, `Ohsumi_${project.name}_${today}.xlsx`)
 }
 
 // 管理者向け：タスク・プロジェクト・メンバーを別シートにまとめた全データエクスポート
@@ -159,5 +159,5 @@ export function exportAllDataToExcel(tasks: Task[], projects: Project[], members
   XLSX.utils.book_append_sheet(wb, mSheet, 'メンバー')
 
   const today = new Date().toISOString().slice(0, 10)
-  downloadWorkbook(wb, `Orbit_全データ_${today}.xlsx`)
+  downloadWorkbook(wb, `Ohsumi_全データ_${today}.xlsx`)
 }

@@ -45,7 +45,7 @@ export function downloadPortableRecord(member: Member) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `Orbit_実績_${member.displayName || member.name}.json`
+  a.download = `Ohsumi_実績_${member.displayName || member.name}.json`
   a.click()
   URL.revokeObjectURL(url)
 }

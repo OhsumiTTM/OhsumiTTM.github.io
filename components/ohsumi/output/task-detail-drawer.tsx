@@ -2495,12 +2495,12 @@ function AddToGCalButton({ task }: { task: Task }) {
           ? `${task.deadline}T${String(parseInt(task.dueTime.slice(0, 2)) + 1).padStart(2, '0')}${task.dueTime.slice(2)}:00+09:00`
           : undefined
         await createCalendarEvent(token, {
-          summary: `[Orbit] ${title}`,
+          summary: `[Ohsumi] ${title}`,
           description: desc,
           ...(iso ? { startDateTime: iso, endDateTime: endIso ?? iso } : { startDate: task.deadline }),
         })
       } else {
-        await createCalendarEvent(token, { summary: `[Orbit] ${title}`, description: desc, startDate: new Date().toISOString().slice(0, 10) })
+        await createCalendarEvent(token, { summary: `[Ohsumi] ${title}`, description: desc, startDate: new Date().toISOString().slice(0, 10) })
       }
       setAdded(true)
       toast(t('taskDrawer.gcal.added'))

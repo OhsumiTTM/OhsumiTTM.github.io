@@ -160,7 +160,7 @@ export interface SyncRow {
   description: string
 }
 
-const SHEET_NAME = 'Orbit Sync'
+const SHEET_NAME = 'Ohsumi Sync'
 
 const HEADER = [
   'タスク名', 'プロジェクト', '部門', '担当者', 'ステータス',

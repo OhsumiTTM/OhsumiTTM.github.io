@@ -52,7 +52,7 @@ export function LoginScreen() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-      {/* subtle orbital accent */}
+      {/* subtle ellipse accent */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <svg
           className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-border"
@@ -69,7 +69,7 @@ export function LoginScreen() {
       <div className="relative z-10 flex w-full max-w-sm flex-col items-center text-center">
         <div className="flex items-center gap-2">
           <OhsumiMark size={30} />
-          <span className="text-2xl font-semibold tracking-tight">Orbit</span>
+          <span className="text-2xl font-semibold tracking-tight">Ohsumi</span>
         </div>
         <p className="mt-4 text-[15px] leading-relaxed text-muted-foreground text-balance">
           {t('login.tagline')}

@@ -773,7 +773,7 @@ export function googleCalendarUrl(
     extra.department && `部門: ${extra.department}`,
     extra.category && `カテゴリ: ${extra.category}`,
     task.description,
-    'Orbitから追加',
+    'Ohsumiから追加',
   ]
     .filter(Boolean)
     .join('\n')

@@ -2103,7 +2103,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // Settingsシートの initial_tasks_json キーで上書き可能。未設定時はハードコードの3件。
   const INITIAL_TASKS_KEY = 'ohsumi-initial-tasks-given'
   const HARDCODED_INITIAL_TASKS = [
-    { name: 'Orbitの使い方を確認する', description: 'まずINPUT画面で「今日やること」を入力し、承認を受けてみましょう。' },
+    { name: 'Ohsumiの使い方を確認する', description: 'まずINPUT画面で「今日やること」を入力し、承認を受けてみましょう。' },
     { name: 'プロフィールを設定する', description: 'ヘッダーのアカウントメニュー →「プロフィール」でWillとスキルを登録しましょう。' },
     { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」タブで組織のタスク全体を把握しましょう。' },
   ]
@@ -4429,7 +4429,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // item 26: プロジェクト健康状態の自動判定変化通知 — 定期タスク生成チェック
   // (上記)と同じく、サーバー側cronが無いためクライアント側で検知する。
   // notifyProjectHealthはGAS側でdaihyoOrLeader認可のため、管理者ロールの
-  // 誰かのブラウザがOrbitを開いたタイミングでのみ検知・送信する
+  // 誰かのブラウザがOhsumiを開いたタイミングでのみ検知・送信する
   // （一般ロールの閲覧では実行しない＝GAS側の権限エラーを避ける）。
   // 手動上書き中(healthOverride)のプロジェクトは対象外、かつ前回通知した
   // 実効状態(lastNotifiedHealth)からattentionへ新たに変化したときのみ送る。

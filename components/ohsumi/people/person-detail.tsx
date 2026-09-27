@@ -1012,7 +1012,7 @@ export function PersonDetail({ id }: { id: string }) {
 
       {/* Tab 5: Calendar — Googleカレンダー連携統合表示
           ※ Tab 2「タスク」タブ内のカレンダービュー（タスク期限表示）とは別物。
-            こちらはGCal連携でイベントをOrbitのカレンダーに重ねて表示する。 */}
+            こちらはGCal連携でイベントをOhsumiのカレンダーに重ねて表示する。 */}
       {tab === 'calendar' && (
         <div className="mt-5 flex flex-col gap-4">
           {isSelf && (

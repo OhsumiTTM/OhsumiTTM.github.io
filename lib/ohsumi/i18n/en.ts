@@ -49,7 +49,7 @@ export const en = {
   'notification.deadline.near': 'Due in {days} days',
   'notification.mention.title': 'Mentioned: {name}',
   'notification.inactive.title': '{name} has not logged in for {days} days',
-  'notification.inactive.detail': 'They may not be accessing Orbit',
+  'notification.inactive.detail': 'They may not be accessing Ohsumi',
   'notification.calendarScope.title': 'Google Calendar integration added',
   'notification.calendarScope.detail': 'Connect it from the Calendar screen\'s "Connect Google Calendar" button',
   'notification.expense.approval.title': 'Expense approval requested: ¥{amount}',
@@ -97,12 +97,12 @@ export const en = {
   'header.logoAlt': 'Logo',
 
   // ---- login ---------------------------------------------------------
-  'login.tagline': 'Launch your tasks, put your team into orbit.',
+  'login.tagline': 'Launch your tasks, get your team on track.',
   'login.googleSignIn': 'Sign in with Google',
   'login.signingIn': 'Signing in…',
   'login.oauthNotConfigured': 'Google OAuth is not configured. Please contact an administrator.',
   'login.failed': 'Sign-in failed. Please try again.',
-  'login.notRegistered': '{email} is not registered in Orbit.',
+  'login.notRegistered': '{email} is not registered in Ohsumi.',
   'login.poweredByGoogle': 'Powered by Google',
 
   // ---- output / list-view ------------------------------------------------
@@ -254,7 +254,7 @@ export const en = {
   'admin.projects.saveChangesButton': 'Save changes',
   'admin.projects.taskSets.addTaskButton': 'Add task',
   'admin.projects.recurring.heading': 'Recurring tasks',
-  'admin.projects.recurring.desc': 'Automatically generates weekly/monthly recurring work. There is no server-side scheduler,\n          so it’s generated once when someone opens Orbit on the due date.',
+  'admin.projects.recurring.desc': 'Automatically generates weekly/monthly recurring work. There is no server-side scheduler,\n          so it’s generated once when someone opens Ohsumi on the due date.',
   'admin.projects.recurring.empty': 'No recurring tasks yet.',
   'admin.projects.recurring.taskNamePlaceholder': 'Task name (e.g. Create weekly space news)',
   'admin.projects.recurring.weekly': 'Weekly',
@@ -911,7 +911,7 @@ export const en = {
 
   // ---- input-screen (main headings/buttons only) ------------------------------
   'input.hero.title': 'What are you working on today?',
-  'input.hero.subtitle': 'Just write down what needs doing. Orbit will organize it into tasks.',
+  'input.hero.subtitle': 'Just write down what needs doing. Ohsumi will organize it into tasks.',
   'input.textarea.placeholder': 'Make an event poster by next Friday. Would like someone who can use Canva.',
   'input.textarea.aria': 'What needs doing',
   'input.textarea.hint': 'You can enter multiple tasks at once.',
@@ -926,7 +926,7 @@ export const en = {
   'input.excelImport.dropActive': 'Drop to import',
   'input.demoHint': 'Use example:',
   'input.demo.buttonLabel': 'Enter 4 event-prep tasks',
-  'input.parsingStatus': 'Orbit is organizing your tasks…',
+  'input.parsingStatus': 'Ohsumi is organizing your tasks…',
   'input.toast.duplicatesFound': '{count} task(s) resemble existing tasks. Please review them.',
   'input.toast.registered': 'Registered {count} task(s)',
   'input.registeredBanner.text': 'Tasks registered. Check them in OUTPUT.',
@@ -1135,7 +1135,7 @@ export const en = {
   'career.portableRecord.exportButton': 'Export record',
   'career.portableRecord.importButton': 'Import record from file',
   'career.portableRecord.importedToast': 'Merged {skillCount} skill point entries and added {qualCount} qualification(s)',
-  'career.portableRecord.importErrorToast': "Couldn't read that file. Please select a file exported from Orbit",
+  'career.portableRecord.importErrorToast': "Couldn't read that file. Please select a file exported from Ohsumi",
   'career.training.namePlaceholder': 'Training name',
   'career.training.providerPlaceholder': 'Provider (optional)',
   'career.training.apply': 'Apply',
@@ -1752,7 +1752,7 @@ export const en = {
   'admin.approvals.rejectModal.reasonPlaceholder': 'Rejection reason (optional)',
 
   // ---- admin assignments ------------------------------------------------
-  'admin.assignments.subtitle': 'Assign owners to unassigned tasks. Orbit suggests candidates, but the final call is the admin\'s.',
+  'admin.assignments.subtitle': 'Assign owners to unassigned tasks. Ohsumi suggests candidates, but the final call is the admin\'s.',
   'admin.assignments.empty.title': 'No unassigned tasks',
   'admin.assignments.empty.desc': 'All tasks have an assignee set.',
   'admin.assignments.unassignedCount': '{count} unassigned',
@@ -1818,7 +1818,7 @@ export const en = {
   'calendar.gcal.loading': 'Loading...',
   'calendar.gcal.synced': 'Synced with GCal',
   'calendar.gcal.connect': 'Connect Google Calendar',
-  'calendar.absent.eventTitle': '[Orbit] Absent',
+  'calendar.absent.eventTitle': '[Ohsumi] Absent',
 
   // ---- gantt: critical path -----------------------------------------
   'gantt.criticalPath.legend': 'Critical path (the dependency chain with the biggest delay impact)',

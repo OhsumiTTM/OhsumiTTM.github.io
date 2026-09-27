@@ -49,7 +49,7 @@ export const ja = {
   'notification.deadline.near': '期限まで{days}日',
   'notification.mention.title': 'メンション: {name}',
   'notification.inactive.title': '{name}が{days}日間未ログイン',
-  'notification.inactive.detail': 'Orbitにアクセスがない可能性があります',
+  'notification.inactive.detail': 'Ohsumiにアクセスがない可能性があります',
   'notification.calendarScope.title': 'Googleカレンダー連携が追加されました',
   'notification.calendarScope.detail': 'カレンダー画面から「Googleカレンダーと連携」ボタンで接続できます',
   'notification.expense.approval.title': '経費承認依頼: ¥{amount}',
@@ -102,7 +102,7 @@ export const ja = {
   'login.signingIn': 'ログイン中…',
   'login.oauthNotConfigured': 'Google OAuthが設定されていません。管理者にお問い合わせください。',
   'login.failed': 'ログインできませんでした。もう一度お試しください。',
-  'login.notRegistered': '{email} はOrbitに登録されていません。',
+  'login.notRegistered': '{email} はOhsumiに登録されていません。',
   'login.poweredByGoogle': 'Powered by Google',
 
   // ---- output / list-view ------------------------------------------------
@@ -254,7 +254,7 @@ export const ja = {
   'admin.projects.saveChangesButton': '変更を保存',
   'admin.projects.taskSets.addTaskButton': 'タスクを追加',
   'admin.projects.recurring.heading': '定期タスク',
-  'admin.projects.recurring.desc': '毎週・毎月発生する業務を自動生成します。サーバー側の定期実行はないため、該当日に誰かが\n          Orbitを開いたタイミングで1回だけ生成されます。',
+  'admin.projects.recurring.desc': '毎週・毎月発生する業務を自動生成します。サーバー側の定期実行はないため、該当日に誰かが\n          Ohsumiを開いたタイミングで1回だけ生成されます。',
   'admin.projects.recurring.empty': 'まだ定期タスクがありません。',
   'admin.projects.recurring.taskNamePlaceholder': 'タスク名（例：週刊宇宙ニュース作成）',
   'admin.projects.recurring.weekly': '毎週',
@@ -911,7 +911,7 @@ export const ja = {
 
   // ---- input-screen（主要な見出し・ボタンのみ）------------------------------
   'input.hero.title': '今日、何を進めますか？',
-  'input.hero.subtitle': 'やることをそのまま書いてください。Orbitがタスクとして整理します。',
+  'input.hero.subtitle': 'やることをそのまま書いてください。Ohsumiがタスクとして整理します。',
   'input.textarea.placeholder': '来週金曜日までにイベント用のポスターを作成する。Canvaを使える人にお願いしたい。',
   'input.textarea.aria': 'やること',
   'input.textarea.hint': '複数のタスクをまとめて入力できます。',
@@ -926,7 +926,7 @@ export const ja = {
   'input.excelImport.dropActive': 'ドロップして読み込む',
   'input.demoHint': '例文を使う:',
   'input.demo.buttonLabel': 'イベント準備の4タスクを入力',
-  'input.parsingStatus': 'Orbitがタスクを整理しています…',
+  'input.parsingStatus': 'Ohsumiがタスクを整理しています…',
   'input.toast.duplicatesFound': '{count}件のタスクに似た既存タスクがあります。内容をご確認ください',
   'input.toast.registered': '{count}件のタスクを登録しました',
   'input.registeredBanner.text': 'タスクを登録しました。OUTPUTで確認できます。',
@@ -1755,7 +1755,7 @@ export const ja = {
   'admin.approvals.rejectModal.reasonPlaceholder': '却下の理由（任意）',
 
   // ---- admin assignments ------------------------------------------------
-  'admin.assignments.subtitle': '未アサインのタスクに担当者を割り当てます。Orbitは候補を提案しますが、最終判断は管理者が行います。',
+  'admin.assignments.subtitle': '未アサインのタスクに担当者を割り当てます。Ohsumiは候補を提案しますが、最終判断は管理者が行います。',
   'admin.assignments.empty.title': '未アサインのタスクはありません',
   'admin.assignments.empty.desc': 'すべてのタスクに担当者が設定されています。',
   'admin.assignments.unassignedCount': '未アサイン {count}件',
@@ -1821,7 +1821,7 @@ export const ja = {
   'calendar.gcal.loading': '読み込み中...',
   'calendar.gcal.synced': 'GCalと同期中',
   'calendar.gcal.connect': 'Googleカレンダーと連携',
-  'calendar.absent.eventTitle': '[Orbit] 不在',
+  'calendar.absent.eventTitle': '[Ohsumi] 不在',
 
   // ---- gantt: クリティカルパス -----------------------------------------
   'gantt.criticalPath.legend': 'クリティカルパス（最も遅延の影響が大きい依存チェーン）',

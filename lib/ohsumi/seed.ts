@@ -27,8 +27,8 @@ export const PROJECTS: Project[] = [
   },
   {
     id: 'p-ohsumi',
-    name: 'Orbit',
-    description: '組織運営プロダクト Orbit 自体の開発。',
+    name: 'Ohsumi',
+    description: '組織運営プロダクト Ohsumi 自体の開発。',
   },
   {
     id: 'p-quiz',
@@ -41,7 +41,7 @@ export const MEMBERS: Member[] = [
   {
     id: 'm-manabe',
     name: '眞鍋 和士',
-    affiliation: 'Orbit',
+    affiliation: 'Ohsumi',
     role: '代表',
     avatarColor: '#6366f1',
     initials: 'MK',
@@ -108,7 +108,7 @@ export const MEMBERS: Member[] = [
   {
     id: 'm-yamada',
     name: '山田 悠斗',
-    affiliation: 'Orbit',
+    affiliation: 'Ohsumi',
     role: '一般',
     avatarColor: '#0ea5e9',
     initials: 'YY',
@@ -302,7 +302,7 @@ export const SEED_TASKS: Task[] = [
   },
   {
     id: 't-ohsumi-req',
-    name: 'Orbit要件整理',
+    name: 'Ohsumi要件整理',
     description: '次期リリースの要件を整理しドキュメント化する。',
     projectId: 'p-ohsumi',
     department: '開発',

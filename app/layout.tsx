@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Orbit — タスクを打ち上げ、組織を軌道に乗せる',
+  title: 'Ohsumi — タスクを打ち上げ、組織を軌道に乗せる',
   description:
-    'Orbit は Task Management × Talent Management × Human Development を接続する組織運営システムです。',
+    'Ohsumi は Task Management × Talent Management × Human Development を接続する組織運営システムです。',
 }
 
 export const viewport: Viewport = {

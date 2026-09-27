@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx'
 import type { Department, Difficulty, Member, ParsedTask, Priority, Project } from './types'
 import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from './types'
 
-// Excelファイルの列は必ずしもOrbitが出力した形式とは限らず、並び順や型は
+// Excelファイルの列は必ずしもOhsumiが出力した形式とは限らず、並び順や型は
 // 保証されない（日付がテキストだったりExcelの日付型だったり、列自体が
 // 無かったりする）。なので取り込みは2段階にする：
 //   1. ヘッダー文字列から「たぶんこの列だろう」を自動推測（初期値として提示）
@@ -137,7 +137,7 @@ export async function readExcelFile(file: File): Promise<SheetData> {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array', cellDates: true })
   if (wb.SheetNames.length === 0) throw new Error('シートが見つかりませんでした')
-  // Orbitの「全データエクスポート」由来のファイルなら「タスク」シートを優先する
+  // Ohsumiの「全データエクスポート」由来のファイルなら「タスク」シートを優先する
   const sheetName = wb.SheetNames.includes('タスク') ? 'タスク' : wb.SheetNames[0]
   const sheet = wb.Sheets[sheetName]
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })

@@ -164,7 +164,7 @@ export interface Member {
   // 活動休止中フラグ — true のときタスクのおすすめ対象から除外される
   // (store.tsx の recommendedAssignees/taskRecommendations で inactive 除外)
   inactive?: boolean
-  // Orbitへの最終アクセス日時（ISO datetime）— GAS側でlogin actionを
+  // Ohsumiへの最終アクセス日時（ISO datetime）— GAS側でlogin actionを
   // 受け取ったときに更新。25日間アクセスなしで管理者に通知（item 25）
   lastLogin?: string
   // 不在日リスト（YYYY-MM-DD）— カレンダービューで自分で登録し、
