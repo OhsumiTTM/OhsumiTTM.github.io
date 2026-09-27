@@ -3,9 +3,8 @@
 タスクを打ち上げ、組織を軌道に乗せる。学生団体向けのタスク管理×人材管理ツールです。
 
 Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コードはそのまま他団体でも
-セルフホストして使えるように設計されています。**Ohsumiチーム側が複数団体を横断的に
-運用することはありません** — 導入する団体ごとに、自分たちの Google Spreadsheet・
-Google アカウント・GitHub リポジトリの上で、完全に独立した1インスタンスとして動きます。
+セルフホストして使えるように設計されています。各団体のデータ(スプレッドシートやアップロードした
+ファイル)は、各団体のGoogleアカウントに保存されます。Ohsumiの運営(FSIF)がその内容を閲覧することはありません。
 
 ## アーキテクチャ
 
@@ -114,7 +113,7 @@ pnpm dev
 
 1. リポジトリの Settings → Secrets and variables → Actions に、`gas/README.md`
    「4. GitHub Secrets」の表にある Secret（`MEMBERS_CSV` / `PROJECTS_CSV` /
-   `TASKS_CSV` / `CSV_GAS`、任意で `DRIVE_FOLDER_ID` / `SETTINGS_CSV`）を設定します。
+   `TASKS_CSV` / `CSV_GAS`、任意で `SETTINGS_CSV`）を設定します。
 2. Settings → Pages で、Source を「GitHub Actions」に設定します。
 3. `main` ブランチに push すると `.github/workflows/deploy.yml` が自動でビルド・
    デプロイします。
@@ -151,5 +150,5 @@ pnpm build                           # 本番ビルド（ローカルモック�
 
 ## ライセンス
 
-[MIT License](LICENSE) — 自由に使用・改変・再配布できます。Ohsumiチームは、配布された
-コードの利用によって生じたいかなる損害についても責任を負いません（詳細はLICENSE参照）。
+[MIT License](LICENSE)（Copyright (c) 2026 FSIF）— 自由に使用・改変・再配布できます。著作権者は、
+配布されたコードの利用によって生じたいかなる損害についても責任を負いません（詳細はLICENSE参照）。

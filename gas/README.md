@@ -252,7 +252,6 @@ Google スプレッドシート（データの保存場所）
 
 | Secret名 | 説明 |
 |---|---|
-| `DRIVE_FOLDER_ID` | プロフィール画像アップロード先。後述「4.5」参照 |
 | `SETTINGS_CSV` | 設定の全員共有に使う Settings シートのURL。後述「4.6」参照 |
 
 **注意**: 静的サイトとしてビルドされるため、ビルド後のJavaScriptを見ればこれらのURLは誰でも読み取れます。機密情報を含むデータはスプレッドシートに置かないでください。
@@ -298,19 +297,20 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 
 ---
 
-## 4.5. プロフィール画像アップロード（任意）
+## 4.5. 画像アップロードの保存先フォルダ
 
-個人ページから本人が顔写真をアップロードできるようにします。
+プロフィール画像・団体ロゴ・経費の領収書・アンケート設問の画像は、Apps Script が
+管理する Drive フォルダに保存されます。GitHub Secrets への登録は不要です。
 
-### 手順
+- `setupOhsumi()` を実行すると、スクリプトプロパティ `UPLOAD_FOLDER_ID` が
+  なければ、Apps Script を実行しているアカウントの Drive に `Ohsumi uploads`
+  フォルダを作成し、そのIDを `UPLOAD_FOLDER_ID` に保存します（既にあれば何もしません）。
+- アップロード処理はこのフォルダだけを使います。
+- 既存のフォルダを使いたい場合は、`setupOhsumi()` の実行前に、スクリプトプロパティ
+  `UPLOAD_FOLDER_ID` にそのフォルダのIDを登録してください。
 
-1. Google ドライブで **新規フォルダ** を作成（名前: `Ohsumi avatars` など）
-2. フォルダを開いた状態のURLの `folders/` より後ろの部分がフォルダIDです  
-   例: `https://drive.google.com/drive/folders/`**`1ABC2DEF3GHI`** → フォルダID は `1ABC2DEF3GHI`
-3. このIDを GitHub Secrets の `DRIVE_FOLDER_ID` に登録する
-4. Apps Script を **再デプロイ**（「デプロイを管理」→「バージョン: 新規」）
-
-`DRIVE_FOLDER_ID` を設定しない場合、プロフィール画像アップロードボタンは無効になります。
+`setupOhsumi()` を実行していない場合、アップロードは「Drive folder is not configured」
+というエラーになります。
 
 ---
 

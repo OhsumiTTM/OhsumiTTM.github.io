@@ -123,7 +123,7 @@ export interface Member {
   avatarColor: string
   initials: string
   // uploaded profile picture (Google Drive-hosted, see gas/README.md's
-  // DRIVE_FOLDER_ID setup) — shown instead of the color+initials circle
+  // upload folder setup) — shown instead of the color+initials circle
   // when set
   avatarUrl?: string
   will: string[]

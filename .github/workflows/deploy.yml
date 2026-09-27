@@ -44,9 +44,9 @@ jobs:
           NEXT_PUBLIC_PROJECTS_CSV: ${{ secrets.PROJECTS_CSV }}
           NEXT_PUBLIC_TASKS_CSV: ${{ secrets.TASKS_CSV }}
           NEXT_PUBLIC_GAS_URL: ${{ secrets.CSV_GAS }}
-          NEXT_PUBLIC_DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
           NEXT_PUBLIC_SETTINGS_CSV: ${{ secrets.SETTINGS_CSV }}
           NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          NEXT_PUBLIC_FEEDBACK_FORM_URL: ${{ secrets.FEEDBACK_FORM_URL }}
         run: pnpm build
 
       - name: Upload artifact

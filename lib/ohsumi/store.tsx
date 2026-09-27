@@ -161,8 +161,8 @@ interface OhsumiContextValue extends OhsumiState {
   // whether the app is backed by the live spreadsheet (via GAS/CSV) or the
   // local mock data — surfaced so the UI can show sync state.
   remoteEnabled: boolean
-  // whether profile-picture uploads are usable (remote configured AND a
-  // Drive folder id is set) — see gas/README.md's DRIVE_FOLDER_ID setup
+  // whether image uploads are usable (remote configured; the Drive folder
+  // is managed by GAS) — see gas/README.md's upload folder setup
   driveEnabled: boolean
   remoteStatus: RemoteStatus
   remoteError: string | null

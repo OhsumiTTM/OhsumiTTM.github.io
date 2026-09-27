@@ -186,15 +186,17 @@ GitHubリポジトリに URL などを登録します。
 2. **「Settings」**（右端のタブ）→ 左メニュー **「Secrets and variables」→「Actions」**
 3. **「New repository secret」** をクリックして以下を1つずつ追加:
 
-| Name（Secret名） | Value（値） |
-|---|---|
-| `MEMBERS_CSV` | 手順5でコピーした Members のURL |
-| `PROJECTS_CSV` | 手順5でコピーした Projects のURL |
-| `TASKS_CSV` | 手順5でコピーした Tasks のURL |
-| `CSV_GAS` | 手順3-3でコピーした `/exec` で終わるURL |
-| `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` | 手順4-3でコピーしたクライアントID |
+| Name（Secret名） | Value（値） | 必須 |
+|---|---|---|
+| `MEMBERS_CSV` | 手順5でコピーした Members のURL | 必須 |
+| `PROJECTS_CSV` | 手順5でコピーした Projects のURL | 必須 |
+| `TASKS_CSV` | 手順5でコピーした Tasks のURL | 必須 |
+| `CSV_GAS` | 手順3-3でコピーした `/exec` で終わるURL | 必須 |
+| `GOOGLE_OAUTH_CLIENT_ID` | 手順4-3でコピーしたクライアントID | 必須 |
+| `SETTINGS_CSV` | Settings シートの CSV 公開URL（[gas/README.md](../gas/README.md) の「4.6. 設定の全員共有」参照） | 任意 |
+| `FEEDBACK_FORM_URL` | フィードバックの送信先 Google フォームの `formResponse` で終わるURL。未設定の場合、フィードバック画面に「送信先が設定されていません」と表示され送信できません | 任意 |
 
-4. 追加後、5つの Secrets が揃っていることを確認する
+4. 追加後、必須の5つの Secrets が揃っていることを確認する
 
 ---
 
@@ -287,9 +289,10 @@ Ohsumi のバージョンアップ時などに `Code.gs` を更新する場合:
 
 ## 追加機能のセットアップ（任意）
 
-### プロフィール画像
+### プロフィール画像・団体ロゴなどの画像アップロード
 
-`gas/README.md` の「4.5. プロフィール画像アップロード」を参照してください。
+保存先フォルダは `setupOhsumi()` の実行時に自動で作成されます。詳しくは
+`gas/README.md` の「4.5. 画像アップロードの保存先フォルダ」を参照してください。
 
 ### Discord 通知
 

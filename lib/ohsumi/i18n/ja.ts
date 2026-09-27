@@ -1037,6 +1037,7 @@ export const ja = {
   'feedback.error.severity': '困り具合を選択してください',
   'feedback.error.wantReply': '返信希望を選択してください',
   'feedback.error.submitFailed': '送信に失敗しました。ネットワーク接続を確認して、もう一度お試しください。',
+  'feedback.error.notConfigured': '送信先が設定されていません',
   'feedback.contactType.bugReport': '不具合の報告',
   'feedback.contactType.improvement': '機能の改善要望',
   'feedback.contactType.newFeature': '新機能の提案',

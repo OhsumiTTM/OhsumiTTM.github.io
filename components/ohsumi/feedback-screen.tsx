@@ -6,8 +6,8 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { MessageSquare, Send, CheckCircle2, ImagePlus, X } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 
-const FORM_URL =
-  'https://docs.google.com/forms/u/0/d/e/1FAIpQLSdiyZI93Tvf-lFOxy49H48mMh2MOgQCsxbZvkoQk07x_P-3sA/formResponse'
+// 送信先のGoogleフォームURL(.../formResponse)。未設定ならフィードバックは送信できない。
+const FORM_URL = process.env.NEXT_PUBLIC_FEEDBACK_FORM_URL
 
 const CONTACT_TYPES = [
   '不具合の報告',
@@ -137,6 +137,7 @@ export function FeedbackScreen() {
     if (!detail.trim()) { setError(t('feedback.error.detail')); return }
     if (contactType === '不具合の報告' && !severity) { setError(t('feedback.error.severity')); return }
     if (!wantReply) { setError(t('feedback.error.wantReply')); return }
+    if (!FORM_URL) { setError(t('feedback.error.notConfigured')); return }
     setError('')
     setSubmitting(true)
 
@@ -205,6 +206,11 @@ export function FeedbackScreen() {
       <p className="mb-6 text-sm text-muted-foreground">
         {t('feedback.description')}
       </p>
+      {!FORM_URL && (
+        <p className="mb-6 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {t('feedback.error.notConfigured')}
+        </p>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* 団体名 */}
@@ -414,7 +420,7 @@ export function FeedbackScreen() {
         <div className="flex items-center gap-3 pt-2">
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !FORM_URL}
             className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
             <Send className="size-4" />

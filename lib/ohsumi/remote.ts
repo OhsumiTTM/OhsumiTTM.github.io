@@ -58,11 +58,6 @@ const MEMBERS_CSV_URL = process.env.NEXT_PUBLIC_MEMBERS_CSV
 const PROJECTS_CSV_URL = process.env.NEXT_PUBLIC_PROJECTS_CSV
 const TASKS_CSV_URL = process.env.NEXT_PUBLIC_TASKS_CSV
 const GAS_URL = process.env.NEXT_PUBLIC_GAS_URL
-// optional — only gates profile-picture uploads (see gas/README.md); the
-// folder id isn't sensitive on its own (uploaded files get their own
-// per-file sharing, the folder itself needn't be publicly listable), so
-// it's fine to inline like the other NEXT_PUBLIC_ config.
-const DRIVE_FOLDER_ID = process.env.NEXT_PUBLIC_DRIVE_FOLDER_ID
 // optional — a 4th published-CSV sheet ("Settings", key/value rows) that
 // syncs the skill/category/role-level option pools and project-type
 // templates across everyone's browser, instead of each browser keeping
@@ -76,7 +71,9 @@ export const isRemoteConfigured = !!(
   GAS_URL
 )
 
-export const isDriveConfigured = isRemoteConfigured && !!DRIVE_FOLDER_ID
+// image uploads go to a Drive folder that GAS manages itself (created by
+// setupOhsumi() and kept in a script property), so they only need GAS.
+export const isDriveConfigured = isRemoteConfigured
 export const isSettingsConfigured = isRemoteConfigured && !!SETTINGS_CSV_URL
 
 // ---- CSV parsing ------------------------------------------------------
@@ -741,25 +738,21 @@ export const remoteApi = {
       memberId,
       dataUrl,
       filename,
-      folderId: DRIVE_FOLDER_ID,
     }),
   uploadOrgLogo: (dataUrl: string, filename: string) =>
     postToGas<{ url: string }>('uploadOrgLogo', {
       dataUrl,
       filename,
-      folderId: DRIVE_FOLDER_ID,
     }),
   uploadExpenseReceipt: (dataUrl: string, filename: string) =>
     postToGas<{ url: string }>('uploadExpenseReceipt', {
       dataUrl,
       filename,
-      folderId: DRIVE_FOLDER_ID,
     }),
   uploadSurveyImage: (dataUrl: string, filename: string) =>
     postToGas<{ url: string }>('uploadSurveyImage', {
       dataUrl,
       filename,
-      folderId: DRIVE_FOLDER_ID,
     }),
   addMember: (name: string, email: string, affiliation: string, role: Role) =>
     postToGas<{ id: string }>('addMember', { name, email, affiliation, role }),
