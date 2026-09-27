@@ -114,7 +114,7 @@ pnpm dev
 
 1. リポジトリの Settings → Secrets and variables → Actions に、`gas/README.md`
    「4. GitHub Secrets」の表にある Secret（`MEMBERS_CSV` / `PROJECTS_CSV` /
-   `TASKS_CSV` / `CSV_GAS`、任意で `DRIVE_FOLDER_ID` / `SETTINGS_CSV`）を設定します。
+   `TASKS_CSV` / `CSV_GAS`、任意で `SETTINGS_CSV`）を設定します。
 2. Settings → Pages で、Source を「GitHub Actions」に設定します。
 3. `main` ブランチに push すると `.github/workflows/deploy.yml` が自動でビルド・
    デプロイします。
