@@ -156,3 +156,84 @@ describe('GAS との通信', () => {
     expect(await remote.fetchLoginConfig()).toEqual({ orgId: 'org_a' })
   })
 })
+
+describe('Googleでログインの準備(google.accounts.id.initialize)', () => {
+  type Config = { nonce: string; callback: (r: { credential?: string }) => void }
+  let id: {
+    initialize: ReturnType<typeof vi.fn>
+    renderButton: ReturnType<typeof vi.fn>
+    prompt: ReturnType<typeof vi.fn>
+    disableAutoSelect: typeof disableAutoSelect
+  }
+  const b64url = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const idToken = (nonce: string) => `${b64url({ alg: 'RS256' })}.${b64url({ nonce, email: 'a@example.com' })}.sig`
+  const lastConfig = () => id.initialize.mock.calls.at(-1)![0] as Config
+  const button = { innerHTML: '' } as unknown as HTMLElement
+
+  beforeEach(() => {
+    id = { initialize: vi.fn(), renderButton: vi.fn(), prompt: vi.fn(), disableAutoSelect }
+    ;(window as unknown as { google: unknown }).google = { accounts: { id, oauth2: {} } }
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID', 'client.apps.googleusercontent.com')
+  })
+
+  const prepare = async (s: typeof import('./session'), onCredential = vi.fn(), onNonceMismatch = vi.fn()) => {
+    await s.prepareGoogleSignIn({ orgId: 'org_a', button, shouldAutoPrompt: () => true, onCredential, onNonceMismatch })
+    return { onCredential, onNonceMismatch }
+  }
+
+  it('何度呼んでも(同時に呼んでも)initialize は1回だけで、ボタンの表示だけやり直す', async () => {
+    const s = await import('./session')
+    await Promise.all([prepare(s), prepare(s)])
+    await prepare(s)
+    expect(id.initialize).toHaveBeenCalledTimes(1)
+    expect(id.renderButton).toHaveBeenCalledTimes(3)
+    // 自動ログイン・One Tap は準備した時の1回だけ
+    expect(id.prompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('IDトークンの nonce に対応する乱数を渡し、同じ乱数は2回渡さない', async () => {
+    const s = await import('./session')
+    const { onCredential, onNonceMismatch } = await prepare(s)
+    const { nonce, callback } = lastConfig()
+    callback({ credential: idToken(nonce) })
+    expect(onCredential).toHaveBeenCalledTimes(1)
+    const secret = onCredential.mock.calls[0][1] as string
+    expect(nonce).toBe(`org_a.${createHash('sha256').update(secret).digest('base64url')}`)
+    // 同じ試行の2回目は渡さない(ログイン中の処理を止めないよう、失敗の扱いにもしない)
+    callback({ credential: idToken(nonce) })
+    expect(onCredential).toHaveBeenCalledTimes(1)
+    expect(onNonceMismatch).not.toHaveBeenCalled()
+  })
+
+  it('nonce が今の試行と違う IDトークンには、乱数を渡さない', async () => {
+    const s = await import('./session')
+    const { onCredential, onNonceMismatch } = await prepare(s)
+    lastConfig().callback({ credential: idToken('org_a.old-attempt') })
+    lastConfig().callback({ credential: 'not-a-jwt' })
+    expect(onCredential).not.toHaveBeenCalled()
+    expect(onNonceMismatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('IDトークンを受け取った後にログイン画面が作り直されても、準備し直さない', async () => {
+    const s = await import('./session')
+    await prepare(s)
+    lastConfig().callback({ credential: idToken(lastConfig().nonce) })
+    await prepare(s)
+    expect(id.initialize).toHaveBeenCalledTimes(1)
+    expect(id.renderButton).toHaveBeenCalledTimes(1)
+  })
+
+  it('失敗した後(resetGoogleSignIn)とログアウトの後は、新しい nonce で準備し直す', async () => {
+    const s = await import('./session')
+    await prepare(s)
+    const first = lastConfig().nonce
+    s.resetGoogleSignIn()
+    await prepare(s)
+    const second = lastConfig().nonce
+    s.clearSession()
+    await prepare(s)
+    const third = lastConfig().nonce
+    expect(id.initialize).toHaveBeenCalledTimes(3)
+    expect(new Set([first, second, third]).size).toBe(3)
+  })
+})
