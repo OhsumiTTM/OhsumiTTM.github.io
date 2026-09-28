@@ -149,7 +149,7 @@ describe("読み込み方式の計測", () => {
       const text = gas[fn]()
       expect(text, fn).toMatch(/Members: 4行×3列=12セル/)
       expect(text, fn).toMatch(/所要時間\(合計\): \d+ ms/)
-      expect(text, fn).toMatch(/結果の一致\(現在の方式と比べて\): 一致/)
+      expect(text, fn).toMatch(/結果の一致\(getDisplayValues と比べて\): 一致/)
     }
     expect(setup().gas.measureReadA()).toMatch(/スプレッドシートを開く \d+ms \/ シートの取得 \d+ms \/ 最終行・最終列\(4回\) \d+ms \/ getRange \d+ms \/ getDisplayValues \d+ms \/ 空行の除去/)
     expect(setup().gas.measureReadB()).toMatch(/シート数 6/)
@@ -165,7 +165,7 @@ describe("読み込み方式の計測", () => {
     expect(calls.fetchUrls[0]).toContain('valueRenderOption=FORMATTED_VALUE')
     expect(text).toMatch(/batchGet\(HTTP\) \d+ms/)
     expect(text).toMatch(/応答: HTTP 200/)
-    expect(text).toMatch(/結果の一致\(現在の方式と比べて\): 一致/)
+    expect(text).toMatch(/結果の一致\(getDisplayValues と比べて\): 一致/)
   })
 
   it('(d) で Sheets API が無効な場合は、エラーの内容と対処を出して終わる(例外を投げない)', () => {
