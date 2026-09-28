@@ -1,0 +1,68 @@
+// content/legal/*.md(紹介ページ・プライバシーポリシー・利用規約)が、見出し・表・
+// 箇条書き・太字・リンクとして表示されることを確かめる
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import { Markdown, parseMarkdown } from './simple-markdown'
+
+const legal = (name: string) => readFileSync(join(__dirname, '..', '..', 'content', 'legal', `${name}.md`), 'utf8')
+const html = (source: string) => renderToStaticMarkup(<Markdown source={source} />)
+
+describe('simple-markdown', () => {
+  it('見出し・段落・改行・箇条書き・番号付き・太字・リンク・表を変換する', () => {
+    const out = html(
+      [
+        '# タイトル',
+        '',
+        '本文1行目  ',
+        '2行目',
+        '',
+        '## 小見出し',
+        '',
+        '- 項目A',
+        '- [リンク](/privacy/)',
+        '',
+        '1. **太字**:説明',
+        '2. 二つ目',
+        '',
+        '| 列1 | 列2 |',
+        '| --- | --- |',
+        '| a | **b** |',
+        '',
+        '[外部](https://example.com)',
+      ].join('\n'),
+    )
+    expect(out).toContain('<h1 class="text-2xl font-semibold tracking-tight">タイトル</h1>')
+    expect(out).toMatch(/本文1行目<br\/><\/span><span>2行目<\/span>/)
+    expect(out).toContain('>小見出し</h2>')
+    expect(out).toMatch(/<ul[^>]*list-disc[^>]*><li>項目A<\/li><li><a href="\/privacy\/"[^>]*>リンク<\/a><\/li><\/ul>/)
+    expect(out).toMatch(/<ol[^>]*list-decimal[^>]*><li><strong[^>]*>太字<\/strong>:説明<\/li><li>二つ目<\/li><\/ol>/)
+    expect(out).toMatch(/<div class="[^"]*overflow-x-auto[^"]*"><table/)
+    expect(out).toMatch(/<th scope="col"[^>]*>列1<\/th>/)
+    expect(out).toMatch(/<td[^>]*><strong[^>]*>b<\/strong><\/td>/)
+    expect(out).toMatch(/<a href="https:\/\/example.com"[^>]*target="_blank" rel="noopener noreferrer"/)
+  })
+
+  it('3つのページの内容を変換でき、未確定の箇所はそのまま残る', () => {
+    const privacy = html(legal('privacy'))
+    expect(privacy).toContain('>Ohsumi プライバシーポリシー</h1>')
+    expect(privacy).toContain('制定日:20XX年X月X日')
+    expect(privacy).toContain('メールアドレス:[記入]')
+    expect(privacy).toMatch(/<th scope="col"[^>]*>権限<\/th>/)
+    expect(privacy).toMatch(/<strong[^>]*>利用組織の情報<\/strong>/)
+    expect(parseMarkdown(legal('privacy')).filter((b) => b.type === 'table')).toHaveLength(1)
+
+    const terms = html(legal('terms'))
+    expect(terms).toContain('>第1条(定義)</h2>')
+    expect(terms).toContain('[横浜地方裁判所]')
+
+    const about = html(legal('about'))
+    expect(about).toMatch(/<a href="\/privacy\/"[^>]*>プライバシーポリシー<\/a>/)
+    expect(about).toContain('お問い合わせ:[メールアドレスを記入]')
+    // Markdown の記号が本文に残っていない
+    for (const out of [privacy, terms, about]) {
+      expect(out).not.toMatch(/\*\*|\]\(|^#|\| ---/m)
+    }
+  })
+})

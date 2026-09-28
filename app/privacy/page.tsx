@@ -4,5 +4,5 @@ import { StaticPage } from '@/components/ohsumi/static-page'
 export const metadata: Metadata = { title: 'プライバシーポリシー | Ohsumi' }
 
 export default function Page() {
-  return <StaticPage title="プライバシーポリシー" />
+  return <StaticPage name="privacy" />
 }
