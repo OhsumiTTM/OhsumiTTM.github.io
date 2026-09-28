@@ -808,6 +808,10 @@ export const remoteApi = {
   updateEmail: (memberId: string, email: string) => postToGas('updateEmail', { memberId, email }),
   // 閲覧できる経費申請だけが返る(gas/Code.gs の canViewExpense)
   getExpenses: () => postToGas<import('./types').ExpenseApplication[]>('getExpenses', {}),
+  // 採用の候補者(個人情報)。採用の権限が無い人には空の一覧が返る(gas/Code.gs の getCandidates)
+  getCandidates: () => postToGas<import('./types').Candidate[]>('getCandidates', {}),
+  // フォームの回答。閲覧できる回答だけが返る(gas/Code.gs の canViewFormSubmission)
+  getFormSubmissions: () => postToGas<import('./types').CustomFormSubmission[]>('getFormSubmissions', {}),
   // アップロードしたファイル(非公開)を権限を確認したうえで取得する
   getFiles: (fileIds: string[]) => postToGas<FetchedFile[]>('getFiles', { fileIds }),
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
@@ -851,8 +855,7 @@ export const remoteApi = {
       departmentName: info.departmentName,
       gradeYear: info.gradeYear,
     }),
-  // 採用支援（Candidates）— Expenses/FormSubmissionsと同じくシート直書きの
-  // 書き込み専用API。読み取りは行わずフロント側のローカルstateで管理する。
+  // 採用支援（Candidates）— 書き込み。読み取りは getCandidates(採用の権限を持つ人だけ)
   addCandidate: (candidate: {
     name: string
     email?: string
