@@ -269,6 +269,7 @@ URLを知っている人がログインなしで全データを読めてしま�
 | Secret名 | 説明 |
 |---|---|
 | `FEEDBACK_FORM_URL` | フィードバックの送信先 Google フォームの `formResponse` で終わるURL |
+| `GOOGLE_CALENDAR_READ` | `true` にすると、Googleカレンダーの予定の表示と日程候補の空き時間の確認を有効にします(機密のスコープ `calendar` を要求します。Google の審査を通過するまでは設定しないでください) |
 
 **注意**: 静的サイトとしてビルドされるため、Web App の URL と OAuth クライアントIDはビルド後のJavaScriptから誰でも読み取れます。ただし、データの読み書きには Google アカウントでのログインが必要で、閲覧権限のないデータは Apps Script が返しません。
 
@@ -296,6 +297,20 @@ Ohsumi のログインには Google アカウントでのサインインを使�
    - `http://localhost:3000`（ローカル開発用、任意）
 8. 「作成」をクリック → **「クライアントID」** をコピー（`123456789-xxxx.apps.googleusercontent.com` の形式）
 9. このIDを GitHub Secrets の `GOOGLE_OAUTH_CLIENT_ID` に登録する
+
+#### 要求するスコープ
+
+フロントが要求するスコープは、非機密のものだけです(Google Auth Platform の「データアクセス」に、この3つを登録します)。
+
+| スコープ | 用途 | 要求するタイミング |
+|---|---|---|
+| `openid` | ログイン | 「Googleでログイン」を押したとき、トークンの期限が切れたとき |
+| `.../auth/userinfo.email`(`email`) | ログインしたメンバーの特定 | 同上 |
+| `.../auth/drive.file` | 個人スプレッドシート連携(アプリが作成したシートにだけ書き込む) | 個人ページで「同期用のスプレッドシートを作成」「今すぐ同期」を押したとき |
+
+- タスクや不在日の Googleカレンダーへの追加は、Googleカレンダーの新規予定画面を開くリンクで行うため、スコープは不要です
+- Googleカレンダーの予定の表示と空き時間の確認は、機密のスコープ(`.../auth/calendar`)が必要なため停止しています。Secret `GOOGLE_CALENDAR_READ` を `true` にすると有効になります
+- 個人スプレッドシート連携には、OAuth クライアントのプロジェクトで **Google Sheets API** が有効になっている必要があります(「APIとサービス」→「ライブラリ」)
 
 #### Apps Script にも登録する
 

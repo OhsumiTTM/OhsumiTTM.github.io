@@ -13,6 +13,7 @@ import {
   setGasAuthToken,
 } from '@/lib/ohsumi/google-sheet-sync'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
+import { LegalLinks } from './legal-links'
 
 // continueAs: 再読み込み後、前回ログインしていた人の名前。読み取りには毎回
 // Google のトークンが必要なため、ボタンを1回押して「続行」してもらう
@@ -134,6 +135,7 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
             {t('login.poweredByGoogle')}
           </p>
         </div>
+        <LegalLinks className="mt-6" />
       </div>
     </main>
   )

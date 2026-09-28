@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { getCalendarToken, requestCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
-import { createCalendarEvent } from '@/lib/ohsumi/google-calendar'
+import { getCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
+import { isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
 import { Drawer, Modal } from '../modal'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Button } from '@/components/ui/button'
@@ -40,7 +40,7 @@ import {
   type TaskRetrospective,
   type TaskStatus,
 } from '@/lib/ohsumi/types'
-import { formatDeadlineFull, formatDateTime, googleCalendarUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, type WorkloadCapacity } from '@/lib/ohsumi/utils'
+import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, type WorkloadCapacity } from '@/lib/ohsumi/utils'
 import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
 import { useI18n, STATUS_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
@@ -2472,54 +2472,24 @@ const SCHEDULE_RESPONSE_COLOR: Record<ScheduleResponseValue, string> = {
 }
 
 // Googleカレンダーへの追加ボタン — 日程調整完了後に表示する
+// 日程調整が完了したタスクを Googleカレンダーに追加する。calendar スコープは使わず、
+// Googleカレンダーの新規予定画面を開くリンクにしている(利用者が内容を確認して保存する)
 function AddToGCalButton({ task }: { task: Task }) {
-  const toast = useToast()
   const { t } = useI18n()
-  const [added, setAdded] = useState(false)
-  const [loading, setLoading] = useState(false)
-
-  if (!isGoogleOAuthConfigured() || added) return null
-
-  const add = async () => {
-    setLoading(true)
-    try {
-      let token = getCalendarToken()
-      if (!token) token = await requestCalendarToken()
-      const title = task.name
-      const desc = task.description ?? ''
-      if (task.deadline) {
-        const iso = task.dueTime
-          ? `${task.deadline}T${task.dueTime}:00+09:00`
-          : undefined
-        const endIso = task.dueTime
-          ? `${task.deadline}T${String(parseInt(task.dueTime.slice(0, 2)) + 1).padStart(2, '0')}${task.dueTime.slice(2)}:00+09:00`
-          : undefined
-        await createCalendarEvent(token, {
-          summary: `[Ohsumi] ${title}`,
-          description: desc,
-          ...(iso ? { startDateTime: iso, endDateTime: endIso ?? iso } : { startDate: task.deadline }),
-        })
-      } else {
-        await createCalendarEvent(token, { summary: `[Ohsumi] ${title}`, description: desc, startDate: new Date().toISOString().slice(0, 10) })
-      }
-      setAdded(true)
-      toast(t('taskDrawer.gcal.added'))
-    } catch (e) {
-      toast(t('taskDrawer.gcal.failed', { error: String(e) }))
-    } finally {
-      setLoading(false)
-    }
-  }
+  const href =
+    googleCalendarUrl(task) ??
+    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, new Date().toISOString().slice(0, 10), task.description || 'Ohsumiから追加')
 
   return (
-    <button
-      onClick={add}
-      disabled={loading}
-      className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:bg-secondary disabled:opacity-50"
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:bg-secondary"
     >
       <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-      {loading ? t('taskDrawer.gcal.adding') : t('taskDrawer.gcal.addButton')}
-    </button>
+      {t('taskDrawer.gcal.addButton')}
+    </a>
   )
 }
 
@@ -2581,6 +2551,7 @@ function ScheduleSection({
   const [freeBusy, setFreeBusy] = useState<Record<string, boolean>>({}) // candidateId -> busy
   const checkFreeBusy = async () => {
     if (!schedule || !isInvited) return
+    if (!isGoogleCalendarReadEnabled) return
     const token = getCalendarToken()
     if (!token) return
     const { fetchFreeBusy } = await import('@/lib/ohsumi/google-calendar')
@@ -2626,7 +2597,12 @@ function ScheduleSection({
             <div className="rounded-lg border border-border bg-secondary/40 p-3">
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-xs text-muted-foreground">{t('taskDrawer.schedule.respondHint')}</p>
-                {isGoogleOAuthConfigured() && getCalendarToken() && (
+                {/* 空き時間の確認は calendar スコープ(機密)が必要なため、既定では停止している
+                    (lib/ohsumi/features.ts の isGoogleCalendarReadEnabled で有効にできる) */}
+                {isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
+                  <span className="text-[10px] text-muted-foreground">{t('taskDrawer.schedule.freeBusyUnavailable')}</span>
+                )}
+                {isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && getCalendarToken() && (
                   <button onClick={checkFreeBusy} className="flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400">
                     <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
                     {t('taskDrawer.schedule.checkFreeBusy')}

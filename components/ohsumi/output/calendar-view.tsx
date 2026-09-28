@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Task } from '@/lib/ohsumi/types'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '../primitives'
-import { todayStr } from '@/lib/ohsumi/utils'
+import { todayStr, googleCalendarAllDayUrl } from '@/lib/ohsumi/utils'
 import { Button } from '@/components/ui/button'
 import { ChevronRight, Calendar, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -14,7 +14,8 @@ import {
   requestCalendarToken,
   isGoogleOAuthConfigured,
 } from '@/lib/ohsumi/google-sheet-sync'
-import { fetchCalendarEvents, createCalendarEvent, deleteCalendarEvent, type GCalEvent } from '@/lib/ohsumi/google-calendar'
+import { fetchCalendarEvents, type GCalEvent } from '@/lib/ohsumi/google-calendar'
+import { isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 
@@ -60,6 +61,9 @@ function useGCalEvents(year: number, month: number, weekStart?: Date, dayDate?: 
   }, [year, month, view, weekStart, dayDate])
 
   useEffect(() => {
+    // 予定の表示は calendar スコープ(機密)が必要なため、既定では停止している
+    // (lib/ohsumi/features.ts の isGoogleCalendarReadEnabled で有効にできる)
+    if (!isGoogleCalendarReadEnabled) return
     const token = getCalendarToken()
     if (token) {
       setHasToken(true)
@@ -73,6 +77,7 @@ function useGCalEvents(year: number, month: number, weekStart?: Date, dayDate?: 
   }, [load])
 
   const connect = async () => {
+    if (!isGoogleCalendarReadEnabled) return
     try {
       const token = await requestCalendarToken()
       setHasToken(true)
@@ -201,6 +206,18 @@ function MonthView({
                     >
                       {absentDates.includes(dateKey(d)) ? tr('calendar.absent.badge') : '＋'}
                     </button>
+                    {absentDates.includes(dateKey(d)) && (
+                      <a
+                        href={googleCalendarAllDayUrl(tr('calendar.absent.eventTitle'), dateKey(d))}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={tr('calendar.absent.addToGcal')}
+                        aria-label={tr('calendar.absent.addToGcal')}
+                        className="rounded px-0.5 text-rose-500 hover:bg-rose-100 dark:hover:bg-rose-900/40"
+                      >
+                        <Calendar className="size-3" />
+                      </a>
+                    )}
                   </div>
                   <div className="space-y-1">
                     {dayGcal.slice(0, 2).map((e) => (
@@ -409,21 +426,16 @@ export function CalendarView({
   const myAbsentDates = currentUser?.absentDates ?? []
   const weekdays = tr('taskDrawer.schedule.weekdayShort').split(',')
 
-  const toggleAbsent = useCallback(async (dateStr: string) => {
+  // 不在日の登録・解除。Googleカレンダーへの予定の追加は、calendar スコープを
+  // 使わず、各日の「不在」の横に出す新規予定画面へのリンクから利用者が行う
+  const toggleAbsent = useCallback((dateStr: string) => {
     if (!currentUser) return
-    const token = getCalendarToken()
     if (myAbsentDates.includes(dateStr)) {
       updateAbsentDates(currentUser.id, myAbsentDates.filter((d) => d !== dateStr))
-      // does not delete the GCal event (left to manual deletion — searching by title would be complex)
     } else {
       updateAbsentDates(currentUser.id, [...myAbsentDates, dateStr])
-      if (token) {
-        try {
-          await createCalendarEvent(token, { summary: tr('calendar.absent.eventTitle'), startDate: dateStr })
-        } catch { /* ignore — calendar sync is best-effort */ }
-      }
     }
-  }, [currentUser, myAbsentDates, updateAbsentDates, tr])
+  }, [currentUser, myAbsentDates, updateAbsentDates])
 
   const initial = useMemo(() => {
     const withDeadline = tasks.find((t) => t.deadline)
@@ -522,7 +534,13 @@ export function CalendarView({
           </div>
 
           {/* Google Calendar connect */}
-          {isGoogleOAuthConfigured() && (
+          {isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
+            <span className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground">
+              <Calendar className="size-3" />
+              {tr('calendar.gcal.unavailable')}
+            </span>
+          )}
+          {isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && (
             hasToken ? (
               <button onClick={connect} title={tr('calendar.gcal.reload')}
                 className={cn('flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300', gcalLoading && 'animate-pulse')}

@@ -43,12 +43,16 @@ import {
 } from 'lucide-react'
 import {
   isGoogleOAuthConfigured,
-  requestSheetsToken,
-  extractSpreadsheetId,
-  verifySheetAccess,
+  requestDriveFileToken,
+  createPersonalSpreadsheet,
+  personalSheetUrl,
+  PersonalSheetUnavailableError,
   syncTasksToSheet,
-  loadPersonalSheetId,
-  savePersonalSheetId,
+  loadPersonalSheet,
+  savePersonalSheet,
+  hasLegacyPersonalSheet,
+  clearLegacyPersonalSheet,
+  type PersonalSheet,
   type SyncRow,
 } from '@/lib/ohsumi/google-sheet-sync'
 
@@ -153,10 +157,10 @@ export function PersonDetail({ id }: { id: string }) {
   const [initialsDraft, setInitialsDraft] = useState('')
   const [newEmail, setNewEmail] = useState('')
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
-  const [personalSheetId, setPersonalSheetId] = useState('')
-  const [sheetInput, setSheetInput] = useState('')
-  const [sheetTitle, setSheetTitle] = useState<string | null>(null)
-  const [sheetStatus, setSheetStatus] = useState<'idle' | 'verifying' | 'syncing'>('idle')
+  const [personalSheet, setPersonalSheet] = useState<PersonalSheet | null>(null)
+  // 以前の方式(既存のシートのURLを貼り付けて連携)で保存したシートが残っている
+  const [legacySheet, setLegacySheet] = useState(false)
+  const [sheetStatus, setSheetStatus] = useState<'idle' | 'creating' | 'syncing'>('idle')
   const [sheetError, setSheetError] = useState<string | null>(null)
   const [sheetSyncedAt, setSheetSyncedAt] = useState<Date | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -210,34 +214,26 @@ export function PersonDetail({ id }: { id: string }) {
   }
 
   useEffect(() => {
-    const saved = loadPersonalSheetId(member.id)
-    setPersonalSheetId(saved)
-    setSheetInput(saved)
+    setPersonalSheet(loadPersonalSheet(member.id))
+    setLegacySheet(hasLegacyPersonalSheet(member.id))
   }, [member.id])
 
-  const handleSheetConnect = async () => {
-    const id = extractSpreadsheetId(sheetInput.trim())
-    if (!id) {
-      setSheetError(t('person.sheet.invalidUrl'))
-      return
-    }
-    setSheetStatus('verifying')
+  // 同期用のスプレッドシートをアプリが新しく作成する(drive.file スコープでは、
+  // アプリが作成したファイルにしか書き込めないため)
+  const handleSheetCreate = async () => {
+    setSheetStatus('creating')
     setSheetError(null)
     try {
-      const token = await requestSheetsToken()
-      const result = await verifySheetAccess(id, token)
-      if (!result.ok) {
-        setSheetError(result.error ?? t('person.sheet.accessFailed'))
-        setSheetStatus('idle')
-        return
-      }
-      savePersonalSheetId(member.id, id)
-      setPersonalSheetId(id)
-      setSheetTitle(result.title ?? null)
-      setSheetStatus('idle')
-      toast(t('person.sheet.connected'))
+      const token = await requestDriveFileToken()
+      const sheet = await createPersonalSpreadsheet(token, t('person.sheet.newSheetTitle', { name: member.name }))
+      savePersonalSheet(member.id, sheet)
+      setPersonalSheet(sheet)
+      setLegacySheet(false)
+      setSheetSyncedAt(null)
+      toast(t('person.sheet.created'))
     } catch (e) {
       setSheetError(e instanceof Error ? e.message : t('person.sheet.authFailed'))
+    } finally {
       setSheetStatus('idle')
     }
   }
@@ -246,7 +242,8 @@ export function PersonDetail({ id }: { id: string }) {
     setSheetStatus('syncing')
     setSheetError(null)
     try {
-      const token = await requestSheetsToken(true)
+      if (!personalSheet) return
+      const token = await requestDriveFileToken(true)
       const rows: SyncRow[] = mine.map((t) => ({
         taskName: t.name,
         project: getProject(t.projectId)?.name ?? '',
@@ -263,23 +260,31 @@ export function PersonDetail({ id }: { id: string }) {
         progress: String(t.progress ?? ''),
         description: t.description ?? '',
       }))
-      await syncTasksToSheet(personalSheetId, token, rows)
+      await syncTasksToSheet(personalSheet.id, token, rows)
       setSheetSyncedAt(new Date())
       toast(t('person.sheet.synced'))
     } catch (e) {
-      setSheetError(e instanceof Error ? e.message : t('person.sheet.syncFailed'))
+      if (e instanceof PersonalSheetUnavailableError) {
+        setSheetError(t('person.sheet.unavailable'))
+      } else {
+        setSheetError(e instanceof Error ? e.message : t('person.sheet.syncFailed'))
+      }
     } finally {
       setSheetStatus('idle')
     }
   }
 
+  // 連携を解除する(スプレッドシート自体は削除しない)
   const handleSheetDisconnect = () => {
-    savePersonalSheetId(member.id, '')
-    setPersonalSheetId('')
-    setSheetInput('')
-    setSheetTitle(null)
+    savePersonalSheet(member.id, null)
+    setPersonalSheet(null)
     setSheetError(null)
     setSheetSyncedAt(null)
+  }
+
+  const dismissLegacySheet = () => {
+    clearLegacyPersonalSheet(member.id)
+    setLegacySheet(false)
   }
 
   const mine = tasks.filter((t) => t.assigneeIds.includes(member.id))
@@ -1391,12 +1396,26 @@ export function PersonDetail({ id }: { id: string }) {
                 {t('person.sheet.description')}
               </p>
 
-              {personalSheetId ? (
+              {legacySheet && !personalSheet && (
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                  <p>{t('person.sheet.legacyNotice')}</p>
+                  <button type="button" onClick={dismissLegacySheet} className="mt-1 underline underline-offset-2">
+                    {t('person.sheet.legacyDismiss')}
+                  </button>
+                </div>
+              )}
+
+              {personalSheet ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-xs font-medium text-accent-foreground">
+                  <a
+                    href={personalSheetUrl(personalSheet.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-2 py-1 text-xs font-medium text-accent-foreground hover:underline"
+                  >
                     <Check className="size-3.5 text-primary" strokeWidth={3} />
-                    {sheetTitle ?? personalSheetId}
-                  </span>
+                    {personalSheet.title || personalSheet.id}
+                  </a>
                   <Button
                     size="sm"
                     variant="outline"
@@ -1422,28 +1441,18 @@ export function PersonDetail({ id }: { id: string }) {
                 </div>
               ) : (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <input
-                    value={sheetInput}
-                    onChange={(e) => setSheetInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.nativeEvent.isComposing || e.keyCode === 229) return
-                      if (e.key === 'Enter') { e.preventDefault(); handleSheetConnect() }
-                    }}
-                    placeholder={t('person.sheet.placeholder')}
-                    className="h-8 min-w-0 flex-1 rounded-md border border-dashed border-border-strong bg-background px-2 text-xs outline-none focus:border-primary"
-                  />
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 text-xs"
-                    disabled={sheetStatus !== 'idle' || !sheetInput.trim()}
-                    onClick={handleSheetConnect}
+                    disabled={sheetStatus !== 'idle'}
+                    onClick={handleSheetCreate}
                   >
-                    {sheetStatus === 'verifying' ? (
+                    {sheetStatus === 'creating' ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
                       <Link2 className="size-3.5" />
                     )}
-                    {sheetStatus === 'verifying' ? t('person.sheet.verifying') : t('person.sheet.connect')}
+                    {sheetStatus === 'creating' ? t('person.sheet.creating') : t('person.sheet.create')}
                   </Button>
                 </div>
               )}
