@@ -4360,10 +4360,24 @@ function updateSlackWebhookUrl(url) {
 // edit form) — posted verbatim as Discord message content, `allowed_mentions`
 // must suppress mention parsing so a title like "@everyone" can't mass-ping
 // the configured channel.
+// テスト環境(TEST_ENVIRONMENT=true)では、Discord・Slack には投稿せずログだけにする
+// (サンプルのデータの期限切れのタスクなどが、毎日投稿されないようにするため)。
+// Webhook の動作を確かめたい時だけ、スクリプトプロパティ TEST_ALLOW_CHAT を true にする
+function isChatSuppressed() {
+  if (!isTestEnvironment()) return false
+  return PropertiesService.getScriptProperties().getProperty('TEST_ALLOW_CHAT') !== 'true'
+}
+
+function logSuppressedChat(kind, content) {
+  console.log('[テスト環境] ' + kind + ' に投稿しませんでした(TEST_ALLOW_CHAT が true ではない): ' +
+    String(content).slice(0, 200))
+}
+
 function sendDiscordMessage(content) {
   try {
     var url = getDiscordWebhookUrl()
     if (!url) return
+    if (isChatSuppressed()) { logSuppressedChat('Discord', content); return }
     UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
@@ -4379,6 +4393,7 @@ function sendSlackMessage(content) {
   try {
     var url = getSlackWebhookUrl()
     if (!url) return
+    if (isChatSuppressed()) { logSuppressedChat('Slack', content); return }
     // @here / @channel / @everyone をゼロ幅スペースで無効化（意図しないメンション防止）
     var safe = String(content).replace(/@(here|channel|everyone)/g, '​$1')
     UrlFetchApp.fetch(url, {
@@ -6544,6 +6559,9 @@ function readWebhookTestResult(kind) {
 
 // テスト送信。通信自体に失敗した場合(例外)も結果として保存してから投げ直す
 function fetchWebhookForTest(kind, url, options) {
+  if (isChatSuppressed()) {
+    throw userError('テスト環境では Discord・Slack に投稿しません。接続を確かめる場合は、スクリプトプロパティ TEST_ALLOW_CHAT を true にしてください。')
+  }
   try {
     return UrlFetchApp.fetch(url, options)
   } catch (e) {
