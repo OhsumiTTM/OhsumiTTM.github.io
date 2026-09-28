@@ -135,6 +135,33 @@ pnpm dev
   シートに置かないでください。
 - 詳しい既知の制約は `gas/README.md` の「既知の制約」を参照してください。
 
+### Content-Security-Policy(CSP)
+
+GitHub Pages ではレスポンスヘッダーを設定できないため、`pnpm build` の最後に
+`scripts/csp.mjs` が `out/` の各 HTML へ `<meta http-equiv="Content-Security-Policy">` を入れます。
+
+- **インラインのスクリプトはハッシュ方式**で許可します(`'unsafe-inline'` は使いません)。
+  Next.js がページごとに出力するインラインのスクリプトの SHA-256 を、ページごとに `script-src` に並べます。
+- 次の場合は**ビルドを失敗**させます: ハッシュが入っていないインラインのスクリプトがある/
+  スクリプトの数が合わない/インラインのイベントハンドラー(`onclick="…"` など)や `javascript:` の URL がある。
+- 接続先(`connect-src`)は用途ごとに `scripts/csp.mjs` の先頭で管理しています。
+  新しい外部サービスへ通信する機能を追加したときは、ここにも追加してください。
+
+  | 接続先 | 用途 |
+  |---|---|
+  | `https://script.google.com`・`https://script.googleusercontent.com` | 団体の Apps Script |
+  | `https://accounts.google.com/gsi/` | Googleでログイン(ボタン・FedCM も含む) |
+  | `https://sheets.googleapis.com` | 個人スプレッドシートの作成・同期 |
+  | `https://docs.google.com/forms/` | フィードバックの送信 |
+  | `https://www.googleapis.com/calendar/v3/` | 予定の表示(`GOOGLE_CALENDAR_READ` が `true` でビルドした時だけ入る) |
+  | `https://www.googleapis.com/oauth2/v3/userinfo` | **以前のログイン方式だけが使う**。以前の方式のコードを削除する時に外す |
+
+- 画像(`img-src`)は、手入力の外部の画像 URL を表示できるよう `https:` をすべて許可しています。
+- meta タグでは `frame-ancestors` が使えないため、iframe への埋め込み対策は
+  `components/ohsumi/frame-guard.tsx` が引き続き担います。
+- 本番で CSP の違反が起きると、ブラウザの開発者ツールのコンソールに
+  「Refused to …because it violates the following Content Security Policy directive」と表示されます。
+
 ## ディレクトリ構成
 
 | パス | 内容 |
