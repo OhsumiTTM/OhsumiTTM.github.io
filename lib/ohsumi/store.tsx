@@ -1029,11 +1029,21 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   // 経費申請(閲覧できるものだけ — gas/Code.gs の getExpenses)。初期表示を
   // 待たせないよう、初期データとは別に後から読み込む
-  const loadExpenses = useCallback(() => {
+  // シートに直接保存している記録(経費・フォームの回答・採用の候補者)を読み込む。
+  // どれも GAS 側で、閲覧できる行だけに絞って返る
+  const loadRecords = useCallback(() => {
     if (!isRemoteConfigured) return
     remoteApi
       .getExpenses()
       .then((apps) => setExpenseApplications(apps))
+      .catch(reportRemoteError)
+    remoteApi
+      .getFormSubmissions()
+      .then((subs) => setCustomFormSubmissions(subs))
+      .catch(reportRemoteError)
+    remoteApi
+      .getCandidates()
+      .then((list) => setCandidates(list))
       .catch(reportRemoteError)
   }, [reportRemoteError])
 
@@ -1057,13 +1067,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         setSettingsReady(true)
         setRemoteStatus('ready')
         setPendingLoginId(res.memberId)
-        loadExpenses()
+        loadRecords()
         return { status: 'ok' as const }
       } catch (err) {
         throw err
       }
     },
-    [applyInitialData, loadExpenses],
+    [applyInitialData, loadRecords],
   )
 
   // 再読み込み後: この端末に保存したセッションがあれば、そのままログインし直す
@@ -1085,7 +1095,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         setSettingsReady(true)
         setRemoteStatus('ready')
         setCurrentUserId(res.memberId)
-        loadExpenses()
+        loadRecords()
       })
       .catch((err) => {
         if (!getSessionToken()) {
@@ -1100,7 +1110,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .finally(() => setSessionResuming(false))
-  }, [hydrated, applyInitialData, loadExpenses, reportRemoteError])
+  }, [hydrated, applyInitialData, loadRecords, reportRemoteError])
 
   // manual refresh for the header's 情報更新 button. Deliberately doesn't
   // touch remoteStatus/settingsReady (those flipping to non-ready is what
@@ -1119,8 +1129,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       })
       .catch(reportRemoteError)
       .finally(() => setRefreshing(false))
-    loadExpenses()
-  }, [reportRemoteError, applyInitialData, loadExpenses])
+    loadRecords()
+  }, [reportRemoteError, applyInitialData, loadRecords])
 
   // 定期タスク generation check (item 2/TSK-051の修正) — 生成の要否判定・
   // 実際の生成はGAS側のLockService付き関数(generateRecurringTasksLocked)
@@ -2225,6 +2235,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setProjects([])
       setTasks([])
       setExpenseApplications([])
+      // 採用の候補者(個人情報)とフォームの回答も、メモリから消す
+      setCandidates([])
+      setCustomFormSubmissions([])
       setInputs(SEED_INPUTS)
       dataVersionRef.current = undefined
       setRemoteStatus('idle')
