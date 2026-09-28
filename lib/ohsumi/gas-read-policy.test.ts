@@ -219,3 +219,34 @@ describe('READ_POLICY の網羅性', () => {
     expect(keys.filter((k) => !(k in policy.Settings.keys!))).toEqual([])
   })
 })
+
+describe('getExpenses の絞り込み(canViewExpense)', () => {
+  const app = {
+    id: 'e1',
+    applicantId: 'a',
+    approvalSteps: [
+      { id: 's1', type: 'member', memberId: 'lead' },
+      { id: 's2', type: 'role', role: '会計' },
+    ],
+  }
+  const viewer = (over: Record<string, unknown>) => ({
+    id: 'x', role: '一般', isFullAdmin: false, canOpenExpensesSection: false, ...over,
+  })
+  const can = (v: Record<string, unknown>) => gas.canViewExpense(viewer(v), app) as boolean
+
+  it('申請者本人と承認ステップの担当者は見える', () => {
+    expect(can({ id: 'a' })).toBe(true)
+    expect(can({ id: 'lead', role: '班長' })).toBe(true)
+    expect(can({ id: 'k', role: '会計' })).toBe(true)
+  })
+
+  it('全権管理者と、経費セクションを許可された役職は見える', () => {
+    expect(can({ id: 'boss', role: '代表', isFullAdmin: true })).toBe(true)
+    expect(can({ id: 'm', role: '班長', canOpenExpensesSection: true })).toBe(true)
+  })
+
+  it('それ以外の人は見えない', () => {
+    expect(can({ id: 'b' })).toBe(false)
+    expect(can({ id: 'l2', role: '班長' })).toBe(false)
+  })
+})

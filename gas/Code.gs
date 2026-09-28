@@ -1007,6 +1007,7 @@ function authorizeAction(acting, action, body) {
     'checkAndGenerateRecurringTasks', // item 2/TSK-051: 生成はルール定義に従うだけなので誰でも呼べる
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
+    'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -1240,7 +1241,7 @@ function toErrorMessage(err) {
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
-  'testDiscordWebhook', 'testSlackWebhook',
+  'testDiscordWebhook', 'testSlackWebhook', 'getExpenses',
 ]
 
 function doPost(e) {
@@ -1794,6 +1795,9 @@ function doPost(e) {
         break
       case 'submitDailyReport':
         result = saveDailyReport(body.report, actingMember)
+        break
+      case 'getExpenses':
+        result = getExpenses(actingMember)
         break
       case 'fetchDailyReports':
         result = fetchDailyReports()
@@ -5215,4 +5219,92 @@ function measureReadPerformance() {
   ]
   console.log(lines.join('\n'))
   return lines.join('\n')
+}
+
+// ---- 経費申請の読み取り --------------------------------------------------------
+//
+// 経費申請は以前は読み戻しておらず、申請した画面にしか表示されなかった。
+// getExpenses で、閲覧者が見てよい申請だけを返す。
+//   申請者本人 / 承認ステップに該当する人(指定メンバー、または同じ役職 —
+//   approveExpenseStep の担当者チェックと同じ基準) / 全権管理者 /
+//   管理画面の「経費」セクションを許可された役職(Settings の role_permissions)
+
+function rolePermissionsFromSettings() {
+  try {
+    var raw = getSettingValue('role_permissions')
+    var parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (e) {
+    return {}
+  }
+}
+
+function makeExpenseViewer(acting) {
+  var role = String(acting.role || '').trim()
+  var sections = rolePermissionsFromSettings()[role]
+  return {
+    id: String(acting.id || ''),
+    role: role,
+    isFullAdmin: role === '代表' || isActingFullAdmin(acting),
+    canOpenExpensesSection: Array.isArray(sections) && sections.indexOf('expenses') >= 0,
+  }
+}
+
+// 1件の経費申請を閲覧できるか(Google のサービスを使わない純粋な関数)
+function canViewExpense(viewer, app) {
+  if (viewer.isFullAdmin || viewer.canOpenExpensesSection) return true
+  if (String(app.applicantId) === viewer.id) return true
+  var steps = Array.isArray(app.approvalSteps) ? app.approvalSteps : []
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i] || {}
+    if (step.type === 'member' && String(step.memberId || '') === viewer.id) return true
+    if (step.type === 'role' && step.role && String(step.role) === viewer.role) return true
+  }
+  return false
+}
+
+function parseJsonOr(raw, fallback) {
+  if (raw === '' || raw == null) return fallback
+  try { return JSON.parse(String(raw)) } catch (e) { return fallback }
+}
+
+function expenseRowToApplication(headers, row) {
+  var get = function (name) {
+    var c = headers.indexOf(name)
+    return c >= 0 ? row[c] : ''
+  }
+  var createdAt = get('created_at')
+  return {
+    id: String(get('id')),
+    applicantId: String(get('applicant_id')),
+    amount: Number(get('amount')) || 0,
+    categoryId: String(get('category_id')),
+    receiptUrl: String(get('receipt_url') || '') || undefined,
+    justification: String(get('justification') || '') || undefined,
+    purpose: String(get('purpose') || '') || undefined,
+    customFieldAnswers: parseJsonOr(get('custom_field_answers_json'), {}),
+    approvalSteps: parseJsonOr(get('approval_steps_json'), []),
+    approvals: parseJsonOr(get('approvals_json'), []),
+    currentStepIndex: Number(get('current_step_index')) || 0,
+    status: String(get('status') || 'pending'),
+    createdAt: createdAt instanceof Date ? createdAt.toISOString() : String(createdAt || ''),
+    rejectionReason: String(get('rejection_reason') || '') || undefined,
+  }
+}
+
+function getExpenses(acting) {
+  var viewer = makeExpenseViewer(acting)
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  var apps = []
+  rows.forEach(function (row) {
+    var app = expenseRowToApplication(headers, row)
+    if (!app.id) return
+    if (canViewExpense(viewer, app)) apps.push(app)
+  })
+  // 新しい申請を先に(フロントの一覧と同じ並び)
+  apps.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
+  return apps
 }
