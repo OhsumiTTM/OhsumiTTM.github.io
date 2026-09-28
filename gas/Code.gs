@@ -816,6 +816,7 @@ function authorizeAction(acting, action, body) {
     'notifyTaskRejected',   // タスク却下通知（管理者が送信）
     'notifyProjectHealth',  // item 26: プロジェクト健康状態の自動判定変化通知
     'updateProjectHealthRecord', // item 26(追補): attention回復時の記録更新（通知なし）
+    'reportProjectHealth',  // 健康状態の自動判定の結果(複数プロジェクト)の記録と、まとめた通知
     'updateSearchProfile',  // 人材検索プロフィール（HR管理者が設定）
     'awardSkillPoints',     // スキルポイント付与（管理者操作）
     'approveExpenseStep',   // 経費承認（管理者操作）
@@ -1659,6 +1660,11 @@ function doPost(e) {
       case 'notifyProjectHealth':
         result = notifyProjectHealth(body.projectId, body.health)
         break
+      case 'reportProjectHealth':
+        // 自動判定の結果を複数プロジェクト分まとめて受け取り、記録の更新と
+        // 通知(1通にまとめる)をサーバー側で判断する
+        result = reportProjectHealth(body.items)
+        break
       case 'updateProjectHealthRecord':
         // item 26(追補): 通知なしでlast_notified_health列だけを更新する
         // （attentionから回復した際、次回の再悪化を確実に再通知するため）
@@ -1913,6 +1919,9 @@ function doPost(e) {
     // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
     // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
     if (lock) {
+      // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
+      // 次にロックを取った実行が更新前の値を読むことがある)
+      try { SpreadsheetApp.flush() } catch (flushErr) { /* 書き込みは実行の終了時にも確定する */ }
       bumpDataVersion()
       lock.releaseLock()
     }
@@ -2082,41 +2091,156 @@ function updateProjectHealthOverride(projectId, healthOverride) {
 }
 
 // item 26: 自動判定が変化した（前回通知時と異なる状態になった）際の通知。
-// フロント側（store.tsx）が重複防止の判定を行った上でのみ呼ぶ想定。
+// 以前のフロント(1件ずつ送る)との互換のために残している。新しいフロントは
+// reportProjectHealth でまとめて送る。健康状態が一度も記録されていない
+// プロジェクトは、初回の計算なので記録だけして通知しない。記録が既に同じ状態
+// (別の管理者の画面が先に記録・通知した場合など)なら通知しない。比較と記録は
+// doPost のロックの中で行うため、同時に呼ばれても二重には通知しない。
 function notifyProjectHealth(projectId, health) {
+  var project = findRow(SHEET_PROJECTS, projectId)
+  var last = project ? String(project.last_notified_health || '').trim() : ''
   var result = updateProjectFields(projectId, { last_notified_health: health })
-  notifyProjectHealthChanged(projectId, health, 'に変化しました（自動判定）')
+  if (project && last && last !== health) notifyProjectHealthChanged(projectId, health, 'に変化しました（自動判定）')
   return result
+}
+
+var PROJECT_HEALTH_LEVELS = ['good', 'watch', 'attention']
+// 1回の reportProjectHealth で受け付けるプロジェクトの数の上限
+var REPORT_PROJECT_HEALTH_MAX_ITEMS = 500
+
+// 自動判定の結果(items: [{ projectId, health }])を受け取り、シート上の記録
+// (last_notified_health)と比べて、記録の更新と通知を決める。フロントの判定は
+// 古いデータに基づく場合があるため、ここでシートの値を読み直して判断する。
+//   - 手動上書き(health_override)中のプロジェクト: 何もしない
+//   - 記録が空(一度も記録されていない): 初回の計算なので、記録だけして通知しない
+//   - attention 以外 → attention: 記録して通知する
+//   - attention → attention 以外: 記録だけする(次に悪化した時に再び通知するため)
+//   - それ以外: 何もしない
+// 通知が必要なプロジェクトが複数あっても、メール・Discord・Slack とも1通にまとめる。
+// 記録との比較と記録の更新は、doPost のロック(LockService)の中で行われる
+// (このアクションはロックの対象)。複数の管理者がほぼ同時に開いても、後の
+// 呼び出しは先の呼び出しが更新した記録と比べるため、同じ変化を二重に通知しない。
+function reportProjectHealth(items) {
+  if (!Array.isArray(items)) throw userError('健康状態の一覧が不正です。')
+  if (items.length > REPORT_PROJECT_HEALTH_MAX_ITEMS) throw userError('一度に送れるプロジェクトの数を超えています。')
+  var wanted = {}
+  items.forEach(function (item) {
+    var id = String((item && item.projectId) || '')
+    var health = String((item && item.health) || '')
+    if (id && PROJECT_HEALTH_LEVELS.indexOf(health) !== -1) wanted[id] = health
+  })
+
+  var sheet = getSheet(SHEET_PROJECTS)
+  var headers = headerRow(sheet)
+  var idCol = headers.indexOf('id')
+  var nameCol = headers.indexOf('name')
+  var overrideCol = headers.indexOf('health_override')
+  var recordCol = headers.indexOf('last_notified_health')
+  if (idCol === -1 || recordCol === -1) {
+    throw userError('プロジェクトのシートに last_notified_health 列がありません。setupOhsumi() を実行してください。')
+  }
+  var lastRow = sheet.getLastRow()
+  var rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, headers.length).getValues() : []
+
+  var recorded = []
+  var notified = []
+  rows.forEach(function (r, i) {
+    var id = String(r[idCol])
+    var health = wanted[id]
+    if (!health) return
+    if (overrideCol !== -1 && String(r[overrideCol] || '').trim()) return
+    var last = String(r[recordCol] || '').trim()
+    var notify = false
+    if (!last) {
+      notify = false
+    } else if (health === 'attention' && last !== 'attention') {
+      notify = true
+    } else if (health !== 'attention' && last === 'attention') {
+      notify = false
+    } else {
+      return
+    }
+    sheet.getRange(i + 2, recordCol + 1).setValue(health)
+    recorded.push(id)
+    if (notify) notified.push({ id: id, name: nameCol !== -1 ? String(r[nameCol] || '') : id, health: health })
+  })
+
+  if (notified.length > 0) {
+    notifyProjectHealthChangedBatch(notified, 'に変化しました（自動判定）')
+  }
+  return { recorded: recorded, notified: notified.map(function (p) { return p.id }) }
 }
 
 function notifyProjectHealthChanged(projectId, health, note) {
   try {
     var project = findRow(SHEET_PROJECTS, projectId)
     if (!project) return
-    var healthLabelJa = { good: '良好', watch: '要注意', attention: '要対応' }[health] || health
-    var healthLabelEn = { good: 'Good', watch: 'Needs attention', attention: 'Needs action' }[health] || health
+    notifyProjectHealthChangedBatch([{ id: projectId, name: project.name, health: health }], note)
+  } catch (err) {
+    console.error('notifyProjectHealthChangedの通知送信に失敗しました: ' + err)
+  }
+}
+
+// チャットの1通に並べるプロジェクトの数の上限(Discord は1通2,000文字まで)
+var PROJECT_HEALTH_CHAT_MAX_LINES = 20
+
+// 健康状態が変わったプロジェクト(1件以上)を、メール1通・Discord/Slack 各1通で知らせる。
+// projects: [{ id, name, health }]
+function notifyProjectHealthChangedBatch(projects, note) {
+  try {
+    if (!projects || projects.length === 0) return
+    var labelsJa = { good: '良好', watch: '要注意', attention: '要対応' }
+    var labelsEn = { good: 'Good', watch: 'Needs attention', attention: 'Needs action' }
     var noteEn = note === 'に手動で変更されました'
       ? ' (changed manually)'
       : note === 'に変化しました（自動判定）'
         ? ' (changed automatically)'
         : ''
-    notifyAdmins(
-      {
+    var templates
+    if (projects.length === 1) {
+      var p = projects[0]
+      var ja = labelsJa[p.health] || p.health
+      var en = labelsEn[p.health] || p.health
+      templates = {
         ja: {
-          subject: '[Ohsumi] プロジェクト「' + project.name + '」の健康状態: ' + healthLabelJa,
-          body: 'プロジェクト「' + project.name + '」の健康状態が「' + healthLabelJa + '」' +
+          subject: '[Ohsumi] プロジェクト「' + p.name + '」の健康状態: ' + ja,
+          body: 'プロジェクト「' + p.name + '」の健康状態が「' + ja + '」' +
             (note || '') + '\n\nOhsumiのダッシュボードで確認してください。',
         },
         en: {
-          subject: '[Ohsumi] Project "' + project.name + '" health: ' + healthLabelEn,
-          body: 'The health of project "' + project.name + '" is now "' + healthLabelEn + '"' +
+          subject: '[Ohsumi] Project "' + p.name + '" health: ' + en,
+          body: 'The health of project "' + p.name + '" is now "' + en + '"' +
             noteEn + '.\n\nCheck the Ohsumi dashboard for details.',
         },
-      },
-    )
-    notifyChat('❤️‍🩹 「' + project.name + '」の健康状態: ' + healthLabelJa)
+      }
+    } else {
+      templates = {
+        ja: {
+          subject: '[Ohsumi] ' + projects.length + '件のプロジェクトの健康状態が変わりました',
+          body: '次のプロジェクトの健康状態が変わりました' + (note === 'に変化しました（自動判定）' ? '（自動判定）' : '') + '。\n\n' +
+            projects.map(function (x) { return '・「' + x.name + '」: ' + (labelsJa[x.health] || x.health) }).join('\n') +
+            '\n\nOhsumiのダッシュボードで確認してください。',
+        },
+        en: {
+          subject: '[Ohsumi] Health changed for ' + projects.length + ' projects',
+          body: 'The health of the following projects has changed' + noteEn + '.\n\n' +
+            projects.map(function (x) { return '- "' + x.name + '": ' + (labelsEn[x.health] || x.health) }).join('\n') +
+            '\n\nCheck the Ohsumi dashboard for details.',
+        },
+      }
+    }
+    notifyAdmins(templates)
+
+    if (projects.length === 1) {
+      notifyChat('❤️‍🩹 「' + projects[0].name + '」の健康状態: ' + (labelsJa[projects[0].health] || projects[0].health))
+    } else {
+      var shown = projects.slice(0, PROJECT_HEALTH_CHAT_MAX_LINES)
+      var lines = shown.map(function (x) { return '・「' + x.name + '」: ' + (labelsJa[x.health] || x.health) })
+      if (projects.length > shown.length) lines.push('ほか ' + (projects.length - shown.length) + ' 件')
+      notifyChat('❤️‍🩹 ' + projects.length + '件のプロジェクトの健康状態が変わりました\n' + lines.join('\n'))
+    }
   } catch (err) {
-    console.error('notifyProjectHealthChangedの通知送信に失敗しました: ' + err)
+    console.error('notifyProjectHealthChangedBatchの通知送信に失敗しました: ' + err)
   }
 }
 
@@ -2345,7 +2469,7 @@ function sendBatchNotifications() {
       var subject = loc === 'en'
         ? 'Ohsumi Notification Summary (' + toSend.length + ')'
         : 'Ohsumi 通知まとめ (' + toSend.length + '件)'
-      MailApp.sendEmail({ to: emails.join(','), subject: subject, body: combined })
+      sendMail({ to: emails.join(','), subject: subject, body: combined })
     }
     if (toKeep.length > 0) {
       props.setProperty(key, JSON.stringify(toKeep))
@@ -2353,6 +2477,44 @@ function sendBatchNotifications() {
       props.deleteProperty(key)
     }
   })
+}
+
+// ---- メール送信(テスト環境では本来の宛先に送らない) ---------------------------
+//
+// スクリプトプロパティ TEST_ENVIRONMENT が true の場合は、本来の宛先には送らず、
+// スクリプトプロパティ TEST_NOTIFICATION_EMAIL の1つのアドレスにだけ送る
+// (件名に [テスト] を付け、本文の先頭に本来の宛先を書く)。未設定の場合は
+// 送信せず、実行ログに記録するだけにする。メールの送信は必ずこの関数を通す。
+
+function isTestEnvironment() {
+  return PropertiesService.getScriptProperties().getProperty('TEST_ENVIRONMENT') === 'true'
+}
+
+function sendMail(options) {
+  if (!isTestEnvironment()) {
+    MailApp.sendEmail(options)
+    return
+  }
+  var original = [options.to, options.cc, options.bcc].filter(Boolean).join(',')
+  var redirect = String(PropertiesService.getScriptProperties().getProperty('TEST_NOTIFICATION_EMAIL') || '').trim()
+  if (!redirect) {
+    console.log(
+      '[テスト環境] メールを送信しませんでした(TEST_NOTIFICATION_EMAIL が未設定)。件名: ' + options.subject +
+        ' / 本来の宛先: ' + original,
+    )
+    return
+  }
+  var notice = '(テスト環境のため、本来の宛先ではなくこのアドレスに送信しています。本来の宛先: ' + original + ')\n\n'
+  var redirected = {}
+  Object.keys(options).forEach(function (key) {
+    if (key !== 'to' && key !== 'cc' && key !== 'bcc') redirected[key] = options[key]
+  })
+  redirected.to = redirect
+  redirected.subject = '[テスト] ' + options.subject
+  redirected.body = notice + (options.body || '')
+  if (options.htmlBody) redirected.htmlBody = '<p>' + notice.trim() + '</p>' + options.htmlBody
+  MailApp.sendEmail(redirected)
+  console.log('[テスト環境] メールを ' + redirect + ' に送信しました。件名: ' + options.subject + ' / 本来の宛先: ' + original)
 }
 
 // 呼び出し方は2通り:
@@ -2540,7 +2702,7 @@ function sendLocalizedEmail(emails, templates) {
     var list = groups[loc]
     if (list.length === 0) return
     var tpl = templates[loc] || templates.ja
-    MailApp.sendEmail({ to: list.join(','), subject: tpl.subject, body: tpl.body })
+    sendMail({ to: list.join(','), subject: tpl.subject, body: tpl.body })
   })
 }
 
@@ -2840,6 +3002,14 @@ function syncCalendarForTask(taskId) {
     var guests = assigneeIds.map(function (aid) { return emailMap[String(aid)] }).filter(Boolean)
     if (guests.length === 0) return
 
+    // テスト環境では招待(メール)を本来の宛先に送らない。予定は作るが、ゲストは付けない
+    var eventOptions = isTestEnvironment()
+      ? {}
+      : { guests: guests.join(','), sendInvites: true }
+    if (isTestEnvironment()) {
+      console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + guests.join(','))
+    }
+
     var cal = CalendarApp.getDefaultCalendar()
     var title = '[Ohsumi] ' + task.title
     var existing = cal.getEvents(
@@ -2854,12 +3024,9 @@ function syncCalendarForTask(taskId) {
     if (task.due_time) {
       var start = new Date(task.due_date + 'T' + task.due_time + ':00')
       var end = new Date(start.getTime() + 60 * 60 * 1000)
-      cal.createEvent(title, start, end, { guests: guests.join(','), sendInvites: true })
+      cal.createEvent(title, start, end, eventOptions)
     } else {
-      cal.createAllDayEvent(title, new Date(task.due_date + 'T00:00:00'), {
-        guests: guests.join(','),
-        sendInvites: true,
-      })
+      cal.createAllDayEvent(title, new Date(task.due_date + 'T00:00:00'), eventOptions)
     }
   } catch (err) {
     // best-effort — Calendar quota/permissions issues shouldn't break assignment
@@ -4550,7 +4717,7 @@ function processFormStep(submissionId, stepId, actorId, action, comment) {
     if (fmNotifyIds.length > 0) {
       var fmNextEmails = memberEmailsByIds(fmNotifyIds)
       if (fmNextEmails.length > 0) {
-        MailApp.sendEmail({ to: fmNextEmails.join(','), subject: 'Ohsumi: 申請フォーム承認の依頼', body: '申請フォームの承認依頼が届きました。Ohsumiにログインして確認してください。' })
+        sendMail({ to: fmNextEmails.join(','), subject: 'Ohsumi: 申請フォーム承認の依頼', body: '申請フォームの承認依頼が届きました。Ohsumiにログインして確認してください。' })
       }
       notifyChat('📋 申請フォームの承認依頼が届きました（ステップ ' + (nextIdx + 1) + '）。Ohsumiにログインして確認してください。')
     }
@@ -4579,7 +4746,7 @@ function setFormSubmissionStatus(submissionId, status, reason) {
       if (submitterId) {
         var emails = memberEmailsByIds([submitterId])
         if (emails.length > 0) {
-          MailApp.sendEmail({
+          sendMail({
             to: emails.join(','),
             subject: '[Ohsumi] 申請フォームが却下されました',
             body:
@@ -6165,7 +6332,7 @@ var PERF_TEST_ID_PREFIX = 'perf-'
 var PERF_TEST_COUNTS = { members: 50, projects: 20, tasks: 500 }
 
 function assertTestEnvironment() {
-  if (PropertiesService.getScriptProperties().getProperty('TEST_ENVIRONMENT') !== 'true') {
+  if (!isTestEnvironment()) {
     throw userError('テスト環境ではないため実行できません。スクリプトプロパティ TEST_ENVIRONMENT を true にしてから実行してください。')
   }
 }
