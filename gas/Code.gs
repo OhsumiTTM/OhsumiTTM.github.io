@@ -18,7 +18,7 @@ var SHEET_TASKS = 'Tasks'
 // メンバーのメールアドレス専用の非公開シート。Members/Projects/Tasksと違い、
 // 「ウェブに公開」は絶対にしないこと — このシートだけ公開してしまうと、
 // Membersシートからemail列を分離した意味が無くなる。email列をMembersシートから
-// 分離し、認証済みのGASアクション(resolveLogin/getMyEmails/updateEmail)経由
+// 分離し、認証済みのGASアクション(exchangeIdToken/getMyEmails/updateEmail)経由
 // でのみ読み書きすることで、公開CSV経由での全員分メアド漏洩を防ぐ。
 var SHEET_MEMBER_EMAILS = 'MemberEmails'
 var MEMBER_EMAILS_HEADERS = ['id', 'email']
@@ -308,100 +308,8 @@ function doGet(e) {
 
 // ---- Authentication & Authorization ----------------------------------------
 
-/**
- * Verifies a Google access token via the tokeninfo endpoint.
- * Returns { email } on success; throws with a Japanese message on failure.
- *
- * Note: we use access tokens (not JWT ID tokens) because the frontend GIS
- * client (initTokenClient) issues access tokens. The tokeninfo endpoint
- * returns the same email + audience fields for both token types, so the
- * security properties are equivalent for our purposes.
- */
-function verifyToken(accessToken) {
-  if (!accessToken || typeof accessToken !== 'string') {
-    throw userError('認証トークンがありません。再ログインしてください。')
-  }
-  // F6: 明らかに形式が不正なリクエストはtokeninfoを呼ぶ前に拒否する
-  // (無駄な外部呼び出しを避ける)。GoogleのアクセストークンはURL-safeな
-  // 文字列で十分な長さがあることを前提にした簡易チェック。
-  if (!/^[A-Za-z0-9\-_.\/]{20,2048}$/.test(accessToken)) {
-    throw userError('認証トークンの形式が不正です。再ログインしてください。')
-  }
-
-  // F6: tokeninfoの検証結果を数分間キャッシュする(同じトークンでの連続
-  // リクエストのたびに外部呼び出しするのを避ける)。キーはトークンそのもの
-  // ではなくハッシュ値にする(CacheServiceの中身が万一漏れてもトークンを
-  // 復元できないようにするため)。
-  var cacheKey = 'tokeninfo_' + Utilities.base64EncodeWebSafe(
-    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, accessToken),
-  )
-  var cache = CacheService.getScriptCache()
-  var cached
-  try { cached = cache.get(cacheKey) } catch (e) { cached = null }
-  if (cached) return JSON.parse(cached)
-
-  // F6: GOOGLE_OAUTH_CLIENT_ID is set in Apps Script: Project Settings >
-  // Script Properties. 未設定のまま検証をスキップする「簡易モード」は
-  // 廃止した — 必ず設定すること(gas/README.md 4.1参照)。
-  var expectedClientId = PropertiesService.getScriptProperties().getProperty('GOOGLE_OAUTH_CLIENT_ID')
-  if (!expectedClientId) {
-    throw userError('サーバー側の設定(GOOGLE_OAUTH_CLIENT_ID)が未設定です。管理者にお問い合わせください。')
-  }
-
-  var url = 'https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(accessToken)
-  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true })
-  var code = resp.getResponseCode()
-  if (code !== 200) {
-    var errBody = {}
-    try { errBody = JSON.parse(resp.getContentText()) } catch (_) {}
-    if (errBody.error_description === 'Token has been expired or revoked.') {
-      throw userError('認証トークンの有効期限が切れています。再ログインしてください。')
-    }
-    throw userError('トークンの検証に失敗しました (HTTP ' + code + ')。再ログインしてください。')
-  }
-  var info = JSON.parse(resp.getContentText())
-  if (info.error || info.error_description) {
-    throw userError('トークンが無効です: ' + (info.error_description || info.error) + '。再ログインしてください。')
-  }
-  // Verify the token was issued for this app (audience check).
-  // access_token tokeninfo returns 'audience'; id_token tokeninfo uses 'aud'
-  var audience = info.audience || info.azp
-  if (audience !== expectedClientId) {
-    throw userError('トークンの発行元がこのアプリと一致しません。')
-  }
-  if (!info.email) throw userError('トークンからメールアドレスを取得できませんでした。')
-  // F6: メールアドレスが確認済み(email_verified)のGoogleアカウントのみ許可する
-  if (info.email_verified === false || info.email_verified === 'false') {
-    throw userError('メールアドレスが確認されていないGoogleアカウントのため利用できません。')
-  }
-
-  var result = { email: info.email }
-  try {
-    // トークン自体の有効期限を超えてキャッシュし続けないよう、Googleが返す
-    // expires_in(秒)と既定値(300秒)の短い方をTTLにする
-    var ttl = 300
-    if (info.expires_in) ttl = Math.max(1, Math.min(ttl, Number(info.expires_in)))
-    cache.put(cacheKey, JSON.stringify(result), ttl)
-  } catch (e) {
-    // キャッシュ書き込み失敗は致命的ではない(次回また検証し直せばよい)
-  }
-  return result
-}
-
-/**
- * Finds the acting member from the Members sheet by email.
- * Returns { id, role, project_ids } or throws if not found.
- */
-function getActingMember(email) {
-  // メール→メンバーIDの解決は非公開のMemberEmailsシート側で行う(Membersシートは
-  // 公開CSVなのでemail列を置いていない — SHEET_MEMBER_EMAILS参照)。
-  var memberId = findMemberIdByEmail(email)
-  if (!memberId) throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
-  return getActingMemberById(memberId)
-}
-
 // メンバーIDから、操作するメンバーの { id, role, project_ids, permission_overrides } を返す
-// (セッショントークンのメンバーID、またはメールから引いたメンバーID)
+// (セッショントークンのメンバーID)
 function getActingMemberById(memberId) {
   memberId = String(memberId)
   var sheet = getSheet(SHEET_MEMBERS)
@@ -452,7 +360,6 @@ function getActingMemberById(memberId) {
 //   ORG_ID / SESSION_SIGNING_KEY / SESSION_KEY_ID  setupOhsumi() が作成する
 //   SESSION_NOT_BEFORE   これより前(秒)に発行されたセッションを無効にする
 //   SESSION_GEN_<メンバーID>  メンバーごとの世代番号(全端末でログアウトで1増える)
-//   LEGACY_ACCESS_TOKEN_AUTH  'false' にすると、以前のアクセストークン方式を受け付けない
 
 var SESSION_TOKEN_VERSION = 'v1'
 // チェックあり(この端末に保存): 1回14日、Googleでのログインから最長30日
@@ -669,25 +576,11 @@ function exchangeIdToken(body) {
   return data
 }
 
-// 以前の方式(アクセストークン)を受け付けるか。切り替えから1日後に LEGACY_ACCESS_TOKEN_AUTH を
-// 'false' にして停止する(disableLegacyLogin)
-function isLegacyAccessTokenAuthEnabled() {
-  return requestProps().LEGACY_ACCESS_TOKEN_AUTH !== 'false'
-}
-
-// リクエストの認証: セッショントークン(新しい方式)か、移行期間中はアクセストークン(以前の方式)。
-// 返り値 { memberId, renewed(新しいセッショントークン or null) }
+// リクエストの認証(セッショントークン)。返り値 { memberId, renewed(新しいセッショントークン or null) }
 function authenticateRequest(body) {
-  if (body.sessionToken) {
-    var payload = verifySessionToken(body.sessionToken)
-    return { memberId: String(payload.sub), renewed: renewSessionIfNeeded(payload) }
-  }
-  if (body.authToken && isLegacyAccessTokenAuthEnabled()) {
-    var memberId = findMemberIdByEmailCached(verifyToken(body.authToken).email)
-    if (!memberId) throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
-    return { memberId: memberId, renewed: null }
-  }
-  throw userError('ログインしていません。再ログインしてください。')
+  if (!body.sessionToken) throw userError('ログインしていません。再ログインしてください。')
+  var payload = verifySessionToken(body.sessionToken)
+  return { memberId: String(payload.sub), renewed: renewSessionIfNeeded(payload) }
 }
 
 // メンバーの世代番号を1増やし、そのメンバーに発行済みのセッショントークンをすべて無効にする
@@ -733,13 +626,6 @@ function setSessionNotBefore(sec) {
   props.setProperty('SESSION_NOT_BEFORE', String(next))
   resetRequestProps()
   console.log('この日時より前に発行されたログインを無効にしました: ' + new Date(next * 1000).toISOString())
-}
-
-// 以前の方式(アクセストークン)でのログインを止める。新しい方式に切り替えてから1日後に実行する
-function disableLegacyLogin() {
-  PropertiesService.getScriptProperties().setProperty('LEGACY_ACCESS_TOKEN_AUTH', 'false')
-  resetRequestProps()
-  console.log('以前の方式(アクセストークン)でのログインを停止しました。')
 }
 
 // ---- 権限の例外(permission_overrides) ------------------------------------------
@@ -1662,26 +1548,8 @@ function doPost(e) {
       }
     }
 
-    // resolveLogin: ログイン処理そのもの — まだ「自分がどのメンバーか」が
-    // 分かっていない状態で呼ばれる特別な読み取り専用アクションなので、他の
-    // アクションのようなactingMember解決/authorizeActionの前提チェックを
-    // 経由せず、ここで完結させる。トークンからメールを検証・抽出し、
-    // 非公開のMemberEmailsシートと突き合わせるだけで、メール自体は
-    // クライアントに返さずmemberIdのみ返す。
-    if (body.action === 'resolveLogin') {
-      if (!isLegacyAccessTokenAuthEnabled()) {
-        return jsonOutput({ ok: false, error: '以前のログイン方式は停止しました。ページを再読み込みしてください。', authError: true })
-      }
-      try {
-        var loginEmail = verifyToken(body.authToken || '').email
-        return jsonOutput({ ok: true, result: { memberId: findMemberIdByEmail(loginEmail) } })
-      } catch (loginErr) {
-        return jsonOutput({ ok: false, error: toErrorMessage(loginErr) })
-      }
-    }
-
     // getInitialData: ログインと初期データの取得をまとめて行う読み取り専用
-    // アクション(resolveLogin と同じく、メンバー特定前に呼ばれる)。
+    // アクション(メンバー特定前に呼ばれる)。
     // 閲覧者が見てよい行・列だけに絞って返す(READ_POLICY 参照)。
     if (body.action === 'getInitialData') {
       var initAuth
@@ -1703,10 +1571,9 @@ function doPost(e) {
 
     // ---- Token verification & authorization --------------------------------
     // Every request must carry a sessionToken (issued by exchangeIdToken and
-    // signed with this organisation's key — see authenticateRequest). During
-    // the migration an authToken (Google access token) is still accepted until
-    // LEGACY_ACCESS_TOKEN_AUTH is set to 'false'. The member is resolved from
-    // the token, then we check whether they have permission for this action.
+    // signed with this organisation's key — see authenticateRequest). The
+    // member is resolved from the token, then we check whether they have
+    // permission for this action.
     //
     // Auth errors are returned with authError:true so the frontend can
     // distinguish them from business logic errors (session expired → login).
@@ -3634,28 +3501,6 @@ function getAllMemberEmails() {
     if (email) map[String(r[idCol])] = email
   })
   return map
-}
-
-// ログイン用: Googleでログインした(トークン検証済みの)メールアドレスから
-// 該当メンバーのidを探す。カンマ区切りの複数メール登録に対応。
-// 見つからなければnull(未登録は例外ではなく通常の結果として扱う)。
-function findMemberIdByEmail(email) {
-  var normalized = String(email || '').trim().toLowerCase()
-  if (!normalized) return null
-  var sheet = getMemberEmailsSheet()
-  var headers = headerRow(sheet)
-  var idCol = headers.indexOf('id')
-  var emailCol = headers.indexOf('email')
-  var lastRow = sheet.getLastRow()
-  if (lastRow < 2) return null
-  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
-  for (var i = 0; i < values.length; i++) {
-    var emails = String(values[i][emailCol] || '').split(',').map(function (e) {
-      return e.trim().toLowerCase()
-    })
-    if (emails.indexOf(normalized) !== -1) return String(values[i][idCol])
-  }
-  return null
 }
 
 // Saves a profile picture (sent as a data: URL, already resized client-side)
@@ -5936,14 +5781,8 @@ function findMemberIdByEmailCached(email) {
   return map[normalized] || null
 }
 
-// getInitialData: ログインと初期データの取得を1回で行う。
+// ログインと初期データの取得を1回で行う。
 // knownVersion が現在の版と同じなら中身を返さず unchanged だけ返す。
-function getInitialData(email, knownVersion) {
-  var memberId = findMemberIdByEmailCached(email)
-  if (!memberId) return { memberId: null }
-  return getInitialDataForMember(memberId, knownVersion)
-}
-
 function getInitialDataForMember(memberId, knownVersion) {
   var version = getDataVersion()
   if (knownVersion && String(knownVersion) === version) {
