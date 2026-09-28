@@ -301,3 +301,12 @@ describe('領収書の種類とサイズの確認(validateReceiptFile)', () => {
     expect(() => gas.validateReceiptFile('application/zip', 'a.pdf', 100)).toThrow()
   })
 })
+
+describe('getFiles の要求件数の上限', () => {
+  it('1回に要求できるファイルIDは30件まで(超えたら Drive に触る前に拒否する)', () => {
+    const ids = Array.from({ length: 31 }, (_, i) => `file_id_${String(i).padStart(4, '0')}`)
+    // Google のサービスは読み込んでいないので、上限の確認より先に Drive や
+    // キャッシュを呼ぶとこのテストは ReferenceError で落ちる
+    expect(() => gas.getFiles({ id: 'a', role: '一般' }, ids)).toThrow(/30件まで/)
+  })
+})
