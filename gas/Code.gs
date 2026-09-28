@@ -206,6 +206,14 @@ function setupOhsumi() {
 // 使わない（任意のフォルダへの書き込みを防ぐため）。
 
 var UPLOAD_FOLDER_PROPERTY_KEY = 'UPLOAD_FOLDER_ID'
+// 移行前のファイルがあるフォルダ(カンマ区切りで複数可)。getFiles はこれらの
+// フォルダ内のファイルも返す(将来、FSIFの本番を移行するときに旧フォルダの
+// 画像を表示するため)。スクリプトプロパティに手動で設定する。
+var LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY = 'LEGACY_UPLOAD_FOLDER_IDS'
+// 'true' のとき、新しくアップロードしたファイルを非公開のままにする。
+// makeUploadsPrivate() の実行時に 'true' になる(段階③)。それまでは、公開CSV
+// 時代のフロントでも表示できるよう「リンクを知っている全員が閲覧可」にする。
+var UPLOADS_PRIVATE_PROPERTY_KEY = 'UPLOADS_PRIVATE'
 var UPLOAD_FOLDER_NAME = 'Ohsumi uploads'
 
 // スクリプトプロパティにフォルダIDがなければ、スクリプトを実行している
@@ -221,6 +229,29 @@ function ensureUploadFolder() {
   props.setProperty(UPLOAD_FOLDER_PROPERTY_KEY, folder.getId())
   console.log('✅ アップロード用フォルダ作成: ' + folder.getName() + ' (' + folder.getId() + ')')
   return folder.getId()
+}
+
+function applyUploadSharing(file) {
+  if (PropertiesService.getScriptProperties().getProperty(UPLOADS_PRIVATE_PROPERTY_KEY) === 'true') return
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+}
+
+// 領収書の種類とサイズの確認(フロントの expense-application-modal.tsx と同じ基準)。
+// ブラウザによっては HEIC の種類が空で届くため、拡張子でも判定する。
+var RECEIPT_MAX_BYTES = 5 * 1024 * 1024
+var RECEIPT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'application/pdf']
+var RECEIPT_EXTENSION_MIME = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf',
+}
+function validateReceiptFile(mimeType, filename, byteLength) {
+  if (byteLength > RECEIPT_MAX_BYTES) throw userError('領収書のファイルサイズは5MBまでです。')
+  var mime = String(mimeType || '').toLowerCase()
+  if (RECEIPT_MIME_TYPES.indexOf(mime) >= 0) return mime
+  var ext = String(filename || '').toLowerCase().split('.').pop()
+  var byExt = RECEIPT_EXTENSION_MIME[ext]
+  if (byExt && (!mime || mime === 'application/octet-stream')) return byExt
+  throw userError('領収書は画像(JPEG・PNG・HEICなど)またはPDFのみアップロードできます。')
 }
 
 function getUploadFolder() {
@@ -1008,6 +1039,7 @@ function authorizeAction(acting, action, body) {
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
+    'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -1241,7 +1273,7 @@ function toErrorMessage(err) {
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
-  'testDiscordWebhook', 'testSlackWebhook', 'getExpenses',
+  'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles',
 ]
 
 function doPost(e) {
@@ -1798,6 +1830,9 @@ function doPost(e) {
         break
       case 'getExpenses':
         result = getExpenses(actingMember)
+        break
+      case 'getFiles':
+        result = getFiles(actingMember, body.fileIds)
         break
       case 'fetchDailyReports':
         result = fetchDailyReports()
@@ -3060,7 +3095,7 @@ function uploadAvatar(memberId, dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   // googleusercontent.com hotlinks more reliably in <img> tags than
   // Drive's own "uc?export=view" (which can trigger a virus-scan
@@ -3092,7 +3127,7 @@ function uploadOrgLogo(dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = 'https://lh3.googleusercontent.com/d/' + file.getId() + '=w256-h256-c'
   console.log('uploadOrgLogo: url=' + url)
@@ -3105,18 +3140,19 @@ function uploadOrgLogo(dataUrl, filename) {
 // 既存ファイルの削除は行わない。領収書は画像だけでなくPDFのこともあるので
 // サムネイルURLではなく汎用のDrive表示URLを返す。
 function uploadExpenseReceipt(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
+  var match = String(dataUrl || '').match(/^data:([^;]*);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var bytes = Utilities.base64Decode(match[2])
+  // 領収書は5MBまで、画像(JPEG・PNG・HEICなど)とPDFのみ(フロントでも同じ確認をする)
+  var mimeType = validateReceiptFile(match[1], filename, bytes.length)
 
   var folder = getUploadFolder()
   var namePrefix = 'expense_receipt_'
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = file.getUrl()
   console.log('uploadExpenseReceipt: url=' + url)
@@ -3139,7 +3175,7 @@ function uploadSurveyImage(dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = 'https://lh3.googleusercontent.com/d/' + file.getId() + '=w512-h512-c'
   console.log('uploadSurveyImage: url=' + url)
@@ -5307,4 +5343,189 @@ function getExpenses(acting) {
   // 新しい申請を先に(フロントの一覧と同じ並び)
   apps.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
   return apps
+}
+
+// ---- アップロードしたファイルの配信(非公開化) ----------------------------------
+//
+// アップロードしたファイルは非公開にし、getFiles で権限を確認してから返す。
+// 返すのはアップロード用フォルダ(UPLOAD_FOLDER_ID)と旧フォルダ
+// (LEGACY_UPLOAD_FOLDER_IDS)の中のファイルだけ — それ以外のIDを受け付けると、
+// GAS を実行しているアカウントの Drive にある任意のファイルを読まれてしまう。
+// 種類はファイル名の先頭で判断する(アップロード時に付けている名前)。
+//   avatar_ / org_logo_ / survey_image_  ログイン済みの全員
+//   expense_receipt_                     その領収書を持つ経費申請を閲覧できる人(canViewExpense)
+
+var GET_FILES_MAX_IDS = 30
+var GET_FILES_MAX_BYTES = 8 * 1024 * 1024
+var FILE_CACHE_MAX_CHARS = 95000
+
+function allowedUploadFolderIds() {
+  var props = PropertiesService.getScriptProperties()
+  var ids = []
+  var current = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  if (current) ids.push(current)
+  splitCsvList(props.getProperty(LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY)).forEach(function (id) {
+    if (ids.indexOf(id) < 0) ids.push(id)
+  })
+  return ids
+}
+
+// ファイル名から種類を判定する(Google のサービスを使わない純粋な関数)
+function uploadKindFromName(name) {
+  var n = String(name || '')
+  if (n.indexOf('expense_receipt_') === 0) return 'receipt'
+  if (n.indexOf('avatar_') === 0) return 'avatar'
+  if (n.indexOf('org_logo_') === 0) return 'orgLogo'
+  if (n.indexOf('survey_image_') === 0) return 'surveyImage'
+  return ''
+}
+
+// 種類ごとの閲覧可否。receiptApps は、その領収書のファイルIDを receipt_url に
+// 含む経費申請の一覧(receipt の判定にだけ使う)
+function canViewUploadedFile(kind, expenseViewer, receiptApps) {
+  if (kind === 'avatar' || kind === 'orgLogo' || kind === 'surveyImage') return true
+  if (kind === 'receipt') {
+    for (var i = 0; i < receiptApps.length; i++) {
+      if (canViewExpense(expenseViewer, receiptApps[i])) return true
+    }
+  }
+  return false
+}
+
+function isInAllowedFolder(file, allowedIds) {
+  var parents = file.getParents()
+  while (parents.hasNext()) {
+    if (allowedIds.indexOf(parents.next().getId()) >= 0) return true
+  }
+  return false
+}
+
+function getFiles(acting, fileIds) {
+  var ids = (Array.isArray(fileIds) ? fileIds : []).map(String)
+  if (ids.length > GET_FILES_MAX_IDS) throw userError('一度に取得できるファイルは' + GET_FILES_MAX_IDS + '件までです。')
+  var allowed = allowedUploadFolderIds()
+  var cache = CacheService.getScriptCache()
+  var expenseViewer = null
+  var expenses = null
+  var totalBytes = 0
+  return ids.map(function (id) {
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return { id: id, ok: false, error: 'invalid' }
+    var file
+    try { file = DriveApp.getFileById(id) } catch (e) { return { id: id, ok: false, error: 'notFound' } }
+    if (!isInAllowedFolder(file, allowed)) return { id: id, ok: false, error: 'notFound' }
+    var kind = uploadKindFromName(file.getName())
+    var receiptApps = []
+    if (kind === 'receipt') {
+      if (!expenseViewer) expenseViewer = makeExpenseViewer(acting)
+      if (!expenses) expenses = readAllExpenses()
+      receiptApps = expenses.filter(function (app) { return String(app.receiptUrl || '').indexOf(id) >= 0 })
+    }
+    if (!canViewUploadedFile(kind, expenseViewer, receiptApps)) {
+      return { id: id, ok: false, error: 'forbidden' }
+    }
+    // 小さい画像(アバター・ロゴなど)はキャッシュする。権限の確認は毎回行う。
+    // 領収書はキャッシュしない
+    var cacheKey = 'file:' + id
+    if (kind !== 'receipt') {
+      var hit = null
+      try { hit = cache.get(cacheKey) } catch (e) { hit = null }
+      if (hit) {
+        var sep = hit.indexOf('|')
+        return { id: id, ok: true, mimeType: hit.slice(0, sep), data: hit.slice(sep + 1) }
+      }
+    }
+    var size = file.getSize()
+    if (totalBytes + size > GET_FILES_MAX_BYTES) return { id: id, ok: false, error: 'batchTooLarge' }
+    totalBytes += size
+    var blob = file.getBlob()
+    var mimeType = blob.getContentType() || 'application/octet-stream'
+    var data = Utilities.base64Encode(blob.getBytes())
+    if (kind !== 'receipt' && data.length + mimeType.length < FILE_CACHE_MAX_CHARS) {
+      try { cache.put(cacheKey, mimeType + '|' + data, SNAPSHOT_CACHE_TTL) } catch (e) { /* キャッシュできなくても返す */ }
+    }
+    return { id: id, ok: true, mimeType: mimeType, data: data }
+  })
+}
+
+function readAllExpenses() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
+    return expenseRowToApplication(headers, row)
+  })
+}
+
+// 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
+// 全員が閲覧可」のファイルを非公開にする。領収書を先に処理する。以後の新規
+// アップロードも非公開になる(UPLOADS_PRIVATE)。extraFolderId を渡すと、
+// そのフォルダも対象にする。実行時間の上限に近づいたら途中で止まり、ログに
+// 再実行を促すメッセージを出す(何度実行しても問題ない)。
+function makeUploadsPrivate(extraFolderId) {
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty(UPLOADS_PRIVATE_PROPERTY_KEY, 'true')
+  var folderIds = allowedUploadFolderIds()
+  if (extraFolderId && folderIds.indexOf(String(extraFolderId)) < 0) folderIds.push(String(extraFolderId))
+  var deadline = Date.now() + 5 * 60 * 1000
+  var changed = { receipt: 0, other: 0 }
+  var finished = true
+  // 1周目は領収書だけ、2周目はそれ以外
+  ;['receipt', 'other'].forEach(function (pass) {
+    if (!finished) return
+    folderIds.forEach(function (folderId) {
+      if (!finished) return
+      var folder
+      try { folder = DriveApp.getFolderById(folderId) } catch (e) {
+        console.error('❌ フォルダを開けません: ' + folderId)
+        return
+      }
+      var files = folder.getFiles()
+      while (files.hasNext()) {
+        if (Date.now() > deadline) { finished = false; return }
+        var file = files.next()
+        var isReceipt = uploadKindFromName(file.getName()) === 'receipt'
+        if ((pass === 'receipt') !== isReceipt) continue
+        var access = file.getSharingAccess()
+        if (access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE) {
+          file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
+          changed[pass]++
+        }
+      }
+    })
+  })
+  var msg = '🔒 非公開にしたファイル: 領収書 ' + changed.receipt + ' 件、その他 ' + changed.other + ' 件'
+  msg += finished ? '\n✅ すべて完了しました' : '\n⏳ 実行時間の上限に近づいたため途中で止めました。もう一度 makeUploadsPrivate() を実行してください'
+  console.log(msg)
+  return msg
+}
+
+// 確認用(手動実行): フォルダごと・種類ごとに、公開/非公開のファイル数を出力する
+function auditUploadSharing(extraFolderId) {
+  var folderIds = allowedUploadFolderIds()
+  if (extraFolderId && folderIds.indexOf(String(extraFolderId)) < 0) folderIds.push(String(extraFolderId))
+  var lines = ['📋 アップロードファイルの共有設定 (新規アップロードの非公開化: ' +
+    (PropertiesService.getScriptProperties().getProperty(UPLOADS_PRIVATE_PROPERTY_KEY) === 'true' ? '有効' : '無効') + ')']
+  folderIds.forEach(function (folderId) {
+    var counts = {}
+    try {
+      var files = DriveApp.getFolderById(folderId).getFiles()
+      while (files.hasNext()) {
+        var file = files.next()
+        var kind = uploadKindFromName(file.getName()) || 'unknown'
+        var access = file.getSharingAccess()
+        var isPublic = access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE
+        counts[kind] = counts[kind] || { public: 0, private: 0 }
+        counts[kind][isPublic ? 'public' : 'private']++
+      }
+    } catch (e) {
+      lines.push('  ' + folderId + ': 開けません (' + e + ')')
+      return
+    }
+    lines.push('  フォルダ ' + folderId + ':')
+    Object.keys(counts).forEach(function (kind) {
+      lines.push('    ' + kind + ': 公開 ' + counts[kind].public + ' / 非公開 ' + counts[kind].private)
+    })
+  })
+  console.log(lines.join('\n'))
+  return lines.join('\n')
 }

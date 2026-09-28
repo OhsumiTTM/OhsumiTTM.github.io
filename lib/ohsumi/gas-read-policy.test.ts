@@ -250,3 +250,54 @@ describe('getExpenses の絞り込み(canViewExpense)', () => {
     expect(can({ id: 'l2', role: '班長' })).toBe(false)
   })
 })
+
+describe('getFiles の閲覧可否(canViewUploadedFile)', () => {
+  const viewer = { id: 'b', role: '一般', isFullAdmin: false, canOpenExpensesSection: false }
+  const receiptApp = { id: 'e1', applicantId: 'a', approvalSteps: [{ id: 's1', type: 'member', memberId: 'lead' }] }
+
+  it('ファイル名の先頭で種類を判定する', () => {
+    expect(gas.uploadKindFromName('expense_receipt_1700000000000')).toBe('receipt')
+    expect(gas.uploadKindFromName('avatar_12_1700000000000')).toBe('avatar')
+    expect(gas.uploadKindFromName('org_logo_1')).toBe('orgLogo')
+    expect(gas.uploadKindFromName('survey_image_1')).toBe('surveyImage')
+    expect(gas.uploadKindFromName('memo.pdf')).toBe('')
+  })
+
+  it('プロフィール画像・団体ロゴ・アンケート画像はログイン済みの全員が見られる', () => {
+    for (const kind of ['avatar', 'orgLogo', 'surveyImage']) {
+      expect(gas.canViewUploadedFile(kind, null, [])).toBe(true)
+    }
+  })
+
+  it('領収書は、その経費申請を閲覧できる人だけが見られる', () => {
+    expect(gas.canViewUploadedFile('receipt', { ...viewer, id: 'a' }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile('receipt', { ...viewer, id: 'lead', role: '班長' }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile('receipt', { ...viewer, isFullAdmin: true }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile('receipt', viewer, [receiptApp])).toBe(false)
+    // どの経費申請にも紐づかない領収書は誰も見られない
+    expect(gas.canViewUploadedFile('receipt', { ...viewer, isFullAdmin: true }, [])).toBe(false)
+  })
+
+  it('種類が分からないファイルは誰も見られない', () => {
+    expect(gas.canViewUploadedFile('', { ...viewer, isFullAdmin: true }, [])).toBe(false)
+  })
+})
+
+describe('領収書の種類とサイズの確認(validateReceiptFile)', () => {
+  const MB = 1024 * 1024
+  it('画像とPDFは5MBまで受け付ける', () => {
+    expect(gas.validateReceiptFile('image/jpeg', 'a.jpg', 5 * MB)).toBe('image/jpeg')
+    expect(gas.validateReceiptFile('application/pdf', 'a.pdf', 100)).toBe('application/pdf')
+    expect(gas.validateReceiptFile('image/heic', 'a.heic', 100)).toBe('image/heic')
+  })
+  it('種類が空で届いた HEIC は拡張子で判定する', () => {
+    expect(gas.validateReceiptFile('', 'IMG_0001.HEIC', 100)).toBe('image/heic')
+    expect(gas.validateReceiptFile('application/octet-stream', 'scan.pdf', 100)).toBe('application/pdf')
+  })
+  it('5MBを超えるもの、画像・PDF以外は受け付けない', () => {
+    expect(() => gas.validateReceiptFile('image/png', 'a.png', 5 * MB + 1)).toThrow()
+    expect(() => gas.validateReceiptFile('text/html', 'a.html', 100)).toThrow()
+    expect(() => gas.validateReceiptFile('application/octet-stream', 'a.exe', 100)).toThrow()
+    expect(() => gas.validateReceiptFile('application/zip', 'a.pdf', 100)).toThrow()
+  })
+})
