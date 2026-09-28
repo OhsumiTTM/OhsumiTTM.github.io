@@ -708,7 +708,7 @@ function authorizeAction(acting, action, body) {
   // restricted_roles に含まれないロール) であれば許可。「事業責任者を代表と
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
-  if (action === 'updateSetting' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'updateProjectHealth') {
+  if (action === 'updateSetting' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth') {
     if (isActingFullAdmin(acting)) return
     if (checkPermissionOverride(acting, action, body)) return
     throw userError('この操作は代表または全権管理者のみ実行できます。')
@@ -1227,7 +1227,7 @@ function toErrorMessage(err) {
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
-  'testDiscordWebhook', 'testSlackWebhook',
+  'testDiscordWebhook', 'testSlackWebhook', 'getWebhookStatus',
 ]
 
 function doPost(e) {
@@ -1632,6 +1632,9 @@ function doPost(e) {
         break
       case 'testDiscordWebhook':
         result = testDiscordWebhook()
+        break
+      case 'getWebhookStatus':
+        result = getWebhookStatus()
         break
       case 'testSlackWebhook':
         result = testSlackWebhook()
@@ -3771,6 +3774,8 @@ function updateDiscordWebhookUrl(url) {
     throw userError('Discord Webhook URLは https://discord.com/api/webhooks/ または https://discordapp.com/api/webhooks/ で始まるURLのみ登録できます。')
   }
   PropertiesService.getScriptProperties().setProperty(DISCORD_WEBHOOK_PROPERTY_KEY, url || '')
+  // URLが変わったら前回のテスト送信の結果は無効になる
+  clearWebhookTestResult('discord')
   notifyAdmins(
     '[Ohsumi] Discord Webhook URLが変更されました',
     (url ? 'Discord Webhook URLが更新されました。' : 'Discord Webhook URLが削除されました。') +
@@ -3791,6 +3796,7 @@ function updateSlackWebhookUrl(url) {
     throw userError('Slack Webhook URLは https://hooks.slack.com/services/ で始まるURLのみ登録できます。')
   }
   PropertiesService.getScriptProperties().setProperty(SLACK_WEBHOOK_PROPERTY_KEY, url || '')
+  clearWebhookTestResult('slack')
   notifyAdmins(
     '[Ohsumi] Slack Webhook URLが変更されました',
     (url ? 'Slack Webhook URLが更新されました。' : 'Slack Webhook URLが削除されました。') +
@@ -3852,7 +3858,7 @@ function notifyChat(content) {
 function testDiscordWebhook() {
   var url = getDiscordWebhookUrl()
   if (!url) throw userError('Discord Webhook URLが保存されていません。先にURLを入力して保存してください。')
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWebhookForTest('discord', url, {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
@@ -3864,15 +3870,17 @@ function testDiscordWebhook() {
   var code = resp.getResponseCode()
   // Discordの正常応答は204 No Content
   if (code < 200 || code >= 300) {
+    recordWebhookTestResult('discord', false, 'HTTP ' + code)
     throw userError('Discordへの送信に失敗しました(HTTP ' + code + ')。Webhook URLが正しいか確認してください。')
   }
+  recordWebhookTestResult('discord', true, '')
   return { tested: true }
 }
 
 function testSlackWebhook() {
   var url = getSlackWebhookUrl()
   if (!url) throw userError('Slack Webhook URLが保存されていません。先にURLを入力して保存してください。')
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWebhookForTest('slack', url, {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
@@ -3883,8 +3891,10 @@ function testSlackWebhook() {
   var code = resp.getResponseCode()
   // Slack Incoming Webhookの正常応答は200(本文 "ok")
   if (code < 200 || code >= 300) {
+    recordWebhookTestResult('slack', false, 'HTTP ' + code)
     throw userError('Slackへの送信に失敗しました(HTTP ' + code + ')。Webhook URLが正しいか確認してください。')
   }
+  recordWebhookTestResult('slack', true, '')
   return { tested: true }
 }
 
@@ -4659,4 +4669,56 @@ function bulkUpdateSkillLevels(updates) {
   }
 
   return { ok: true, updated: count }
+}
+
+// ---- Discord / Slack の連携状態 ----------------------------------------------
+//
+// Webhook URL は秘密情報なので、スクリプトプロパティから外には出さない。
+// 画面には「設定済みかどうか」と、最後のテスト送信の結果・日時だけを返す
+// (getWebhookStatus。全権管理者と、Webhook を設定できる人だけが呼べる —
+// authorizeAction で updateDiscordWebhookUrl と同じ基準)。
+// テスト送信の結果・日時はスクリプトプロパティに保存する。
+
+var WEBHOOK_TEST_RESULT_PROPERTY_KEYS = {
+  discord: 'discord_webhook_last_test',
+  slack: 'slack_webhook_last_test',
+}
+
+function recordWebhookTestResult(kind, ok, error) {
+  PropertiesService.getScriptProperties().setProperty(
+    WEBHOOK_TEST_RESULT_PROPERTY_KEYS[kind],
+    JSON.stringify({ ok: !!ok, at: new Date().toISOString(), error: error || '' }),
+  )
+}
+
+function clearWebhookTestResult(kind) {
+  PropertiesService.getScriptProperties().deleteProperty(WEBHOOK_TEST_RESULT_PROPERTY_KEYS[kind])
+}
+
+function readWebhookTestResult(kind) {
+  var raw = PropertiesService.getScriptProperties().getProperty(WEBHOOK_TEST_RESULT_PROPERTY_KEYS[kind])
+  if (!raw) return null
+  try {
+    var parsed = JSON.parse(raw)
+    return { ok: !!parsed.ok, at: String(parsed.at || ''), error: String(parsed.error || '') }
+  } catch (e) {
+    return null
+  }
+}
+
+// テスト送信。通信自体に失敗した場合(例外)も結果として保存してから投げ直す
+function fetchWebhookForTest(kind, url, options) {
+  try {
+    return UrlFetchApp.fetch(url, options)
+  } catch (e) {
+    recordWebhookTestResult(kind, false, '送信できませんでした')
+    throw userError((kind === 'discord' ? 'Discord' : 'Slack') + 'への送信に失敗しました。Webhook URLが正しいか確認してください。')
+  }
+}
+
+function getWebhookStatus() {
+  return {
+    discord: { configured: !!getDiscordWebhookUrl(), lastTest: readWebhookTestResult('discord') },
+    slack: { configured: !!getSlackWebhookUrl(), lastTest: readWebhookTestResult('slack') },
+  }
 }

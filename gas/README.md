@@ -374,9 +374,16 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 ### 手順
 
 1. Discord で通知したいチャンネルの **「設定」→「連携サービス」→「ウェブフック」→「新しいウェブフックを作成」** → URLをコピー
-2. Ohsumi の **Admin → Tags** の「Discord Webhook 連携」欄にURLを貼り付けて保存する
+2. Ohsumi のアカウントメニュー →「団体設定」の「Discord Webhook 連携」欄にURLを貼り付けて保存する(保存と同時にテストメッセージを送って接続を確認します)
 
-Webhook URLは Settings シート（公開CSV）には保存されず、Apps Script の PropertiesService（スクリプト専用の非公開領域）に保存されます。
+Slack(Incoming Webhook)も同じ画面から設定できます。
+
+Webhook URLは Settings シートには保存されず、Apps Script の PropertiesService（スクリプト専用の非公開領域）に保存されます。URLは保存後に画面へ表示されず、Apps Script も返しません。
+
+- 団体設定の画面には、Discord・Slack それぞれ「連携済み」か「未連携」かと、最後のテスト送信の結果・日時が表示されます(`getWebhookStatus`。全権管理者と、Webhook を設定できる人にだけ返します)
+- 未連携の場合はURLの入力欄が、連携済みの場合は「テスト送信」と「連携を解除」のボタンが表示されます
+- URLを変更したい場合は、「連携を解除」してから入れ直してください
+- テスト送信の結果・日時はスクリプトプロパティ(`discord_webhook_last_test` / `slack_webhook_last_test`)に保存されます。URLを変更・解除すると消えます
 
 ---
 
@@ -461,7 +468,7 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 | アクション | 必要な権限 |
 |---|---|
 | updateRole, removeMember, removeProject, uploadOrgLogo, addMember, updateEmail, updateJoinedAt, updateReportsTo, updateMentor, notifyTrainingDecision, updatePermissionOverrides, updateMemberProjects | 最上位ロール（代表）のみ |
-| updateSetting, updateDiscordWebhookUrl, updateSlackWebhookUrl, updateProjectHealth | 代表 または 全権管理者（`restricted_roles`に含まれないロール。団体ごとにAdmin → Tagsで調整可能） |
+| updateSetting, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 代表 または 全権管理者（`restricted_roles`に含まれないロール。団体ごとにAdmin → Tagsで調整可能） |
 | approveTask, assignTask, updateTaskDetails, setBlocker, createProject, updateProject, updatePriority, updateReviewer(s), removeTask, bulkUpdateSkills, updateExpenseStatus, addExpenseApplication, manageCustomForm, updateEvaluationHistory, updateTransferHistory, updateOneOnOnes, updateCompetencies, notifyProjectHealth, updateProjectHealthRecord, approveTaskReview 等 | 任意の管理者ロール（代表 または 班長以上） |
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |
