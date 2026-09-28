@@ -4,6 +4,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'export',
+  // /about/ などを about/index.html として出力する(GitHub Pages で末尾が / の URL を開けるように)
+  trailingSlash: true,
   agentRules: false,
   typescript: {
     ignoreBuildErrors: true,

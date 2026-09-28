@@ -25,6 +25,7 @@ import { LearningContentScreen } from './learning-content-screen'
 import { TaskDetailDrawer } from './output/task-detail-drawer'
 import { OhsumiMark } from './primitives'
 import { TriangleAlert } from 'lucide-react'
+import { LegalLinks } from './legal-links'
 
 // shown while a persisted session (currentUserId from localStorage) is
 // waiting on the spreadsheet fetch to resolve who that is
@@ -182,6 +183,9 @@ function Router() {
         {screen.name === 'skillgrid' && <SkillGridScreen />}
         {screen.name === 'learning' && <LearningContentScreen />}
       </div>
+      <footer className="border-t border-border px-4 py-4">
+        <LegalLinks />
+      </footer>
       <TaskDetailDrawer taskId={openTaskId} onClose={closeTask} />
     </div>
   )
