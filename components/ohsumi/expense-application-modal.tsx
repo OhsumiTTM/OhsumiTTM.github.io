@@ -5,6 +5,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { Modal } from '@/components/ohsumi/modal'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
+import { RECEIPT_ACCEPT, validateReceiptFile } from '@/lib/ohsumi/receipt'
 import type { ExpenseApplication } from '@/lib/ohsumi/types'
 import { Loader2, Paperclip } from 'lucide-react'
 
@@ -46,6 +47,17 @@ export function ExpenseApplicationModal({
 
   const handleFileSelect = async (file: File | undefined) => {
     if (!file) return
+    // 5MBまで、画像(JPEG・PNG・HEICなど)とPDFのみ(GAS 側でも同じ確認をする)
+    const invalid = validateReceiptFile(file)
+    if (invalid) {
+      setError(
+        invalid === 'tooLarge'
+          ? t('expenseApplication.receiptUpload.tooLarge')
+          : t('expenseApplication.receiptUpload.unsupportedType'),
+      )
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
     setUploading(true)
     setError('')
     try {
@@ -149,6 +161,7 @@ export function ExpenseApplicationModal({
               <input
                 ref={fileInputRef}
                 type="file"
+                accept={RECEIPT_ACCEPT}
                 className="hidden"
                 onChange={(e) => handleFileSelect(e.target.files?.[0])}
               />

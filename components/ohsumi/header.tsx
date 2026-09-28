@@ -7,7 +7,7 @@ import { useTheme } from '@/lib/ohsumi/theme'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { isAdminRole } from '@/lib/ohsumi/types'
-import { Avatar, OhsumiMark } from './primitives'
+import { Avatar, OhsumiMark, StoredImage } from './primitives'
 import { cn } from '@/lib/utils'
 import {
   ArrowLeft,
@@ -161,8 +161,7 @@ export function Header() {
               <>
                 <span className="hidden text-muted-foreground/40 sm:inline" aria-hidden>|</span>
                 {orgLogoUrl && (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img src={orgLogoUrl} alt={orgName || t('header.logoAlt')} className="size-[18px] rounded object-contain" />
+                  <StoredImage url={orgLogoUrl} alt={orgName || t('header.logoAlt')} className="size-[18px] rounded object-contain" />
                 )}
                 {orgName && (
                   <span className="hidden text-[13px] text-muted-foreground sm:inline">{orgName}</span>

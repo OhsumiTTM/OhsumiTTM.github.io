@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
 import { useToast } from '@/components/ohsumi/toast'
-import { Tag, SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Tag, SectionLabel, AdminAccessNote, StoredImage } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
 import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -122,8 +122,7 @@ export function OrgSettingsScreen() {
             />
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               {orgLogoUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={orgLogoUrl} alt={t('orgSettings.nameLogo.altText')} className="h-10 w-10 rounded-md border border-border object-contain" />
+                <StoredImage url={orgLogoUrl} alt={t('orgSettings.nameLogo.altText')} className="h-10 w-10 rounded-md border border-border object-contain" />
               )}
               <input
                 value={orgLogoUrl}
