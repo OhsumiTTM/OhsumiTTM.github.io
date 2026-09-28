@@ -179,6 +179,19 @@ function setupOhsumi() {
   // 既存の全行の保護対象列を書式なしテキストにしておく(値は変更しない)。
   protectAllExistingRows()
 
+  // --- スプレッドシートの手動編集で読み取りキャッシュを無効にするトリガー ---
+  try {
+    var changeTriggers = ScriptApp.getProjectTriggers()
+    var hasChange = changeTriggers.some(function(t) { return t.getHandlerFunction() === 'onSpreadsheetChange' })
+    if (!hasChange) {
+      ScriptApp.newTrigger('onSpreadsheetChange').forSpreadsheet(ss).onChange().create()
+      console.log('✅ onSpreadsheetChange トリガー作成')
+    } else {
+      console.log('✅ onSpreadsheetChange トリガー既存')
+    }
+  } catch (e) { console.error('❌ 変更検知トリガー設定: ' + e) }
+  bumpDataVersion()
+
   // --- 画像アップロード用フォルダ ---
   try { ensureUploadFolder() }
   catch (e) { console.error('❌ アップロード用フォルダ: ' + e) }
@@ -1251,6 +1264,23 @@ function doPost(e) {
       }
     }
 
+    // getInitialData: ログインと初期データの取得をまとめて行う読み取り専用
+    // アクション(resolveLogin と同じく、メンバー特定前に呼ばれる)。
+    // 閲覧者が見てよい行・列だけに絞って返す(READ_POLICY 参照)。
+    if (body.action === 'getInitialData') {
+      var initEmail
+      try {
+        initEmail = verifyToken(body.authToken || '').email
+      } catch (initAuthErr) {
+        return jsonOutput({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
+      }
+      try {
+        return jsonOutput({ ok: true, result: getInitialData(initEmail, body.knownVersion) })
+      } catch (initErr) {
+        return jsonOutput({ ok: false, error: toErrorMessage(initErr) })
+      }
+    }
+
     // ---- Token verification & authorization --------------------------------
     // Every write must carry an authToken (Google access token obtained at
     // login via GIS initTokenClient). We verify it against Google's tokeninfo
@@ -1805,7 +1835,12 @@ function doPost(e) {
     // リクエストの中身・トークンは返さない/ログにも出さない)。
     return jsonOutput({ ok: false, error: toErrorMessage(err) })
   } finally {
-    if (lock) lock.releaseLock()
+    // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
+    // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
+    if (lock) {
+      bumpDataVersion()
+      lock.releaseLock()
+    }
   }
 }
 
@@ -3506,7 +3541,10 @@ function generateRecurringTasksLocked() {
     return { generated: [] }
   }
   try {
-    return generateRecurringTasksInternal()
+    var genResult = generateRecurringTasksInternal()
+    // 定期タスクを生成した場合は読み取りキャッシュを無効にする
+    if (genResult && genResult.generated && genResult.generated.length > 0) bumpDataVersion()
+    return genResult
   } finally {
     lock.releaseLock()
   }
@@ -3605,6 +3643,8 @@ function dailyMaintenance() {
   notifyOverdueTasksToDiscord()
   notifyOverdueTasksToAssignees()
   try { notifyInactiveMembers() } catch (err) { }
+  // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
+  bumpDataVersion()
 }
 
 // 一定期間アクセスのないメンバーを管理者に通知する日次スイープ。
@@ -4659,4 +4699,520 @@ function bulkUpdateSkillLevels(updates) {
   }
 
   return { ok: true, updated: count }
+}
+
+// ---- 読み取り(公開CSVの代替) ------------------------------------------------
+//
+// Members / Projects / Tasks / Settings の読み取りは、以前は「ウェブに公開」した
+// CSVから直接行っていた(URLを知っていればログインなしで全データを読めた)。
+// 現在は getInitialData アクションでまとめて返す。流れ:
+//   1. トークンを検証してログイン中のメンバーを特定する
+//   2. 4シート分の「スナップショット」をキャッシュから取り出す(なければ読む)
+//   3. READ_POLICY に従い、閲覧者が見てよい行・列・キーだけに絞って返す
+//
+// キャッシュは「データの版(DATA_VERSION)」ごとに持つ。書き込みのたびに版を
+// 新しくするので、古い版のキャッシュは参照されなくなり期限切れで消える。
+// 版を新しくする箇所: doPost の書き込みアクション(finally)、dailyMaintenance、
+// generateRecurringTasksLocked、スプレッドシートの手動編集(onSpreadsheetChange)。
+
+var DATA_VERSION_PROPERTY_KEY = 'DATA_VERSION'
+var SNAPSHOT_SHEETS = ['Members', 'Projects', 'Tasks', 'Settings']
+// CacheService は1キー100KBまで。base64文字列を90,000文字ずつに分割する
+var SNAPSHOT_CHUNK_SIZE = 90000
+// 分割数の上限(約5.4MB)。これを超える場合はキャッシュせず毎回シートから読む
+var SNAPSHOT_MAX_CHUNKS = 60
+// CacheService の有効期限の上限(6時間)
+var SNAPSHOT_CACHE_TTL = 21600
+
+function getDataVersion() {
+  return PropertiesService.getScriptProperties().getProperty(DATA_VERSION_PROPERTY_KEY) || '0'
+}
+
+function bumpDataVersion() {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      DATA_VERSION_PROPERTY_KEY,
+      String(Date.now()) + '-' + Math.floor(Math.random() * 1e6),
+    )
+  } catch (e) {
+    // 版の更新に失敗しても、キャッシュの有効期限(6時間)で最終的に反映される
+    Logger.log('bumpDataVersion failed: ' + e)
+  }
+}
+
+// スプレッドシートを手で編集したときにキャッシュを無効にする(setupOhsumi で
+// インストール型トリガーとして登録する)。スクリプトからの書き込みでは発火しない。
+function onSpreadsheetChange(e) {
+  bumpDataVersion()
+}
+
+// シートを {headers, rows} で読む。値は公開CSVと同じく「表示されている文字列」
+// (getDisplayValues)にそろえる。空行は除く。シートが無ければ空で返す。
+function readSheetTable(name) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return { headers: [], rows: [] }
+  var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getDisplayValues()
+  var headers = values[0].map(function (h) { return String(h).trim() })
+  var rows = []
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i]
+    var hasValue = false
+    for (var c = 0; c < row.length; c++) {
+      if (row[c] !== '') { hasValue = true; break }
+    }
+    if (hasValue) rows.push(row)
+  }
+  return { headers: headers, rows: rows }
+}
+
+function snapshotCacheKey(version, suffix) {
+  return 'snap:' + version + ':' + suffix
+}
+
+function readSnapshotCache(version) {
+  try {
+    var cache = CacheService.getScriptCache()
+    var meta = cache.get(snapshotCacheKey(version, 'meta'))
+    if (!meta) return null
+    var count = Number(meta)
+    if (!(count > 0)) return null
+    var keys = []
+    for (var i = 0; i < count; i++) keys.push(snapshotCacheKey(version, i))
+    var parts = cache.getAll(keys)
+    var encoded = ''
+    for (var j = 0; j < count; j++) {
+      var part = parts[keys[j]]
+      if (part == null) return null
+      encoded += part
+    }
+    var gz = Utilities.newBlob(Utilities.base64Decode(encoded), 'application/x-gzip')
+    return JSON.parse(Utilities.ungzip(gz).getDataAsString('UTF-8'))
+  } catch (e) {
+    return null
+  }
+}
+
+function writeSnapshotCache(version, data) {
+  try {
+    var gz = Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json'))
+    var encoded = Utilities.base64Encode(gz.getBytes())
+    var count = Math.ceil(encoded.length / SNAPSHOT_CHUNK_SIZE)
+    if (count > SNAPSHOT_MAX_CHUNKS) return false
+    var entries = {}
+    for (var i = 0; i < count; i++) {
+      entries[snapshotCacheKey(version, i)] = encoded.substr(i * SNAPSHOT_CHUNK_SIZE, SNAPSHOT_CHUNK_SIZE)
+    }
+    var cache = CacheService.getScriptCache()
+    cache.putAll(entries, SNAPSHOT_CACHE_TTL)
+    // 目録は最後に書く(途中で失敗したら目録が無く、次回は読み直しになる)
+    cache.put(snapshotCacheKey(version, 'meta'), String(count), SNAPSHOT_CACHE_TTL)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+// 4シート分のスナップショットを返す。版は必ずシートより先に読む(書き込みと
+// 同時に読んでも、古い版のキーに新しいデータが入るだけで逆は起きない)。
+function loadSnapshot() {
+  var version = getDataVersion()
+  var cached = readSnapshotCache(version)
+  if (cached) return { version: version, data: cached, cacheHit: true }
+  var data = {}
+  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  writeSnapshotCache(version, data)
+  return { version: version, data: data, cacheHit: false }
+}
+
+// ---- 読み取りの権限表(閲覧範囲の判定はここに集約する) -----------------------
+//
+// 列ごと・キーごとに規則名を書く。規則のない列・キーは誰にも返さない。
+// 将来、団体ごとに人材データの閲覧範囲を設定できるようにする場合は、
+// Settings の設定をこの表に重ねる形で拡張する。
+//   all             ログイン済みの全員
+//   self            本人のみ(Members の行の id が閲覧者)
+//   selfOrAdminRole 本人と、一般以外の役職
+//   selfOrFullAdmin 本人と全権管理者
+//   adminRole       一般以外の役職
+//   fullAdmin       全権管理者のみ
+//   none            誰にも返さない
+var READ_POLICY = {
+  Members: {
+    rows: 'all',
+    columns: {
+      id: 'all',
+      name: 'all',
+      display_name: 'all',
+      role: 'all',
+      avatar_url: 'all',
+      avatar_color: 'all',
+      avatar_initials: 'all',
+      project_ids: 'all',
+      will_tags: 'all',
+      judgment_tags: 'all',
+      reports_to_id: 'all',
+      joined_at: 'all',
+      department_path: 'all',
+      unavailable_dates: 'all',
+      absent_dates: 'all',
+      available_hours_json: 'all',
+      skill_levels_json: 'all',
+      timezone: 'all',
+      inactive: 'all',
+      mentor_id: 'selfOrAdminRole',
+      has_management_experience: 'selfOrAdminRole',
+      desired_areas: 'selfOrAdminRole',
+      desired_skills: 'selfOrAdminRole',
+      career_history_json: 'selfOrAdminRole',
+      qualifications_json: 'selfOrAdminRole',
+      evaluation_history_json: 'selfOrAdminRole',
+      transfer_history_json: 'selfOrAdminRole',
+      competencies_json: 'selfOrAdminRole',
+      training_history_json: 'selfOrAdminRole',
+      development_plan_json: 'selfOrAdminRole',
+      one_on_ones_json: 'selfOrAdminRole',
+      career_aspiration: 'selfOrAdminRole',
+      desired_future_role: 'selfOrAdminRole',
+      career_plan: 'selfOrAdminRole',
+      university: 'selfOrAdminRole',
+      faculty: 'selfOrAdminRole',
+      department_name: 'selfOrAdminRole',
+      grade_year: 'selfOrAdminRole',
+      custom_fields_json: 'selfOrAdminRole',
+      skill_points_json: 'selfOrAdminRole',
+      survey_responses_json: 'selfOrAdminRole',
+      last_login: 'selfOrAdminRole',
+      notify_new_task: 'self',
+      notify_settings: 'self',
+      locale: 'self',
+      permission_overrides_json: 'selfOrFullAdmin',
+      last_inactive_notified: 'none',
+      years_of_experience: 'none',
+    },
+  },
+  Projects: {
+    rows: 'all',
+    columns: {
+      id: 'all', name: 'all', description: 'all', type: 'all', owner_id: 'all',
+      member_ids: 'all', archived: 'all', parent_id: 'all', goal: 'all',
+      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all',
+    },
+  },
+  Tasks: {
+    // 行の規則は canViewTaskRow を参照。行が見える人には全列を返す
+    rows: 'task',
+    columns: {
+      id: 'all', project_id: 'all', title: 'all', description: 'all', status: 'all',
+      assign_type: 'all', assignee_id: 'all', creator_id: 'all', created_at: 'all',
+      start_date: 'all', due_date: 'all', due_time: 'all', visibility: 'all',
+      department: 'all', category: 'all', skills: 'all', difficulty: 'all', priority: 'all',
+      last_activity: 'all', original_input_id: 'all', approval_status: 'all',
+      estimated_hours: 'all', importance: 'all', reviewer_id: 'all', reviewer_ids: 'all',
+      depends_on_ids: 'all', progress_note: 'all', progress_percent: 'all',
+      progress_history_json: 'all', deliverables_json: 'all', history_json: 'all',
+      comments_json: 'all', retrospective_json: 'all', schedule_json: 'all', form_json: 'all',
+      blocker_note: 'all', blocker_since: 'all', hold_reason_note: 'all', hold_reason_since: 'all',
+      completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
+      required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
+      open_bid_applicant_ids: 'all', related_review_task_id: 'all',
+    },
+  },
+  Settings: {
+    // キーごとの規則。関数になっているキーは、閲覧者に合わせて値を加工して返す
+    keys: {
+      skill_options: 'all',
+      category_options: 'all',
+      role_levels: 'all',
+      project_templates: 'all',
+      role_permissions: 'all',
+      task_set_templates: 'all',
+      recurring_rules: 'all',
+      job_requirements: 'all',
+      skill_field_options: 'all',
+      skill_field_skills: 'all',
+      skill_field_threshold: 'all',
+      org_notification_emails: 'fullAdmin',
+      survey_invited_ids: filterSurveyInvitedIds,
+      project_order: 'all',
+      restricted_roles: 'all',
+      skill_level_thresholds: 'all',
+      quiz_definitions: filterQuizDefinitions,
+      radar_axes: 'all',
+      custom_member_columns_json: 'all',
+      expense_categories: 'all',
+      custom_form_defs: 'all',
+      org_name: 'all',
+      org_logo_url: 'all',
+      theme_color: 'all',
+      one_on_one_questions: 'all',
+      initial_tasks_json: 'all',
+      department_tree_config: 'all',
+      learning_contents: 'all',
+      learning_courses: 'all',
+      training_programs: 'all',
+      survey_questions: 'all',
+    },
+  },
+}
+
+function splitCsvList(value) {
+  return String(value || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
+}
+
+// 閲覧者の情報(判定に使う値だけ)。restrictedRoles は Settings の restricted_roles。
+// 全権管理者の判定は lib/ohsumi/permissions.ts の isFullAdminRole と同じ基準
+// (代表は常に全権管理者として扱う — authorizeAction と同じ)。
+function makeViewer(memberRow, restrictedRoles) {
+  var role = String(memberRow.role || '').trim()
+  var isAdminRole = role !== '' && role !== '一般'
+  return {
+    id: String(memberRow.id || ''),
+    role: role,
+    isAdminRole: isAdminRole,
+    isFullAdmin: role === '代表' || (isAdminRole && restrictedRoles.indexOf(role) < 0),
+  }
+}
+
+function checkReadRule(rule, viewer, ownerId) {
+  switch (rule) {
+    case 'all': return true
+    case 'self': return !!ownerId && ownerId === viewer.id
+    case 'selfOrAdminRole': return (!!ownerId && ownerId === viewer.id) || viewer.isAdminRole
+    case 'selfOrFullAdmin': return (!!ownerId && ownerId === viewer.id) || viewer.isFullAdmin
+    case 'adminRole': return viewer.isAdminRole
+    case 'fullAdmin': return viewer.isFullAdmin
+    default: return false
+  }
+}
+
+// タスクの行の規則(画面の visibleTasks / pendingTasks の表示範囲を再現する)
+//   幹部限定: 一般以外の役職のみ
+//   承認待ち: 一般以外の役職と、作成者・担当者
+function canViewTaskRow(viewer, task) {
+  if (String(task.visibility || '') === '幹部' && !viewer.isAdminRole) return false
+  if (String(task.approval_status || '') === '承認待ち' && !viewer.isAdminRole) {
+    if (String(task.creator_id || '') === viewer.id) return true
+    return splitCsvList(task.assignee_id).indexOf(viewer.id) >= 0
+  }
+  return true
+}
+
+// アンケートの回答対象者一覧: 一般以外の役職には一覧をそのまま返す。一般には
+// 「自分が対象かどうか」だけが分かる値にする(対象なら自分のID、対象外なら
+// どのメンバーIDとも一致しない値)。空(=全員が対象)はそのまま返す。
+var SURVEY_NOT_INVITED_MARKER = '__not_invited__'
+function filterSurveyInvitedIds(value, viewer) {
+  if (viewer.isAdminRole) return value
+  var ids = splitCsvList(value)
+  if (ids.length === 0) return value
+  return ids.indexOf(viewer.id) >= 0 ? viewer.id : SURVEY_NOT_INVITED_MARKER
+}
+
+// 検定: 正解番号(correctIndex)は検定を編集できる全権管理者だけに返す
+// (採点は submitQuizResult でサーバー側が行う)
+function filterQuizDefinitions(value, viewer) {
+  if (viewer.isFullAdmin || !value) return value
+  try {
+    var quizzes = JSON.parse(value)
+    if (!Array.isArray(quizzes)) return ''
+    quizzes.forEach(function (q) {
+      ;(q && Array.isArray(q.questions) ? q.questions : []).forEach(function (question) {
+        if (question) delete question.correctIndex
+      })
+    })
+    return JSON.stringify(quizzes)
+  } catch (e) {
+    return ''
+  }
+}
+
+function tableRowToObject(headers, row) {
+  var obj = {}
+  for (var c = 0; c < headers.length; c++) obj[headers[c]] = row[c]
+  return obj
+}
+
+// 1シート分を閲覧者に合わせて絞り込む(Members / Projects / Tasks)
+function filterTableForViewer(sheetName, table, viewer) {
+  var policy = READ_POLICY[sheetName]
+  var headers = table.headers || []
+  var rows = table.rows || []
+  // 規則のある列だけを残す(列の並びは元のまま。none の列も落とす)
+  var keepCols = []
+  headers.forEach(function (h, c) {
+    if (h && policy.columns[h] && policy.columns[h] !== 'none') keepCols.push(c)
+  })
+  var idCol = headers.indexOf('id')
+  var outRows = []
+  rows.forEach(function (row) {
+    var obj = null
+    if (policy.rows === 'task') {
+      obj = tableRowToObject(headers, row)
+      if (!canViewTaskRow(viewer, obj)) return
+    }
+    // Members の「本人」判定は行の id で行う
+    var ownerId = sheetName === 'Members' && idCol >= 0 ? String(row[idCol]) : ''
+    outRows.push(keepCols.map(function (c) {
+      return checkReadRule(policy.columns[headers[c]], viewer, ownerId) ? row[c] : ''
+    }))
+  })
+  return { headers: keepCols.map(function (c) { return headers[c] }), rows: outRows }
+}
+
+function filterSettingsForViewer(table, viewer) {
+  var headers = table.headers || []
+  var keyCol = headers.indexOf('key')
+  var valueCol = headers.indexOf('value')
+  var out = { headers: ['key', 'value'], rows: [] }
+  if (keyCol < 0 || valueCol < 0) return out
+  var keys = READ_POLICY.Settings.keys
+  ;(table.rows || []).forEach(function (row) {
+    var key = String(row[keyCol] || '')
+    var rule = keys[key]
+    if (!rule) return
+    var value = row[valueCol]
+    if (typeof rule === 'function') {
+      out.rows.push([key, rule(value, viewer)])
+    } else if (checkReadRule(rule, viewer, '')) {
+      out.rows.push([key, value])
+    }
+  })
+  return out
+}
+
+function restrictedRolesFromSnapshot(data) {
+  var settings = data.Settings || { headers: [], rows: [] }
+  var keyCol = settings.headers.indexOf('key')
+  var valueCol = settings.headers.indexOf('value')
+  if (keyCol < 0 || valueCol < 0) return []
+  for (var i = 0; i < settings.rows.length; i++) {
+    if (String(settings.rows[i][keyCol]) === 'restricted_roles') return splitCsvList(settings.rows[i][valueCol])
+  }
+  return []
+}
+
+function findMemberInSnapshot(data, memberId) {
+  var members = data.Members || { headers: [], rows: [] }
+  var idCol = members.headers.indexOf('id')
+  if (idCol < 0) return null
+  for (var i = 0; i < members.rows.length; i++) {
+    if (String(members.rows[i][idCol]) === String(memberId)) return tableRowToObject(members.headers, members.rows[i])
+  }
+  return null
+}
+
+// スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
+// Google のサービスを使わない純粋な関数なのでテストから直接呼べる)
+function buildViewerData(data, memberId) {
+  var memberRow = findMemberInSnapshot(data, memberId)
+  if (!memberRow) return null
+  var viewer = makeViewer(memberRow, restrictedRolesFromSnapshot(data))
+  var empty = { headers: [], rows: [] }
+  return {
+    Members: filterTableForViewer('Members', data.Members || empty, viewer),
+    Projects: filterTableForViewer('Projects', data.Projects || empty, viewer),
+    Tasks: filterTableForViewer('Tasks', data.Tasks || empty, viewer),
+    Settings: filterSettingsForViewer(data.Settings || empty, viewer),
+  }
+}
+
+// ログイン用のメール→メンバーIDの対応表(非公開の MemberEmails シート)。
+// 版ごとにキャッシュする(メールの変更も doPost 経由の書き込みなので版が変わる)。
+function findMemberIdByEmailCached(email) {
+  var normalized = String(email || '').trim().toLowerCase()
+  if (!normalized) return null
+  var cache = CacheService.getScriptCache()
+  var key = 'emails:' + getDataVersion()
+  var map = null
+  try {
+    var raw = cache.get(key)
+    if (raw) map = JSON.parse(raw)
+  } catch (e) { map = null }
+  if (!map) {
+    map = {}
+    var sheet = getMemberEmailsSheet()
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var emailCol = headers.indexOf('email')
+    var lastRow = sheet.getLastRow()
+    if (lastRow >= 2 && idCol >= 0 && emailCol >= 0) {
+      sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().forEach(function (row) {
+        String(row[emailCol] || '').split(',').forEach(function (e) {
+          var addr = e.trim().toLowerCase()
+          if (addr && !map[addr]) map[addr] = String(row[idCol])
+        })
+      })
+    }
+    try { cache.put(key, JSON.stringify(map), SNAPSHOT_CACHE_TTL) } catch (e) { /* 大きすぎる場合は毎回読む */ }
+  }
+  return map[normalized] || null
+}
+
+// getInitialData: ログインと初期データの取得を1回で行う。
+// knownVersion が現在の版と同じなら中身を返さず unchanged だけ返す。
+function getInitialData(email, knownVersion) {
+  var memberId = findMemberIdByEmailCached(email)
+  if (!memberId) return { memberId: null }
+  var version = getDataVersion()
+  if (knownVersion && String(knownVersion) === version) {
+    return { memberId: memberId, version: version, unchanged: true }
+  }
+  var snapshot = loadSnapshot()
+  var sheets = buildViewerData(snapshot.data, memberId)
+  if (!sheets) return { memberId: null }
+  return { memberId: memberId, version: snapshot.version, sheets: sheets }
+}
+
+// 段階①の計測用: Apps Script エディタで実行し、実行ログの結果を確認する。
+// キャッシュなし(シートから読む)とキャッシュあり、それぞれの所要時間と
+// データ量を出力する。実行するとデータの版が新しくなる(全員のキャッシュが
+// 一度無効になる)が、データそのものは変更しない。
+function measureReadPerformance() {
+  function ms(start) { return Date.now() - start }
+  bumpDataVersion()
+  var version = getDataVersion()
+
+  var t = Date.now()
+  var data = {}
+  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  var readSheetsMs = ms(t)
+
+  var json = JSON.stringify(data)
+  t = Date.now()
+  var cached = writeSnapshotCache(version, data)
+  var writeCacheMs = ms(t)
+
+  t = Date.now()
+  var fromCache = readSnapshotCache(version)
+  var readCacheMs = ms(t)
+
+  var members = data.Members || { headers: [], rows: [] }
+  var idCol = members.headers.indexOf('id')
+  var sampleId = idCol >= 0 && members.rows.length > 0 ? String(members.rows[0][idCol]) : ''
+  t = Date.now()
+  var filtered = sampleId ? buildViewerData(data, sampleId) : null
+  var filterMs = ms(t)
+
+  t = Date.now()
+  var emails = getMemberEmailsSheet()
+  emails.getDataRange().getValues()
+  var readEmailsMs = ms(t)
+
+  var lines = [
+    '📊 読み取り性能の計測結果',
+    '  行数: Members=' + members.rows.length +
+      ' Projects=' + ((data.Projects || {}).rows || []).length +
+      ' Tasks=' + ((data.Tasks || {}).rows || []).length +
+      ' Settings=' + ((data.Settings || {}).rows || []).length,
+    '  データ量(JSON): ' + Math.round(json.length / 1024) + ' KB',
+    '  キャッシュなし: シート読み込み ' + readSheetsMs + ' ms',
+    '  キャッシュ書き込み: ' + writeCacheMs + ' ms (' + (cached ? '成功' : '上限超過のためキャッシュしない') + ')',
+    '  キャッシュあり: キャッシュ読み込み ' + readCacheMs + ' ms (' + (fromCache ? '取得成功' : '取得失敗') + ')',
+    '  閲覧者ごとの絞り込み: ' + filterMs + ' ms',
+    '  MemberEmails 読み込み(キャッシュなし時のみ): ' + readEmailsMs + ' ms',
+    '  絞り込み後のデータ量(先頭メンバー視点): ' + (filtered ? Math.round(JSON.stringify(filtered).length / 1024) + ' KB' : '-'),
+    '  ※ 上記に加え、Webアプリ呼び出しの往復とトークン検証(5分キャッシュ)の時間がかかります',
+  ]
+  console.log(lines.join('\n'))
+  return lines.join('\n')
 }
