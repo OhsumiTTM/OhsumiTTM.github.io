@@ -234,8 +234,9 @@ export function ListView({
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <table className="w-full text-sm">
+      {/* スマホの幅では列を縮めずに、表の枠の中で横にスクロールする */}
+      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+        <table className="w-full min-w-[720px] text-sm">
           <thead>
             <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
               <th className="px-4 py-2.5 font-medium">{tr('output.list.colTask')}</th>
@@ -286,7 +287,7 @@ export function ListView({
                                 e.stopPropagation()
                                 go({ name: 'person', id: m.id })
                               }}
-                              className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
+                              className="flex items-center gap-1.5 whitespace-nowrap text-muted-foreground hover:text-foreground hover:underline"
                             >
                               <Avatar member={m} size={22} />
                               {m.displayName || m.name}

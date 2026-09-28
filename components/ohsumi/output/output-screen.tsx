@@ -403,8 +403,8 @@ export function OutputScreen() {
   return (
     <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
       <div className="mb-5 flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight">{tr('output.title')}</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
               {target === 'mine'
@@ -412,19 +412,19 @@ export function OutputScreen() {
                 : tr('output.subtitle.all')}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {expenseCategories.length > 0 && (
               <>
                 <button
                   onClick={() => setExpenseModalOpen(true)}
-                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <Receipt className="size-3.5" />
                   {tr('output.expenseApply')}
                 </button>
                 <button
                   onClick={() => setExpenseHistoryOpen(true)}
-                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <FileText className="size-3.5" />
                   {tr('output.expenseHistory')}
@@ -434,7 +434,7 @@ export function OutputScreen() {
             {customFormDefs.length > 0 && (
               <button
                 onClick={() => setFormModalOpen(true)}
-                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <FileText className="size-3.5" />
                 {tr('output.formApply')}
@@ -752,11 +752,11 @@ export function OutputScreen() {
           )}
 
           {(target === 'all' || target === 'mine') && view !== 'openbid' && (
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
               <select
                 value={projectFilter}
                 onChange={(e) => setProjectFilter(e.target.value)}
-                className="h-8 cursor-pointer rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"
+                className="h-8 w-full min-w-0 cursor-pointer rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary sm:w-auto sm:max-w-[16rem]"
               >
                 <option value="">{tr('output.filter.allProjects')}</option>
                 {projects.map((p) => (
@@ -909,7 +909,7 @@ export function OutputScreen() {
 
 function Segment({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
+    <div className="flex min-w-0 max-w-full items-center gap-2.5">
       <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
       <div className="ohsumi-scroll inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-secondary/60 p-0.5">
         {children}
@@ -931,7 +931,8 @@ function Seg({
     <button
       onClick={onClick}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
+        // 縮めずに横に並べ、入りきらない分はタブの枠の中で横にスクロールする
+        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
         active
           ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(16,24,40,0.06)]'
           : 'text-muted-foreground hover:text-foreground',

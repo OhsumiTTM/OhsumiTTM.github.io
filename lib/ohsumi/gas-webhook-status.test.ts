@@ -13,6 +13,7 @@ const SLACK_URL = 'https://hooks.slack.com/services/T000/B000/secret-token'
 
 function loadGas(props: Record<string, string>, responseCode = 204) {
   const store = { ...props }
+  const fetched: string[] = []
   const context = vm.createContext({
     console,
     PropertiesService: {
@@ -26,10 +27,15 @@ function loadGas(props: Record<string, string>, responseCode = 204) {
         },
       }),
     },
-    UrlFetchApp: { fetch: () => ({ getResponseCode: () => responseCode }) },
+    UrlFetchApp: {
+      fetch: (url: string) => {
+        fetched.push(url)
+        return { getResponseCode: () => responseCode }
+      },
+    },
   })
   vm.runInContext(CODE_GS, context)
-  return { gas: context as unknown as Record<string, (...args: unknown[]) => unknown>, store }
+  return { gas: context as unknown as Record<string, (...args: unknown[]) => unknown>, store, fetched }
 }
 
 describe('getWebhookStatus', () => {
@@ -58,5 +64,29 @@ describe('getWebhookStatus', () => {
     expect(() => gas.testSlackWebhook()).toThrow()
     const status = gas.getWebhookStatus() as { slack: { lastTest: { ok: boolean; error: string } } }
     expect(status.slack.lastTest).toMatchObject({ ok: false, error: 'HTTP 404' })
+  })
+})
+
+describe('テスト環境の Discord・Slack', () => {
+  const hooks = { discord_webhook_url: DISCORD_URL, slack_webhook_url: SLACK_URL }
+
+  it('テスト環境では投稿せず、ログだけにする(接続テストもしない)', () => {
+    const { gas, fetched } = loadGas({ ...hooks, TEST_ENVIRONMENT: 'true' })
+    gas.notifyChat('期限切れのタスクがあります')
+    expect(fetched).toEqual([])
+    expect(() => gas.testDiscordWebhook()).toThrow(/TEST_ALLOW_CHAT/)
+    expect(fetched).toEqual([])
+  })
+
+  it('TEST_ALLOW_CHAT が true なら、テスト環境でも投稿する', () => {
+    const { gas, fetched } = loadGas({ ...hooks, TEST_ENVIRONMENT: 'true', TEST_ALLOW_CHAT: 'true' })
+    gas.notifyChat('x')
+    expect(fetched).toEqual([DISCORD_URL, SLACK_URL])
+  })
+
+  it('本番(テスト環境ではない)は、これまでどおり投稿する', () => {
+    const { gas, fetched } = loadGas(hooks)
+    gas.notifyChat('x')
+    expect(fetched).toEqual([DISCORD_URL, SLACK_URL])
   })
 })

@@ -180,6 +180,13 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+  /* 選択肢(<select>)は、いちばん長い選択肢の幅まで広がる。長いプロジェクト名などで
+     スマホの画面より広くなり、ページ全体が横にはみ出さないよう、入れ物の幅までにする */
+  select {
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
 }
 
 @layer utilities {

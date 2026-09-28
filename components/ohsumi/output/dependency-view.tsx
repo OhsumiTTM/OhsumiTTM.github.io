@@ -30,8 +30,10 @@ import { GitBranch, GripVertical, TriangleAlert } from 'lucide-react'
 const CARD_W = 220
 // カードの高さは表示項目の数に応じて可変（名前+ステータス行は常時表示、
 // プロジェクト/担当者・期限/カテゴリ・難易度は選んだ項目に応じて行が増える）
+// 1行は 20px + 行の間隔(gap-1 = 4px)。間隔を含めないと、項目が多い時に中身がカードより
+// 高くなり、タイトルの下の行が重なって切れる
 const BASE_CARD_H = 40
-const ROW_H = 20
+const ROW_H = 24
 function cardHeightFor(fields: Set<KanbanCardField>): number {
   let extraRows = 0
   if (fields.has('project')) extraRows++
