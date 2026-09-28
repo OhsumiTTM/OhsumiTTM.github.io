@@ -5561,3 +5561,243 @@ function auditUploadSharing(extraFolderId) {
   console.log(lines.join('\n'))
   return lines.join('\n')
 }
+
+// ---- 性能計測用のダミーデータ(テスト環境専用) ----------------------------------
+//
+// 本番と同じくらいの規模(メンバー50人・プロジェクト20件・タスク500件)の
+// ダミーデータを作り、measureReadPerformance() で規模を再現した計測ができる
+// ようにする。本番で誤って実行されないよう、スクリプトプロパティ
+// TEST_ENVIRONMENT が 'true' のときだけ動く。ダミーデータの id はすべて
+// 'perf-' で始まり、deletePerformanceTestData() でまとめて削除できる。
+//
+// 使い方(Apps Script エディタで実行):
+//   1. スクリプトプロパティ TEST_ENVIRONMENT を true にする
+//   2. seedPerformanceTestData() を実行する
+//   3. measureReadPerformance() を実行して結果を確認する
+//   4. deletePerformanceTestData() を実行してダミーデータを消す
+
+var PERF_TEST_ID_PREFIX = 'perf-'
+var PERF_TEST_COUNTS = { members: 50, projects: 20, tasks: 500 }
+
+function assertTestEnvironment() {
+  if (PropertiesService.getScriptProperties().getProperty('TEST_ENVIRONMENT') !== 'true') {
+    throw userError('テスト環境ではないため実行できません。スクリプトプロパティ TEST_ENVIRONMENT を true にしてから実行してください。')
+  }
+}
+
+// 同じ結果を再現できるよう、乱数は種を固定した簡易な生成器を使う
+function makePerfRandom(seed) {
+  var state = seed >>> 0
+  var next = function () {
+    state = (state * 1664525 + 1013904223) >>> 0
+    return state / 4294967296
+  }
+  return {
+    next: next,
+    int: function (min, max) { return min + Math.floor(next() * (max - min + 1)) },
+    pick: function (list) { return list[Math.floor(next() * list.length)] },
+    chance: function (p) { return next() < p },
+    sample: function (list, n) {
+      var copy = list.slice()
+      var out = []
+      while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(next() * copy.length), 1)[0])
+      return out
+    },
+  }
+}
+
+function perfDate(daysFromBase) {
+  var d = new Date(Date.UTC(2026, 0, 1) + daysFromBase * 86400000)
+  return d.toISOString().slice(0, 10)
+}
+
+function perfText(rng, minLen, maxLen) {
+  var words = ['資料を確認しました', '来週までに対応します', '先方に連絡済みです', '修正版をアップしました',
+    'レビューをお願いします', '日程を調整中です', '予算の見直しが必要です', '進捗を共有します',
+    '担当を追加しました', '参考資料を添付します', '確認事項があります', '次回の定例で相談します']
+  var len = rng.int(minLen, maxLen)
+  var s = ''
+  while (s.length < len) s += rng.pick(words) + '。'
+  return s
+}
+
+// メンバー・プロジェクト・タスクの行を作る(Google のサービスを使わない純粋な関数)。
+// 返り値は { Members: [...], Projects: [...], Tasks: [...] } で、各要素は
+// {列名: 値} のオブジェクト。割合は実際の団体に近づけている:
+//   役職: 代表1人・事業責任者2人・班長7人・一般40人
+//   タスク: 幹部限定 約10%、承認待ち 約5%、コメント付き 約35%、履歴付き 約60%
+function buildPerformanceTestData(seed) {
+  var rng = makePerfRandom(seed || 20260928)
+  var P = PERF_TEST_ID_PREFIX
+  var pad = function (n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s }
+  var departments = ['運営', '広報', '開発', 'デザイン', '渉外', 'イベント', 'リサーチ']
+  var skills = ['企画', '広報', 'デザイン', 'リサーチ', 'イベント運営', 'メール', '実装', '要件定義', '校閲']
+  var statuses = ['未着手', '進行中', '進行中', '進行中', '確認待ち', '修正中', '保留', 'サポート必要', '完了', '完了', '完了']
+  var difficulties = ['誰でも可', '新人歓迎', '少し経験必要', '経験者向け', '上級者向け']
+  var colors = ['#6366f1', '#db2777', '#059669', '#d97706', '#0ea5e9', '#8b5cf6']
+
+  var projects = []
+  for (var p = 1; p <= PERF_TEST_COUNTS.projects; p++) {
+    projects.push({ id: P + 'p-' + pad(p, 2), name: 'ダミープロジェクト' + p })
+  }
+
+  var members = []
+  for (var m = 1; m <= PERF_TEST_COUNTS.members; m++) {
+    var role = m === 1 ? '代表' : m <= 3 ? '事業責任者' : m <= 10 ? '班長' : '一般'
+    var id = P + 'm-' + pad(m, 2)
+    var myProjects = role === '班長' ? rng.sample(projects, 2).map(function (x) { return x.id }) : []
+    var hasHr = role !== '一般' || rng.chance(0.4)
+    members.push({
+      id: id,
+      name: 'ダミー' + pad(m, 2),
+      display_name: 'ダミー' + pad(m, 2),
+      role: role,
+      avatar_color: rng.pick(colors),
+      avatar_initials: 'D' + (m % 10),
+      will_tags: rng.sample(skills, 2).join(','),
+      judgment_tags: rng.sample(skills, 2).join(','),
+      reports_to_id: m > 10 ? P + 'm-' + pad(rng.int(4, 10), 2) : m > 1 ? P + 'm-01' : '',
+      joined_at: perfDate(-rng.int(30, 900)),
+      project_ids: myProjects.join(','),
+      department_path: '事業本部>' + rng.pick(departments),
+      skill_levels_json: JSON.stringify(rng.sample(skills, 3).map(function (s) { return { skill: s, level: rng.int(1, 5) } })),
+      skill_points_json: JSON.stringify({ '企画': rng.int(0, 400), 'デザイン': rng.int(0, 400) }),
+      career_history_json: hasHr ? JSON.stringify([{ id: 'c1', startDate: perfDate(-600), title: '担当', note: perfText(rng, 20, 60) }]) : '',
+      evaluation_history_json: hasHr ? JSON.stringify([{ id: 'e1', date: perfDate(-90), rating: rng.int(1, 5), comment: perfText(rng, 40, 120) }]) : '',
+      one_on_ones_json: hasHr ? JSON.stringify([{ id: 'o1', date: perfDate(-30), notes: perfText(rng, 60, 200) }]) : '',
+      survey_responses_json: rng.chance(0.6) ? JSON.stringify([{ id: 's1', submittedAt: perfDate(-10), answers: { q1: rng.int(1, 5), q2: rng.int(1, 5) } }]) : '',
+      last_login: perfDate(-rng.int(0, 40)) + 'T09:00:00.000Z',
+      timezone: 'Asia/Tokyo',
+      locale: 'ja',
+    })
+  }
+  projects.forEach(function (proj) {
+    var mids = rng.sample(members, rng.int(5, 10)).map(function (x) { return x.id })
+    proj.description = perfText(rng, 40, 120)
+    proj.goal = perfText(rng, 20, 60)
+    proj.owner_id = P + 'm-' + pad(rng.int(1, 10), 2)
+    proj.member_ids = mids.join(',')
+    proj.archived = 'FALSE'
+    proj.start_date = perfDate(-rng.int(30, 300))
+  })
+
+  var tasks = []
+  for (var t = 1; t <= PERF_TEST_COUNTS.tasks; t++) {
+    var assignees = rng.sample(members, rng.int(0, 2)).map(function (x) { return x.id })
+    var creator = rng.pick(members).id
+    var comments = []
+    if (rng.chance(0.35)) {
+      for (var c = 0, nc = rng.int(1, 6); c < nc; c++) {
+        comments.push({ id: 'cm' + c, byId: rng.pick(members).id, at: perfDate(rng.int(0, 250)) + 'T10:00:00.000Z', text: perfText(rng, 30, 200) })
+      }
+    }
+    var history = []
+    if (rng.chance(0.6)) {
+      for (var h = 0, nh = rng.int(2, 8); h < nh; h++) {
+        history.push({ at: perfDate(rng.int(0, 250)) + 'T10:00:00.000Z', byId: rng.pick(members).id, type: 'status', from: rng.pick(statuses), to: rng.pick(statuses) })
+      }
+    }
+    tasks.push({
+      id: P + 't-' + pad(t, 4),
+      project_id: rng.pick(projects).id,
+      title: 'ダミータスク' + t,
+      description: perfText(rng, 40, 300),
+      status: rng.pick(statuses),
+      assign_type: assignees.length ? 'direct' : 'open_bid',
+      assignee_id: assignees.join(','),
+      creator_id: creator,
+      created_at: perfDate(rng.int(0, 250)),
+      start_date: perfDate(rng.int(0, 250)),
+      due_date: perfDate(rng.int(0, 300)),
+      visibility: rng.chance(0.1) ? '幹部' : 'all',
+      department: rng.pick(departments),
+      category: rng.pick(['企画', '制作', '連絡', '会計', '調査']),
+      skills: rng.sample(skills, rng.int(1, 3)).join(','),
+      difficulty: rng.pick(difficulties),
+      priority: rng.pick(['高', '中', '中', '低']),
+      approval_status: rng.chance(0.05) ? '承認待ち' : '',
+      importance: rng.chance(0.1) ? '重要' : '一般',
+      progress_note: rng.chance(0.3) ? perfText(rng, 20, 100) : '',
+      progress_percent: String(rng.int(0, 100)),
+      comments_json: comments.length ? JSON.stringify(comments) : '',
+      history_json: history.length ? JSON.stringify(history) : '',
+    })
+  }
+  return { Members: members, Projects: projects, Tasks: tasks }
+}
+
+// 行オブジェクトをシートの見出しに合わせて末尾に一括で書き込む
+// (見出しに無い列は捨てる。日付の自動変換を避けるため書式なしテキストにする)
+function appendPerfRows(sheetName, objects) {
+  if (objects.length === 0) return 0
+  var sheet = getSheet(sheetName)
+  var headers = headerRow(sheet)
+  var values = objects.map(function (obj) {
+    return headers.map(function (h) { return obj[h] != null ? String(obj[h]) : '' })
+  })
+  var range = sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length)
+  range.setNumberFormat('@')
+  range.setValues(values)
+  return values.length
+}
+
+function countPerfRows(sheetName) {
+  var sheet = getSheet(sheetName)
+  var headers = headerRow(sheet)
+  var idCol = headers.indexOf('id')
+  if (idCol < 0 || sheet.getLastRow() < 2) return 0
+  return sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues().filter(function (r) {
+    return String(r[0]).indexOf(PERF_TEST_ID_PREFIX) === 0
+  }).length
+}
+
+// ダミーデータを作る(テスト環境専用)。既にダミーデータがある場合は、先に
+// deletePerformanceTestData() で消すよう促して止まる(重複を防ぐため)
+function seedPerformanceTestData() {
+  assertTestEnvironment()
+  var existing = countPerfRows(SHEET_MEMBERS) + countPerfRows(SHEET_PROJECTS) + countPerfRows(SHEET_TASKS)
+  if (existing > 0) {
+    throw userError('ダミーデータが既に ' + existing + ' 行あります。deletePerformanceTestData() で削除してから実行してください。')
+  }
+  var data = buildPerformanceTestData()
+  var counts = {
+    members: appendPerfRows(SHEET_MEMBERS, data.Members),
+    projects: appendPerfRows(SHEET_PROJECTS, data.Projects),
+    tasks: appendPerfRows(SHEET_TASKS, data.Tasks),
+  }
+  bumpDataVersion()
+  var msg = '🧪 ダミーデータを作成しました: メンバー ' + counts.members + ' 人、プロジェクト ' + counts.projects +
+    ' 件、タスク ' + counts.tasks + ' 件。続けて measureReadPerformance() を実行してください。'
+  console.log(msg)
+  return msg
+}
+
+// ダミーデータ(id が 'perf-' で始まる行)を Members / Projects / Tasks から
+// まとめて削除する(テスト環境専用)。それ以外の行には触れない
+function deletePerformanceTestData() {
+  assertTestEnvironment()
+  var deleted = {}
+  ;[SHEET_TASKS, SHEET_PROJECTS, SHEET_MEMBERS].forEach(function (name) {
+    var sheet = getSheet(name)
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    deleted[name] = 0
+    if (idCol < 0 || sheet.getLastRow() < 2) return
+    var ids = sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues()
+    // 下の行から、連続したダミー行をまとめて削除する(行番号がずれないように)
+    var i = ids.length - 1
+    while (i >= 0) {
+      if (String(ids[i][0]).indexOf(PERF_TEST_ID_PREFIX) !== 0) { i--; continue }
+      var end = i
+      while (i >= 0 && String(ids[i][0]).indexOf(PERF_TEST_ID_PREFIX) === 0) i--
+      var count = end - i
+      sheet.deleteRows(i + 3, count)
+      deleted[name] += count
+    }
+  })
+  bumpDataVersion()
+  var msg = '🧹 ダミーデータを削除しました: メンバー ' + deleted[SHEET_MEMBERS] + ' 行、プロジェクト ' +
+    deleted[SHEET_PROJECTS] + ' 行、タスク ' + deleted[SHEET_TASKS] + ' 行'
+  console.log(msg)
+  return msg
+}

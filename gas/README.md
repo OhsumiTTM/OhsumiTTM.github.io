@@ -571,3 +571,18 @@ Excel等で開いた場合には効きません（CSVには書式情報が乗ら
    スプレッドシートの **「ファイル」→「共有」→「ウェブに公開」** を開き、Members / Projects /
    Tasks / Settings それぞれの公開を停止します。あわせて GitHub Secrets の `MEMBERS_CSV`・
    `PROJECTS_CSV`・`TASKS_CSV`・`SETTINGS_CSV` を削除します。
+
+---
+
+## 11. 性能計測用のダミーデータ(テスト環境専用)
+
+本番に近い規模で `measureReadPerformance()` を試すための関数です。**本番のスプレッドシートでは実行しないでください。**
+スクリプトプロパティ `TEST_ENVIRONMENT` が `true` のときだけ動きます。
+
+1. テスト用のスプレッドシート(本番のコピーなど)に `Code.gs` を入れ、スクリプトプロパティ `TEST_ENVIRONMENT` を `true` にする
+2. `seedPerformanceTestData()` を実行する
+   - メンバー50人(代表1・事業責任者2・班長7・一般40)、プロジェクト20件、タスク500件を追加します
+   - タスクは幹部限定が約10%、承認待ちが約5%、コメント付きが約35%、履歴付きが約60%です
+   - 追加した行の `id` はすべて `perf-` で始まります。ダミーデータが既にある場合は止まります
+3. `measureReadPerformance()` を実行し、実行ログで所要時間とデータ量を確認する
+4. `deletePerformanceTestData()` を実行してダミーデータを削除する(`id` が `perf-` で始まる行だけを削除します)
