@@ -44,25 +44,30 @@ describe('simple-markdown', () => {
     expect(out).toMatch(/<a href="https:\/\/example.com"[^>]*target="_blank" rel="noopener noreferrer"/)
   })
 
-  it('3つのページの内容を変換でき、未確定の箇所はそのまま残る', () => {
+  it('3つのページの内容を変換でき、未確定の箇所が残っていない', () => {
     const privacy = html(legal('privacy'))
     expect(privacy).toContain('>Ohsumi プライバシーポリシー</h1>')
-    expect(privacy).toContain('制定日:20XX年X月X日')
-    expect(privacy).toContain('メールアドレス:[記入]')
+    expect(privacy).toContain('制定日:2026年9月28日')
+    expect(privacy).toContain('メールアドレス:<a href="mailto:fsif.official@gmail.com"')
     expect(privacy).toMatch(/<th scope="col"[^>]*>権限<\/th>/)
     expect(privacy).toMatch(/<strong[^>]*>利用組織の情報<\/strong>/)
     expect(parseMarkdown(legal('privacy')).filter((b) => b.type === 'table')).toHaveLength(1)
 
     const terms = html(legal('terms'))
     expect(terms).toContain('>第1条(定義)</h2>')
-    expect(terms).toContain('[横浜地方裁判所]')
+    expect(terms).toContain('制定日:2026年9月28日')
+    expect(terms).toContain('、横浜地方裁判所を第一審')
+    expect(terms).toContain('<a href="mailto:fsif.official@gmail.com"')
 
     const about = html(legal('about'))
     expect(about).toMatch(/<a href="\/privacy\/"[^>]*>プライバシーポリシー<\/a>/)
-    expect(about).toContain('お問い合わせ:[メールアドレスを記入]')
+    expect(about).toMatch(/お問い合わせ:<a href="mailto:fsif.official@gmail.com"[^>]*>fsif.official@gmail.com<\/a>/)
     // Markdown の記号が本文に残っていない
     for (const out of [privacy, terms, about]) {
       expect(out).not.toMatch(/\*\*|\]\(|^#|\| ---/m)
+      // 未確定の箇所([…] や XX)が残っていない
+      // (クラス名の min-w-[520px] などを除くため、タグを取り除いた本文で確かめる)
+      expect(out.replace(/<[^>]*>/g, '')).not.toMatch(/\[[^\]]*\]|XX/)
     }
   })
 })

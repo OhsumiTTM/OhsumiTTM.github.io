@@ -21,4 +21,4 @@ Ohsumi で登録したデータは、利用する団体自身の Google アカ�
 
 - [プライバシーポリシー](/privacy/)
 - [利用規約](/terms/)
-- お問い合わせ:[メールアドレスを記入]
+- お問い合わせ:[fsif.official@gmail.com](mailto:fsif.official@gmail.com)
