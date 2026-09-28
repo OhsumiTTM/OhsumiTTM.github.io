@@ -143,6 +143,12 @@ function setupOhsumi() {
   ensureSheetHeaders(ss, SHEET_MEMBER_EMAILS, MEMBER_EMAILS_HEADERS)
   bumpMemberEmailsVersion()
 
+  // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
+  var createdSecrets = ensureSessionSecrets()
+  console.log(createdSecrets.length
+    ? '🔑 ログイン用の設定を作成しました: ' + createdSecrets.join(', ')
+    : '✅ ログイン用の設定(ORG_ID・秘密鍵)は作成済みです')
+
   // --- Settings の初期キーを確保（上書きはしない）---
   var DEFAULT_SETTINGS = [
     ['org_name', ''],
@@ -391,7 +397,13 @@ function getActingMember(email) {
   // 公開CSVなのでemail列を置いていない — SHEET_MEMBER_EMAILS参照)。
   var memberId = findMemberIdByEmail(email)
   if (!memberId) throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
+  return getActingMemberById(memberId)
+}
 
+// メンバーIDから、操作するメンバーの { id, role, project_ids, permission_overrides } を返す
+// (セッショントークンのメンバーID、またはメールから引いたメンバーID)
+function getActingMemberById(memberId) {
+  memberId = String(memberId)
   var sheet = getSheet(SHEET_MEMBERS)
   var headers = headerRow(sheet)
   var idCol = headers.indexOf('id')
@@ -417,6 +429,317 @@ function getActingMember(email) {
   // MemberEmails側には行があるがMembers側に対応する行が無い(データ不整合) —
   // 通常起こらないはずだが、安全側に倒して「見つからない」として扱う
   throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
+}
+
+// ---- ログイン(IDトークン)とセッショントークン ----------------------------------
+//
+// ログインの流れ:
+//   1. フロントが getLoginConfig で団体ID(ORG_ID)を取得する(認証不要)
+//   2. フロントは乱数 r を作り、nonce = ORG_ID + "." + base64url(SHA-256(r)) で
+//      Google Identity Services(google.accounts.id)の IDトークンを受け取る
+//   3. exchangeIdToken で IDトークンと r を送る。ここで tokeninfo により署名・
+//      有効期限を確認し、aud(クライアントID)・iss・email_verified・nonce を確かめる
+//      (nonce は1回だけ使える)。登録済みのメンバーなら、この団体の秘密鍵で署名した
+//      セッショントークンを発行する
+//   4. 以降のリクエストはセッショントークンだけで認証する(Google への問い合わせなし)
+//
+// セッショントークン: "v1.<payload(base64url JSON)>.<HMAC-SHA256(base64url)>"
+//   payload = { org, sub(メンバーID), gen(世代番号), kid(鍵ID), sid, iat, exp, auth(ログイン時刻), rem }
+//   別の団体のトークン(org・鍵が違う)、改ざん、有効期限切れ、SESSION_NOT_BEFORE より前に
+//   発行されたもの、世代番号が古いもの(全端末でログアウト済み)は受け付けない。
+//
+// スクリプトプロパティ(1回のリクエストで getProperties() を1回だけ読む — requestProps 参照):
+//   ORG_ID / SESSION_SIGNING_KEY / SESSION_KEY_ID  setupOhsumi() が作成する
+//   SESSION_NOT_BEFORE   これより前(秒)に発行されたセッションを無効にする
+//   SESSION_GEN_<メンバーID>  メンバーごとの世代番号(全端末でログアウトで1増える)
+//   LEGACY_ACCESS_TOKEN_AUTH  'false' にすると、以前のアクセストークン方式を受け付けない
+
+var SESSION_TOKEN_VERSION = 'v1'
+// チェックあり(この端末に保存): 1回14日、Googleでのログインから最長30日
+var SESSION_TTL_REMEMBER_SEC = 14 * 24 * 3600
+var SESSION_MAX_REMEMBER_SEC = 30 * 24 * 3600
+// チェックなし: 12時間(延長しない)
+var SESSION_TTL_TEMP_SEC = 12 * 3600
+// 使用済みの nonce を覚えておく時間(IDトークンの有効期間と同じ1時間)
+var ID_TOKEN_NONCE_TTL_SEC = 3600
+var SESSION_GEN_PREFIX = 'SESSION_GEN_'
+
+// 1回のリクエスト(実行)の間は、スクリプトプロパティを getProperties() で1回だけ読み、
+// その結果を使う(読み取り回数の上限対策)。この実行の中で書き込んだ値は setRequestProp で
+// 反映する。doPost の最初に resetRequestProps() で読み直す。
+var _requestProps = null
+
+function resetRequestProps() {
+  _requestProps = null
+}
+
+function requestProps() {
+  if (!_requestProps) _requestProps = PropertiesService.getScriptProperties().getProperties() || {}
+  return _requestProps
+}
+
+function setRequestProp(key, value) {
+  PropertiesService.getScriptProperties().setProperty(key, value)
+  if (_requestProps) _requestProps[key] = value
+}
+
+function nowSec() {
+  return Math.floor(Date.now() / 1000)
+}
+
+function base64UrlEncode(bytesOrString) {
+  return Utilities.base64EncodeWebSafe(bytesOrString).replace(/=+$/, '')
+}
+
+function base64UrlDecodeToString(text) {
+  var s = String(text)
+  while (s.length % 4) s += '='
+  return Utilities.newBlob(Utilities.base64DecodeWebSafe(s)).getDataAsString('UTF-8')
+}
+
+function sha256Base64Url(text) {
+  return base64UrlEncode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8))
+}
+
+// 推測できない値を作る(Utilities.getUuid を複数と時刻を SHA-256 でまとめる)
+function generateSecret() {
+  var seed = [Utilities.getUuid(), Utilities.getUuid(), Utilities.getUuid(), Utilities.getUuid(), String(Date.now())].join(':')
+  return base64UrlEncode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, seed, Utilities.Charset.UTF_8))
+}
+
+// 長さの違いも含めて、比較にかかる時間が内容で変わらないように比べる
+function constantTimeEquals(a, b) {
+  a = String(a)
+  b = String(b)
+  var diff = a.length ^ b.length
+  for (var i = 0; i < Math.max(a.length, b.length); i++) {
+    diff |= (a.charCodeAt(i % (a.length || 1)) || 0) ^ (b.charCodeAt(i % (b.length || 1)) || 0)
+  }
+  return diff === 0
+}
+
+// ORG_ID・秘密鍵・鍵IDが無ければ作る(setupOhsumi から呼ぶ)。既にあれば変えない
+function ensureSessionSecrets() {
+  var props = PropertiesService.getScriptProperties()
+  var created = []
+  if (!props.getProperty('ORG_ID')) {
+    props.setProperty('ORG_ID', 'org_' + generateSecret().slice(0, 20))
+    created.push('ORG_ID')
+  }
+  if (!props.getProperty('SESSION_SIGNING_KEY') || !props.getProperty('SESSION_KEY_ID')) {
+    props.setProperty('SESSION_SIGNING_KEY', generateSecret())
+    props.setProperty('SESSION_KEY_ID', generateSecret().slice(0, 8))
+    created.push('SESSION_SIGNING_KEY', 'SESSION_KEY_ID')
+  }
+  resetRequestProps()
+  return created
+}
+
+function signSessionPayload(payloadB64, key) {
+  return base64UrlEncode(Utilities.computeHmacSha256Signature(SESSION_TOKEN_VERSION + '.' + payloadB64, key))
+}
+
+function sessionGeneration(memberId) {
+  return Number(requestProps()[SESSION_GEN_PREFIX + memberId] || 0)
+}
+
+// セッショントークンを発行する。auth は Google でログインした時刻(秒)
+function issueSessionToken(memberId, remember, auth) {
+  var props = requestProps()
+  var key = props.SESSION_SIGNING_KEY
+  var kid = props.SESSION_KEY_ID
+  var org = props.ORG_ID
+  if (!key || !kid || !org) {
+    throw userError('ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。')
+  }
+  var now = nowSec()
+  var exp = remember
+    ? Math.min(now + SESSION_TTL_REMEMBER_SEC, auth + SESSION_MAX_REMEMBER_SEC)
+    : Math.min(now + SESSION_TTL_TEMP_SEC, auth + SESSION_TTL_TEMP_SEC)
+  var payload = {
+    org: org,
+    sub: String(memberId),
+    gen: sessionGeneration(memberId),
+    kid: kid,
+    sid: generateSecret().slice(0, 16),
+    iat: now,
+    exp: exp,
+    auth: auth,
+    rem: !!remember,
+  }
+  var payloadB64 = base64UrlEncode(JSON.stringify(payload))
+  return { token: SESSION_TOKEN_VERSION + '.' + payloadB64 + '.' + signSessionPayload(payloadB64, key), exp: exp, remember: !!remember }
+}
+
+// セッショントークンを確かめ、payload を返す。受け付けない場合は理由つきで例外を投げる
+function verifySessionToken(token) {
+  var props = requestProps()
+  var parts = String(token || '').split('.')
+  if (parts.length !== 3 || parts[0] !== SESSION_TOKEN_VERSION || !parts[1] || !parts[2]) {
+    throw userError('ログイン情報の形式が不正です。再ログインしてください。')
+  }
+  if (!props.SESSION_SIGNING_KEY || !props.ORG_ID) {
+    throw userError('ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。')
+  }
+  if (!constantTimeEquals(signSessionPayload(parts[1], props.SESSION_SIGNING_KEY), parts[2])) {
+    throw userError('ログイン情報が無効です。再ログインしてください。')
+  }
+  var payload
+  try {
+    payload = JSON.parse(base64UrlDecodeToString(parts[1]))
+  } catch (e) {
+    throw userError('ログイン情報の形式が不正です。再ログインしてください。')
+  }
+  if (!payload || payload.org !== props.ORG_ID) throw userError('この団体のログイン情報ではありません。再ログインしてください。')
+  if (payload.kid !== props.SESSION_KEY_ID) throw userError('ログイン情報が無効になりました。再ログインしてください。')
+  var now = nowSec()
+  if (!(Number(payload.exp) > now)) throw userError('ログインの有効期限が切れました。再ログインしてください。')
+  var notBefore = Number(props.SESSION_NOT_BEFORE || 0)
+  if (Number(payload.iat) < notBefore) throw userError('ログイン情報が無効になりました。再ログインしてください。')
+  if (!payload.sub) throw userError('ログイン情報の形式が不正です。再ログインしてください。')
+  if (Number(payload.gen) !== sessionGeneration(payload.sub)) {
+    throw userError('この端末のログインは無効になりました(全端末でログアウト済み)。再ログインしてください。')
+  }
+  return payload
+}
+
+// 残りが半分を切ったら新しいトークンを発行する(上限はGoogleでのログインから30日。
+// チェックなしのセッションは延長しない)
+function renewSessionIfNeeded(payload) {
+  if (!payload.rem) return null
+  var now = nowSec()
+  var remaining = Number(payload.exp) - now
+  if (remaining > SESSION_TTL_REMEMBER_SEC / 2) return null
+  var renewed = issueSessionToken(payload.sub, true, Number(payload.auth))
+  // 上限に近づいて期限がほとんど延びない場合は発行しない
+  if (renewed.exp - Number(payload.exp) < 3600) return null
+  return renewed
+}
+
+// Google の IDトークンを tokeninfo で確かめ、nonce がこの団体・この端末のものかを確かめる。
+// 成功したら { email, iat } を返す
+function verifyGoogleIdToken(idToken, nonceSecret) {
+  var props = requestProps()
+  var clientId = props.GOOGLE_OAUTH_CLIENT_ID
+  if (!clientId) throw userError('サーバー側の設定(GOOGLE_OAUTH_CLIENT_ID)が未設定です。管理者にお問い合わせください。')
+  if (!props.ORG_ID) throw userError('ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。')
+  if (!/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/.test(String(idToken || '')) || String(idToken).length > 4096) {
+    throw userError('ログインの情報の形式が不正です。もう一度ログインしてください。')
+  }
+  if (!nonceSecret || String(nonceSecret).length < 16 || String(nonceSecret).length > 256) {
+    throw userError('ログインの情報の形式が不正です。もう一度ログインしてください。')
+  }
+  var resp = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), {
+    muteHttpExceptions: true,
+  })
+  if (resp.getResponseCode() !== 200) {
+    throw userError('Googleのログイン情報を確認できませんでした(有効期限切れなど)。もう一度ログインしてください。')
+  }
+  var info = JSON.parse(resp.getContentText())
+  if (info.aud !== clientId) throw userError('ログイン情報の発行元がこのアプリと一致しません。')
+  if (info.iss !== 'accounts.google.com' && info.iss !== 'https://accounts.google.com') {
+    throw userError('ログイン情報の発行元が不正です。')
+  }
+  if (!(Number(info.exp) > nowSec())) throw userError('Googleのログイン情報の有効期限が切れています。もう一度ログインしてください。')
+  if (!info.email) throw userError('ログイン情報からメールアドレスを取得できませんでした。')
+  if (info.email_verified !== true && info.email_verified !== 'true') {
+    throw userError('メールアドレスが確認されていないGoogleアカウントのため利用できません。')
+  }
+  var expectedNonce = props.ORG_ID + '.' + sha256Base64Url(nonceSecret)
+  if (!info.nonce || !constantTimeEquals(info.nonce, expectedNonce)) {
+    throw userError('ログイン情報がこの団体・この画面のものではありません。もう一度ログインしてください。')
+  }
+  // 同じIDトークン(nonce)は1回だけ使える
+  var cache = CacheService.getScriptCache()
+  var nonceKey = 'idnonce:' + sha256Base64Url(info.nonce)
+  if (cache.get(nonceKey)) throw userError('このログイン情報は既に使われています。もう一度ログインしてください。')
+  cache.put(nonceKey, '1', ID_TOKEN_NONCE_TTL_SEC)
+  return { email: String(info.email), iat: Number(info.iat) || nowSec() }
+}
+
+// exchangeIdToken: IDトークンをセッショントークンに交換し、初期データもまとめて返す
+function exchangeIdToken(body) {
+  var google = verifyGoogleIdToken(body.idToken, body.nonceSecret)
+  var memberId = findMemberIdByEmailCached(google.email)
+  // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
+  if (!memberId) return { memberId: null, email: google.email }
+  var data = getInitialDataForMember(memberId, null)
+  if (!data.memberId) return { memberId: null, email: google.email }
+  data.session = issueSessionToken(memberId, body.remember !== false, nowSec())
+  return data
+}
+
+// 以前の方式(アクセストークン)を受け付けるか。切り替えから1日後に LEGACY_ACCESS_TOKEN_AUTH を
+// 'false' にして停止する(disableLegacyLogin)
+function isLegacyAccessTokenAuthEnabled() {
+  return requestProps().LEGACY_ACCESS_TOKEN_AUTH !== 'false'
+}
+
+// リクエストの認証: セッショントークン(新しい方式)か、移行期間中はアクセストークン(以前の方式)。
+// 返り値 { memberId, renewed(新しいセッショントークン or null) }
+function authenticateRequest(body) {
+  if (body.sessionToken) {
+    var payload = verifySessionToken(body.sessionToken)
+    return { memberId: String(payload.sub), renewed: renewSessionIfNeeded(payload) }
+  }
+  if (body.authToken && isLegacyAccessTokenAuthEnabled()) {
+    var memberId = findMemberIdByEmailCached(verifyToken(body.authToken).email)
+    if (!memberId) throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
+    return { memberId: memberId, renewed: null }
+  }
+  throw userError('ログインしていません。再ログインしてください。')
+}
+
+// メンバーの世代番号を1増やし、そのメンバーに発行済みのセッショントークンをすべて無効にする
+function bumpSessionGeneration(memberId) {
+  if (!memberId) return
+  try {
+    setRequestProp(SESSION_GEN_PREFIX + memberId, String(sessionGeneration(memberId) + 1))
+  } catch (e) {
+    Logger.log('bumpSessionGeneration failed: ' + e)
+  }
+}
+
+// ---- エディタから実行する関数 ----
+
+// 秘密鍵を作り直す。発行済みのセッショントークンがすべて無効になり、全員が再ログインになる
+function rotateSessionKey() {
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty('SESSION_SIGNING_KEY', generateSecret())
+  props.setProperty('SESSION_KEY_ID', generateSecret().slice(0, 8))
+  resetRequestProps()
+  console.log('セッションの秘密鍵を作り直しました。全員のログインが無効になりました(次回の操作で再ログインになります)。')
+}
+
+// 今より前に発行されたセッショントークンをすべて無効にする(将来はレジストリからの指示で同じことを行う)
+function revokeSessionsIssuedBefore() {
+  setSessionNotBefore(nowSec())
+}
+
+// スクリプトプロパティ REVOKE_BEFORE_INPUT に書いた日時(ISO 形式 または 秒)より前に
+// 発行されたセッショントークンを無効にする。エディタは引数を渡せないため、プロパティ経由で受け取る
+function revokeSessionsIssuedBeforeInput() {
+  var raw = String(PropertiesService.getScriptProperties().getProperty('REVOKE_BEFORE_INPUT') || '').trim()
+  var sec = /^\d+$/.test(raw) ? Number(raw) : Math.floor(new Date(raw).getTime() / 1000)
+  if (!raw || !(sec > 0)) throw new Error('REVOKE_BEFORE_INPUT に日時(例: 2026-10-01T09:00:00+09:00)を設定してから実行してください。')
+  setSessionNotBefore(sec)
+}
+
+function setSessionNotBefore(sec) {
+  var props = PropertiesService.getScriptProperties()
+  var current = Number(props.getProperty('SESSION_NOT_BEFORE') || 0)
+  // 後から古い日時を指定しても、既に無効にした範囲は戻さない
+  var next = Math.max(current, Math.floor(sec))
+  props.setProperty('SESSION_NOT_BEFORE', String(next))
+  resetRequestProps()
+  console.log('この日時より前に発行されたログインを無効にしました: ' + new Date(next * 1000).toISOString())
+}
+
+// 以前の方式(アクセストークン)でのログインを止める。新しい方式に切り替えてから1日後に実行する
+function disableLegacyLogin() {
+  PropertiesService.getScriptProperties().setProperty('LEGACY_ACCESS_TOKEN_AUTH', 'false')
+  resetRequestProps()
+  console.log('以前の方式(アクセストークン)でのログインを停止しました。')
 }
 
 // ---- 権限の例外(permission_overrides) ------------------------------------------
@@ -785,7 +1108,7 @@ function authorizeAction(acting, action, body) {
   // restricted_roles に含まれないロール) であれば許可。「事業責任者を代表と
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
-  if (action === 'updateSetting' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth') {
+  if (action === 'updateSetting' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin(acting)) return
     if (checkPermissionOverride(acting, action, body)) return
     throw userError('この操作は代表または全権管理者のみ実行できます。')
@@ -1074,6 +1397,7 @@ function authorizeAction(acting, action, body) {
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
     'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
+    'revokeMySessions',        // 全端末でログアウト(常に acting.id が対象、body の memberId は見ない)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -1308,6 +1632,8 @@ function toErrorMessage(err) {
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
+  // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
+  'revokeMySessions', 'revokeMemberSessions',
 ]
 
 function doPost(e) {
@@ -1315,6 +1641,26 @@ function doPost(e) {
   var lock = null
   try {
     var body = JSON.parse(e.postData.contents)
+    // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
+    resetRequestProps()
+
+    // getLoginConfig: ログイン前に団体ID(IDトークンの nonce に含める)を返す。認証不要
+    if (body.action === 'getLoginConfig') {
+      var orgId = requestProps().ORG_ID
+      if (!orgId) {
+        return jsonOutput({ ok: false, error: 'ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。' })
+      }
+      return jsonOutput({ ok: true, result: { orgId: orgId } })
+    }
+
+    // exchangeIdToken: Google の IDトークンを確かめ、セッショントークンと初期データを返す
+    if (body.action === 'exchangeIdToken') {
+      try {
+        return jsonOutput({ ok: true, result: exchangeIdToken(body) })
+      } catch (exchangeErr) {
+        return jsonOutput({ ok: false, error: toErrorMessage(exchangeErr), authError: true })
+      }
+    }
 
     // resolveLogin: ログイン処理そのもの — まだ「自分がどのメンバーか」が
     // 分かっていない状態で呼ばれる特別な読み取り専用アクションなので、他の
@@ -1323,6 +1669,9 @@ function doPost(e) {
     // 非公開のMemberEmailsシートと突き合わせるだけで、メール自体は
     // クライアントに返さずmemberIdのみ返す。
     if (body.action === 'resolveLogin') {
+      if (!isLegacyAccessTokenAuthEnabled()) {
+        return jsonOutput({ ok: false, error: '以前のログイン方式は停止しました。ページを再読み込みしてください。', authError: true })
+      }
       try {
         var loginEmail = verifyToken(body.authToken || '').email
         return jsonOutput({ ok: true, result: { memberId: findMemberIdByEmail(loginEmail) } })
@@ -1335,31 +1684,38 @@ function doPost(e) {
     // アクション(resolveLogin と同じく、メンバー特定前に呼ばれる)。
     // 閲覧者が見てよい行・列だけに絞って返す(READ_POLICY 参照)。
     if (body.action === 'getInitialData') {
-      var initEmail
+      var initAuth
       try {
-        initEmail = verifyToken(body.authToken || '').email
+        initAuth = authenticateRequest(body)
       } catch (initAuthErr) {
         return jsonOutput({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
       }
       try {
-        return jsonOutput({ ok: true, result: getInitialData(initEmail, body.knownVersion) })
+        return jsonOutput({
+          ok: true,
+          result: getInitialDataForMember(initAuth.memberId, body.knownVersion),
+          session: initAuth.renewed || undefined,
+        })
       } catch (initErr) {
         return jsonOutput({ ok: false, error: toErrorMessage(initErr) })
       }
     }
 
     // ---- Token verification & authorization --------------------------------
-    // Every write must carry an authToken (Google access token obtained at
-    // login via GIS initTokenClient). We verify it against Google's tokeninfo
-    // endpoint, extract the email, find the acting member in the Members sheet,
-    // and check whether they have permission for this action.
+    // Every request must carry a sessionToken (issued by exchangeIdToken and
+    // signed with this organisation's key — see authenticateRequest). During
+    // the migration an authToken (Google access token) is still accepted until
+    // LEGACY_ACCESS_TOKEN_AUTH is set to 'false'. The member is resolved from
+    // the token, then we check whether they have permission for this action.
     //
     // Auth errors are returned with authError:true so the frontend can
-    // distinguish them from business logic errors and attempt a silent
-    // token refresh + retry automatically.
+    // distinguish them from business logic errors (session expired → login).
     var actingMember
+    var renewedSession = null
     try {
-      actingMember = getActingMember(verifyToken(body.authToken || '').email)
+      var auth = authenticateRequest(body)
+      renewedSession = auth.renewed
+      actingMember = getActingMemberById(auth.memberId)
       authorizeAction(actingMember, body.action, body)
     } catch (authErr) {
       return jsonOutput({ ok: false, error: toErrorMessage(authErr), authError: true })
@@ -1714,6 +2070,17 @@ function doPost(e) {
         setMemberEmail(body.memberId, body.email || '')
         result = { updated: true }
         break
+      case 'revokeMySessions':
+        // 全端末でログアウト(自分): 世代番号を上げ、発行済みのセッションをすべて無効にする
+        bumpSessionGeneration(actingMember.id)
+        result = { revoked: true }
+        break
+      case 'revokeMemberSessions':
+        // 全端末でログアウト(管理者が他のメンバーに対して)
+        if (!findRow(SHEET_MEMBERS, String(body.memberId || ''))) throw userError('メンバーが見つかりません。')
+        bumpSessionGeneration(String(body.memberId))
+        result = { revoked: true }
+        break
       case 'getMyEmails':
         // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
         // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
@@ -1907,7 +2274,7 @@ function doPost(e) {
       default:
         throw userError('Unknown action: ' + body.action)
     }
-    return jsonOutput({ ok: true, result: result })
+    return jsonOutput({ ok: true, result: result, session: renewedSession || undefined })
   } catch (err) {
     // F14: userError()で作られた業務上のエラー(目印つき)はそのメッセージを
     // フロントに返す。目印の無い例外(SpreadsheetApp等のApps Scriptサービス
@@ -3219,8 +3586,16 @@ function getMemberEmailValue(memberId) {
 // メンバー1人分のメールを書く(行が無ければ追加、あれば上書き)。
 // ログイン用の対応表のキャッシュ(findMemberIdByEmailCached)を無効にする。
 function setMemberEmail(memberId, email) {
+  var before = ''
+  try { before = getMemberEmailValue(memberId) } catch (e) { before = '' }
   try {
     writeMemberEmail(memberId, email)
+    // 登録していたアドレスが外された場合は、そのメンバーのログイン(全端末)を無効にする
+    var normalize = function (v) {
+      return String(v || '').split(',').map(function (x) { return x.trim().toLowerCase() }).filter(Boolean)
+    }
+    var after = normalize(email)
+    if (normalize(before).some(function (addr) { return after.indexOf(addr) === -1 })) bumpSessionGeneration(memberId)
   } finally {
     bumpMemberEmailsVersion()
   }
@@ -3432,6 +3807,8 @@ function removeMember(memberId) {
 
   // メール行は残るが、ログイン用の対応表のキャッシュは念のため無効にする
   bumpMemberEmailsVersion()
+  // 削除したメンバーのログイン(全端末)を無効にする
+  bumpSessionGeneration(memberId)
   return { removed: memberId }
 }
 
@@ -5564,6 +5941,10 @@ function findMemberIdByEmailCached(email) {
 function getInitialData(email, knownVersion) {
   var memberId = findMemberIdByEmailCached(email)
   if (!memberId) return { memberId: null }
+  return getInitialDataForMember(memberId, knownVersion)
+}
+
+function getInitialDataForMember(memberId, knownVersion) {
   var version = getDataVersion()
   if (knownVersion && String(knownVersion) === version) {
     return { memberId: memberId, version: version, unchanged: true }
