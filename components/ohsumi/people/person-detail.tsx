@@ -527,7 +527,8 @@ export function PersonDetail({ id }: { id: string }) {
       </div>
 
       {/* Tabs */}
-      <div className="mt-5 flex items-center gap-1 border-b border-border">
+      {/* 幅が足りない時は、タブを縮めずに横にスクロールする */}
+      <div className="ohsumi-scroll mt-5 flex items-center gap-1 overflow-x-auto border-b border-border">
         {(
           [
             // 自分のページでは自分のプロフィール詳細(Overview)を主要タブから
@@ -544,7 +545,7 @@ export function PersonDetail({ id }: { id: string }) {
             key={key}
             onClick={() => setTab(key)}
             className={cn(
-              '-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+              '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors',
               tab === key
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -830,13 +831,13 @@ export function PersonDetail({ id }: { id: string }) {
       {tab === 'tasks' && (
         <div className="mt-5 flex flex-col gap-4">
           {/* サブビュー切り替え */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             {(['list', 'board', 'calendar', 'dependency'] as TaskView[]).map((v) => (
               <button
                 key={v}
                 onClick={() => setTaskView(v)}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  'shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
                   taskView === v
                     ? 'bg-primary text-primary-foreground'
                     : 'bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground',
@@ -851,34 +852,37 @@ export function PersonDetail({ id }: { id: string }) {
                       : t('person.tasks.view.dependency')}
               </button>
             ))}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="ml-auto gap-1.5"
-              disabled={mine.length === 0}
-              onClick={() => exportTasksToExcel(mine, projects, members)}
-            >
-              <FileSpreadsheet className="size-4" />
-              {t('person.tasks.exportExcel')}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              disabled={mine.length === 0}
-              onClick={() => exportTasksToCsv(mine, projects, members)}
-            >
-              <Download className="size-4" />
-              {t('person.tasks.exportCsv')}
-            </Button>
+            {/* 幅が足りない時は、書き出しのボタンをまとめて次の行に送る */}
+            <div className="ml-auto flex flex-wrap gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={mine.length === 0}
+                onClick={() => exportTasksToExcel(mine, projects, members)}
+              >
+                <FileSpreadsheet className="size-4" />
+                {t('person.tasks.exportExcel')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={mine.length === 0}
+                onClick={() => exportTasksToCsv(mine, projects, members)}
+              >
+                <Download className="size-4" />
+                {t('person.tasks.exportCsv')}
+              </Button>
+            </div>
           </div>
 
           {/* リスト表示 */}
           {taskView === 'list' && (
-            <div className="overflow-hidden rounded-xl border border-border bg-card">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-xl border border-border bg-card">
+              <table className="w-full min-w-[560px] text-sm">
                 <thead>
                   <tr className="border-b border-border bg-secondary/50 text-left text-xs text-muted-foreground">
                     <th className="px-4 py-2.5 font-medium">{t('person.tasks.table.task')}</th>
