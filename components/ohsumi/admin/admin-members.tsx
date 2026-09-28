@@ -9,7 +9,8 @@ import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play } from 'lucide-react'
+import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play, LogOut } from 'lucide-react'
+import { isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { BASE_ROLE } from '@/lib/ohsumi/types'
 import type { Member, Role } from '@/lib/ohsumi/types'
 import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
@@ -62,6 +63,7 @@ export function AdminMembers() {
     isFullAdmin,
     toggleMemberInactive,
     currentUser,
+    revokeMemberSessions,
   } = useOhsumi()
   // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
   // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
@@ -511,6 +513,25 @@ export function AdminMembers() {
                           {m.inactive ? t('admin.members.resume') : t('admin.members.pause')}
                         </button>
                         {isFullAdmin && <PermissionOverridesButton member={m} />}
+                        {/* 全端末でログアウトさせる(スマートフォンの紛失・退会時など) */}
+                        {isFullAdmin && isRemoteConfigured && m.id !== currentUser?.id && (
+                          <button
+                            onClick={async () => {
+                              const name = m.displayName || m.name
+                              if (!window.confirm(t('admin.members.revokeSessionsConfirm', { name }))) return
+                              try {
+                                await revokeMemberSessions(m.id)
+                                toast(t('admin.members.revokeSessionsDone', { name }))
+                              } catch (e) {
+                                toast(t('admin.members.revokeSessionsFailed', { error: e instanceof Error ? e.message : String(e) }))
+                              }
+                            }}
+                            className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                          >
+                            <LogOut className="size-3.5" />
+                            {t('admin.members.revokeSessions')}
+                          </button>
+                        )}
                         <button
                           onClick={() => setRemoving(m)}
                           disabled={!isDaihyo}

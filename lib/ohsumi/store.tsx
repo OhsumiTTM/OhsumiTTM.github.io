@@ -76,6 +76,8 @@ import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
   colorForId,
   fetchInitialData,
+  exchangeIdToken,
+  SESSION_ENDED_EVENT,
   type InitialData,
   type RemoteSettings,
   initialsForName,
@@ -92,6 +94,7 @@ import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, 
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setGasAuthToken, setCalendarToken } from './google-sheet-sync'
+import { activateSession, clearSession, getSessionToken, loadCachedLoginConfig, loadSession, saveSession } from './session'
 import { clearFileCache } from './files'
 import { clearTranslateCache } from './translate'
 
@@ -270,6 +273,20 @@ interface OhsumiContextValue extends OhsumiState {
   // ログイン画面・「続行」画面から呼ばれる: Google のトークンを受け取り、GAS から
   // 閲覧できるデータをまとめて読み込む(getInitialData)。fresh=true は新規ログイン
   signIn: (token: string, fresh: boolean) => Promise<'ok' | 'notRegistered'>
+  // ログイン画面から呼ばれる(新しい方式): Google の IDトークンをセッショントークンに
+  // 交換し、初期データを読み込む。未登録のアカウントなら notRegistered と本人のメール
+  signInWithGoogle: (
+    idToken: string,
+    nonceSecret: string,
+    remember: boolean,
+    orgId: string,
+  ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string }>
+  // 保存したセッションで自動的にログインし直している途中(読み込み中の画面を出す)
+  sessionResuming: boolean
+  // 全端末でログアウト(自分)。この端末もログアウトする
+  revokeAllMySessions: () => Promise<void>
+  // 全端末でログアウト(代表・全権管理者が他のメンバーに対して)
+  revokeMemberSessions: (memberId: string) => Promise<void>
   // ログイン画面専用: Googleでログインしたメールアドレスから該当メンバーの
   // idを解決する(見つからなければnull)。isRemoteConfiguredなら非公開の
   // MemberEmailsシートをGAS経由で照合し、そうでなければローカルデモの
@@ -1071,6 +1088,68 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     },
     [applyInitialData, loadExpenses, reportRemoteError],
   )
+
+  // 新しい方式のログイン: Google の IDトークンを団体の GAS でセッショントークンに交換する
+  const signInWithGoogle = useCallback(
+    async (idToken: string, nonceSecret: string, remember: boolean, orgId: string) => {
+      // 読み込み中の表示はログイン画面側で行う(失敗したらログイン画面にそのまま
+      // エラーを出すため、ここでは remoteStatus を loading にしない)
+      setRemoteError(null)
+      try {
+        const res = await exchangeIdToken(idToken, nonceSecret, remember)
+        if (!res.memberId || !res.session) {
+          return { status: 'notRegistered' as const, email: res.email }
+        }
+        saveSession(orgId, res.session)
+        applyInitialData(res)
+        setSettingsReady(true)
+        setRemoteStatus('ready')
+        setPendingLoginId(res.memberId)
+        loadExpenses()
+        return { status: 'ok' as const }
+      } catch (err) {
+        throw err
+      }
+    },
+    [applyInitialData, loadExpenses],
+  )
+
+  // 再読み込み後: この端末に保存したセッションがあれば、そのままログインし直す
+  // (「〇〇さんとして続行」を押さなくてよい)
+  const [sessionResuming, setSessionResuming] = useState(false)
+  const resumeTriedRef = useRef(false)
+  useEffect(() => {
+    if (!hydrated || !isRemoteConfigured || resumeTriedRef.current) return
+    resumeTriedRef.current = true
+    const config = loadCachedLoginConfig()
+    const saved = config ? loadSession(config.orgId) : null
+    if (!config || !saved) return
+    activateSession(config.orgId, saved)
+    setSessionResuming(true)
+    setRemoteStatus('loading')
+    fetchInitialData()
+      .then((res) => {
+        if (!res.memberId) throw new Error('メンバー登録が見つかりません')
+        applyInitialData(res)
+        setSettingsReady(true)
+        setRemoteStatus('ready')
+        setCurrentUserId(res.memberId)
+        loadExpenses()
+      })
+      .catch((err) => {
+        if (!getSessionToken()) {
+          // セッションが無効(期限切れ・全端末でログアウトなど。remote.ts が保存したトークンを
+          // 消している)なら、ログイン画面に戻す
+          clearSession(config.orgId)
+          setRemoteStatus('idle')
+        } else {
+          // 通信エラーなど: 保存したセッションは残し、読み込みエラーの画面を出す
+          reportRemoteError(err)
+          setRemoteStatus('error')
+        }
+      })
+      .finally(() => setSessionResuming(false))
+  }, [hydrated, applyInitialData, loadExpenses, reportRemoteError])
 
   // manual refresh for the header's 情報更新 button. Deliberately doesn't
   // touch remoteStatus/settingsReady (those flipping to non-ready is what
@@ -2188,6 +2267,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setCurrentUserId(null)
     setGasAuthToken(null)
     setCalendarToken(null)
+    // 保存したセッショントークンを消し、Google の自動ログインも止める
+    clearSession()
     if (isRemoteConfigured) {
       // 読み込んだデータはメモリにだけ持っているので、ここで破棄する
       setMembers([])
@@ -2202,6 +2283,22 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     clearFileCache()
     clearTranslateCache()
     clearPerUserBrowserData()
+  }, [])
+
+  // セッションが無効になった(期限切れ・全端末でログアウト・鍵の変更など)ら、ログイン画面に戻す
+  useEffect(() => {
+    const onEnded = () => logout()
+    window.addEventListener(SESSION_ENDED_EVENT, onEnded)
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded)
+  }, [logout])
+
+  const revokeAllMySessions = useCallback(async () => {
+    await remoteApi.revokeMySessions()
+    logout()
+  }, [logout])
+
+  const revokeMemberSessions = useCallback(async (memberId: string) => {
+    await remoteApi.revokeMemberSessions(memberId)
   }, [])
 
   // 新規ログイン: データが反映された後で login() を呼ぶ(login() は読み込んだ
@@ -4865,6 +4962,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     login,
     logout,
     signIn,
+    signInWithGoogle,
+    sessionResuming,
+    revokeAllMySessions,
+    revokeMemberSessions,
     resolveLoginMember,
     setMode,
     addTasksFromInput,

@@ -137,7 +137,7 @@ function LocaleSyncWatcher() {
 }
 
 function Router() {
-  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, dataReady } =
+  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, dataReady, sessionResuming } =
     useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
@@ -150,9 +150,12 @@ function Router() {
     // login screen even though the person is (or was) logged in — looking
     // like they got signed out, and worse, letting Admin screens briefly
     // compute permissions against no/stale data (see admin-screen.tsx).
+    // この端末に保存したセッションで、自動的にログインし直している途中
+    if (remoteEnabled && sessionResuming) return <RemoteLoadingScreen />
     if (remoteEnabled && currentUserId) {
       if (remoteStatus === 'error') return <RemoteLoadErrorScreen message={remoteError} />
-      // 再読み込み後はトークンが無いので、「〇〇さんとして続行」を押してもらう
+      // 保存したセッションが無い場合はログイン画面に戻る。以前の方式(GAS が未対応)では、
+      // 再読み込み後はトークンが無いので「〇〇さんとして続行」を押してもらう
       if (remoteStatus === 'idle') return <LoginScreen continueAs={loadLastUserName() || '—'} />
       if (!dataReady) return <RemoteLoadingScreen />
     }

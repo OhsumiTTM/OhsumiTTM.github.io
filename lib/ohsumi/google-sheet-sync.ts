@@ -11,12 +11,28 @@
 
 import { isGoogleCalendarReadEnabled } from './features'
 
-const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
+export const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
 
 declare global {
   interface Window {
     google?: {
       accounts: {
+        // Sign in With Google(IDトークン)。ログインに使う — lib/ohsumi/session.ts
+        id?: {
+          initialize: (config: {
+            client_id: string
+            callback: (response: { credential?: string }) => void
+            nonce?: string
+            auto_select?: boolean
+            use_fedcm_for_prompt?: boolean
+            itp_support?: boolean
+            cancel_on_tap_outside?: boolean
+          }) => void
+          prompt: () => void
+          renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void
+          disableAutoSelect: () => void
+          cancel: () => void
+        }
         oauth2: {
           initTokenClient: (config: {
             client_id: string
@@ -35,7 +51,7 @@ export const LOGIN_SCOPE = 'openid email'
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
-function waitForGIS(): Promise<void> {
+export function waitForGIS(): Promise<void> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined') {
       reject(new Error('ブラウザ環境でのみ使用できます'))

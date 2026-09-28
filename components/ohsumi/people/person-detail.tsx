@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
 import { isAdminRole, BASE_ROLE, DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member } from '@/lib/ohsumi/types'
-import { AVATAR_PALETTE } from '@/lib/ohsumi/remote'
+import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { useI18n, SUPPORTED_LOCALES, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TIMEZONE_OPTIONS, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
@@ -39,6 +39,7 @@ import {
   RefreshCw,
   Download,
   FileSpreadsheet,
+  LogOut,
   TrendingDown,
 } from 'lucide-react'
 import {
@@ -138,6 +139,7 @@ export function PersonDetail({ id }: { id: string }) {
     submitQuizResult,
     oneOnOneQuestions,
     notifications,
+    revokeAllMySessions,
   } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
@@ -161,6 +163,7 @@ export function PersonDetail({ id }: { id: string }) {
   // 以前の方式(既存のシートのURLを貼り付けて連携)で保存したシートが残っている
   const [legacySheet, setLegacySheet] = useState(false)
   const [sheetStatus, setSheetStatus] = useState<'idle' | 'creating' | 'syncing'>('idle')
+  const [revokingSessions, setRevokingSessions] = useState(false)
   const [sheetError, setSheetError] = useState<string | null>(null)
   const [sheetSyncedAt, setSheetSyncedAt] = useState<Date | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -1351,6 +1354,33 @@ export function PersonDetail({ id }: { id: string }) {
               onUpdate={(settings) => updateNotifySettings(member.id, settings)}
             />
           </div>
+
+          {/* ログイン中の端末 — 全端末でログアウト(発行済みのログイン情報をすべて無効にする) */}
+          {isRemoteConfigured && (
+            <div className="rounded-xl border border-border bg-card p-4">
+              <SectionLabel>{t('person.account.sessionsTitle')}</SectionLabel>
+              <p className="mt-0.5 text-xs text-muted-foreground">{t('person.account.sessionsDesc')}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-3 h-8 gap-1.5 border-destructive/40 text-xs text-destructive hover:bg-destructive/5 hover:text-destructive"
+                disabled={revokingSessions}
+                onClick={async () => {
+                  if (!window.confirm(t('person.account.revokeAllConfirm'))) return
+                  setRevokingSessions(true)
+                  try {
+                    await revokeAllMySessions()
+                  } catch (e) {
+                    toast(t('person.account.revokeAllFailed', { error: e instanceof Error ? e.message : String(e) }))
+                    setRevokingSessions(false)
+                  }
+                }}
+              >
+                {revokingSessions ? <Loader2 className="size-3.5 animate-spin" /> : <LogOut className="size-3.5" />}
+                {t('person.account.revokeAll')}
+              </Button>
+            </div>
+          )}
 
           {/* 言語 / タイムゾーン */}
           <div className="rounded-xl border border-border bg-card p-4">
