@@ -40,3 +40,8 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # スマホの幅(375px)で主な画面を開き、横にはみ出す箇所が無いことを確かめる
+      # (テスト用の設定でもう一度ビルドし、ランナーの Chrome で開く)
+      - name: Layout check (375px)
+        run: pnpm check:layout

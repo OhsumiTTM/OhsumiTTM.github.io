@@ -54,7 +54,8 @@ export function Avatar({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-full font-medium text-white',
+        // イニシャル(漢字2文字など)が小さな丸の中で2行に折り返さないようにする
+        'inline-flex shrink-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-full font-medium leading-none text-white',
         className,
       )}
       style={{
@@ -108,7 +109,7 @@ export function DifficultyBadge({ difficulty }: { difficulty: Difficulty }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-medium',
+        'inline-flex items-center whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[11px] font-medium',
         difficultyStyles[difficulty],
       )}
     >
@@ -161,7 +162,7 @@ export function ProjectTag({ name }: { name: string }) {
 export function DepartmentTag({ name }: { name: Department }) {
   const { t } = useI18n()
   return (
-    <span className="inline-flex items-center rounded-md border border-info-border bg-info-muted px-1.5 py-0.5 text-[11px] font-medium text-info">
+    <span className="inline-flex items-center whitespace-nowrap rounded-md border border-info-border bg-info-muted px-1.5 py-0.5 text-[11px] font-medium text-info">
       {t(DEPARTMENT_KEY[name])}
     </span>
   )

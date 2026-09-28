@@ -202,7 +202,7 @@ function MonthView({
                     <button
                       onClick={() => onToggleAbsent(dateKey(d))}
                       title={absentDates.includes(dateKey(d)) ? tr('calendar.absent.clear') : tr('calendar.absent.set')}
-                      className={cn('rounded px-1 text-[9px] transition-colors', absentDates.includes(dateKey(d)) ? 'bg-rose-100 text-rose-600 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-400' : 'text-transparent hover:text-muted-foreground hover:bg-secondary')}
+                      className={cn('whitespace-nowrap rounded px-1 text-[9px] transition-colors', absentDates.includes(dateKey(d)) ? 'bg-rose-100 text-rose-600 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-400' : 'text-transparent hover:text-muted-foreground hover:bg-secondary')}
                     >
                       {absentDates.includes(dateKey(d)) ? tr('calendar.absent.badge') : '＋'}
                     </button>

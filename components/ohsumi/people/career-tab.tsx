@@ -90,8 +90,9 @@ function EntryRow({
   )
 }
 
+// min-w-0: 横に並べた時に入力欄が縮めるようにする(縮めないと、スマホの幅で右端のボタンがはみ出す)
 const fieldClass =
-  'h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary'
+  'h-8 min-w-0 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary'
 
 export function CareerTab({
   member,
@@ -508,7 +509,7 @@ function SkillLevelsSection({
           <button
             onClick={add}
             disabled={!skill}
-            className="flex size-8 items-center justify-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:bg-secondary disabled:opacity-40"
+            className="flex size-8 shrink-0 items-center justify-center rounded-md border border-dashed border-border-strong text-muted-foreground hover:bg-secondary disabled:opacity-40"
             aria-label={t('common.add')}
           >
             <Plus className="size-4" />
