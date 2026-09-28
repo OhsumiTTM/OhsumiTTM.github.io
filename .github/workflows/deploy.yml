@@ -43,6 +43,7 @@ jobs:
           NEXT_PUBLIC_GAS_URL: ${{ secrets.CSV_GAS }}
           NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           NEXT_PUBLIC_FEEDBACK_FORM_URL: ${{ secrets.FEEDBACK_FORM_URL }}
+          NEXT_PUBLIC_GOOGLE_CALENDAR_READ: ${{ secrets.GOOGLE_CALENDAR_READ }}
         run: pnpm build
 
       - name: Upload artifact

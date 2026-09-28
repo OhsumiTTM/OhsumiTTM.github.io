@@ -731,6 +731,21 @@ export function computeTeamRadarValues(
 // admin-side sync, which creates the event server-side and invites
 // assignees; this one needs no backend at all. Returns null when the task
 // has no deadline (nothing to add).
+// Googleカレンダーの「新規予定」画面を開くリンク(終日・1日分)。calendar スコープを
+// 使わず、利用者が Google の画面で内容を確認して保存する。date は YYYY-MM-DD
+export function googleCalendarAllDayUrl(title: string, date: string, details = 'Ohsumiから追加'): string {
+  const compact = (d: string) => d.replace(/-/g, '')
+  const next = new Date(`${date}T00:00:00Z`)
+  next.setUTCDate(next.getUTCDate() + 1)
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: title,
+    dates: `${compact(date)}/${compact(next.toISOString().slice(0, 10))}`,
+    details,
+  })
+  return `https://calendar.google.com/calendar/render?${params.toString()}`
+}
+
 export function googleCalendarUrl(
   task: {
     name: string

@@ -87,6 +87,7 @@ import {
   type WebhookStatus,
 } from './remote'
 import { selectProjectHealthReports } from './project-health-report'
+import { isGoogleCalendarReadEnabled } from './features'
 import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from './utils'
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
@@ -4715,8 +4716,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           applicationId: app.id,
         })
       })
-    // カレンダースコープ追加告知 — 一度「消す」まで表示する
-    items.push({
+    // カレンダースコープ追加告知 — 一度「消す」まで表示する。予定の表示が停止中
+    // (isGoogleCalendarReadEnabled が false)の間は、連携できないため出さない
+    if (isGoogleCalendarReadEnabled) items.push({
       id: 'calendar-scope-notice',
       kind: 'info' as const,
       title: t('notification.calendarScope.title'),

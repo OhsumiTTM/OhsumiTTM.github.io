@@ -1,6 +1,15 @@
 // Google Identity Services (GIS) — token client for OAuth flows.
 // The GIS script is loaded globally in app/layout.tsx.
 // No npm packages needed: GIS is loaded via <script> tag, Sheets API via fetch().
+//
+// フロントが要求するスコープはこのファイルの定数だけにまとめる(他のファイルで
+// スコープの文字列を書かない)。既定で要求するのは非機密のスコープだけ:
+//   LOGIN_SCOPE      'openid email'  ログインと、Apps Script への本人確認
+//   DRIVE_FILE_SCOPE drive.file      個人スプレッドシート(アプリが作ったファイルだけ)
+// CALENDAR_SCOPE(機密)は、features.ts の isGoogleCalendarReadEnabled が true の
+// 場合だけ要求する(既定では無効)。
+
+import { isGoogleCalendarReadEnabled } from './features'
 
 const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
 
@@ -22,8 +31,8 @@ declare global {
   }
 }
 
-const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets'
-const LOGIN_SCOPE = 'openid email profile'
+export const LOGIN_SCOPE = 'openid email'
+export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
 function waitForGIS(): Promise<void> {
@@ -70,7 +79,7 @@ function requestToken(scope: string, silent = false): Promise<string> {
   )
 }
 
-// ---- login (openid email profile) ----------------------------------------
+// ---- login (openid email) ----------------------------------------
 
 export function isGoogleOAuthConfigured(): boolean {
   return !!CLIENT_ID
@@ -110,38 +119,44 @@ export function refreshGasAuthToken(): Promise<string> {
   })
 }
 
-// ---- personal sheet sync (spreadsheets scope) ----------------------------
+// ---- personal sheet sync (drive.file scope) -------------------------------
+// drive.file では、アプリが作成したファイルにしか触れられない。そのため、
+// 同期先のスプレッドシートはアプリが新しく作成する(既存のシートの URL を
+// 貼り付けて連携する方式は廃止した)。
 
-export function requestSheetsToken(silent = false): Promise<string> {
-  return requestToken(SHEETS_SCOPE, silent)
+export function requestDriveFileToken(silent = false): Promise<string> {
+  return requestToken(DRIVE_FILE_SCOPE, silent)
 }
 
-export function extractSpreadsheetId(input: string): string | null {
-  const match = input.match(/\/spreadsheets\/d\/([-\w]+)/)
-  if (match) return match[1]
-  if (/^[-\w]{20,}$/.test(input.trim())) return input.trim()
-  return null
+export interface PersonalSheet {
+  id: string
+  title: string
 }
 
-export async function verifySheetAccess(
-  spreadsheetId: string,
-  accessToken: string,
-): Promise<{ ok: boolean; title?: string; error?: string }> {
-  try {
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=properties.title`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    )
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({})) as { error?: { message?: string } }
-      return { ok: false, error: data?.error?.message ?? `HTTP ${res.status}` }
-    }
-    const data = await res.json() as { properties?: { title?: string } }
-    return { ok: true, title: data?.properties?.title }
-  } catch (e) {
-    return { ok: false, error: String(e) }
+/** 同期用のスプレッドシートを新しく作成する(Sheets API の spreadsheets.create)。 */
+export async function createPersonalSpreadsheet(accessToken: string, title: string): Promise<PersonalSheet> {
+  const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      properties: { title },
+      sheets: [{ properties: { title: SHEET_NAME } }],
+    }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { error?: { message?: string } }
+    throw new Error(data?.error?.message ?? `作成エラー HTTP ${res.status}`)
   }
+  const data = await res.json() as { spreadsheetId: string; properties?: { title?: string } }
+  return { id: data.spreadsheetId, title: data.properties?.title ?? title }
 }
+
+export function personalSheetUrl(id: string): string {
+  return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(id)}/edit`
+}
+
+/** 同期先のシートにアクセスできない(削除された・アプリが作ったものではない)エラー */
+export class PersonalSheetUnavailableError extends Error {}
 
 export interface SyncRow {
   taskName: string
@@ -191,31 +206,62 @@ export async function syncTasksToSheet(
   )
   if (!res.ok) {
     const data = await res.json().catch(() => ({})) as { error?: { message?: string } }
+    if (res.status === 403 || res.status === 404) {
+      throw new PersonalSheetUnavailableError(data?.error?.message ?? `HTTP ${res.status}`)
+    }
     throw new Error(data?.error?.message ?? `書き込みエラー HTTP ${res.status}`)
   }
 }
 
 // ---- localStorage helpers (per-user, browser-only) -----------------------
+// v2: アプリが作成したシート { id, title }。以前の方式(spreadsheets スコープで
+// 既存のシートに連携)で保存したシートIDは LEGACY のキーに残っている場合がある。
+// そのシートは drive.file では書き込めないため、新しいシートの作成を案内する。
 
 function personalSheetKey(userId: string) {
+  return `ohsumi-personal-sheet-v2-${userId}`
+}
+
+function legacyPersonalSheetKey(userId: string) {
   return `ohsumi-personal-sheet-id-${userId}`
 }
 
-export function loadPersonalSheetId(userId: string): string {
+export function loadPersonalSheet(userId: string): PersonalSheet | null {
   try {
-    return localStorage.getItem(personalSheetKey(userId)) ?? ''
+    const raw = localStorage.getItem(personalSheetKey(userId))
+    if (!raw) return null
+    const v = JSON.parse(raw) as Partial<PersonalSheet>
+    return typeof v.id === 'string' && v.id ? { id: v.id, title: String(v.title ?? '') } : null
   } catch {
-    return ''
+    return null
   }
 }
 
-export function savePersonalSheetId(userId: string, sheetId: string): void {
+export function savePersonalSheet(userId: string, sheet: PersonalSheet | null): void {
   try {
-    if (sheetId) {
-      localStorage.setItem(personalSheetKey(userId), sheetId)
+    if (sheet) {
+      localStorage.setItem(personalSheetKey(userId), JSON.stringify(sheet))
+      localStorage.removeItem(legacyPersonalSheetKey(userId))
     } else {
       localStorage.removeItem(personalSheetKey(userId))
     }
+  } catch {
+    // ignore
+  }
+}
+
+/** 以前の方式で連携したシートIDがブラウザに残っているか */
+export function hasLegacyPersonalSheet(userId: string): boolean {
+  try {
+    return !!localStorage.getItem(legacyPersonalSheetKey(userId))
+  } catch {
+    return false
+  }
+}
+
+export function clearLegacyPersonalSheet(userId: string): void {
+  try {
+    localStorage.removeItem(legacyPersonalSheetKey(userId))
   } catch {
     // ignore
   }
@@ -240,8 +286,14 @@ export function setCalendarToken(token: string | null): void {
   _calendarToken = token
 }
 
-/** Request (or silently refresh) the Calendar scope token. */
+/**
+ * Request (or silently refresh) the Calendar scope token.
+ * 予定の表示・空き時間の確認が無効(既定)の場合は、calendar スコープを要求せずに失敗する。
+ */
 export function requestCalendarToken(silent = false): Promise<string> {
+  if (!isGoogleCalendarReadEnabled) {
+    return Promise.reject(new Error('Googleカレンダーの予定の表示は現在ご利用いただけません'))
+  }
   return requestToken(CALENDAR_SCOPE, silent).then((token) => {
     setCalendarToken(token)
     return token
