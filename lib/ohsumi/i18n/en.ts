@@ -101,7 +101,6 @@ export const en = {
   'login.signingIn': 'Signing in…',
   'login.gasOutdated': "Couldn't load your organization's settings. Its Apps Script (GAS) may be out of date or unreachable. Please ask your organization's administrator to update the GAS to the latest version (see gas/README.md).",
   'login.notConfigured': "This site's Apps Script (GAS) URL or Google OAuth client ID is not configured. Please contact your organization's administrator.",
-  'login.demo': 'Development demo (local mock data). Choose a member to sign in as.',
   'login.failed': 'Sign-in failed. Please try again.',
   'login.notRegistered': '{email} is not registered in Ohsumi.',
   'login.preparing': 'Preparing…',

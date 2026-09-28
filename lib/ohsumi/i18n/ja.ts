@@ -101,7 +101,6 @@ export const ja = {
   'login.signingIn': 'ログイン中…',
   'login.gasOutdated': '団体の設定を取得できませんでした。団体の Apps Script(GAS)が古いか、接続できない可能性があります。団体の管理者に、GAS を最新版に更新する(gas/README.md の手順)よう依頼してください。',
   'login.notConfigured': 'このサイトは、団体の Apps Script(GAS)の URL または Google の OAuth クライアントIDが設定されていません。団体の管理者にお問い合わせください。',
-  'login.demo': '開発用のデモ(ローカルのモックデータ)です。ログインするメンバーを選んでください。',
   'login.failed': 'ログインできませんでした。もう一度お試しください。',
   'login.notRegistered': '{email} はOhsumiに登録されていません。',
   'login.preparing': '準備中…',

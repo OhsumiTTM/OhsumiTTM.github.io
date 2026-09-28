@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import dynamic from 'next/dynamic'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { OhsumiMark } from './primitives'
@@ -28,7 +28,13 @@ import { LegalLinks } from './legal-links'
 //   demo          開発環境(pnpm dev)で GAS を設定していない場合: ローカルのモックデータのメンバーを選んでログインする
 type LoginMode = 'checking' | 'id' | 'gasOutdated' | 'notConfigured' | 'demo'
 
-const isDemo = !isRemoteConfigured && process.env.NODE_ENV === 'development'
+// デモ用のログイン画面(メンバーを選ぶだけでログインできる)は開発環境だけで読み込む。
+// 条件はビルド時に決まるため、本番のビルドでは demo-login.tsx ごと取り除かれる
+// (scripts/check-no-demo-login.mjs がビルドの最後に確かめる)。
+const DemoLogin =
+  process.env.NODE_ENV === 'development' ? dynamic(() => import('./demo-login'), { ssr: false }) : null
+
+const isDemo = DemoLogin !== null && !isRemoteConfigured
 
 function initialMode(): LoginMode {
   if (isRemoteConfigured && isGoogleOAuthConfigured()) return 'checking'
@@ -36,7 +42,7 @@ function initialMode(): LoginMode {
 }
 
 export function LoginScreen() {
-  const { login, members, signInWithGoogle } = useOhsumi()
+  const { signInWithGoogle } = useOhsumi()
   const { t, locale } = useI18n()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
@@ -178,18 +184,8 @@ export function LoginScreen() {
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
               <span>{mode === 'gasOutdated' ? t('login.gasOutdated') : t('login.notConfigured')}</span>
             </div>
-          ) : mode === 'demo' ? (
-            <>
-              <p className="text-left text-sm text-muted-foreground">{t('login.demo')}</p>
-              <div className="mt-3 flex max-h-72 flex-col gap-1 overflow-y-auto">
-                {members.map((m) => (
-                  <Button key={m.id} variant="outline" className="justify-start" onClick={() => login(m.id)}>
-                    {m.displayName || m.name}
-                    <span className="ml-auto text-xs text-muted-foreground">{m.role}</span>
-                  </Button>
-                ))}
-              </div>
-            </>
+          ) : mode === 'demo' && DemoLogin ? (
+            <DemoLogin />
           ) : (
             <>
               {/* Google が表示する「Googleでログイン」ボタン(IDトークン) */}
