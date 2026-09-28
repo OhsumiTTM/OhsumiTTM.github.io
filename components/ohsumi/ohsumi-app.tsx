@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { OhsumiProvider, useOhsumi } from '@/lib/ohsumi/store'
+import { OhsumiProvider, useOhsumi, loadLastUserName } from '@/lib/ohsumi/store'
 import { NavProvider, useNav } from '@/lib/ohsumi/nav'
 import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
@@ -149,11 +149,11 @@ function Router() {
     // login screen even though the person is (or was) logged in — looking
     // like they got signed out, and worse, letting Admin screens briefly
     // compute permissions against no/stale data (see admin-screen.tsx).
-    if (remoteEnabled && currentUserId && !dataReady) {
-      return <RemoteLoadingScreen />
-    }
-    if (remoteEnabled && currentUserId && remoteStatus === 'error') {
-      return <RemoteLoadErrorScreen message={remoteError} />
+    if (remoteEnabled && currentUserId) {
+      if (remoteStatus === 'error') return <RemoteLoadErrorScreen message={remoteError} />
+      // 再読み込み後はトークンが無いので、「〇〇さんとして続行」を押してもらう
+      if (remoteStatus === 'idle') return <LoginScreen continueAs={loadLastUserName() || '—'} />
+      if (!dataReady) return <RemoteLoadingScreen />
     }
     return <LoginScreen />
   }

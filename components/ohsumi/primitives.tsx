@@ -12,6 +12,7 @@ import {
 import type { Member, Department, Task } from '@/lib/ohsumi/types'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, DEPARTMENT_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
 import { useOhsumi } from '@/lib/ohsumi/store'
+import { useFileUrl } from '@/lib/ohsumi/files'
 
 export function Avatar({
   member,
@@ -22,6 +23,9 @@ export function Avatar({
   size?: number
   className?: string
 }) {
+  // アップロードした画像は非公開のため GAS 経由で取得する(取得できるまでは
+  // 色とイニシャルを表示する)
+  const avatarSrc = useFileUrl(member?.avatarUrl)
   if (!member) {
     return (
       <span
@@ -36,10 +40,10 @@ export function Avatar({
       </span>
     )
   }
-  if (member.avatarUrl) {
+  if (avatarSrc) {
     return (
       <img
-        src={member.avatarUrl}
+        src={avatarSrc}
         alt={member.displayName || member.name}
         title={member.displayName || member.name}
         className={cn('inline-block shrink-0 rounded-full object-cover', className)}
@@ -313,4 +317,13 @@ export function OhsumiMark({ size = 22 }: { size?: number }) {
       <circle cx="20.2" cy="6.6" r="1.6" fill="currentColor" />
     </svg>
   )
+}
+
+// アップロードした画像(団体ロゴ・アンケート画像など)を表示する <img>。
+// 非公開のファイルは GAS 経由で取得し、取得できるまでは何も表示しない
+export function StoredImage({ url, alt, className }: { url: string | undefined; alt: string; className?: string }) {
+  const src = useFileUrl(url)
+  if (!src) return null
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt={alt} className={className} />
 }

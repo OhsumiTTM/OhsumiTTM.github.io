@@ -9,23 +9,25 @@ Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コ
 ## アーキテクチャ
 
 ```
-┌─────────────────┐     読み取り: CSV公開URL      ┌──────────────────┐
-│  Next.js (静的   │ ─────────────────────────────▶│                  │
-│  エクスポート)    │                                │  Google          │
-│  GitHub Pages    │     書き込み: Web App (POST)   │  Spreadsheet     │
-│  でホスト         │ ◀─────────────────────────────│  (Members /      │
-└─────────────────┘   ┌──────────────────────┐      │   Projects /     │
-                       │  Google Apps Script  │─────▶│   Tasks /        │
-                       │  Web App (Code.gs)   │      │   Settings)      │
-                       └──────────────────────┘      └──────────────────┘
+┌─────────────────┐  読み取り・書き込み   ┌──────────────────────┐      ┌──────────────────┐
+│  Next.js (静的   │  (POST + Googleの     │  Google Apps Script  │      │  Google          │
+│  エクスポート)    │   アクセストークン)  │  Web App (Code.gs)   │─────▶│  Spreadsheet     │
+│  GitHub Pages    │ ────────────────────▶│  トークン検証・      │      │  (Members /      │
+│  でホスト         │ ◀────────────────────│  閲覧権限で絞り込み  │◀─────│   Projects /     │
+└─────────────────┘                        └──────────────────────┘      │   Tasks /        │
+                                                                           │   Settings)      │
+                                                                           └──────────────────┘
 ```
 
 - **フロントエンド**: Next.js 16 (App Router) を `output: 'export'` で静的サイトとしてビルドし、
   GitHub Pages でホストします。サーバーサイドのAPIやDBは持ちません。
 - **データベース**: Google Spreadsheet の Members / Projects / Tasks（任意で Settings）の
   4シートが「データベース」です。
-- **読み取り**: 各シートを「ウェブに公開」した CSV URL をビルド時に環境変数として埋め込み、
-  クライアントから直接フェッチします。
+- **読み取り**: ログイン後、Apps Script の `getInitialData` で4シート分をまとめて取得します。
+  Apps Script がGoogleのアクセストークンを検証し、閲覧権限のないデータ(幹部限定タスク、
+  他の人の評価・1on1記録など)を取り除いてから返します(`gas/Code.gs` の `READ_POLICY`)。
+  シートを「ウェブに公開」する必要はありません。アップロードしたファイル(プロフィール画像・
+  領収書など)も非公開で保存し、Apps Script が権限を確認してから返します。
 - **書き込み**: Google Apps Script（`gas/Code.gs`）をウェブアプリとしてデプロイし、
   クライアントからそのURLへ POST することでシートに書き込みます。
 - **認証**: 現状は簡易的なデモ用のメンバー選択画面です（本人確認なし）。実際の
@@ -64,8 +66,8 @@ push してください。
 
 ### 3. Google Apps Script をデプロイする
 
-`gas/README.md` の「2. Apps Script のデプロイ」〜「3. シートのCSV公開」の手順に従い、
-書き込み用の Web App URL と、各シートの CSV 公開URLを取得します。
+`gas/README.md` の「2. Apps Script のデプロイ」の手順に従い、読み書きに使う Web App URL を
+取得します。
 
 定期タスク（`RecurringTaskRule`）を毎日自動生成させたい場合は、同ファイルの
 「定期タスクの自動生成（サーバー側トリガー）」の手順で時間主導トリガーも設定してください。
@@ -112,19 +114,17 @@ pnpm dev
 ### 7. GitHub Pages へデプロイする
 
 1. リポジトリの Settings → Secrets and variables → Actions に、`gas/README.md`
-   「4. GitHub Secrets」の表にある Secret（`MEMBERS_CSV` / `PROJECTS_CSV` /
-   `TASKS_CSV` / `CSV_GAS`、任意で `SETTINGS_CSV`）を設定します。
+   「4. GitHub Secrets」の表にある Secret（`CSV_GAS` / `GOOGLE_OAUTH_CLIENT_ID`、
+   任意で `FEEDBACK_FORM_URL`）を設定します。
 2. Settings → Pages で、Source を「GitHub Actions」に設定します。
 3. `main` ブランチに push すると `.github/workflows/deploy.yml` が自動でビルド・
    デプロイします。
 
 ## セキュリティ・注意事項
 
-- **APIキー・OAuthクライアント・Spreadsheetの公開URLは団体ごとに必ず自分で発行し、
-  他団体と使い回さないでください。** これらは事実上「誰でも書き込める」形で
-  クライアントサイドのJavaScriptに埋め込まれます（`gas/README.md`の注意事項参照）。
-  他団体のURLを流用すると、自団体のタスク・メンバー情報が他団体からも操作・
-  閲覧できる状態になってしまいます。
+- **APIキー・OAuthクライアント・Apps Script の Web App は団体ごとに必ず自分で発行し、
+  他団体と使い回さないでください。** Web App URL と OAuthクライアントIDはクライアント
+  サイドのJavaScriptに埋め込まれます（`gas/README.md`の注意事項参照）。
 - 本人確認なしの内輪利用を前提とした設計です。機密性の高い情報（給与・成績など）は
   シートに置かないでください。
 - 詳しい既知の制約は `gas/README.md` の「既知の制約」を参照してください。

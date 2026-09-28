@@ -6,6 +6,7 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { ArrowLeft, ClipboardList, Check, ChevronRight } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import type { SurveyQuestion } from '@/lib/ohsumi/types'
+import { StoredImage } from './primitives'
 
 // item 22: メンバー体験定点測定（簡易アンケートフォーム）
 // 回答はSurveyResponsesシート(GAS経由)に保存し、団体全体で共有される。
@@ -124,8 +125,7 @@ export function SurveyScreen() {
             <div key={q.id} className="rounded-xl border border-border bg-card p-4">
               <p className="mb-3 text-sm font-medium">{q.text}</p>
               {q.imageUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={q.imageUrl} alt="" className="mb-3 max-h-64 w-full rounded-lg object-contain" />
+                <StoredImage url={q.imageUrl} alt="" className="mb-3 max-h-64 w-full rounded-lg object-contain" />
               )}
               {q.type === 'scale' ? (
                 <div className="space-y-2">

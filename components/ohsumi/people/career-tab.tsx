@@ -550,6 +550,8 @@ function QuizSection({
     try {
       const r = await submitQuizResult(activeQuiz.id, member.id, answers)
       setResult(r)
+    } catch {
+      // 送信に失敗した場合は画面上部の同期エラー表示で知らせる(回答はそのまま残す)
     } finally {
       setSubmitting(false)
     }

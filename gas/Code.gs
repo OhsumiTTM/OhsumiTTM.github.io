@@ -179,6 +179,19 @@ function setupOhsumi() {
   // 既存の全行の保護対象列を書式なしテキストにしておく(値は変更しない)。
   protectAllExistingRows()
 
+  // --- スプレッドシートの手動編集で読み取りキャッシュを無効にするトリガー ---
+  try {
+    var changeTriggers = ScriptApp.getProjectTriggers()
+    var hasChange = changeTriggers.some(function(t) { return t.getHandlerFunction() === 'onSpreadsheetChange' })
+    if (!hasChange) {
+      ScriptApp.newTrigger('onSpreadsheetChange').forSpreadsheet(ss).onChange().create()
+      console.log('✅ onSpreadsheetChange トリガー作成')
+    } else {
+      console.log('✅ onSpreadsheetChange トリガー既存')
+    }
+  } catch (e) { console.error('❌ 変更検知トリガー設定: ' + e) }
+  bumpDataVersion()
+
   // --- 画像アップロード用フォルダ ---
   try { ensureUploadFolder() }
   catch (e) { console.error('❌ アップロード用フォルダ: ' + e) }
@@ -193,6 +206,14 @@ function setupOhsumi() {
 // 使わない（任意のフォルダへの書き込みを防ぐため）。
 
 var UPLOAD_FOLDER_PROPERTY_KEY = 'UPLOAD_FOLDER_ID'
+// 移行前のファイルがあるフォルダ(カンマ区切りで複数可)。getFiles はこれらの
+// フォルダ内のファイルも返す(将来、FSIFの本番を移行するときに旧フォルダの
+// 画像を表示するため)。スクリプトプロパティに手動で設定する。
+var LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY = 'LEGACY_UPLOAD_FOLDER_IDS'
+// 'true' のとき、新しくアップロードしたファイルを非公開のままにする。
+// makeUploadsPrivate() の実行時に 'true' になる(段階③)。それまでは、公開CSV
+// 時代のフロントでも表示できるよう「リンクを知っている全員が閲覧可」にする。
+var UPLOADS_PRIVATE_PROPERTY_KEY = 'UPLOADS_PRIVATE'
 var UPLOAD_FOLDER_NAME = 'Ohsumi uploads'
 
 // スクリプトプロパティにフォルダIDがなければ、スクリプトを実行している
@@ -208,6 +229,29 @@ function ensureUploadFolder() {
   props.setProperty(UPLOAD_FOLDER_PROPERTY_KEY, folder.getId())
   console.log('✅ アップロード用フォルダ作成: ' + folder.getName() + ' (' + folder.getId() + ')')
   return folder.getId()
+}
+
+function applyUploadSharing(file) {
+  if (PropertiesService.getScriptProperties().getProperty(UPLOADS_PRIVATE_PROPERTY_KEY) === 'true') return
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+}
+
+// 領収書の種類とサイズの確認(フロントの expense-application-modal.tsx と同じ基準)。
+// ブラウザによっては HEIC の種類が空で届くため、拡張子でも判定する。
+var RECEIPT_MAX_BYTES = 5 * 1024 * 1024
+var RECEIPT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif', 'application/pdf']
+var RECEIPT_EXTENSION_MIME = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif', pdf: 'application/pdf',
+}
+function validateReceiptFile(mimeType, filename, byteLength) {
+  if (byteLength > RECEIPT_MAX_BYTES) throw userError('領収書のファイルサイズは5MBまでです。')
+  var mime = String(mimeType || '').toLowerCase()
+  if (RECEIPT_MIME_TYPES.indexOf(mime) >= 0) return mime
+  var ext = String(filename || '').toLowerCase().split('.').pop()
+  var byExt = RECEIPT_EXTENSION_MIME[ext]
+  if (byExt && (!mime || mime === 'application/octet-stream')) return byExt
+  throw userError('領収書は画像(JPEG・PNG・HEICなど)またはPDFのみアップロードできます。')
 }
 
 function getUploadFolder() {
@@ -1026,6 +1070,8 @@ function authorizeAction(acting, action, body) {
     'checkAndGenerateRecurringTasks', // item 2/TSK-051: 生成はルール定義に従うだけなので誰でも呼べる
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
+    'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
+    'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -1259,7 +1305,7 @@ function toErrorMessage(err) {
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
-  'testDiscordWebhook', 'testSlackWebhook',
+  'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles',
 ]
 
 function doPost(e) {
@@ -1280,6 +1326,23 @@ function doPost(e) {
         return jsonOutput({ ok: true, result: { memberId: findMemberIdByEmail(loginEmail) } })
       } catch (loginErr) {
         return jsonOutput({ ok: false, error: toErrorMessage(loginErr) })
+      }
+    }
+
+    // getInitialData: ログインと初期データの取得をまとめて行う読み取り専用
+    // アクション(resolveLogin と同じく、メンバー特定前に呼ばれる)。
+    // 閲覧者が見てよい行・列だけに絞って返す(READ_POLICY 参照)。
+    if (body.action === 'getInitialData') {
+      var initEmail
+      try {
+        initEmail = verifyToken(body.authToken || '').email
+      } catch (initAuthErr) {
+        return jsonOutput({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
+      }
+      try {
+        return jsonOutput({ ok: true, result: getInitialData(initEmail, body.knownVersion) })
+      } catch (initErr) {
+        return jsonOutput({ ok: false, error: toErrorMessage(initErr) })
       }
     }
 
@@ -1797,6 +1860,12 @@ function doPost(e) {
       case 'submitDailyReport':
         result = saveDailyReport(body.report, actingMember)
         break
+      case 'getExpenses':
+        result = getExpenses(actingMember)
+        break
+      case 'getFiles':
+        result = getFiles(actingMember, body.fileIds)
+        break
       case 'fetchDailyReports':
         result = fetchDailyReports()
         break
@@ -1837,7 +1906,12 @@ function doPost(e) {
     // リクエストの中身・トークンは返さない/ログにも出さない)。
     return jsonOutput({ ok: false, error: toErrorMessage(err) })
   } finally {
-    if (lock) lock.releaseLock()
+    // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
+    // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
+    if (lock) {
+      bumpDataVersion()
+      lock.releaseLock()
+    }
   }
 }
 
@@ -3053,7 +3127,7 @@ function uploadAvatar(memberId, dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   // googleusercontent.com hotlinks more reliably in <img> tags than
   // Drive's own "uc?export=view" (which can trigger a virus-scan
@@ -3085,7 +3159,7 @@ function uploadOrgLogo(dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = 'https://lh3.googleusercontent.com/d/' + file.getId() + '=w256-h256-c'
   console.log('uploadOrgLogo: url=' + url)
@@ -3098,18 +3172,19 @@ function uploadOrgLogo(dataUrl, filename) {
 // 既存ファイルの削除は行わない。領収書は画像だけでなくPDFのこともあるので
 // サムネイルURLではなく汎用のDrive表示URLを返す。
 function uploadExpenseReceipt(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
+  var match = String(dataUrl || '').match(/^data:([^;]*);base64,(.*)$/)
   if (!match) throw userError('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var bytes = Utilities.base64Decode(match[2])
+  // 領収書は5MBまで、画像(JPEG・PNG・HEICなど)とPDFのみ(フロントでも同じ確認をする)
+  var mimeType = validateReceiptFile(match[1], filename, bytes.length)
 
   var folder = getUploadFolder()
   var namePrefix = 'expense_receipt_'
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = file.getUrl()
   console.log('uploadExpenseReceipt: url=' + url)
@@ -3132,7 +3207,7 @@ function uploadSurveyImage(dataUrl, filename) {
   var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW)
+  applyUploadSharing(file)
 
   var url = 'https://lh3.googleusercontent.com/d/' + file.getId() + '=w512-h512-c'
   console.log('uploadSurveyImage: url=' + url)
@@ -3538,7 +3613,10 @@ function generateRecurringTasksLocked() {
     return { generated: [] }
   }
   try {
-    return generateRecurringTasksInternal()
+    var genResult = generateRecurringTasksInternal()
+    // 定期タスクを生成した場合は読み取りキャッシュを無効にする
+    if (genResult && genResult.generated && genResult.generated.length > 0) bumpDataVersion()
+    return genResult
   } finally {
     lock.releaseLock()
   }
@@ -3637,6 +3715,8 @@ function dailyMaintenance() {
   notifyOverdueTasksToDiscord()
   notifyOverdueTasksToAssignees()
   try { notifyInactiveMembers() } catch (err) { }
+  // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
+  bumpDataVersion()
 }
 
 // 一定期間アクセスのないメンバーを管理者に通知する日次スイープ。
@@ -4691,4 +4771,793 @@ function bulkUpdateSkillLevels(updates) {
   }
 
   return { ok: true, updated: count }
+}
+
+// ---- 読み取り(公開CSVの代替) ------------------------------------------------
+//
+// Members / Projects / Tasks / Settings の読み取りは、以前は「ウェブに公開」した
+// CSVから直接行っていた(URLを知っていればログインなしで全データを読めた)。
+// 現在は getInitialData アクションでまとめて返す。流れ:
+//   1. トークンを検証してログイン中のメンバーを特定する
+//   2. 4シート分の「スナップショット」をキャッシュから取り出す(なければ読む)
+//   3. READ_POLICY に従い、閲覧者が見てよい行・列・キーだけに絞って返す
+//
+// キャッシュは「データの版(DATA_VERSION)」ごとに持つ。書き込みのたびに版を
+// 新しくするので、古い版のキャッシュは参照されなくなり期限切れで消える。
+// 版を新しくする箇所: doPost の書き込みアクション(finally)、dailyMaintenance、
+// generateRecurringTasksLocked、スプレッドシートの手動編集(onSpreadsheetChange)。
+
+var DATA_VERSION_PROPERTY_KEY = 'DATA_VERSION'
+var SNAPSHOT_SHEETS = ['Members', 'Projects', 'Tasks', 'Settings']
+// CacheService は1キー100KBまで。base64文字列を90,000文字ずつに分割する
+var SNAPSHOT_CHUNK_SIZE = 90000
+// 分割数の上限(約5.4MB)。これを超える場合はキャッシュせず毎回シートから読む
+var SNAPSHOT_MAX_CHUNKS = 60
+// CacheService の有効期限の上限(6時間)
+var SNAPSHOT_CACHE_TTL = 21600
+
+function getDataVersion() {
+  return PropertiesService.getScriptProperties().getProperty(DATA_VERSION_PROPERTY_KEY) || '0'
+}
+
+function bumpDataVersion() {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      DATA_VERSION_PROPERTY_KEY,
+      String(Date.now()) + '-' + Math.floor(Math.random() * 1e6),
+    )
+  } catch (e) {
+    // 版の更新に失敗しても、キャッシュの有効期限(6時間)で最終的に反映される
+    Logger.log('bumpDataVersion failed: ' + e)
+  }
+}
+
+// スプレッドシートを手で編集したときにキャッシュを無効にする(setupOhsumi で
+// インストール型トリガーとして登録する)。スクリプトからの書き込みでは発火しない。
+function onSpreadsheetChange(e) {
+  bumpDataVersion()
+}
+
+// シートを {headers, rows} で読む。値は公開CSVと同じく「表示されている文字列」
+// (getDisplayValues)にそろえる。空行は除く。シートが無ければ空で返す。
+function readSheetTable(name) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return { headers: [], rows: [] }
+  var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getDisplayValues()
+  var headers = values[0].map(function (h) { return String(h).trim() })
+  var rows = []
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i]
+    var hasValue = false
+    for (var c = 0; c < row.length; c++) {
+      if (row[c] !== '') { hasValue = true; break }
+    }
+    if (hasValue) rows.push(row)
+  }
+  return { headers: headers, rows: rows }
+}
+
+function snapshotCacheKey(version, suffix) {
+  return 'snap:' + version + ':' + suffix
+}
+
+function readSnapshotCache(version) {
+  try {
+    var cache = CacheService.getScriptCache()
+    var meta = cache.get(snapshotCacheKey(version, 'meta'))
+    if (!meta) return null
+    var count = Number(meta)
+    if (!(count > 0)) return null
+    var keys = []
+    for (var i = 0; i < count; i++) keys.push(snapshotCacheKey(version, i))
+    var parts = cache.getAll(keys)
+    var encoded = ''
+    for (var j = 0; j < count; j++) {
+      var part = parts[keys[j]]
+      if (part == null) return null
+      encoded += part
+    }
+    var gz = Utilities.newBlob(Utilities.base64Decode(encoded), 'application/x-gzip')
+    return JSON.parse(Utilities.ungzip(gz).getDataAsString('UTF-8'))
+  } catch (e) {
+    return null
+  }
+}
+
+function writeSnapshotCache(version, data) {
+  try {
+    var gz = Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json'))
+    var encoded = Utilities.base64Encode(gz.getBytes())
+    var count = Math.ceil(encoded.length / SNAPSHOT_CHUNK_SIZE)
+    if (count > SNAPSHOT_MAX_CHUNKS) return false
+    var entries = {}
+    for (var i = 0; i < count; i++) {
+      entries[snapshotCacheKey(version, i)] = encoded.substr(i * SNAPSHOT_CHUNK_SIZE, SNAPSHOT_CHUNK_SIZE)
+    }
+    var cache = CacheService.getScriptCache()
+    cache.putAll(entries, SNAPSHOT_CACHE_TTL)
+    // 目録は最後に書く(途中で失敗したら目録が無く、次回は読み直しになる)
+    cache.put(snapshotCacheKey(version, 'meta'), String(count), SNAPSHOT_CACHE_TTL)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+// 4シート分のスナップショットを返す。版は必ずシートより先に読む(書き込みと
+// 同時に読んでも、古い版のキーに新しいデータが入るだけで逆は起きない)。
+function loadSnapshot() {
+  var version = getDataVersion()
+  var cached = readSnapshotCache(version)
+  if (cached) return { version: version, data: cached, cacheHit: true }
+  var data = {}
+  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  writeSnapshotCache(version, data)
+  return { version: version, data: data, cacheHit: false }
+}
+
+// ---- 読み取りの権限表(閲覧範囲の判定はここに集約する) -----------------------
+//
+// 列ごと・キーごとに規則名を書く。規則のない列・キーは誰にも返さない。
+// 将来、団体ごとに人材データの閲覧範囲を設定できるようにする場合は、
+// Settings の設定をこの表に重ねる形で拡張する。
+//   all             ログイン済みの全員
+//   self            本人のみ(Members の行の id が閲覧者)
+//   selfOrAdminRole 本人と、一般以外の役職
+//   selfOrFullAdmin 本人と全権管理者
+//   adminRole       一般以外の役職
+//   fullAdmin       全権管理者のみ
+//   none            誰にも返さない
+var READ_POLICY = {
+  Members: {
+    rows: 'all',
+    columns: {
+      id: 'all',
+      name: 'all',
+      display_name: 'all',
+      role: 'all',
+      avatar_url: 'all',
+      avatar_color: 'all',
+      avatar_initials: 'all',
+      project_ids: 'all',
+      will_tags: 'all',
+      judgment_tags: 'all',
+      reports_to_id: 'all',
+      joined_at: 'all',
+      department_path: 'all',
+      unavailable_dates: 'all',
+      absent_dates: 'all',
+      available_hours_json: 'all',
+      skill_levels_json: 'all',
+      timezone: 'all',
+      inactive: 'all',
+      mentor_id: 'selfOrAdminRole',
+      has_management_experience: 'selfOrAdminRole',
+      desired_areas: 'selfOrAdminRole',
+      desired_skills: 'selfOrAdminRole',
+      career_history_json: 'selfOrAdminRole',
+      qualifications_json: 'selfOrAdminRole',
+      evaluation_history_json: 'selfOrAdminRole',
+      transfer_history_json: 'selfOrAdminRole',
+      competencies_json: 'selfOrAdminRole',
+      training_history_json: 'selfOrAdminRole',
+      development_plan_json: 'selfOrAdminRole',
+      one_on_ones_json: 'selfOrAdminRole',
+      career_aspiration: 'selfOrAdminRole',
+      desired_future_role: 'selfOrAdminRole',
+      career_plan: 'selfOrAdminRole',
+      university: 'selfOrAdminRole',
+      faculty: 'selfOrAdminRole',
+      department_name: 'selfOrAdminRole',
+      grade_year: 'selfOrAdminRole',
+      custom_fields_json: 'selfOrAdminRole',
+      skill_points_json: 'selfOrAdminRole',
+      survey_responses_json: 'selfOrAdminRole',
+      last_login: 'selfOrAdminRole',
+      notify_new_task: 'self',
+      notify_settings: 'self',
+      locale: 'self',
+      permission_overrides_json: 'selfOrFullAdmin',
+      last_inactive_notified: 'none',
+      years_of_experience: 'none',
+    },
+  },
+  Projects: {
+    rows: 'all',
+    columns: {
+      id: 'all', name: 'all', description: 'all', type: 'all', owner_id: 'all',
+      member_ids: 'all', archived: 'all', parent_id: 'all', goal: 'all',
+      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all',
+    },
+  },
+  Tasks: {
+    // 行の規則は canViewTaskRow を参照。行が見える人には全列を返す
+    rows: 'task',
+    columns: {
+      id: 'all', project_id: 'all', title: 'all', description: 'all', status: 'all',
+      assign_type: 'all', assignee_id: 'all', creator_id: 'all', created_at: 'all',
+      start_date: 'all', due_date: 'all', due_time: 'all', visibility: 'all',
+      department: 'all', category: 'all', skills: 'all', difficulty: 'all', priority: 'all',
+      last_activity: 'all', original_input_id: 'all', approval_status: 'all',
+      estimated_hours: 'all', importance: 'all', reviewer_id: 'all', reviewer_ids: 'all',
+      depends_on_ids: 'all', progress_note: 'all', progress_percent: 'all',
+      progress_history_json: 'all', deliverables_json: 'all', history_json: 'all',
+      comments_json: 'all', retrospective_json: 'all', schedule_json: 'all', form_json: 'all',
+      blocker_note: 'all', blocker_since: 'all', hold_reason_note: 'all', hold_reason_since: 'all',
+      completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
+      required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
+      open_bid_applicant_ids: 'all', related_review_task_id: 'all',
+    },
+  },
+  Settings: {
+    // キーごとの規則。関数になっているキーは、閲覧者に合わせて値を加工して返す
+    keys: {
+      skill_options: 'all',
+      category_options: 'all',
+      role_levels: 'all',
+      project_templates: 'all',
+      role_permissions: 'all',
+      task_set_templates: 'all',
+      recurring_rules: 'all',
+      job_requirements: 'all',
+      skill_field_options: 'all',
+      skill_field_skills: 'all',
+      skill_field_threshold: 'all',
+      org_notification_emails: 'fullAdmin',
+      survey_invited_ids: filterSurveyInvitedIds,
+      project_order: 'all',
+      restricted_roles: 'all',
+      skill_level_thresholds: 'all',
+      quiz_definitions: filterQuizDefinitions,
+      radar_axes: 'all',
+      custom_member_columns_json: 'all',
+      expense_categories: 'all',
+      custom_form_defs: 'all',
+      org_name: 'all',
+      org_logo_url: 'all',
+      theme_color: 'all',
+      one_on_one_questions: 'all',
+      initial_tasks_json: 'all',
+      department_tree_config: 'all',
+      learning_contents: 'all',
+      learning_courses: 'all',
+      training_programs: 'all',
+      survey_questions: 'all',
+    },
+  },
+}
+
+function splitCsvList(value) {
+  return String(value || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
+}
+
+// 閲覧者の情報(判定に使う値だけ)。restrictedRoles は Settings の restricted_roles。
+// 全権管理者の判定は lib/ohsumi/permissions.ts の isFullAdminRole と同じ基準
+// (代表は常に全権管理者として扱う — authorizeAction と同じ)。
+function makeViewer(memberRow, restrictedRoles) {
+  var role = String(memberRow.role || '').trim()
+  var isAdminRole = role !== '' && role !== '一般'
+  return {
+    id: String(memberRow.id || ''),
+    role: role,
+    isAdminRole: isAdminRole,
+    isFullAdmin: role === '代表' || (isAdminRole && restrictedRoles.indexOf(role) < 0),
+  }
+}
+
+function checkReadRule(rule, viewer, ownerId) {
+  switch (rule) {
+    case 'all': return true
+    case 'self': return !!ownerId && ownerId === viewer.id
+    case 'selfOrAdminRole': return (!!ownerId && ownerId === viewer.id) || viewer.isAdminRole
+    case 'selfOrFullAdmin': return (!!ownerId && ownerId === viewer.id) || viewer.isFullAdmin
+    case 'adminRole': return viewer.isAdminRole
+    case 'fullAdmin': return viewer.isFullAdmin
+    default: return false
+  }
+}
+
+// タスクの行の規則(画面の visibleTasks / pendingTasks の表示範囲を再現する)
+//   幹部限定: 一般以外の役職のみ
+//   承認待ち: 一般以外の役職と、作成者・担当者
+function canViewTaskRow(viewer, task) {
+  if (String(task.visibility || '') === '幹部' && !viewer.isAdminRole) return false
+  if (String(task.approval_status || '') === '承認待ち' && !viewer.isAdminRole) {
+    if (String(task.creator_id || '') === viewer.id) return true
+    return splitCsvList(task.assignee_id).indexOf(viewer.id) >= 0
+  }
+  return true
+}
+
+// アンケートの回答対象者一覧: 一般以外の役職には一覧をそのまま返す。一般には
+// 「自分が対象かどうか」だけが分かる値にする(対象なら自分のID、対象外なら
+// どのメンバーIDとも一致しない値)。空(=全員が対象)はそのまま返す。
+var SURVEY_NOT_INVITED_MARKER = '__not_invited__'
+function filterSurveyInvitedIds(value, viewer) {
+  if (viewer.isAdminRole) return value
+  var ids = splitCsvList(value)
+  if (ids.length === 0) return value
+  return ids.indexOf(viewer.id) >= 0 ? viewer.id : SURVEY_NOT_INVITED_MARKER
+}
+
+// 検定: 正解番号(correctIndex)は検定を編集できる全権管理者だけに返す
+// (採点は submitQuizResult でサーバー側が行う)
+function filterQuizDefinitions(value, viewer) {
+  if (viewer.isFullAdmin || !value) return value
+  try {
+    var quizzes = JSON.parse(value)
+    if (!Array.isArray(quizzes)) return ''
+    quizzes.forEach(function (q) {
+      ;(q && Array.isArray(q.questions) ? q.questions : []).forEach(function (question) {
+        if (question) delete question.correctIndex
+      })
+    })
+    return JSON.stringify(quizzes)
+  } catch (e) {
+    return ''
+  }
+}
+
+function tableRowToObject(headers, row) {
+  var obj = {}
+  for (var c = 0; c < headers.length; c++) obj[headers[c]] = row[c]
+  return obj
+}
+
+// 1シート分を閲覧者に合わせて絞り込む(Members / Projects / Tasks)
+function filterTableForViewer(sheetName, table, viewer) {
+  var policy = READ_POLICY[sheetName]
+  var headers = table.headers || []
+  var rows = table.rows || []
+  // 規則のある列だけを残す(列の並びは元のまま。none の列も落とす)
+  var keepCols = []
+  headers.forEach(function (h, c) {
+    if (h && policy.columns[h] && policy.columns[h] !== 'none') keepCols.push(c)
+  })
+  var idCol = headers.indexOf('id')
+  var outRows = []
+  rows.forEach(function (row) {
+    var obj = null
+    if (policy.rows === 'task') {
+      obj = tableRowToObject(headers, row)
+      if (!canViewTaskRow(viewer, obj)) return
+    }
+    // Members の「本人」判定は行の id で行う
+    var ownerId = sheetName === 'Members' && idCol >= 0 ? String(row[idCol]) : ''
+    outRows.push(keepCols.map(function (c) {
+      return checkReadRule(policy.columns[headers[c]], viewer, ownerId) ? row[c] : ''
+    }))
+  })
+  return { headers: keepCols.map(function (c) { return headers[c] }), rows: outRows }
+}
+
+function filterSettingsForViewer(table, viewer) {
+  var headers = table.headers || []
+  var keyCol = headers.indexOf('key')
+  var valueCol = headers.indexOf('value')
+  var out = { headers: ['key', 'value'], rows: [] }
+  if (keyCol < 0 || valueCol < 0) return out
+  var keys = READ_POLICY.Settings.keys
+  ;(table.rows || []).forEach(function (row) {
+    var key = String(row[keyCol] || '')
+    var rule = keys[key]
+    if (!rule) return
+    var value = row[valueCol]
+    if (typeof rule === 'function') {
+      out.rows.push([key, rule(value, viewer)])
+    } else if (checkReadRule(rule, viewer, '')) {
+      out.rows.push([key, value])
+    }
+  })
+  return out
+}
+
+function restrictedRolesFromSnapshot(data) {
+  var settings = data.Settings || { headers: [], rows: [] }
+  var keyCol = settings.headers.indexOf('key')
+  var valueCol = settings.headers.indexOf('value')
+  if (keyCol < 0 || valueCol < 0) return []
+  for (var i = 0; i < settings.rows.length; i++) {
+    if (String(settings.rows[i][keyCol]) === 'restricted_roles') return splitCsvList(settings.rows[i][valueCol])
+  }
+  return []
+}
+
+function findMemberInSnapshot(data, memberId) {
+  var members = data.Members || { headers: [], rows: [] }
+  var idCol = members.headers.indexOf('id')
+  if (idCol < 0) return null
+  for (var i = 0; i < members.rows.length; i++) {
+    if (String(members.rows[i][idCol]) === String(memberId)) return tableRowToObject(members.headers, members.rows[i])
+  }
+  return null
+}
+
+// スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
+// Google のサービスを使わない純粋な関数なのでテストから直接呼べる)
+function buildViewerData(data, memberId) {
+  var memberRow = findMemberInSnapshot(data, memberId)
+  if (!memberRow) return null
+  var viewer = makeViewer(memberRow, restrictedRolesFromSnapshot(data))
+  var empty = { headers: [], rows: [] }
+  return {
+    Members: filterTableForViewer('Members', data.Members || empty, viewer),
+    Projects: filterTableForViewer('Projects', data.Projects || empty, viewer),
+    Tasks: filterTableForViewer('Tasks', data.Tasks || empty, viewer),
+    Settings: filterSettingsForViewer(data.Settings || empty, viewer),
+  }
+}
+
+// ログイン用のメール→メンバーIDの対応表(非公開の MemberEmails シート)。
+// 版ごとにキャッシュする(メールの変更も doPost 経由の書き込みなので版が変わる)。
+function findMemberIdByEmailCached(email) {
+  var normalized = String(email || '').trim().toLowerCase()
+  if (!normalized) return null
+  var cache = CacheService.getScriptCache()
+  var key = 'emails:' + getDataVersion()
+  var map = null
+  try {
+    var raw = cache.get(key)
+    if (raw) map = JSON.parse(raw)
+  } catch (e) { map = null }
+  if (!map) {
+    map = {}
+    var sheet = getMemberEmailsSheet()
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var emailCol = headers.indexOf('email')
+    var lastRow = sheet.getLastRow()
+    if (lastRow >= 2 && idCol >= 0 && emailCol >= 0) {
+      sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().forEach(function (row) {
+        String(row[emailCol] || '').split(',').forEach(function (e) {
+          var addr = e.trim().toLowerCase()
+          if (addr && !map[addr]) map[addr] = String(row[idCol])
+        })
+      })
+    }
+    try { cache.put(key, JSON.stringify(map), SNAPSHOT_CACHE_TTL) } catch (e) { /* 大きすぎる場合は毎回読む */ }
+  }
+  return map[normalized] || null
+}
+
+// getInitialData: ログインと初期データの取得を1回で行う。
+// knownVersion が現在の版と同じなら中身を返さず unchanged だけ返す。
+function getInitialData(email, knownVersion) {
+  var memberId = findMemberIdByEmailCached(email)
+  if (!memberId) return { memberId: null }
+  var version = getDataVersion()
+  if (knownVersion && String(knownVersion) === version) {
+    return { memberId: memberId, version: version, unchanged: true }
+  }
+  var snapshot = loadSnapshot()
+  var sheets = buildViewerData(snapshot.data, memberId)
+  if (!sheets) return { memberId: null }
+  return { memberId: memberId, version: snapshot.version, sheets: sheets }
+}
+
+// 段階①の計測用: Apps Script エディタで実行し、実行ログの結果を確認する。
+// キャッシュなし(シートから読む)とキャッシュあり、それぞれの所要時間と
+// データ量を出力する。実行するとデータの版が新しくなる(全員のキャッシュが
+// 一度無効になる)が、データそのものは変更しない。
+function measureReadPerformance() {
+  function ms(start) { return Date.now() - start }
+  bumpDataVersion()
+  var version = getDataVersion()
+
+  var t = Date.now()
+  var data = {}
+  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  var readSheetsMs = ms(t)
+
+  var json = JSON.stringify(data)
+  t = Date.now()
+  var cached = writeSnapshotCache(version, data)
+  var writeCacheMs = ms(t)
+
+  t = Date.now()
+  var fromCache = readSnapshotCache(version)
+  var readCacheMs = ms(t)
+
+  var members = data.Members || { headers: [], rows: [] }
+  var idCol = members.headers.indexOf('id')
+  var sampleId = idCol >= 0 && members.rows.length > 0 ? String(members.rows[0][idCol]) : ''
+  t = Date.now()
+  var filtered = sampleId ? buildViewerData(data, sampleId) : null
+  var filterMs = ms(t)
+
+  t = Date.now()
+  var emails = getMemberEmailsSheet()
+  emails.getDataRange().getValues()
+  var readEmailsMs = ms(t)
+
+  var lines = [
+    '📊 読み取り性能の計測結果',
+    '  行数: Members=' + members.rows.length +
+      ' Projects=' + ((data.Projects || {}).rows || []).length +
+      ' Tasks=' + ((data.Tasks || {}).rows || []).length +
+      ' Settings=' + ((data.Settings || {}).rows || []).length,
+    '  データ量(JSON): ' + Math.round(json.length / 1024) + ' KB',
+    '  キャッシュなし: シート読み込み ' + readSheetsMs + ' ms',
+    '  キャッシュ書き込み: ' + writeCacheMs + ' ms (' + (cached ? '成功' : '上限超過のためキャッシュしない') + ')',
+    '  キャッシュあり: キャッシュ読み込み ' + readCacheMs + ' ms (' + (fromCache ? '取得成功' : '取得失敗') + ')',
+    '  閲覧者ごとの絞り込み: ' + filterMs + ' ms',
+    '  MemberEmails 読み込み(キャッシュなし時のみ): ' + readEmailsMs + ' ms',
+    '  絞り込み後のデータ量(先頭メンバー視点): ' + (filtered ? Math.round(JSON.stringify(filtered).length / 1024) + ' KB' : '-'),
+    '  ※ 上記に加え、Webアプリ呼び出しの往復とトークン検証(5分キャッシュ)の時間がかかります',
+  ]
+  console.log(lines.join('\n'))
+  return lines.join('\n')
+}
+
+// ---- 経費申請の読み取り --------------------------------------------------------
+//
+// 経費申請は以前は読み戻しておらず、申請した画面にしか表示されなかった。
+// getExpenses で、閲覧者が見てよい申請だけを返す。
+//   申請者本人 / 承認ステップに該当する人(指定メンバー、または同じ役職 —
+//   approveExpenseStep の担当者チェックと同じ基準) / 全権管理者 /
+//   管理画面の「経費」セクションを許可された役職(Settings の role_permissions)
+
+function rolePermissionsFromSettings() {
+  try {
+    var raw = getSettingValue('role_permissions')
+    var parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (e) {
+    return {}
+  }
+}
+
+function makeExpenseViewer(acting) {
+  var role = String(acting.role || '').trim()
+  var sections = rolePermissionsFromSettings()[role]
+  return {
+    id: String(acting.id || ''),
+    role: role,
+    isFullAdmin: role === '代表' || isActingFullAdmin(acting),
+    canOpenExpensesSection: Array.isArray(sections) && sections.indexOf('expenses') >= 0,
+  }
+}
+
+// 1件の経費申請を閲覧できるか(Google のサービスを使わない純粋な関数)
+function canViewExpense(viewer, app) {
+  if (viewer.isFullAdmin || viewer.canOpenExpensesSection) return true
+  if (String(app.applicantId) === viewer.id) return true
+  var steps = Array.isArray(app.approvalSteps) ? app.approvalSteps : []
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i] || {}
+    if (step.type === 'member' && String(step.memberId || '') === viewer.id) return true
+    if (step.type === 'role' && step.role && String(step.role) === viewer.role) return true
+  }
+  return false
+}
+
+function parseJsonOr(raw, fallback) {
+  if (raw === '' || raw == null) return fallback
+  try { return JSON.parse(String(raw)) } catch (e) { return fallback }
+}
+
+function expenseRowToApplication(headers, row) {
+  var get = function (name) {
+    var c = headers.indexOf(name)
+    return c >= 0 ? row[c] : ''
+  }
+  var createdAt = get('created_at')
+  return {
+    id: String(get('id')),
+    applicantId: String(get('applicant_id')),
+    amount: Number(get('amount')) || 0,
+    categoryId: String(get('category_id')),
+    receiptUrl: String(get('receipt_url') || '') || undefined,
+    justification: String(get('justification') || '') || undefined,
+    purpose: String(get('purpose') || '') || undefined,
+    customFieldAnswers: parseJsonOr(get('custom_field_answers_json'), {}),
+    approvalSteps: parseJsonOr(get('approval_steps_json'), []),
+    approvals: parseJsonOr(get('approvals_json'), []),
+    currentStepIndex: Number(get('current_step_index')) || 0,
+    status: String(get('status') || 'pending'),
+    createdAt: createdAt instanceof Date ? createdAt.toISOString() : String(createdAt || ''),
+    rejectionReason: String(get('rejection_reason') || '') || undefined,
+  }
+}
+
+function getExpenses(acting) {
+  var viewer = makeExpenseViewer(acting)
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  var apps = []
+  rows.forEach(function (row) {
+    var app = expenseRowToApplication(headers, row)
+    if (!app.id) return
+    if (canViewExpense(viewer, app)) apps.push(app)
+  })
+  // 新しい申請を先に(フロントの一覧と同じ並び)
+  apps.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
+  return apps
+}
+
+// ---- アップロードしたファイルの配信(非公開化) ----------------------------------
+//
+// アップロードしたファイルは非公開にし、getFiles で権限を確認してから返す。
+// 返すのはアップロード用フォルダ(UPLOAD_FOLDER_ID)と旧フォルダ
+// (LEGACY_UPLOAD_FOLDER_IDS)の中のファイルだけ — それ以外のIDを受け付けると、
+// GAS を実行しているアカウントの Drive にある任意のファイルを読まれてしまう。
+// 種類はファイル名の先頭で判断する(アップロード時に付けている名前)。
+//   avatar_ / org_logo_ / survey_image_  ログイン済みの全員
+//   expense_receipt_                     その領収書を持つ経費申請を閲覧できる人(canViewExpense)
+
+var GET_FILES_MAX_IDS = 30
+var GET_FILES_MAX_BYTES = 8 * 1024 * 1024
+var FILE_CACHE_MAX_CHARS = 95000
+
+function allowedUploadFolderIds() {
+  var props = PropertiesService.getScriptProperties()
+  var ids = []
+  var current = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  if (current) ids.push(current)
+  splitCsvList(props.getProperty(LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY)).forEach(function (id) {
+    if (ids.indexOf(id) < 0) ids.push(id)
+  })
+  return ids
+}
+
+// ファイル名から種類を判定する(Google のサービスを使わない純粋な関数)
+function uploadKindFromName(name) {
+  var n = String(name || '')
+  if (n.indexOf('expense_receipt_') === 0) return 'receipt'
+  if (n.indexOf('avatar_') === 0) return 'avatar'
+  if (n.indexOf('org_logo_') === 0) return 'orgLogo'
+  if (n.indexOf('survey_image_') === 0) return 'surveyImage'
+  return ''
+}
+
+// 種類ごとの閲覧可否。receiptApps は、その領収書のファイルIDを receipt_url に
+// 含む経費申請の一覧(receipt の判定にだけ使う)
+function canViewUploadedFile(kind, expenseViewer, receiptApps) {
+  if (kind === 'avatar' || kind === 'orgLogo' || kind === 'surveyImage') return true
+  if (kind === 'receipt') {
+    for (var i = 0; i < receiptApps.length; i++) {
+      if (canViewExpense(expenseViewer, receiptApps[i])) return true
+    }
+  }
+  return false
+}
+
+function isInAllowedFolder(file, allowedIds) {
+  var parents = file.getParents()
+  while (parents.hasNext()) {
+    if (allowedIds.indexOf(parents.next().getId()) >= 0) return true
+  }
+  return false
+}
+
+function getFiles(acting, fileIds) {
+  var ids = (Array.isArray(fileIds) ? fileIds : []).map(String)
+  if (ids.length > GET_FILES_MAX_IDS) throw userError('一度に取得できるファイルは' + GET_FILES_MAX_IDS + '件までです。')
+  var allowed = allowedUploadFolderIds()
+  var cache = CacheService.getScriptCache()
+  var expenseViewer = null
+  var expenses = null
+  var totalBytes = 0
+  return ids.map(function (id) {
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return { id: id, ok: false, error: 'invalid' }
+    var file
+    try { file = DriveApp.getFileById(id) } catch (e) { return { id: id, ok: false, error: 'notFound' } }
+    if (!isInAllowedFolder(file, allowed)) return { id: id, ok: false, error: 'notFound' }
+    var kind = uploadKindFromName(file.getName())
+    var receiptApps = []
+    if (kind === 'receipt') {
+      if (!expenseViewer) expenseViewer = makeExpenseViewer(acting)
+      if (!expenses) expenses = readAllExpenses()
+      receiptApps = expenses.filter(function (app) { return String(app.receiptUrl || '').indexOf(id) >= 0 })
+    }
+    if (!canViewUploadedFile(kind, expenseViewer, receiptApps)) {
+      return { id: id, ok: false, error: 'forbidden' }
+    }
+    // 小さい画像(アバター・ロゴなど)はキャッシュする。権限の確認は毎回行う。
+    // 領収書はキャッシュしない
+    var cacheKey = 'file:' + id
+    if (kind !== 'receipt') {
+      var hit = null
+      try { hit = cache.get(cacheKey) } catch (e) { hit = null }
+      if (hit) {
+        var sep = hit.indexOf('|')
+        return { id: id, ok: true, mimeType: hit.slice(0, sep), data: hit.slice(sep + 1) }
+      }
+    }
+    var size = file.getSize()
+    if (totalBytes + size > GET_FILES_MAX_BYTES) return { id: id, ok: false, error: 'batchTooLarge' }
+    totalBytes += size
+    var blob = file.getBlob()
+    var mimeType = blob.getContentType() || 'application/octet-stream'
+    var data = Utilities.base64Encode(blob.getBytes())
+    if (kind !== 'receipt' && data.length + mimeType.length < FILE_CACHE_MAX_CHARS) {
+      try { cache.put(cacheKey, mimeType + '|' + data, SNAPSHOT_CACHE_TTL) } catch (e) { /* キャッシュできなくても返す */ }
+    }
+    return { id: id, ok: true, mimeType: mimeType, data: data }
+  })
+}
+
+function readAllExpenses() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
+    return expenseRowToApplication(headers, row)
+  })
+}
+
+// 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
+// 全員が閲覧可」のファイルを非公開にする。領収書を先に処理する。以後の新規
+// アップロードも非公開になる(UPLOADS_PRIVATE)。extraFolderId を渡すと、
+// そのフォルダも対象にする。実行時間の上限に近づいたら途中で止まり、ログに
+// 再実行を促すメッセージを出す(何度実行しても問題ない)。
+function makeUploadsPrivate(extraFolderId) {
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty(UPLOADS_PRIVATE_PROPERTY_KEY, 'true')
+  var folderIds = allowedUploadFolderIds()
+  if (extraFolderId && folderIds.indexOf(String(extraFolderId)) < 0) folderIds.push(String(extraFolderId))
+  var deadline = Date.now() + 5 * 60 * 1000
+  var changed = { receipt: 0, other: 0 }
+  var finished = true
+  // 1周目は領収書だけ、2周目はそれ以外
+  ;['receipt', 'other'].forEach(function (pass) {
+    if (!finished) return
+    folderIds.forEach(function (folderId) {
+      if (!finished) return
+      var folder
+      try { folder = DriveApp.getFolderById(folderId) } catch (e) {
+        console.error('❌ フォルダを開けません: ' + folderId)
+        return
+      }
+      var files = folder.getFiles()
+      while (files.hasNext()) {
+        if (Date.now() > deadline) { finished = false; return }
+        var file = files.next()
+        var isReceipt = uploadKindFromName(file.getName()) === 'receipt'
+        if ((pass === 'receipt') !== isReceipt) continue
+        var access = file.getSharingAccess()
+        if (access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE) {
+          file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
+          changed[pass]++
+        }
+      }
+    })
+  })
+  var msg = '🔒 非公開にしたファイル: 領収書 ' + changed.receipt + ' 件、その他 ' + changed.other + ' 件'
+  msg += finished ? '\n✅ すべて完了しました' : '\n⏳ 実行時間の上限に近づいたため途中で止めました。もう一度 makeUploadsPrivate() を実行してください'
+  console.log(msg)
+  return msg
+}
+
+// 確認用(手動実行): フォルダごと・種類ごとに、公開/非公開のファイル数を出力する
+function auditUploadSharing(extraFolderId) {
+  var folderIds = allowedUploadFolderIds()
+  if (extraFolderId && folderIds.indexOf(String(extraFolderId)) < 0) folderIds.push(String(extraFolderId))
+  var lines = ['📋 アップロードファイルの共有設定 (新規アップロードの非公開化: ' +
+    (PropertiesService.getScriptProperties().getProperty(UPLOADS_PRIVATE_PROPERTY_KEY) === 'true' ? '有効' : '無効') + ')']
+  folderIds.forEach(function (folderId) {
+    var counts = {}
+    try {
+      var files = DriveApp.getFolderById(folderId).getFiles()
+      while (files.hasNext()) {
+        var file = files.next()
+        var kind = uploadKindFromName(file.getName()) || 'unknown'
+        var access = file.getSharingAccess()
+        var isPublic = access === DriveApp.Access.ANYONE_WITH_LINK || access === DriveApp.Access.ANYONE
+        counts[kind] = counts[kind] || { public: 0, private: 0 }
+        counts[kind][isPublic ? 'public' : 'private']++
+      }
+    } catch (e) {
+      lines.push('  ' + folderId + ': 開けません (' + e + ')')
+      return
+    }
+    lines.push('  フォルダ ' + folderId + ':')
+    Object.keys(counts).forEach(function (kind) {
+      lines.push('    ' + kind + ': 公開 ' + counts[kind].public + ' / 非公開 ' + counts[kind].private)
+    })
+  })
+  console.log(lines.join('\n'))
+  return lines.join('\n')
 }
