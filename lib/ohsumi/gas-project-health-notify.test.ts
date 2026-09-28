@@ -177,6 +177,33 @@ describe('reportProjectHealth', () => {
     expect(() => gas.reportProjectHealth(Array.from({ length: 501 }, () => ({})))).toThrow()
   })
 
+  it('複数の管理者がほぼ同時に送っても(ロックで順番に処理される)、同じ変化は1回だけ通知する', () => {
+    const { gas, mails, chats } = setup([['p1', 'A', '', 'good'], ['p2', 'B', '', 'watch']])
+    const items = [
+      { projectId: 'p1', health: 'attention' },
+      { projectId: 'p2', health: 'attention' },
+    ]
+    expect(gas.reportProjectHealth(items).notified).toEqual(['p1', 'p2'])
+    // 2人目の画面は古いデータ(good / watch)をもとに同じ内容を送ってくる
+    expect(gas.reportProjectHealth(items)).toEqual({ recorded: [], notified: [] })
+    expect(mails).toHaveLength(1)
+    expect(chats).toHaveLength(2)
+  })
+
+  it('以前のフロントからの notifyProjectHealth も、記録が既に同じ状態なら通知しない', () => {
+    const { gas, mails } = setup([['p1', 'A', '', 'good']])
+    gas.reportProjectHealth([{ projectId: 'p1', health: 'attention' }])
+    gas.notifyProjectHealth('p1', 'attention')
+    expect(mails).toHaveLength(1)
+  })
+
+  it('ロックを放す前に、シートへの書き込みを確定させる', () => {
+    const tail = CODE_GS.slice(CODE_GS.indexOf('function doPost('))
+    const fin = tail.slice(tail.indexOf('} finally {'), tail.indexOf('lock.releaseLock()'))
+    expect(fin).toContain('SpreadsheetApp.flush()')
+    expect(CODE_GS.match(/var LOCK_EXEMPT_ACTIONS = \[[^\]]*\]/)![0]).not.toMatch(/reportProjectHealth|notifyProjectHealth/)
+  })
+
   it('以前のフロントからの notifyProjectHealth も、初回の計算では通知しない', () => {
     const { gas, mails, record } = setup([['p1', 'A', '', ''], ['p2', 'B', '', 'good']])
     gas.notifyProjectHealth('p1', 'attention')

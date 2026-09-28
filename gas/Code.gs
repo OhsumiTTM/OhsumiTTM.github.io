@@ -1919,6 +1919,9 @@ function doPost(e) {
     // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
     // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
     if (lock) {
+      // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
+      // 次にロックを取った実行が更新前の値を読むことがある)
+      try { SpreadsheetApp.flush() } catch (flushErr) { /* 書き込みは実行の終了時にも確定する */ }
       bumpDataVersion()
       lock.releaseLock()
     }
@@ -2090,12 +2093,14 @@ function updateProjectHealthOverride(projectId, healthOverride) {
 // item 26: 自動判定が変化した（前回通知時と異なる状態になった）際の通知。
 // 以前のフロント(1件ずつ送る)との互換のために残している。新しいフロントは
 // reportProjectHealth でまとめて送る。健康状態が一度も記録されていない
-// プロジェクトは、初回の計算なので記録だけして通知しない。
+// プロジェクトは、初回の計算なので記録だけして通知しない。記録が既に同じ状態
+// (別の管理者の画面が先に記録・通知した場合など)なら通知しない。比較と記録は
+// doPost のロックの中で行うため、同時に呼ばれても二重には通知しない。
 function notifyProjectHealth(projectId, health) {
   var project = findRow(SHEET_PROJECTS, projectId)
-  var firstTime = project && !String(project.last_notified_health || '').trim()
+  var last = project ? String(project.last_notified_health || '').trim() : ''
   var result = updateProjectFields(projectId, { last_notified_health: health })
-  if (!firstTime) notifyProjectHealthChanged(projectId, health, 'に変化しました（自動判定）')
+  if (project && last && last !== health) notifyProjectHealthChanged(projectId, health, 'に変化しました（自動判定）')
   return result
 }
 
@@ -2112,6 +2117,9 @@ var REPORT_PROJECT_HEALTH_MAX_ITEMS = 500
 //   - attention → attention 以外: 記録だけする(次に悪化した時に再び通知するため)
 //   - それ以外: 何もしない
 // 通知が必要なプロジェクトが複数あっても、メール・Discord・Slack とも1通にまとめる。
+// 記録との比較と記録の更新は、doPost のロック(LockService)の中で行われる
+// (このアクションはロックの対象)。複数の管理者がほぼ同時に開いても、後の
+// 呼び出しは先の呼び出しが更新した記録と比べるため、同じ変化を二重に通知しない。
 function reportProjectHealth(items) {
   if (!Array.isArray(items)) throw userError('健康状態の一覧が不正です。')
   if (items.length > REPORT_PROJECT_HEALTH_MAX_ITEMS) throw userError('一度に送れるプロジェクトの数を超えています。')
