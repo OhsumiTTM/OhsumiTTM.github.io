@@ -83,6 +83,7 @@ import {
   isSettingsConfigured,
   remoteApi,
   toCreatePayload,
+  type WebhookStatus,
 } from './remote'
 import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from './utils'
 import { useI18n } from './i18n'
@@ -248,6 +249,11 @@ interface OhsumiContextValue extends OhsumiState {
   markMentionSeen: (commentId: string) => void
   dismissNotification: (notificationId: string) => void
   setSlackWebhookUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
+  // Discord / Slack の連携状態(null = 未取得、または取得する権限が無い)
+  webhookStatus: WebhookStatus | null
+  refreshWebhookStatus: () => Promise<void>
+  // 保存済みの Webhook にテストメッセージを送る(結果・日時は GAS 側に保存される)
+  testWebhook: (kind: 'discord' | 'slack') => Promise<{ ok: boolean; error?: string }>
   toggleMemberInactive: (memberId: string) => void
   updateMemberDepartmentPaths: (memberId: string, departmentPaths: string[]) => void
   updateAbsentDates: (memberId: string, dates: string[]) => void
@@ -4301,6 +4307,36 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [reportRemoteError],
   )
 
+  // Discord / Slack の連携状態。GAS は Webhook URL そのものは返さず、設定済み
+  // かどうかと最後のテスト送信の結果・日時だけを返す(全権管理者と、Webhook を
+  // 設定できる人だけが取得できる)
+  const [webhookStatus, setWebhookStatus] = useState<WebhookStatus | null>(null)
+  const refreshWebhookStatus = useCallback(async () => {
+    if (!isRemoteConfigured) return
+    try {
+      setWebhookStatus(await remoteApi.getWebhookStatus())
+    } catch {
+      // 権限が無い場合など — 状態は表示しない
+      setWebhookStatus(null)
+    }
+  }, [])
+
+  const testWebhook = useCallback(
+    async (kind: 'discord' | 'slack'): Promise<{ ok: boolean; error?: string }> => {
+      if (!isRemoteConfigured) return { ok: false, error: 'GASが未接続です' }
+      try {
+        if (kind === 'discord') await remoteApi.testDiscordWebhook()
+        else await remoteApi.testSlackWebhook()
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      } finally {
+        void refreshWebhookStatus()
+      }
+    },
+    [refreshWebhookStatus],
+  )
+
   // item 20: 1on1質問項目を更新
   const setOneOnOneQuestions = useCallback((questions: string[]) => {
     setOneOnOneQuestionsState(questions)
@@ -4773,6 +4809,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     markMentionSeen,
     dismissNotification,
     setSlackWebhookUrl,
+    webhookStatus,
+    refreshWebhookStatus,
+    testWebhook,
     toggleMemberInactive,
     updateMemberDepartmentPaths,
     updateAbsentDates,
