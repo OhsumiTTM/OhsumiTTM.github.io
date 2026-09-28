@@ -611,6 +611,22 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   return json.result as T
 }
 
+export interface WebhookTestResult {
+  ok: boolean
+  at: string // ISO datetime
+  error: string
+}
+
+export interface WebhookConnectionStatus {
+  configured: boolean
+  lastTest: WebhookTestResult | null
+}
+
+export interface WebhookStatus {
+  discord: WebhookConnectionStatus
+  slack: WebhookConnectionStatus
+}
+
 export const remoteApi = {
   createTasks: (tasks: CreateTaskPayload[]) =>
     postToGas<{ tempId: string; id: string }[]>('createTasks', { tasks }),
@@ -747,6 +763,8 @@ export const remoteApi = {
   // public read path — write-only from the client's perspective.
   updateDiscordWebhookUrl: (url: string) => postToGas('updateDiscordWebhookUrl', { url }),
   updateSlackWebhookUrl: (url: string) => postToGas('updateSlackWebhookUrl', { url }),
+  // 連携状態(設定済みかどうかと最後のテスト送信の結果・日時)。URLそのものは返らない
+  getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // 保存済みのWebhook URLへ実際にテストメッセージを送信し、HTTPレスポンス
   // コードで成否を判定する(send*Messageと違いここでは失敗を握りつぶさない —
   // 失敗時はGAS側がエラーを投げ、postToGas経由でここもrejectする)
