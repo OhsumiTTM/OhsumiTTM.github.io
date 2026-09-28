@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
 import { useToast } from '@/components/ohsumi/toast'
@@ -39,9 +39,8 @@ export function OrgSettingsScreen() {
     orgNotificationEmails,
     addOrgNotificationEmail,
     removeOrgNotificationEmail,
-    setDiscordWebhookUrl,
-    setSlackWebhookUrl,
     isFullAdmin,
+    refreshWebhookStatus,
   } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -50,38 +49,11 @@ export function OrgSettingsScreen() {
   const [themeColorDraft, setThemeColorDraft] = useState(themeColor)
   const themeColorValid = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(themeColorDraft)
   const [orgEmailDraft, setOrgEmailDraft] = useState('')
-  const [discordDraft, setDiscordDraft] = useState('')
-  const [slackDraft, setSlackDraft] = useState('')
-  const [discordTesting, setDiscordTesting] = useState(false)
-  const [slackTesting, setSlackTesting] = useState(false)
+  // Discord / Slack の連携状態を取得する(URL そのものは GAS から返らない)
+  useEffect(() => {
+    void refreshWebhookStatus()
+  }, [refreshWebhookStatus])
 
-  // 保存するだけでなく実際にテストメッセージを送って接続確認する
-  // (URLの入力ミス等があっても「保存しました」しか出ないと気づけないため)
-  const handleSaveDiscord = async () => {
-    const url = discordDraft.trim()
-    setDiscordTesting(true)
-    const result = await setDiscordWebhookUrl(url)
-    setDiscordTesting(false)
-    if (result.ok) {
-      setDiscordDraft('')
-      toast(url ? t('orgSettings.discord.testSuccessToast') : t('orgSettings.discord.savedToast'))
-    } else {
-      toast(t('orgSettings.discord.testFailToast', { error: result.error ?? '' }))
-    }
-  }
-
-  const handleSaveSlack = async () => {
-    const url = slackDraft.trim()
-    setSlackTesting(true)
-    const result = await setSlackWebhookUrl(url)
-    setSlackTesting(false)
-    if (result.ok) {
-      setSlackDraft('')
-      toast(url ? t('orgSettings.slack.testSuccessToast') : t('orgSettings.slack.savedToast'))
-    } else {
-      toast(t('orgSettings.slack.testFailToast', { error: result.error ?? '' }))
-    }
-  }
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const logoFileRef = useRef<HTMLInputElement>(null)
 
@@ -260,71 +232,131 @@ export function OrgSettingsScreen() {
           </Section>
         )}
 
-        <Section>
-          <div className="flex items-center gap-1.5">
-            <MessageSquare className="size-4 text-muted-foreground" />
-            <SectionLabel>{t('orgSettings.discord.label')}</SectionLabel>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('orgSettings.discord.desc')}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('orgSettings.discord.urlNote')}
-          </p>
-          {!remoteOk && (
-            <p className="mt-1 text-xs text-warning">{t('orgSettings.remoteWarning')}</p>
-          )}
-          <div className="mt-3 flex items-center gap-2">
-            <input
-              value={discordDraft}
-              onChange={(e) => setDiscordDraft(e.target.value)}
-              placeholder="https://discord.com/api/webhooks/..."
-              className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-            />
-            <Button
-              className="h-9 shrink-0"
-              disabled={!discordDraft.trim() || !remoteOk || discordTesting}
-              onClick={handleSaveDiscord}
-            >
-              {discordTesting && <Loader2 className="size-3.5 animate-spin" />}
-              {discordTesting ? t('orgSettings.discord.testingLabel') : t('orgSettings.nameLogo.save')}
-            </Button>
-          </div>
-          {/* setDiscordWebhookUrlはupdateSetting相当・isActingFullAdmin基準 */}
-          <AdminAccessNote level="fullAdmin" className="mt-1.5" />
-        </Section>
-
-        <Section>
-          <div className="flex items-center gap-1.5">
-            <MessageSquare className="size-4 text-muted-foreground" />
-            <SectionLabel>{t('orgSettings.slack.label')}</SectionLabel>
-          </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('orgSettings.slack.desc')}
-          </p>
-          {!remoteOk && (
-            <p className="mt-1 text-xs text-warning">{t('orgSettings.remoteWarning')}</p>
-          )}
-          <div className="mt-3 flex items-center gap-2">
-            <input
-              value={slackDraft}
-              onChange={(e) => setSlackDraft(e.target.value)}
-              placeholder="https://hooks.slack.com/services/..."
-              className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-            />
-            <Button
-              className="h-9 shrink-0"
-              disabled={!slackDraft.trim() || !remoteOk || slackTesting}
-              onClick={handleSaveSlack}
-            >
-              {slackTesting && <Loader2 className="size-3.5 animate-spin" />}
-              {slackTesting ? t('orgSettings.slack.testingLabel') : t('orgSettings.nameLogo.save')}
-            </Button>
-          </div>
-          {/* setSlackWebhookUrlはupdateSetting相当・isActingFullAdmin基準 */}
-          <AdminAccessNote level="fullAdmin" className="mt-1.5" />
-        </Section>
+        <WebhookSection kind="discord" remoteOk={remoteOk} placeholder="https://discord.com/api/webhooks/..." />
+        <WebhookSection kind="slack" remoteOk={remoteOk} placeholder="https://hooks.slack.com/services/..." />
       </div>
     </div>
+  )
+}
+
+// Discord / Slack の Webhook 連携。未連携ならURLの入力欄を、連携済みなら
+// 「テスト送信」と「連携を解除」を表示する。URLを変更したい場合は、解除して
+// から入れ直す(URLは秘密情報のため、保存後は画面に表示しない)。
+function WebhookSection({
+  kind,
+  remoteOk,
+  placeholder,
+}: {
+  kind: 'discord' | 'slack'
+  remoteOk: boolean
+  placeholder: string
+}) {
+  const { setDiscordWebhookUrl, setSlackWebhookUrl, webhookStatus, refreshWebhookStatus, testWebhook } = useOhsumi()
+  const toast = useToast()
+  const { t, locale } = useI18n()
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState<'save' | 'test' | 'unlink' | null>(null)
+  const setUrl = kind === 'discord' ? setDiscordWebhookUrl : setSlackWebhookUrl
+  const status = webhookStatus?.[kind] ?? null
+  const label = kind === 'discord' ? t('orgSettings.discord.label') : t('orgSettings.slack.label')
+
+  // 保存するだけでなく実際にテストメッセージを送って接続確認する
+  // (URLの入力ミス等があっても「保存しました」しか出ないと気づけないため)
+  const handleSave = async () => {
+    const url = draft.trim()
+    setBusy('save')
+    const result = await setUrl(url)
+    await refreshWebhookStatus()
+    setBusy(null)
+    if (result.ok) {
+      setDraft('')
+      toast(t(kind === 'discord' ? 'orgSettings.discord.testSuccessToast' : 'orgSettings.slack.testSuccessToast'))
+    } else {
+      toast(t(kind === 'discord' ? 'orgSettings.discord.testFailToast' : 'orgSettings.slack.testFailToast', { error: result.error ?? '' }))
+    }
+  }
+
+  const handleTest = async () => {
+    setBusy('test')
+    const result = await testWebhook(kind)
+    setBusy(null)
+    toast(result.ok ? t('orgSettings.webhook.testOkToast') : t('orgSettings.webhook.testFailToast', { error: result.error ?? '' }))
+  }
+
+  const handleUnlink = async () => {
+    if (!window.confirm(t('orgSettings.webhook.unlinkConfirm', { name: label }))) return
+    setBusy('unlink')
+    const result = await setUrl('')
+    await refreshWebhookStatus()
+    setBusy(null)
+    toast(result.ok ? t('orgSettings.webhook.unlinkedToast') : t('orgSettings.webhook.unlinkFailToast', { error: result.error ?? '' }))
+  }
+
+  const formatAt = (iso: string) => {
+    const d = new Date(iso)
+    return isNaN(d.getTime()) ? iso : d.toLocaleString(locale)
+  }
+
+  return (
+    <Section>
+      <div className="flex items-center gap-1.5">
+        <MessageSquare className="size-4 text-muted-foreground" />
+        <SectionLabel>{label}</SectionLabel>
+        {status && (
+          <span
+            className={
+              status.configured
+                ? 'ml-1 rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-700 dark:text-green-400'
+                : 'ml-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground'
+            }
+          >
+            {status.configured ? t('orgSettings.webhook.connected') : t('orgSettings.webhook.notConnected')}
+          </span>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {t(kind === 'discord' ? 'orgSettings.discord.desc' : 'orgSettings.slack.desc')}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">{t('orgSettings.discord.urlNote')}</p>
+      {!remoteOk && <p className="mt-1 text-xs text-warning">{t('orgSettings.remoteWarning')}</p>}
+
+      {status?.configured ? (
+        <>
+          <p className="mt-3 text-xs text-muted-foreground">
+            {status.lastTest
+              ? status.lastTest.ok
+                ? t('orgSettings.webhook.lastTestOk', { at: formatAt(status.lastTest.at) })
+                : t('orgSettings.webhook.lastTestFail', { at: formatAt(status.lastTest.at), error: status.lastTest.error })
+              : t('orgSettings.webhook.noTest')}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button className="h-9" disabled={!remoteOk || busy !== null} onClick={handleTest}>
+              {busy === 'test' && <Loader2 className="size-3.5 animate-spin" />}
+              {busy === 'test' ? t('orgSettings.discord.testingLabel') : t('orgSettings.webhook.testButton')}
+            </Button>
+            <Button variant="outline" className="h-9" disabled={!remoteOk || busy !== null} onClick={handleUnlink}>
+              {busy === 'unlink' && <Loader2 className="size-3.5 animate-spin" />}
+              {t('orgSettings.webhook.unlinkButton')}
+            </Button>
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">{t('orgSettings.webhook.changeHint')}</p>
+        </>
+      ) : (
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={placeholder}
+            className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+          />
+          <Button className="h-9 shrink-0" disabled={!draft.trim() || !remoteOk || busy !== null} onClick={handleSave}>
+            {busy === 'save' && <Loader2 className="size-3.5 animate-spin" />}
+            {busy === 'save' ? t('orgSettings.discord.testingLabel') : t('orgSettings.nameLogo.save')}
+          </Button>
+        </div>
+      )}
+      {/* Webhook の設定・状態の取得は updateSetting 相当・isActingFullAdmin 基準 */}
+      <AdminAccessNote level="fullAdmin" className="mt-1.5" />
+    </Section>
   )
 }
