@@ -4877,11 +4877,47 @@ function resetMemberEmailsCache() {
 }
 
 // シートを {headers, rows} で読む。値は公開CSVと同じく「表示されている文字列」
-// (getDisplayValues)にそろえる。空行は除く。シートが無ければ空で返す。
+// (getDisplayValues と同じ見え方)にそろえる。空行は除く。シートが無ければ空で返す。
+//
+// 読み込みは Sheets API の values.batchGet を UrlFetchApp で1回だけ呼んで行う
+// (スクリプトのトークンを使う。Apps Script の「サービス」に Google Sheets API が
+// 追加されている必要がある — appsscript.json を参照)。失敗した場合(403・429・
+// 5xx・通信エラーなど)は、SpreadsheetApp の getSheets() + getDisplayValues() で
+// 読み直す。どちらで読んだかと失敗の理由は実行ログに残す。
+function readSheetTables(names) {
+  var start = Date.now()
+  var viaApi
+  try {
+    viaApi = readSheetTablesViaApi(names)
+  } catch (e) {
+    viaApi = { error: '通信エラー: ' + ((e && e.message) || e) }
+  }
+  if (viaApi.tables) {
+    console.log('readSheetTables: Sheets API(batchGet)で読み込み ' + (Date.now() - start) + 'ms')
+    return viaApi.tables
+  }
+  var t = Date.now()
+  var tables = readSheetTablesViaSpreadsheetApp(names)
+  console.warn(
+    'readSheetTables: Sheets API で読み込めなかったため、SpreadsheetApp(getDisplayValues)で読み込み ' +
+      (Date.now() - t) + 'ms。理由: ' + viaApi.error,
+  )
+  return tables
+}
+
 function readSheetTable(name) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
-  if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return { headers: [], rows: [] }
-  var values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getDisplayValues()
+  return readSheetTables([name])[name]
+}
+
+var EMPTY_SHEET_TABLE_JSON = '{"headers":[],"rows":[]}'
+
+// 2次元配列(1行目が見出し)を {headers, rows} にする。空行は除く。
+function sheetTableFromValues(values) {
+  if (!values || values.length === 0) return JSON.parse(EMPTY_SHEET_TABLE_JSON)
+  // getDataRange は空のシートでも A1 の1セルを返す
+  if (values.length === 1 && values[0].every(function (v) { return v === '' })) {
+    return JSON.parse(EMPTY_SHEET_TABLE_JSON)
+  }
   var headers = values[0].map(function (h) { return String(h).trim() })
   var rows = []
   for (var i = 1; i < values.length; i++) {
@@ -4893,6 +4929,83 @@ function readSheetTable(name) {
     if (hasValue) rows.push(row)
   }
   return { headers: headers, rows: rows }
+}
+
+function sheetsApiRangeName(name) {
+  return "'" + String(name).replace(/'/g, "''") + "'"
+}
+
+function sheetsApiBatchGetUrl(spreadsheetId, names) {
+  return 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '/values:batchGet?' +
+    names.map(function (name) { return 'ranges=' + encodeURIComponent(sheetsApiRangeName(name)) }).join('&') +
+    '&valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS'
+}
+
+// API は行末の空セルと、表の末尾の空行を省いて返す。getDisplayValues と同じ
+// 長方形(最も長い行の幅)にそろえ、値はすべて文字列にする。
+function padSheetsApiValues(values) {
+  var width = 0
+  ;(values || []).forEach(function (r) { if (r.length > width) width = r.length })
+  return (values || []).map(function (r) {
+    var row = r.map(function (v) { return v === null || v === undefined ? '' : String(v) })
+    while (row.length < width) row.push('')
+    return row
+  })
+}
+
+// 応答の range("'Tasks'!A1:AT501" など)のシート名部分
+function sheetNameOfApiRange(range) {
+  var sheetPart = String(range || '').replace(/![^!]*$/, '')
+  if (/^'.*'$/.test(sheetPart)) sheetPart = sheetPart.slice(1, -1).replace(/''/g, "'")
+  return sheetPart
+}
+
+// 成功したら { tables }、失敗したら { error }(例外は投げない。通信の例外だけは
+// 呼び出し側で受ける)
+function readSheetTablesViaApi(names) {
+  var id = SpreadsheetApp.getActiveSpreadsheet().getId()
+  var response = UrlFetchApp.fetch(sheetsApiBatchGetUrl(id, names), {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  })
+  var code = response.getResponseCode()
+  var text = response.getContentText()
+  if (code !== 200) return { error: describeSheetsApiError(code, text) }
+  var body
+  try {
+    body = JSON.parse(text)
+  } catch (e) {
+    return { error: '応答を JSON として読めませんでした' }
+  }
+  var valueRanges = (body && body.valueRanges) || []
+  if (valueRanges.length !== names.length) {
+    return { error: '応答の範囲の数が違います(' + valueRanges.length + ' / ' + names.length + ')' }
+  }
+  var tables = {}
+  for (var i = 0; i < names.length; i++) {
+    if (sheetNameOfApiRange(valueRanges[i].range) !== names[i]) {
+      return { error: '応答の範囲が違います(' + valueRanges[i].range + ' / ' + names[i] + ')' }
+    }
+    tables[names[i]] = sheetTableFromValues(padSheetsApiValues(valueRanges[i].values))
+  }
+  return { tables: tables }
+}
+
+// 予備の読み方(計測の (b)): getSheets() を1回呼び、getDataRange().getDisplayValues()
+function readSheetTablesViaSpreadsheetApp(names) {
+  var byName = {}
+  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
+    byName[sheet.getName()] = sheet
+  })
+  var tables = {}
+  names.forEach(function (name) {
+    var sheet = byName[name]
+    tables[name] = sheet
+      ? sheetTableFromValues(sheet.getDataRange().getDisplayValues())
+      : JSON.parse(EMPTY_SHEET_TABLE_JSON)
+  })
+  return tables
 }
 
 function snapshotCacheKey(version, suffix) {
@@ -4948,8 +5061,7 @@ function loadSnapshot() {
   var version = getDataVersion()
   var cached = readSnapshotCache(version)
   if (cached) return { version: version, data: cached, cacheHit: true }
-  var data = {}
-  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  var data = readSheetTables(SNAPSHOT_SHEETS)
   writeSnapshotCache(version, data)
   return { version: version, data: data, cacheHit: false }
 }
@@ -5305,8 +5417,7 @@ function measureReadPerformance() {
   var version = getDataVersion()
 
   var t = Date.now()
-  var data = {}
-  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = readSheetTable(name) })
+  var data = readSheetTables(SNAPSHOT_SHEETS)
   var readSheetsMs = ms(t)
 
   var json = JSON.stringify(data)
@@ -5354,12 +5465,14 @@ function measureReadPerformance() {
 // シートの読み込み方を (a)〜(d) の4通りで計測する。Apps Script エディタでは
 // 引数を渡せないため、方式ごとに関数を分けている。1回の実行では1つの方式だけを
 // 測る(同じ実行の中で続けて読むと、2回目以降が速く見えるため)。
-//   measureReadA: (a) 現在の方式(readSheetTable と同じ手順。シートごとに
-//                 スプレッドシートを開き、getLastRow / getLastColumn を2回ずつ呼ぶ)
+//   measureReadA: (a) 以前の方式(シートごとにスプレッドシートを開き、
+//                 getLastRow / getLastColumn を2回ずつ呼ぶ)
 //   measureReadB: (b) getSheets() を1回だけ呼び、getDataRange().getDisplayValues()
+//                 (Sheets API で読めなかった場合の予備の読み方)
 //   measureReadC: (c) (b) と同じ取得で getValues() を使い、表示用の文字列に自前で変換
 //   measureReadD: (d) Sheets API の values.batchGet を UrlFetchApp で1回だけ呼ぶ
-//                 (スクリプトのトークンを使う。表示されている文字列 FORMATTED_VALUE)
+//                 (スクリプトのトークンを使う。表示されている文字列 FORMATTED_VALUE)。
+//                 現在の読み込み(readSheetTables)はこの方式
 // 各方式とも、同じ方式を3回以上(できれば時間を空けて)実行し、実行ログの
 // 「直近3回の中央値」を比べる。showReadMeasurements() で4方式の記録を一覧できる。
 //
@@ -5369,7 +5482,7 @@ function measureReadPerformance() {
 // READ_MEASURE_HISTORY_a〜d に残る(clearReadMeasurements() で消せる)。
 
 var READ_MEASURE_LABELS = {
-  a: '(a) 現在の方式(シートごとに開く + getDisplayValues)',
+  a: '(a) 以前の方式(シートごとに開く + getDisplayValues)',
   b: '(b) getSheets() 1回 + getDataRange().getDisplayValues()',
   c: '(c) getSheets() 1回 + getDataRange().getValues() + 自前の文字列変換',
   d: '(d) Sheets API values.batchGet(UrlFetchApp + スクリプトのトークン)',
@@ -5395,11 +5508,11 @@ function runReadMeasurement(variant) {
   } catch (e) {
     lines.push('  結果の整形に失敗しました: ' + e)
   }
-  // 結果が現在の方式(readSheetTable)と同じかを確かめる(計測の後に行うため、
-  // 所要時間には含まれない)
+  // 結果が getDisplayValues(予備の読み方 (b))と同じ見え方かを確かめる
+  // (計測の後に行うため、所要時間には含まれない)
   if (!result.error && result.data) {
     try {
-      lines.push('  結果の一致(現在の方式と比べて): ' + compareWithCurrentRead(result.data))
+      lines.push('  結果の一致(getDisplayValues と比べて): ' + compareWithDisplayValues(result.data))
     } catch (e) {
       lines.push('  結果の一致: 確認できませんでした(' + e + ')')
     }
@@ -5415,22 +5528,6 @@ function runReadMeasurement(variant) {
 }
 
 function readMeasureNow() { return Date.now() }
-
-// readSheetTable と同じ空行の除き方
-function readMeasureToTable(values) {
-  if (!values || values.length === 0) return { headers: [], rows: [] }
-  var headers = values[0].map(function (h) { return String(h).trim() })
-  var rows = []
-  for (var i = 1; i < values.length; i++) {
-    var row = values[i]
-    var hasValue = false
-    for (var c = 0; c < row.length; c++) {
-      if (row[c] !== '') { hasValue = true; break }
-    }
-    if (hasValue) rows.push(row)
-  }
-  return { headers: headers, rows: rows }
-}
 
 function readMeasureSize(values) {
   var cells = 0
@@ -5464,7 +5561,7 @@ function measureEachSheet(result, fn) {
       }
       var size = readMeasureSize(values)
       entry.size = size
-      result.data[name] = phase('空行の除去', function () { return readMeasureToTable(values) })
+      result.data[name] = phase('空行の除去', function () { return sheetTableFromValues(values) })
     } catch (e) {
       entry.error = String(e)
       failed = true
@@ -5516,11 +5613,7 @@ var READ_MEASURE_RUNNERS = {
       return SpreadsheetApp.getActiveSpreadsheet().getId()
     })
     var token = measureCommon(result, 'トークンの取得', function () { return ScriptApp.getOAuthToken() })
-    var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(id) + '/values:batchGet?' +
-      SNAPSHOT_SHEETS.map(function (name) {
-        return 'ranges=' + encodeURIComponent("'" + name.replace(/'/g, "''") + "'")
-      }).join('&') +
-      '&valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS'
+    var url = sheetsApiBatchGetUrl(id, SNAPSHOT_SHEETS)
     var response = measureCommon(result, 'batchGet(HTTP)', function () {
       return UrlFetchApp.fetch(url, {
         method: 'get',
@@ -5544,15 +5637,7 @@ var READ_MEASURE_RUNNERS = {
     measureEachSheet(result, function (name, phase) {
       var values = (valueRanges[index++] || {}).values || []
       // API は行末・表の末尾の空セルを省くため、getDisplayValues と同じ長方形にそろえる
-      return phase('行の長さをそろえる', function () {
-        var width = 0
-        values.forEach(function (r) { if (r.length > width) width = r.length })
-        return values.map(function (r) {
-          var row = r.map(function (v) { return String(v) })
-          while (row.length < width) row.push('')
-          return row
-        })
-      })
+      return phase('行の長さをそろえる', function () { return padSheetsApiValues(values) })
     })
     result.totalMs = readMeasureNow() - start
     return result
@@ -5621,11 +5706,12 @@ function describeSheetsApiError(code, text) {
   return 'Sheets API がエラーを返しました: HTTP ' + code + ' ' + detail + hint
 }
 
-function compareWithCurrentRead(data) {
+function compareWithDisplayValues(data) {
   var mismatched = 0
   var examples = []
+  var reference = readSheetTablesViaSpreadsheetApp(SNAPSHOT_SHEETS)
   SNAPSHOT_SHEETS.forEach(function (name) {
-    var expected = readSheetTable(name)
+    var expected = reference[name]
     var actual = data[name] || { headers: [], rows: [] }
     var rows = [expected.headers].concat(expected.rows)
     var actualRows = [actual.headers].concat(actual.rows)
