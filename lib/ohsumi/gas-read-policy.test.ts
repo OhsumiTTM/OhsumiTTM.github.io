@@ -184,10 +184,9 @@ describe('getInitialData の絞り込み: 設定', () => {
 
 // ---- 網羅性: 新しい列・キーを追加したら READ_POLICY への登録が必要 ----------
 
-function headerArray(name: string): string[] {
-  const match = CODE_GS.match(new RegExp(`var ${name} = (\\[[\\s\\S]*?\\n  \\])`))
-  if (!match) throw new Error(`${name} not found in Code.gs`)
-  return new Function(`return ${match[1]}`)() as string[]
+// 列の一覧は Code.gs の SHEET_HEADERS(読み込んだスクリプトの値)を使う
+function headerArray(sheet: string): string[] {
+  return (gas as unknown as { SHEET_HEADERS: Record<string, string[]> }).SHEET_HEADERS[sheet]
 }
 
 function columnsReadByMapper(source: string, fnName: string): string[] {
@@ -202,12 +201,12 @@ describe('READ_POLICY の網羅性', () => {
   const remote = readFileSync(join(ROOT, 'lib', 'ohsumi', 'remote.ts'), 'utf8')
 
   it.each([
-    ['Members', 'MEMBERS_HEADERS', 'mapMemberRow'],
-    ['Projects', 'PROJECTS_HEADERS', 'mapProjectRow'],
-    ['Tasks', 'TASKS_HEADERS', 'mapTaskRow'],
-  ])('%s: シートの列とフロントが読む列はすべて規則を持つ', (sheet, headersVar, mapper) => {
+    ['Members', 'mapMemberRow'],
+    ['Projects', 'mapProjectRow'],
+    ['Tasks', 'mapTaskRow'],
+  ])('%s: シートの列とフロントが読む列はすべて規則を持つ', (sheet, mapper) => {
     const columns = policy[sheet].columns!
-    const missing = [...headerArray(headersVar), ...columnsReadByMapper(remote, mapper)].filter(
+    const missing = [...headerArray(sheet), ...columnsReadByMapper(remote, mapper)].filter(
       (c) => !(c in columns),
     )
     expect(missing).toEqual([])

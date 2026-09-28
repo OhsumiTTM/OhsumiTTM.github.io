@@ -165,12 +165,16 @@ Google スプレッドシート（データの保存場所）
 | awarded_points_json | 完了時に付与するスキルポイント（JSON文字列、例: `{"デザイン":30}`、任意） |
 | required_skill_levels_json | このタスクをこなすのに必要なスキルレベルの目安（JSON、例: `{"デザイン":3}`、任意） |
 | review_approvals_json | 複数確認者の承認記録（JSON配列、`[{"memberId":"...","at":"..."}]`）。`required_approvals`で指定した人数分の承認が揃うと自動的に「完了」になります |
+| hold_reason_note | 保留にした理由のメモ（任意） |
+| hold_reason_since | 保留にした日（`YYYY-MM-DD`） |
 
 > `accept_at` / `deliverable_url` / `feedback_comment` は現状のUIからは未使用ですが、
 > 列として残しておいて構いません。
 >
-> 経費申請・カスタムフォームの多段階承認で使われる `approval_steps_json`・`approval_records_json`・`current_step_index` は、
-> `setupOhsumi()` では自動追加されないため、使用する場合は手動で列を追加してください。
+> 各シートの列は `Code.gs` の `SHEET_HEADERS` にまとめて定義しています。`setupOhsumi()` は、すべてのシート
+> (Members・Projects・Tasks・Settings・MemberEmails・Expenses・FormSubmissions・DailyReports・Candidates)を作成し、
+> 不足している列を末尾に追加します(既存の列・データは変えません)。**`Code.gs` を新しい版に貼り替えたら、
+> 毎回 `setupOhsumi()` を実行してください**(新しい版で増えた列が追加されます)。
 
 ---
 

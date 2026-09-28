@@ -26,6 +26,88 @@ var MEMBER_EMAILS_HEADERS = ['id', 'email']
 // option pools and project templates; see gas/README.md. Missing sheet is
 // fine, updateSetting() creates it on first write.
 var SHEET_SETTINGS = 'Settings'
+
+// ---- シートの列の一覧 ----------------------------------------------------------
+// 各シートの列は、ここだけで定義する。setupOhsumi() と各シートの作成処理
+// (ensure*Sheet)は、この一覧で不足している列を末尾に追加する。GAS が書き込む列・
+// 画面が読む列・読み取りの権限表(READ_POLICY)の列がこの一覧とずれていないことは、
+// lib/ohsumi/gas-sheet-headers.test.ts で確かめる(列を増やしたら、ここにも追加する)。
+var MEMBERS_HEADERS = [
+  // email列はここにはもう無い(MemberEmailsという非公開シートに分離した —
+  // このシートは公開CSVとして配信されるため)。
+  'id', 'name', 'role', 'notify_new_task', 'display_name',
+  'avatar_url', 'avatar_color', 'avatar_initials',
+  'will_tags', 'judgment_tags',
+  'reports_to_id', 'mentor_id', 'joined_at', 'unavailable_dates', 'project_ids',
+  'years_of_experience', 'has_management_experience', 'desired_areas', 'desired_skills',
+  'career_history_json', 'qualifications_json', 'evaluation_history_json',
+  'transfer_history_json', 'skill_levels_json', 'competencies_json',
+  'career_aspiration', 'desired_future_role', 'career_plan',
+  'training_history_json', 'development_plan_json', 'one_on_ones_json',
+  'notify_settings',
+  // 組織階層・権限・スキルポイント（新規列）
+  'department_path',          // 例: "事業本部A>事業部1>グループX"
+  'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
+  'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
+  'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）
+  'absent_dates',            // 不在日リスト（カンマ区切り YYYY-MM-DD）
+  'last_login',              // 最終ログイン日時（ISO datetime）
+  'last_inactive_notified',  // 未アクセス通知を最後に送った日（YYYY-MM-DD）
+  'timezone',                // 本人のタイムゾーン（IANA名、例: "Asia/Tokyo"）
+  'locale',                  // 本人の表示言語（例: "ja", "en"）
+  'university',              // 大学名
+  'faculty',                 // 学部
+  'department_name',         // 学科（department_pathと紛らわしいので department_name とする）
+  'grade_year',              // 学年
+  'custom_fields_json',      // 団体ごとのカスタム列（人材DB）の値 {"key":"value"}
+  'survey_responses_json',   // item 22/30: このメンバー自身の全アンケート回答履歴 [{"id","submittedAt","answers"}]
+  'available_hours_json',    // CAL-009: 日々の稼働可能時間帯（参考情報） {"start":"10:00","end":"18:00"}
+]
+var PROJECTS_HEADERS = [
+  'id', 'name', 'description', 'type', 'owner_id', 'member_ids', 'archived', 'parent_id',
+  'goal', // 目標（概要=descriptionとは別枠）
+  'health_override',       // item 26: 幹部による健康状態の手動上書き
+  'last_notified_health',  // item 26: 直近に通知した実効健康状態（重複通知防止）
+  'start_date', // PRJ-003: プロジェクトの開始日（任意, YYYY-MM-DD）
+  'end_date',   // PRJ-003: プロジェクトの終了予定日（任意, YYYY-MM-DD）
+]
+var TASKS_HEADERS = [
+  'id', 'project_id', 'title', 'description', 'status', 'assign_type',
+  'assignee_id', 'creator_id', 'created_at', 'start_date', 'due_date', 'due_time',
+  'visibility', 'department', 'category', 'skills', 'difficulty', 'priority',
+  'last_activity', 'original_input_id', 'approval_status', 'estimated_hours',
+  'importance', 'reviewer_id', 'reviewer_ids', 'depends_on_ids',
+  'progress_note', 'progress_percent', 'progress_history_json',
+  'deliverables_json', 'history_json', 'comments_json',
+  'retrospective_json', 'schedule_json', 'form_json',
+  'blocker_note', 'blocker_since', 'completed_date', 'actual_hours',
+  'awarded_points_json', // 完了時付与スキルポイント {"デザイン":30}
+  'required_approvals',  // 承認に必要な確認者数 (数値 or "all")
+  'required_skill_levels_json', // 必要スキルレベル(item 10/11) {"デザイン":3}
+  'review_approvals_json', // 複数確認者の承認記録 [{"memberId","at","comment"}]
+  'open_bid_applicant_ids', // TSK-027: 公募タスクへの応募者IDリスト(カンマ区切り)
+  'related_review_task_id', // APR-007: このタスクが確認タスクである場合、確認対象の元タスクのid
+  'hold_reason_note',  // 保留の理由(ステータスを保留にしたときのメモ)
+  'hold_reason_since', // 保留にした日(YYYY-MM-DD)
+]
+var SETTINGS_HEADERS = ['key', 'value']
+var EXPENSES_HEADERS = ['id', 'applicant_id', 'amount', 'category_id', 'receipt_url', 'justification', 'purpose', 'custom_field_answers_json', 'approval_steps_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
+var FORM_SUBMISSIONS_HEADERS = ['id', 'form_id', 'submitter_id', 'answers_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
+var DAILY_REPORTS_HEADERS = ['id', 'member_id', 'type', 'report_date', 'done_text', 'todo_text', 'issues_text', 'created_at']
+var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interview_notes', 'status', 'created_at', 'updated_at']
+
+var SHEET_HEADERS = {
+  Members: MEMBERS_HEADERS,
+  Projects: PROJECTS_HEADERS,
+  Tasks: TASKS_HEADERS,
+  Settings: SETTINGS_HEADERS,
+  MemberEmails: MEMBER_EMAILS_HEADERS,
+  Expenses: EXPENSES_HEADERS,
+  FormSubmissions: FORM_SUBMISSIONS_HEADERS,
+  DailyReports: DAILY_REPORTS_HEADERS,
+  Candidates: CANDIDATES_HEADERS,
+}
+
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
 // スキルごとのレベルアップ閾値 JSON: { "デフォルト": 100, "デザイン": 150, ... }
 var SETTINGS_KEY_SKILL_LEVEL_THRESHOLDS = 'skill_level_thresholds'
@@ -76,71 +158,13 @@ function setupOhsumi() {
   catch (e) { console.error('❌ PropertiesService: ' + e) }
 
   // --- ヘッダー行の確認・追加 ---
-  var MEMBERS_HEADERS = [
-    // email列はここにはもう無い(MemberEmailsという非公開シートに分離した —
-    // このシートは公開CSVとして配信されるため)。
-    'id', 'name', 'role', 'notify_new_task', 'display_name',
-    'avatar_url', 'avatar_color', 'avatar_initials',
-    'will_tags', 'judgment_tags',
-    'reports_to_id', 'mentor_id', 'joined_at', 'unavailable_dates', 'project_ids',
-    'years_of_experience', 'has_management_experience', 'desired_areas', 'desired_skills',
-    'career_history_json', 'qualifications_json', 'evaluation_history_json',
-    'transfer_history_json', 'skill_levels_json', 'competencies_json',
-    'career_aspiration', 'desired_future_role', 'career_plan',
-    'training_history_json', 'development_plan_json', 'one_on_ones_json',
-    'notify_settings',
-    // 組織階層・権限・スキルポイント（新規列）
-    'department_path',          // 例: "事業本部A>事業部1>グループX"
-    'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
-    'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
-    'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）
-    'absent_dates',            // 不在日リスト（カンマ区切り YYYY-MM-DD）
-    'last_login',              // 最終ログイン日時（ISO datetime）
-    'last_inactive_notified',  // 未アクセス通知を最後に送った日（YYYY-MM-DD）
-    'timezone',                // 本人のタイムゾーン（IANA名、例: "Asia/Tokyo"）
-    'locale',                  // 本人の表示言語（例: "ja", "en"）
-    'university',              // 大学名
-    'faculty',                 // 学部
-    'department_name',         // 学科（department_pathと紛らわしいので department_name とする）
-    'grade_year',              // 学年
-    'custom_fields_json',      // 団体ごとのカスタム列（人材DB）の値 {"key":"value"}
-    'survey_responses_json',   // item 22/30: このメンバー自身の全アンケート回答履歴 [{"id","submittedAt","answers"}]
-    'available_hours_json',    // CAL-009: 日々の稼働可能時間帯（参考情報） {"start":"10:00","end":"18:00"}
-  ]
-  var PROJECTS_HEADERS = [
-    'id', 'name', 'description', 'type', 'owner_id', 'member_ids', 'archived', 'parent_id',
-    'goal', // 目標（概要=descriptionとは別枠）
-    'health_override',       // item 26: 幹部による健康状態の手動上書き
-    'last_notified_health',  // item 26: 直近に通知した実効健康状態（重複通知防止）
-    'start_date', // PRJ-003: プロジェクトの開始日（任意, YYYY-MM-DD）
-    'end_date',   // PRJ-003: プロジェクトの終了予定日（任意, YYYY-MM-DD）
-  ]
-  var TASKS_HEADERS = [
-    'id', 'project_id', 'title', 'description', 'status', 'assign_type',
-    'assignee_id', 'creator_id', 'created_at', 'start_date', 'due_date', 'due_time',
-    'visibility', 'department', 'category', 'skills', 'difficulty', 'priority',
-    'last_activity', 'original_input_id', 'approval_status', 'estimated_hours',
-    'importance', 'reviewer_id', 'reviewer_ids', 'depends_on_ids',
-    'progress_note', 'progress_percent', 'progress_history_json',
-    'deliverables_json', 'history_json', 'comments_json',
-    'retrospective_json', 'schedule_json', 'form_json',
-    'blocker_note', 'blocker_since', 'completed_date', 'actual_hours',
-    'awarded_points_json', // 完了時付与スキルポイント {"デザイン":30}
-    'required_approvals',  // 承認に必要な確認者数 (数値 or "all")
-    'required_skill_levels_json', // 必要スキルレベル(item 10/11) {"デザイン":3}
-    'review_approvals_json', // 複数確認者の承認記録 [{"memberId","at","comment"}]
-    'open_bid_applicant_ids', // TSK-027: 公募タスクへの応募者IDリスト(カンマ区切り)
-    'related_review_task_id', // APR-007: このタスクが確認タスクである場合、確認対象の元タスクのid
-  ]
-  var SETTINGS_HEADERS = ['key', 'value']
 
-  ensureSheetHeaders(ss, SHEET_MEMBERS,       MEMBERS_HEADERS)
-  ensureSheetHeaders(ss, SHEET_PROJECTS,      PROJECTS_HEADERS)
-  ensureSheetHeaders(ss, SHEET_TASKS,         TASKS_HEADERS)
-  ensureSheetHeaders(ss, SHEET_SETTINGS,      SETTINGS_HEADERS)
+  // すべてのシート(SHEET_HEADERS)を作成し、不足している列を追加する。
   // MemberEmailsは新規作成した場合デフォルトで非公開(「ウェブに公開」未設定)
   // なので、ここで作成するだけでMembersのemail列を分離した効果が出る。
-  ensureSheetHeaders(ss, SHEET_MEMBER_EMAILS, MEMBER_EMAILS_HEADERS)
+  Object.keys(SHEET_HEADERS).forEach(function (name) {
+    ensureSheetHeaders(ss, name, SHEET_HEADERS[name])
+  })
   bumpMemberEmailsVersion()
 
   // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
@@ -160,7 +184,7 @@ function setupOhsumi() {
     : []
   DEFAULT_SETTINGS.forEach(function(pair) {
     if (settingsData.indexOf(pair[0]) === -1) {
-      settingsSheet.appendRow(pair)
+      appendRowByHeaders(settingsSheet, SHEET_SETTINGS, { key: pair[0], value: pair[1] })
       console.log('➕ Settings 初期キー追加: ' + pair[0])
     }
   })
@@ -293,6 +317,20 @@ function ensureSheetHeaders(ss, sheetName, requiredHeaders) {
   var startCol = lastCol + 1
   sheet.getRange(1, startCol, 1, missing.length).setValues([missing])
   console.log('➕ ' + sheetName + ': ' + missing.length + ' 列追加 — ' + missing.join(', '))
+}
+
+// 行を末尾に追加する。値は {列名: 値} で渡し、シートの実際の列の順番に合わせて並べる
+// (列の順番を前提にした配列で追加すると、列が足された古いシートでずれるため)。
+// 一覧(SHEET_HEADERS)に無い列名は、書き込み先が無いのでエラーにする。
+function appendRowByHeaders(sheet, sheetName, obj) {
+  var headers = headerRow(sheet)
+  var unknown = Object.keys(obj).filter(function (k) { return headers.indexOf(k) === -1 })
+  if (unknown.length) {
+    throw userError(sheetName + 'シートに列が見つかりません: ' + unknown.join(', ') +
+      '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。')
+  }
+  protectRowFromFormulaInjection(sheet, headers, sheet.getLastRow() + 1, sheetName)
+  sheet.appendRow(headers.map(function (h) { return obj[h] !== undefined ? obj[h] : '' }))
 }
 
 // A member is completing a certain number of same-category tasks and
@@ -3481,7 +3519,7 @@ function writeMemberEmail(memberId, email) {
       return
     }
   }
-  sheet.appendRow([memberId, email || ''])
+  appendRowByHeaders(sheet, SHEET_MEMBER_EMAILS, { id: memberId, email: email || '' })
 }
 
 // MemberEmailsシート全体を1回読み、{ memberId: email } のマップを返す。
@@ -4508,7 +4546,6 @@ function debugAvatarWrite() {
 
 var SHEET_EXPENSES = 'Expenses'
 var SHEET_FORM_SUBMISSIONS = 'FormSubmissions'
-var EXPENSES_HEADERS = ['id', 'applicant_id', 'amount', 'category_id', 'receipt_url', 'justification', 'purpose', 'custom_field_answers_json', 'approval_steps_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
 
 // EXP-005: custom_field_answers_json列を既存シートにも反映させるため、
 // Members/Projects/Tasks/Settingsと同じ ensureSheetHeaders パターンに統一
@@ -4521,12 +4558,8 @@ function ensureExpensesSheet() {
 
 function ensureFormSubmissionsSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
-  var sheet = ss.getSheetByName(SHEET_FORM_SUBMISSIONS)
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_FORM_SUBMISSIONS)
-    sheet.appendRow(['id', 'form_id', 'submitter_id', 'answers_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason'])
-  }
-  return sheet
+  ensureSheetHeaders(ss, SHEET_FORM_SUBMISSIONS, FORM_SUBMISSIONS_HEADERS)
+  return ss.getSheetByName(SHEET_FORM_SUBMISSIONS)
 }
 
 // item 22/30: アンケート回答をMembersシートのsurvey_responses_json列に
@@ -4554,23 +4587,22 @@ function saveExpenseApplication(application, acting) {
     throw userError('領収書URLは http または https で始まるURLのみ登録できます。')
   }
   var sheet = ensureExpensesSheet()
-  protectRowFromFormulaInjection(sheet, headerRow(sheet), sheet.getLastRow() + 1, 'Expenses')
-  sheet.appendRow([
-    application.id,
-    application.applicantId,
-    application.amount,
-    application.categoryId,
-    application.receiptUrl || '',
-    application.justification || '',
-    application.purpose || '',
-    JSON.stringify(application.customFieldAnswers || {}),
-    JSON.stringify(application.approvalSteps || []),
-    '[]',
-    0,
-    'pending',
-    application.createdAt || new Date().toISOString(),
-    '',
-  ])
+  appendRowByHeaders(sheet, SHEET_EXPENSES, {
+    id: application.id,
+    applicant_id: application.applicantId,
+    amount: application.amount,
+    category_id: application.categoryId,
+    receipt_url: application.receiptUrl || '',
+    justification: application.justification || '',
+    purpose: application.purpose || '',
+    custom_field_answers_json: JSON.stringify(application.customFieldAnswers || {}),
+    approval_steps_json: JSON.stringify(application.approvalSteps || []),
+    approvals_json: '[]',
+    current_step_index: 0,
+    status: 'pending',
+    created_at: application.createdAt || new Date().toISOString(),
+    rejection_reason: '',
+  })
   // 1次承認者への通知
   var steps = application.approvalSteps || []
   if (steps.length > 0) {
@@ -4812,17 +4844,17 @@ function setExpenseStatus(applicationId, status, reason, actorId) {
 // (経費申請はapplication自体にステップのスナップショットを持つ)。
 function saveCustomFormSubmission(submission, acting) {
   var sheet = ensureFormSubmissionsSheet()
-  sheet.appendRow([
-    submission.id,
-    submission.formId,
-    submission.submitterId,
-    JSON.stringify(submission.answers || {}),
-    '[]',
-    0,
-    'pending',
-    submission.createdAt || new Date().toISOString(),
-    '',
-  ])
+  appendRowByHeaders(sheet, SHEET_FORM_SUBMISSIONS, {
+    id: submission.id,
+    form_id: submission.formId,
+    submitter_id: submission.submitterId,
+    answers_json: JSON.stringify(submission.answers || {}),
+    approvals_json: '[]',
+    current_step_index: 0,
+    status: 'pending',
+    created_at: submission.createdAt || new Date().toISOString(),
+    rejection_reason: '',
+  })
 
   var customFormDefs = []
   try {
@@ -4996,7 +5028,6 @@ function setFormSubmissionStatus(submissionId, status, reason) {
 // 管理者の閲覧画面が明示的にfetchDailyReportsを呼ぶ設計にする。
 
 var SHEET_DAILY_REPORTS = 'DailyReports'
-var DAILY_REPORTS_HEADERS = ['id', 'member_id', 'type', 'report_date', 'done_text', 'todo_text', 'issues_text', 'created_at']
 
 function ensureDailyReportsSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
@@ -5007,17 +5038,16 @@ function ensureDailyReportsSheet() {
 // REP-004: 日報・週報の保存(追記のみ)。
 function saveDailyReport(report, acting) {
   var sheet = ensureDailyReportsSheet()
-  protectRowFromFormulaInjection(sheet, headerRow(sheet), sheet.getLastRow() + 1, 'DailyReports')
-  sheet.appendRow([
-    report.id,
-    report.memberId,
-    report.type,
-    report.date,
-    report.done || '',
-    report.todo || '',
-    report.issues || '',
-    report.createdAt || new Date().toISOString(),
-  ])
+  appendRowByHeaders(sheet, SHEET_DAILY_REPORTS, {
+    id: report.id,
+    member_id: report.memberId,
+    type: report.type,
+    report_date: report.date,
+    done_text: report.done || '',
+    todo_text: report.todo || '',
+    issues_text: report.issues || '',
+    created_at: report.createdAt || new Date().toISOString(),
+  })
   return { id: report.id }
 }
 
@@ -5061,12 +5091,8 @@ var SHEET_CANDIDATES = 'Candidates'
 
 function ensureCandidatesSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
-  var sheet = ss.getSheetByName(SHEET_CANDIDATES)
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_CANDIDATES)
-    sheet.appendRow(['id', 'name', 'email', 'phone', 'resume_text', 'interview_notes', 'status', 'created_at', 'updated_at'])
-  }
-  return sheet
+  ensureSheetHeaders(ss, SHEET_CANDIDATES, CANDIDATES_HEADERS)
+  return ss.getSheetByName(SHEET_CANDIDATES)
 }
 
 function addCandidate(candidate) {
@@ -5074,18 +5100,17 @@ function addCandidate(candidate) {
   var headers = headerRow(sheet)
   var id = String(nextIntId(sheet, headers))
   var now = new Date().toISOString()
-  protectRowFromFormulaInjection(sheet, headers, sheet.getLastRow() + 1, 'Candidates')
-  sheet.appendRow([
-    id,
-    candidate.name || '',
-    candidate.email || '',
-    candidate.phone || '',
-    candidate.resumeText || '',
-    candidate.interviewNotes || '',
-    candidate.status || 'candidate',
-    now,
-    now,
-  ])
+  appendRowByHeaders(sheet, SHEET_CANDIDATES, {
+    id: id,
+    name: candidate.name || '',
+    email: candidate.email || '',
+    phone: candidate.phone || '',
+    resume_text: candidate.resumeText || '',
+    interview_notes: candidate.interviewNotes || '',
+    status: candidate.status || 'candidate',
+    created_at: now,
+    updated_at: now,
+  })
   return { id: id }
 }
 
