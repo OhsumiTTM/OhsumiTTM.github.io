@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
-import { OhsumiProvider, useOhsumi, loadLastUserName } from '@/lib/ohsumi/store'
+import { OhsumiProvider, useOhsumi } from '@/lib/ohsumi/store'
 import { NavProvider, useNav } from '@/lib/ohsumi/nav'
 import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
@@ -154,9 +154,8 @@ function Router() {
     if (remoteEnabled && sessionResuming) return <RemoteLoadingScreen />
     if (remoteEnabled && currentUserId) {
       if (remoteStatus === 'error') return <RemoteLoadErrorScreen message={remoteError} />
-      // 保存したセッションが無い場合はログイン画面に戻る。以前の方式(GAS が未対応)では、
-      // 再読み込み後はトークンが無いので「〇〇さんとして続行」を押してもらう
-      if (remoteStatus === 'idle') return <LoginScreen continueAs={loadLastUserName() || '—'} />
+      // 保存したセッションが無い場合はログイン画面に戻る
+      if (remoteStatus === 'idle') return <LoginScreen />
       if (!dataReady) return <RemoteLoadingScreen />
     }
     return <LoginScreen />

@@ -93,7 +93,7 @@ import { isGoogleCalendarReadEnabled } from './features'
 import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from './utils'
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
-import { setGasAuthToken, setCalendarToken } from './google-sheet-sync'
+import { setCalendarToken } from './google-sheet-sync'
 import { activateSession, clearSession, getSessionToken, loadCachedLoginConfig, loadSession, saveSession } from './session'
 import { clearFileCache } from './files'
 import { clearTranslateCache } from './translate'
@@ -270,10 +270,7 @@ interface OhsumiContextValue extends OhsumiState {
   setOneOnOneQuestions: (questions: string[]) => void
   login: (userId: string) => void
   logout: () => void
-  // ログイン画面・「続行」画面から呼ばれる: Google のトークンを受け取り、GAS から
-  // 閲覧できるデータをまとめて読み込む(getInitialData)。fresh=true は新規ログイン
-  signIn: (token: string, fresh: boolean) => Promise<'ok' | 'notRegistered'>
-  // ログイン画面から呼ばれる(新しい方式): Google の IDトークンをセッショントークンに
+  // ログイン画面から呼ばれる: Google の IDトークンをセッショントークンに
   // 交換し、初期データを読み込む。未登録のアカウントなら notRegistered と本人のメール
   signInWithGoogle: (
     idToken: string,
@@ -287,11 +284,6 @@ interface OhsumiContextValue extends OhsumiState {
   revokeAllMySessions: () => Promise<void>
   // 全端末でログアウト(代表・全権管理者が他のメンバーに対して)
   revokeMemberSessions: (memberId: string) => Promise<void>
-  // ログイン画面専用: Googleでログインしたメールアドレスから該当メンバーの
-  // idを解決する(見つからなければnull)。isRemoteConfiguredなら非公開の
-  // MemberEmailsシートをGAS経由で照合し、そうでなければローカルデモの
-  // members配列を直接見る
-  resolveLoginMember: (email: string) => Promise<string | null>
   setMode: (m: Mode) => void
   // Register approved parsed tasks as a single natural-language input.
   addTasksFromInput: (text: string, parsed: ParsedTask[]) => void
@@ -556,22 +548,12 @@ const ORG_NAME_STORAGE_KEY = 'ohsumi-org-name'
 const ORG_LOGO_URL_STORAGE_KEY = 'ohsumi-org-logo-url'
 const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
 
-// 再読み込み後の「〇〇さんとして続行」に表示する名前(ログアウトで消す)
-const LAST_USER_NAME_KEY = 'ohsumi-last-user-name'
-
-export function loadLastUserName(): string {
-  try {
-    return window.localStorage.getItem(LAST_USER_NAME_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
 // ログアウト時: 共用PCで次の人に見られないよう、利用者ごとの内容が残る
 // ブラウザ保存データを消す(表示言語・テーマ、初期タスク付与済み/オンボー
 // ディング済みの記録などは残す)
 const PER_USER_STORAGE_PREFIXES = [
-  LAST_USER_NAME_KEY,
+  // 以前の「〇〇さんとして続行」に表示していた名前(残っているブラウザから消す)
+  'ohsumi-last-user-name',
   'ohsumi-input-draft-',
   'ohsumi-daily-reports',
   'ohsumi-avatar-url-',
@@ -928,8 +910,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setMyEmail(MEMBERS.find((m) => m.id === currentUserId)?.email ?? '')
       return
     }
-    // トークンを受け取ってデータを読み込んだ後にだけ呼ぶ(再読み込み直後は
-    // 「続行」を押すまでトークンが無い)
+    // ログインしてデータを読み込んだ後にだけ呼ぶ
     if (remoteStatus !== 'ready') return
     let cancelled = false
     remoteApi
@@ -1056,40 +1037,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       .catch(reportRemoteError)
   }, [reportRemoteError])
 
-  // ログイン後(または再読み込み後の「続行」)にトークンを受け取り、GAS から
-  // 閲覧できるデータをまとめて読み込む。fresh=true は新しくログインした場合で、
-  // データの反映後に login() の処理(最終ログイン日時の更新・初期タスクの付与)を行う
+  // ログインの後、データが反映されてから login() の処理(最終ログイン日時の更新・
+  // 初期タスクの付与)を行うメンバー
   const [pendingLoginId, setPendingLoginId] = useState<string | null>(null)
-  const signIn = useCallback(
-    async (token: string, fresh: boolean): Promise<'ok' | 'notRegistered'> => {
-      setGasAuthToken(token)
-      setRemoteStatus('loading')
-      setRemoteError(null)
-      try {
-        const res = await fetchInitialData()
-        if (!res.memberId) {
-          setGasAuthToken(null)
-          setRemoteStatus('idle')
-          return 'notRegistered'
-        }
-        applyInitialData(res)
-        setSettingsReady(true)
-        setRemoteStatus('ready')
-        if (fresh) setPendingLoginId(res.memberId)
-        else setCurrentUserId(res.memberId)
-        loadExpenses()
-        return 'ok'
-      } catch (err) {
-        setGasAuthToken(null)
-        reportRemoteError(err)
-        setRemoteStatus('error')
-        throw err
-      }
-    },
-    [applyInitialData, loadExpenses, reportRemoteError],
-  )
 
-  // 新しい方式のログイン: Google の IDトークンを団体の GAS でセッショントークンに交換する
+  // ログイン: Google の IDトークンを団体の GAS でセッショントークンに交換する
   const signInWithGoogle = useCallback(
     async (idToken: string, nonceSecret: string, remember: boolean, orgId: string) => {
       // 読み込み中の表示はログイン画面側で行う(失敗したらログイン画面にそのまま
@@ -1115,7 +1067,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   // 再読み込み後: この端末に保存したセッションがあれば、そのままログインし直す
-  // (「〇〇さんとして続行」を押さなくてよい)
   const [sessionResuming, setSessionResuming] = useState(false)
   const resumeTriedRef = useRef(false)
   useEffect(() => {
@@ -2265,7 +2216,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     setCurrentUserId(null)
-    setGasAuthToken(null)
     setCalendarToken(null)
     // 保存したセッショントークンを消し、Google の自動ログインも止める
     clearSession()
@@ -2308,27 +2258,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     login(pendingLoginId)
     setPendingLoginId(null)
   }, [pendingLoginId, remoteStatus, login])
-
-  // ログイン画面から呼ばれる。以前はここでクライアント側が保持する全メンバー分の
-  // emailと突き合わせていたが、セキュリティ対応でMembersの公開CSVからemailを
-  // 分離したため、isRemoteConfigured時は非公開のMemberEmailsシートをGAS経由で
-  // 照合する(resolveLogin — メール自体はサーバーに残したまま、一致した
-  // memberIdだけを受け取る)。ローカルデモ環境はGASが無いため従来通り
-  // membersを直接見る
-  const resolveLoginMember = useCallback(
-    async (email: string): Promise<string | null> => {
-      if (!isRemoteConfigured) {
-        const lc = email.trim().toLowerCase()
-        const found = members.find((m) =>
-          (m.email ?? '').split(',').map((e) => e.trim().toLowerCase()).includes(lc),
-        )
-        return found?.id ?? null
-      }
-      const res = await remoteApi.resolveLogin()
-      return res.memberId
-    },
-    [members],
-  )
 
   const setMode = useCallback((m: Mode) => setModeState(m), [])
 
@@ -4532,16 +4461,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [members, currentUserId],
   )
 
-  // 再読み込み後の「〇〇さんとして続行」に出す名前を覚えておく
-  useEffect(() => {
-    if (!isRemoteConfigured || !currentUser) return
-    try {
-      window.localStorage.setItem(LAST_USER_NAME_KEY, currentUser.displayName || currentUser.name)
-    } catch {
-      /* ignore */
-    }
-  }, [currentUser])
-
   const visibleTasks = useMemo(() => {
     const canSeeExec = currentUser ? canSeeExecTasks(currentUser.role) : false
     return tasks.filter(
@@ -4961,12 +4880,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setOneOnOneQuestions,
     login,
     logout,
-    signIn,
     signInWithGoogle,
     sessionResuming,
     revokeAllMySessions,
     revokeMemberSessions,
-    resolveLoginMember,
     setMode,
     addTasksFromInput,
     updateTaskStatus,

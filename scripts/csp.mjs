@@ -32,9 +32,6 @@ export const CONNECT_SOURCES = {
 // Googleカレンダーの予定の表示・空き時間の確認(NEXT_PUBLIC_GOOGLE_CALENDAR_READ=true の時だけ)
 export const CALENDAR_READ_CONNECT_SOURCES = ['https://www.googleapis.com/calendar/v3/']
 
-// 以前のログイン方式(アクセストークン)だけが使う接続先。以前の方式のコードを削除する PR で外す
-export const LEGACY_LOGIN_CONNECT_SOURCES = ['https://www.googleapis.com/oauth2/v3/userinfo']
-
 /**
  * @param {{ scriptHashes?: string[], calendarRead?: boolean }} [options]
  * @returns {string}
@@ -44,7 +41,6 @@ export function buildPolicy({ scriptHashes = [], calendarRead = false } = {}) {
     "'self'",
     ...Object.values(CONNECT_SOURCES).flat(),
     ...(calendarRead ? CALENDAR_READ_CONNECT_SOURCES : []),
-    ...LEGACY_LOGIN_CONNECT_SOURCES,
   ]
   const directives = [
     ["default-src", "'self'"],

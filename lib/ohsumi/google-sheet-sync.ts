@@ -2,9 +2,9 @@
 // The GIS script is loaded globally in app/layout.tsx.
 // No npm packages needed: GIS is loaded via <script> tag, Sheets API via fetch().
 //
+// ログインはアクセストークンではなく IDトークン(google.accounts.id)で行う — session.ts。
 // フロントが要求するスコープはこのファイルの定数だけにまとめる(他のファイルで
 // スコープの文字列を書かない)。既定で要求するのは非機密のスコープだけ:
-//   LOGIN_SCOPE      'openid email'  ログインと、Apps Script への本人確認
 //   DRIVE_FILE_SCOPE drive.file      個人スプレッドシート(アプリが作ったファイルだけ)
 // CALENDAR_SCOPE(機密)は、features.ts の isGoogleCalendarReadEnabled が true の
 // 場合だけ要求する(既定では無効)。
@@ -47,7 +47,6 @@ declare global {
   }
 }
 
-export const LOGIN_SCOPE = 'openid email'
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 export const CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar'
 
@@ -95,44 +94,8 @@ function requestToken(scope: string, silent = false): Promise<string> {
   )
 }
 
-// ---- login (openid email) ----------------------------------------
-
 export function isGoogleOAuthConfigured(): boolean {
   return !!CLIENT_ID
-}
-
-export function requestGoogleLoginToken(): Promise<string> {
-  return requestToken(LOGIN_SCOPE)
-}
-
-export async function fetchGoogleUserInfo(accessToken: string): Promise<{ email: string }> {
-  const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  })
-  if (!res.ok) throw new Error('ユーザー情報の取得に失敗しました')
-  return res.json() as Promise<{ email: string }>
-}
-
-// ---- GAS auth token cache (module-level, browser-only) -------------------
-// The access token from requestGoogleLoginToken() is reused for every GAS
-// write request. It is stored here after login and cleared on logout.
-
-let _gasAuthToken: string | null = null
-
-export function setGasAuthToken(token: string | null): void {
-  _gasAuthToken = token
-}
-
-export function getGasAuthToken(): string | null {
-  return _gasAuthToken
-}
-
-/** Silently requests a new Google access token (no popup) and updates the cache. */
-export function refreshGasAuthToken(): Promise<string> {
-  return requestToken(LOGIN_SCOPE, /* silent= */ true).then((token) => {
-    _gasAuthToken = token
-    return token
-  })
 }
 
 // ---- personal sheet sync (drive.file scope) -------------------------------

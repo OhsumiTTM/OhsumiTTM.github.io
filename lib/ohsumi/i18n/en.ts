@@ -98,11 +98,9 @@ export const en = {
 
   // ---- login ---------------------------------------------------------
   'login.tagline': 'Launch your tasks, get your team on track.',
-  'login.googleSignIn': 'Sign in with Google',
-  'login.continueAs': 'Continue as {name}',
-  'login.useAnotherAccount': 'Sign in with a different account',
   'login.signingIn': 'Signing in…',
-  'login.oauthNotConfigured': 'Google OAuth is not configured. Please contact an administrator.',
+  'login.gasOutdated': "Couldn't load your organization's settings. Its Apps Script (GAS) may be out of date or unreachable. Please ask your organization's administrator to update the GAS to the latest version (see gas/README.md).",
+  'login.notConfigured': "This site's Apps Script (GAS) URL or Google OAuth client ID is not configured. Please contact your organization's administrator.",
   'login.failed': 'Sign-in failed. Please try again.',
   'login.notRegistered': '{email} is not registered in Ohsumi.',
   'login.preparing': 'Preparing…',

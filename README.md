@@ -10,8 +10,8 @@ Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コ
 
 ```
 ┌─────────────────┐  読み取り・書き込み   ┌──────────────────────┐      ┌──────────────────┐
-│  Next.js (静的   │  (POST + Googleの     │  Google Apps Script  │      │  Google          │
-│  エクスポート)    │   アクセストークン)  │  Web App (Code.gs)   │─────▶│  Spreadsheet     │
+│  Next.js (静的   │  (POST + セッション   │  Google Apps Script  │      │  Google          │
+│  エクスポート)    │   トークン)          │  Web App (Code.gs)   │─────▶│  Spreadsheet     │
 │  GitHub Pages    │ ────────────────────▶│  トークン検証・      │      │  (Members /      │
 │  でホスト         │ ◀────────────────────│  閲覧権限で絞り込み  │◀─────│   Projects /     │
 └─────────────────┘                        └──────────────────────┘      │   Tasks /        │
@@ -24,7 +24,8 @@ Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コ
 - **データベース**: Google Spreadsheet の Members / Projects / Tasks（任意で Settings）の
   4シートが「データベース」です。
 - **読み取り**: ログイン後、Apps Script の `getInitialData` で4シート分をまとめて取得します。
-  Apps Script がGoogleのアクセストークンを検証し、閲覧権限のないデータ(幹部限定タスク、
+  ログインは Google の IDトークンで行い、Apps Script が団体の鍵で署名したセッショントークンを
+  発行します(`gas/README.md` の「4.2. ログインの仕組み」)。Apps Script はセッショントークンを検証し、閲覧権限のないデータ(幹部限定タスク、
   他の人の評価・1on1記録など)を取り除いてから返します(`gas/Code.gs` の `READ_POLICY`)。
   シートを「ウェブに公開」する必要はありません。アップロードしたファイル(プロフィール画像・
   領収書など)も非公開で保存し、Apps Script が権限を確認してから返します。
@@ -154,7 +155,6 @@ GitHub Pages ではレスポンスヘッダーを設定できないため、`pnp
   | `https://sheets.googleapis.com` | 個人スプレッドシートの作成・同期 |
   | `https://docs.google.com/forms/` | フィードバックの送信 |
   | `https://www.googleapis.com/calendar/v3/` | 予定の表示(`GOOGLE_CALENDAR_READ` が `true` でビルドした時だけ入る) |
-  | `https://www.googleapis.com/oauth2/v3/userinfo` | **以前のログイン方式だけが使う**。以前の方式のコードを削除する時に外す |
 
 - 画像(`img-src`)は、手入力の外部の画像 URL を表示できるよう `https:` をすべて許可しています。
 - meta タグでは `frame-ancestors` が使えないため、iframe への埋め込み対策は

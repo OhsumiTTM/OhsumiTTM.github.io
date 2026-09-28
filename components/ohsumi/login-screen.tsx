@@ -1,17 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import dynamic from 'next/dynamic'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { OhsumiMark } from './primitives'
 import { Loader2, TriangleAlert } from 'lucide-react'
-import {
-  isGoogleOAuthConfigured,
-  requestGoogleLoginToken,
-  fetchGoogleUserInfo,
-  setGasAuthToken,
-} from '@/lib/ohsumi/google-sheet-sync'
+import { isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
 import { fetchLoginConfig, isRemoteConfigured } from '@/lib/ohsumi/remote'
 import {
   hasSavedSession,
@@ -24,21 +19,35 @@ import {
 } from '@/lib/ohsumi/session'
 import { LegalLinks } from './legal-links'
 
-// ログインの方式:
-//   id     新しい方式。Googleでログイン(IDトークン)→ 団体の GAS がセッショントークンを発行する。
-//          「この端末にログイン情報を保存する」がチェックありなら、再読み込み後もログインしたまま
-//   legacy 以前の方式(アクセストークン)。団体の GAS がまだ新しい方式に対応していない場合と、
-//          GAS を使わないローカルのデモ環境で使う
-//   checking 団体の設定(団体ID)を確認中
-// continueAs: 以前の方式で、再読み込み後に前回ログインしていた人の名前
-export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
-  const { login, logout, signIn, signInWithGoogle, resolveLoginMember } = useOhsumi()
+// ログイン画面の状態:
+//   checking      団体の設定(団体ID)を確認中
+//   id            Googleでログイン(IDトークン)→ 団体の GAS がセッショントークンを発行する。
+//                 「この端末にログイン情報を保存する」がチェックありなら、再読み込み後もログインしたまま
+//   gasOutdated   団体の設定を取得できない(GAS が古い・接続できない)。管理者に GAS の更新を促す
+//   notConfigured GAS の URL・OAuth クライアントIDが設定されていない
+//   demo          開発環境(pnpm dev)で GAS を設定していない場合: ローカルのモックデータのメンバーを選んでログインする
+type LoginMode = 'checking' | 'id' | 'gasOutdated' | 'notConfigured' | 'demo'
+
+// デモ用のログイン画面(メンバーを選ぶだけでログインできる)は開発環境だけで読み込む。
+// 条件はビルド時に決まるため、本番のビルドでは demo-login.tsx ごと取り除かれる
+// (scripts/check-no-demo-login.mjs がビルドの最後に確かめる)。
+const DemoLogin =
+  process.env.NODE_ENV === 'development' ? dynamic(() => import('./demo-login'), { ssr: false }) : null
+
+const isDemo = DemoLogin !== null && !isRemoteConfigured
+
+function initialMode(): LoginMode {
+  if (isRemoteConfigured && isGoogleOAuthConfigured()) return 'checking'
+  return isDemo ? 'demo' : 'notConfigured'
+}
+
+export function LoginScreen() {
+  const { signInWithGoogle } = useOhsumi()
   const { t, locale } = useI18n()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
   const [loginError, setLoginError] = useState<string | null>(null)
-  const useIdLogin = isRemoteConfigured && isGoogleOAuthConfigured()
-  const [mode, setMode] = useState<'checking' | 'id' | 'legacy'>(useIdLogin ? 'checking' : 'legacy')
+  const [mode, setMode] = useState<LoginMode>(initialMode)
   const [orgId, setOrgId] = useState<string | null>(null)
   const [remember, setRemember] = useState(loadRememberPreference)
   const rememberRef = useRef(remember)
@@ -52,9 +61,9 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
   }, [])
 
   // 団体ID を確認する。前回の値があればすぐに使い、裏で確認し直す。
-  // GAS が新しい方式に対応していなければ、以前の方式に切り替える
+  // 取得できない(GAS が古い・接続できない)場合は、管理者に GAS の更新を促す
   useEffect(() => {
-    if (!useIdLogin) return
+    if (mode !== 'checking') return
     const cached = loadCachedLoginConfig()
     if (cached) {
       setOrgId(cached.orgId)
@@ -67,10 +76,12 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
         setOrgId(config.orgId)
         setMode('id')
       } else if (!cached) {
-        setMode('legacy')
+        setMode('gasOutdated')
       }
     })
-  }, [useIdLogin])
+    // 最初の1回だけ確認する
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const toggleRemember = (value: boolean) => {
     setRemember(value)
@@ -142,47 +153,6 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
     // 言語を切り替えた時は、準備済みの試行のままボタンの表示だけやり直す
   }, [mode, prepare, locale])
 
-  const handleGoogle = async () => {
-    setError(false)
-    setLoginError(null)
-
-    if (!isGoogleOAuthConfigured()) {
-      setLoginError(t('login.oauthNotConfigured'))
-      return
-    }
-
-    setLoading(true)
-    try {
-      const token = await requestGoogleLoginToken()
-      if (isRemoteConfigured) {
-        // 以前の方式: トークンを渡して、ログイン(メンバーの特定)と初期データの
-        // 読み込みを GAS の getInitialData でまとめて行う
-        const result = await signIn(token, !continueAs)
-        if (result === 'notRegistered') {
-          const info = await fetchGoogleUserInfo(token).catch(() => null)
-          if (continueAs) logout()
-          setLoginError(t('login.notRegistered', { email: info?.email ?? '' }))
-        }
-        return
-      }
-      // Cache the token so every subsequent GAS write can include it
-      // for server-side authentication without re-prompting the user.
-      setGasAuthToken(token)
-      const userInfo = await fetchGoogleUserInfo(token)
-      const matchedId = await resolveLoginMember(userInfo.email)
-      if (matchedId) {
-        login(matchedId)
-      } else {
-        setGasAuthToken(null)
-        setLoginError(t('login.notRegistered', { email: userInfo.email }))
-      }
-    } catch {
-      setError(true)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
       {/* subtle ellipse accent */}
@@ -209,33 +179,13 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
         </p>
 
         <div className="mt-9 w-full rounded-2xl border border-border bg-card p-6 shadow-[0_1px_3px_rgba(16,24,40,0.06)]">
-          {mode === 'legacy' ? (
-            <>
-              <Button
-                size="lg"
-                variant="outline"
-                className="h-11 w-full border-border-strong text-[15px]"
-                onClick={handleGoogle}
-                disabled={loading}
-              >
-                <GoogleGlyph />
-                {loading
-                  ? t('login.signingIn')
-                  : continueAs
-                    ? t('login.continueAs', { name: continueAs })
-                    : t('login.googleSignIn')}
-              </Button>
-
-              {continueAs && !loading && (
-                <button
-                  type="button"
-                  onClick={logout}
-                  className="mt-3 text-xs text-muted-foreground underline-offset-2 hover:underline"
-                >
-                  {t('login.useAnotherAccount')}
-                </button>
-              )}
-            </>
+          {mode === 'gasOutdated' || mode === 'notConfigured' ? (
+            <div role="alert" className="flex items-start gap-2 text-left text-sm text-muted-foreground">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+              <span>{mode === 'gasOutdated' ? t('login.gasOutdated') : t('login.notConfigured')}</span>
+            </div>
+          ) : mode === 'demo' && DemoLogin ? (
+            <DemoLogin />
           ) : (
             <>
               {/* Google が表示する「Googleでログイン」ボタン(IDトークン) */}
@@ -289,28 +239,5 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
         <LegalLinks className="mt-6" />
       </div>
     </main>
-  )
-}
-
-function GoogleGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden>
-      <path
-        fill="#4285F4"
-        d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"
-      />
-      <path
-        fill="#34A853"
-        d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.34A9 9 0 0 0 9 18z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M3.97 10.72a5.41 5.41 0 0 1 0-3.44V4.94H.96a9 9 0 0 0 0 8.12l3.01-2.34z"
-      />
-      <path
-        fill="#EA4335"
-        d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58C13.47.9 11.43 0 9 0A9 9 0 0 0 .96 4.94l3.01 2.34C4.68 5.16 6.66 3.58 9 3.58z"
-      />
-    </svg>
   )
 }

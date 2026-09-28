@@ -326,19 +326,20 @@ describe('セッションの延長', () => {
   })
 })
 
-describe('以前の方式(アクセストークン)', () => {
-  it('LEGACY_ACCESS_TOKEN_AUTH を false にすると受け付けない', () => {
+describe('セッショントークンが無いリクエスト', () => {
+  it.each([
+    ['トークンなし', {}],
+    // 以前の方式(Google のアクセストークン)は受け付けない。Google にも問い合わせない
+    ['アクセストークンだけ', { authToken: 'x'.repeat(40) }],
+  ])('%s は拒否する', (_label, auth) => {
     const t = setup()
-    t.gas.disableLegacyLogin()
-    const res = t.post({ action: 'getMyEmails', authToken: 'x'.repeat(40) })
-    expect(res.ok).toBe(false)
-    expect(res.authError).toBe(true)
-    expect(res.error).toMatch(/ログインしていません/)
-  })
-
-  it('トークンが無いリクエストは拒否する', () => {
-    const t = setup()
-    expect(t.post({ action: 'getMyEmails' }).authError).toBe(true)
+    const calls = t.tokeninfoCalls
+    for (const action of ['getMyEmails', 'getInitialData', 'resolveLogin']) {
+      const res = t.post({ action, ...auth })
+      expect(res.ok).toBe(false)
+      expect(res.authError).toBe(true)
+    }
+    expect(t.tokeninfoCalls).toBe(calls)
   })
 })
 

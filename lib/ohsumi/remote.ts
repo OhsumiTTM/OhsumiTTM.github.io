@@ -51,7 +51,6 @@ import type {
   SurveyQuestion,
 } from './types'
 import { STATUS_LABEL, isAdminRole } from './types'
-import { getGasAuthToken, refreshGasAuthToken } from './google-sheet-sync'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
@@ -157,7 +156,7 @@ function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Proje
     // is derived from the same two so the existing matching UI keeps working.
     skills: [...will, ...judgment],
     // email はここでは読まない — Membersシートから分離し、非公開の
-    // MemberEmailsシートへ移した(resolveLogin/getMyEmails/updateEmail経由で
+    // MemberEmailsシートへ移した(exchangeIdToken/getMyEmails/updateEmail経由で
     // のみ扱う。getInitialData もemail列は返さない)
     notify: /^(true|1|yes)$/i.test((r.notify_new_task || '').trim()),
     notifySettings: parseJsonObject<Partial<Record<NotifyKind, NotifyFrequency>>>(r.notify_settings),
@@ -635,57 +634,39 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
 async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
   if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
 
-  // 新しい方式(セッショントークン)があればそれを使い、無ければ移行期間中の
-  // 以前の方式(Google のアクセストークン)を使う
+  // セッショントークン(exchangeIdToken で発行されたもの)で認証する
   const sessionToken = getSessionToken()
 
-  const doFetch = async (authToken: string | null) => {
-    const auth = sessionToken ? { sessionToken } : { authToken }
-    const res = await fetch(GAS_URL!, {
-      method: 'POST',
-      // text/plain avoids a CORS preflight (Apps Script doesn't handle
-      // OPTIONS); the body is still JSON, parsed server-side with JSON.parse.
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, ...auth, ...payload }),
-    })
-    // GAS always returns JSON from doPost. A non-JSON response (HTML) means
-    // the request was redirected to a login page (auth config issue) or the
-    // script itself failed to load (syntax error, undeployed version, etc.).
-    const text = await res.text()
-    try {
-      return JSON.parse(text) as GasResponse<T>
-    } catch {
-      throw new Error(
-        'GASスクリプトからJSONが返りませんでした。' +
-        'GASのデプロイ設定（「全員」アクセス）またはスクリプトのコピーを確認してください。',
-      )
-    }
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    // text/plain avoids a CORS preflight (Apps Script doesn't handle
+    // OPTIONS); the body is still JSON, parsed server-side with JSON.parse.
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, sessionToken, ...payload }),
+  })
+  // GAS always returns JSON from doPost. A non-JSON response (HTML) means
+  // the request was redirected to a login page (auth config issue) or the
+  // script itself failed to load (syntax error, undeployed version, etc.).
+  const text = await res.text()
+  let json: GasResponse<T>
+  try {
+    json = JSON.parse(text) as GasResponse<T>
+  } catch {
+    throw new Error(
+      'GASスクリプトからJSONが返りませんでした。' +
+      'GASのデプロイ設定（「全員」アクセス）またはスクリプトのコピーを確認してください。',
+    )
   }
-
-  const legacyToken = sessionToken ? null : getGasAuthToken()
-  let json = await doFetch(legacyToken)
 
   if (json.session) applyRenewedSession(json.session)
 
   // セッションが無効(期限切れ・全端末でログアウト・鍵の変更など): 保存したトークンを消し、
   // ログイン画面に戻す
   // (セッションの期限がこの端末で切れている場合も、トークンを送らずに同じ扱いにする)
-  if (!legacyToken && !json.ok && json.authError) {
+  if (!json.ok && json.authError) {
     clearSession()
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: json.error }))
     throw new Error(json.error || 'ログインの有効期限が切れました。再ログインしてください。')
-  }
-
-  // 以前の方式: Auth error (expired token): silently refresh and retry once.
-  // GIS prompt:'' avoids showing a popup if the user's Google session is active.
-  if (!json.ok && json.authError) {
-    try {
-      const newToken = await refreshGasAuthToken()
-      json = await doFetch(newToken)
-    } catch {
-      // Silent refresh failed (Google session also expired) — surface original error
-      throw new Error(json.error || `GAS action "${action}" failed`)
-    }
   }
 
   if (!json.ok) throw new Error(json.error || `GAS action "${action}" failed`)
@@ -825,10 +806,6 @@ export const remoteApi = {
   addMember: (name: string, email: string, affiliation: string, role: Role) =>
     postToGas<{ id: string }>('addMember', { name, email, affiliation, role }),
   updateEmail: (memberId: string, email: string) => postToGas('updateEmail', { memberId, email }),
-  // ログイン時にGoogleでログインしたメールアドレス(送信済みauthToken)から
-  // 該当メンバーIdを解決する。メール自体はやり取りせず、サーバー側の
-  // 非公開MemberEmailsシートと突き合わせた結果(memberId、無ければnull)のみ返す
-  resolveLogin: () => postToGas<{ memberId: string | null }>('resolveLogin', {}),
   // 閲覧できる経費申請だけが返る(gas/Code.gs の canViewExpense)
   getExpenses: () => postToGas<import('./types').ExpenseApplication[]>('getExpenses', {}),
   // アップロードしたファイル(非公開)を権限を確認したうえで取得する
