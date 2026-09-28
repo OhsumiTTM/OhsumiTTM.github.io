@@ -847,6 +847,10 @@ export const remoteApi = {
   // notifyProjectHealth=自動悪化検知+必ず通知、とは役割が異なる）
   updateProjectHealthRecord: (projectId: string, health: import('./types').ProjectHealthLevel) =>
     postToGas('updateProjectHealthRecord', { projectId, health }),
+  // 自動判定の結果を複数プロジェクト分まとめて送る。記録の更新と通知の要否は
+  // GAS 側がシート上の記録と比べて決め、通知は1通にまとめて送る
+  reportProjectHealth: (items: { projectId: string; health: import('./types').ProjectHealthLevel }[]) =>
+    postToGas('reportProjectHealth', { items }),
   updateComments: (taskId: string, comments: TaskComment[]) =>
     postToGas('updateComments', { taskId, comments }),
   notifyMention: (taskId: string, commentText: string, memberIds: string[]) =>
