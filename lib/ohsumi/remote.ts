@@ -1,9 +1,10 @@
-// Wires the app to the real "database": three Google Sheets tabs
-// (Members / Projects / Tasks) published as CSV for reads, and a Google
-// Apps Script Web App for writes. See gas/README.md for the sheet schema
-// and deployment steps. All of this is optional — when the env vars below
-// aren't set (e.g. local dev), the app falls back to the local seed data
-// exactly as before.
+// Wires the app to the real "database": Google Sheets tabs (Members /
+// Projects / Tasks / Settings) read and written through a Google Apps
+// Script Web App. Reads go through the authenticated getInitialData action,
+// which returns only what the signed-in member may see (see gas/Code.gs's
+// READ_POLICY). See gas/README.md for the sheet schema and deployment steps.
+// All of this is optional — when NEXT_PUBLIC_GAS_URL isn't set (e.g. local
+// dev), the app falls back to the local seed data exactly as before.
 import type {
   AdminSection,
   CareerHistoryEntry,
@@ -54,94 +55,35 @@ import { getGasAuthToken, refreshGasAuthToken } from './google-sheet-sync'
 
 // NEXT_PUBLIC_ vars are inlined at build time by Next.js. They must be
 // referenced by their literal full name (not a dynamic key) to be inlined.
-const MEMBERS_CSV_URL = process.env.NEXT_PUBLIC_MEMBERS_CSV
-const PROJECTS_CSV_URL = process.env.NEXT_PUBLIC_PROJECTS_CSV
-const TASKS_CSV_URL = process.env.NEXT_PUBLIC_TASKS_CSV
 const GAS_URL = process.env.NEXT_PUBLIC_GAS_URL
-// optional — a 4th published-CSV sheet ("Settings", key/value rows) that
-// syncs the skill/category/role-level option pools and project-type
-// templates across everyone's browser, instead of each browser keeping
-// its own localStorage-only copy (see gas/README.md).
-const SETTINGS_CSV_URL = process.env.NEXT_PUBLIC_SETTINGS_CSV
 
-export const isRemoteConfigured = !!(
-  MEMBERS_CSV_URL &&
-  PROJECTS_CSV_URL &&
-  TASKS_CSV_URL &&
-  GAS_URL
-)
+export const isRemoteConfigured = !!GAS_URL
 
 // image uploads go to a Drive folder that GAS manages itself (created by
 // setupOhsumi() and kept in a script property), so they only need GAS.
 export const isDriveConfigured = isRemoteConfigured
-export const isSettingsConfigured = isRemoteConfigured && !!SETTINGS_CSV_URL
+// Settings are part of getInitialData, so they're synced whenever GAS is
+export const isSettingsConfigured = isRemoteConfigured
 
-// ---- CSV parsing ------------------------------------------------------
+// ---- GAS read response → header-keyed records ---------------------------
 
-// Small state-machine CSV parser (handles quoted fields, embedded commas /
-// newlines, and doubled "" quote escaping) — Google Sheets' published CSV
-// output needs this; a naive split(',') breaks on any quoted field.
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = []
-  let row: string[] = []
-  let field = ''
-  let inQuotes = false
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') {
-          field += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        field += c
-      }
-    } else if (c === '"') {
-      inQuotes = true
-    } else if (c === ',') {
-      row.push(field)
-      field = ''
-    } else if (c === '\n') {
-      row.push(field)
-      rows.push(row)
-      row = []
-      field = ''
-    } else if (c === '\r') {
-      // skip; \r\n handled by the following \n
-    } else {
-      field += c
-    }
-  }
-  if (field.length > 0 || row.length > 0) {
-    row.push(field)
-    rows.push(row)
-  }
-  return rows.filter((r) => r.some((cell) => cell.trim() !== ''))
+export interface SheetTable {
+  headers: string[]
+  rows: string[][]
 }
 
-// Parses CSV text into an array of header-keyed row objects.
-function parseCsvAsRecords(text: string): Record<string, string>[] {
-  const rows = parseCsv(text)
-  if (rows.length === 0) return []
-  const headers = rows[0].map((h) => h.trim())
-  return rows.slice(1).map((r) => {
+// Same shape (and whitespace trimming) the old published-CSV reader produced,
+// so the row mappers below are unchanged
+export function tableToRecords(table: SheetTable | undefined): Record<string, string>[] {
+  if (!table || !table.headers) return []
+  const headers = table.headers.map((h) => String(h).trim())
+  return (table.rows ?? []).map((r) => {
     const rec: Record<string, string> = {}
     headers.forEach((h, i) => {
-      rec[h] = (r[i] ?? '').trim()
+      rec[h] = String(r[i] ?? '').trim()
     })
     return rec
   })
-}
-
-async function fetchCsvRecords(url: string): Promise<Record<string, string>[]> {
-  const res = await fetch(url, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`CSV fetch failed (${res.status}): ${url}`)
-  const text = await res.text()
-  return parseCsvAsRecords(text)
 }
 
 function splitTags(value: string | undefined): string[] {
@@ -209,10 +151,9 @@ function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Proje
     // Talent matching (design doc §7) scores on will+judgment tags; skills
     // is derived from the same two so the existing matching UI keeps working.
     skills: [...will, ...judgment],
-    // email はここでは読まない — セキュリティ対応でMembersシート(公開CSV)から
-    // 分離し、非公開のMemberEmailsシートへ移した(resolveLogin/getMyEmails/
-    // updateEmail経由でのみ扱う)。ここで拾ってしまうと全メンバー分のメール
-    // アドレスがまた一括で全クライアントに配信されてしまう
+    // email はここでは読まない — Membersシートから分離し、非公開の
+    // MemberEmailsシートへ移した(resolveLogin/getMyEmails/updateEmail経由で
+    // のみ扱う。getInitialData もemail列は返さない)
     notify: /^(true|1|yes)$/i.test((r.notify_new_task || '').trim()),
     notifySettings: parseJsonObject<Partial<Record<NotifyKind, NotifyFrequency>>>(r.notify_settings),
     displayName: r.display_name || undefined,
@@ -371,31 +312,14 @@ export interface RemoteData {
   tasks: Task[]
 }
 
-export async function fetchRemoteData(): Promise<RemoteData> {
-  if (!MEMBERS_CSV_URL || !PROJECTS_CSV_URL || !TASKS_CSV_URL) {
-    throw new Error('Remote CSV URLs are not configured')
-  }
-  const [memberRows, projectRows, taskRows] = await Promise.all([
-    fetchCsvRecords(MEMBERS_CSV_URL),
-    fetchCsvRecords(PROJECTS_CSV_URL),
-    fetchCsvRecords(TASKS_CSV_URL),
-  ])
+export function mapRemoteData(
+  memberRows: Record<string, string>[],
+  projectRows: Record<string, string>[],
+  taskRows: Record<string, string>[],
+): RemoteData {
   const projects = projectRows.map(mapProjectRow)
   const projectsById = new Map(projects.map((p) => [p.id, p]))
-  const members = memberRows.map((r) => {
-    const m = mapMemberRow(r, projectsById)
-    // Apply locally-cached avatar URL when the published CSV is still stale
-    // (Google Sheets can lag several minutes after a GAS write). Once the CSV
-    // catches up and returns the URL itself, the cached value is redundant but
-    // harmless, and the CSV value wins (overrides the local one) once it's set.
-    if (!m.avatarUrl) {
-      try {
-        const cached = localStorage.getItem(`ohsumi-avatar-url-${m.id}`)
-        if (cached) m.avatarUrl = cached
-      } catch {}
-    }
-    return m
-  })
+  const members = memberRows.map((r) => mapMemberRow(r, projectsById))
   const tasks = taskRows.map(mapTaskRow)
   return { members, projects, tasks }
 }
@@ -460,12 +384,10 @@ export interface RemoteSettings {
   surveyQuestions: SurveyQuestion[]
 }
 
-// Reads the optional "Settings" sheet (key,value rows) — see
-// gas/README.md. Any missing/unparseable key just comes back empty, so
-// callers merge with their own defaults.
-export async function fetchSettings(): Promise<RemoteSettings> {
-  if (!SETTINGS_CSV_URL) throw new Error('Settings CSV URL is not configured')
-  const rows = await fetchCsvRecords(SETTINGS_CSV_URL)
+// Parses the "Settings" sheet (key,value rows) — see gas/README.md. Any
+// missing/unparseable key just comes back empty, so callers merge with
+// their own defaults.
+export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   const byKey = new Map(rows.map((r) => [r.key, r.value ?? '']))
   let projectTemplates: Record<string, ProjectTemplateTask[]> = {}
   try {
@@ -570,6 +492,55 @@ export async function fetchSettings(): Promise<RemoteSettings> {
       try { const r = byKey.get('survey_questions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),
   }
+}
+
+// ---- initial read (Google Apps Script Web App) ---------------------------
+
+export interface InitialData {
+  // null = the signed-in Google account isn't registered as a member
+  memberId: string | null
+  version?: string
+  // true = nothing changed since knownVersion (data/settings are omitted)
+  unchanged?: boolean
+  data?: RemoteData
+  settings?: RemoteSettings
+}
+
+interface InitialDataResponse {
+  memberId: string | null
+  version?: string
+  unchanged?: boolean
+  sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
+}
+
+// Signs in (resolves the member) and loads Members/Projects/Tasks/Settings
+// in one GAS call. Pass the version from the previous load to skip the
+// payload when nothing changed.
+export async function fetchInitialData(knownVersion?: string): Promise<InitialData> {
+  const started = typeof performance !== 'undefined' ? performance.now() : 0
+  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion } : {})
+  if (started) {
+    // eslint-disable-next-line no-console
+    console.info(`[ohsumi] getInitialData ${Math.round(performance.now() - started)}ms${res.unchanged ? ' (unchanged)' : ''}`)
+  }
+  if (!res.memberId || res.unchanged || !res.sheets) {
+    return { memberId: res.memberId, version: res.version, unchanged: res.unchanged }
+  }
+  const { Members, Projects, Tasks, Settings } = res.sheets
+  return {
+    memberId: res.memberId,
+    version: res.version,
+    data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks)),
+    settings: parseSettings(tableToRecords(Settings)),
+  }
+}
+
+export interface FetchedFile {
+  id: string
+  ok: boolean
+  mimeType?: string
+  data?: string // base64
+  error?: string
 }
 
 // ---- writes (Google Apps Script Web App) ---------------------------------
@@ -761,14 +732,17 @@ export const remoteApi = {
   // 該当メンバーIdを解決する。メール自体はやり取りせず、サーバー側の
   // 非公開MemberEmailsシートと突き合わせた結果(memberId、無ければnull)のみ返す
   resolveLogin: () => postToGas<{ memberId: string | null }>('resolveLogin', {}),
+  // 閲覧できる経費申請だけが返る(gas/Code.gs の canViewExpense)
+  getExpenses: () => postToGas<import('./types').ExpenseApplication[]>('getExpenses', {}),
+  // アップロードしたファイル(非公開)を権限を確認したうえで取得する
+  getFiles: (fileIds: string[]) => postToGas<FetchedFile[]>('getFiles', { fileIds }),
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
   // サーバー側が自分の分のみ返すため、他人のメールを取得する手段にはならない
   getMyEmails: () => postToGas<{ email: string }>('getMyEmails', {}),
   updateSetting: (key: string, value: string) => postToGas('updateSetting', { key, value }),
   // Discord Webhook 連携 — deliberately NOT part of updateSetting/Settings
-  // シート同期: that sheet is published as a public CSV like the other
-  // three, so a webhook URL (a bearer-token-like secret) would leak to
-  // anyone who fetches it. This writes to Apps Script's private
+  // シート同期: every signed-in member receives the Settings sheet, so a
+  // webhook URL (a bearer-token-like secret) would leak to all of them. This writes to Apps Script's private
   // PropertiesService instead (see gas/README.md §4.7), which has no
   // public read path — write-only from the client's perspective.
   updateDiscordWebhookUrl: (url: string) => postToGas('updateDiscordWebhookUrl', { url }),

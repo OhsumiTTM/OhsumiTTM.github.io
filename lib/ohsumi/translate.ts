@@ -20,6 +20,16 @@ type Cache = Record<string, string> // `${targetLang}::${text}` -> translated te
 
 let memoryCache: Cache | null = null
 
+// ログアウト時: 翻訳のキャッシュ(タスク本文などの翻訳が入る)を消す
+export function clearTranslateCache() {
+  memoryCache = null
+  try {
+    window.localStorage.removeItem(CACHE_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
 function loadCache(): Cache {
   if (memoryCache) return memoryCache
   try {

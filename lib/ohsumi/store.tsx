@@ -75,8 +75,9 @@ import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
   colorForId,
-  fetchRemoteData,
-  fetchSettings,
+  fetchInitialData,
+  type InitialData,
+  type RemoteSettings,
   initialsForName,
   isDriveConfigured,
   isRemoteConfigured,
@@ -88,6 +89,8 @@ import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, 
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setGasAuthToken, setCalendarToken } from './google-sheet-sync'
+import { clearFileCache } from './files'
+import { clearTranslateCache } from './translate'
 
 type Mode = 'input' | 'output'
 type RemoteStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -158,7 +161,7 @@ interface OhsumiContextValue extends OhsumiState {
   pendingTasks: Task[]
   // 完了 tasks old enough to be archived — see Archive tab
   archivedTasks: Task[]
-  // whether the app is backed by the live spreadsheet (via GAS/CSV) or the
+  // whether the app is backed by the live spreadsheet (via GAS) or the
   // local mock data — surfaced so the UI can show sync state.
   remoteEnabled: boolean
   // whether image uploads are usable (remote configured; the Drive folder
@@ -256,6 +259,9 @@ interface OhsumiContextValue extends OhsumiState {
   setOneOnOneQuestions: (questions: string[]) => void
   login: (userId: string) => void
   logout: () => void
+  // ログイン画面・「続行」画面から呼ばれる: Google のトークンを受け取り、GAS から
+  // 閲覧できるデータをまとめて読み込む(getInitialData)。fresh=true は新規ログイン
+  signIn: (token: string, fresh: boolean) => Promise<'ok' | 'notRegistered'>
   // ログイン画面専用: Googleでログインしたメールアドレスから該当メンバーの
   // idを解決する(見つからなければnull)。isRemoteConfiguredなら非公開の
   // MemberEmailsシートをGAS経由で照合し、そうでなければローカルデモの
@@ -524,6 +530,40 @@ const DISMISSED_NOTIFICATIONS_STORAGE_KEY = 'ohsumi-dismissed-notifications'
 const ORG_NAME_STORAGE_KEY = 'ohsumi-org-name'
 const ORG_LOGO_URL_STORAGE_KEY = 'ohsumi-org-logo-url'
 const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
+
+// 再読み込み後の「〇〇さんとして続行」に表示する名前(ログアウトで消す)
+const LAST_USER_NAME_KEY = 'ohsumi-last-user-name'
+
+export function loadLastUserName(): string {
+  try {
+    return window.localStorage.getItem(LAST_USER_NAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+// ログアウト時: 共用PCで次の人に見られないよう、利用者ごとの内容が残る
+// ブラウザ保存データを消す(表示言語・テーマ、初期タスク付与済み/オンボー
+// ディング済みの記録などは残す)
+const PER_USER_STORAGE_PREFIXES = [
+  LAST_USER_NAME_KEY,
+  'ohsumi-input-draft-',
+  'ohsumi-daily-reports',
+  'ohsumi-avatar-url-',
+  'ohsumi-org-notification-emails',
+]
+function clearPerUserBrowserData() {
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i)
+      if (key && PER_USER_STORAGE_PREFIXES.some((p) => key.startsWith(p))) keys.push(key)
+    }
+    keys.forEach((k) => window.localStorage.removeItem(k))
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadState(): Partial<OhsumiState> | null {
   if (typeof window === 'undefined') return null
@@ -863,6 +903,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setMyEmail(MEMBERS.find((m) => m.id === currentUserId)?.email ?? '')
       return
     }
+    // トークンを受け取ってデータを読み込んだ後にだけ呼ぶ(再読み込み直後は
+    // 「続行」を押すまでトークンが無い)
+    if (remoteStatus !== 'ready') return
     let cancelled = false
     remoteApi
       .getMyEmails()
@@ -876,7 +919,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [currentUserId])
+  }, [currentUserId, remoteStatus])
 
   // hydrate from localStorage once (only meaningful without a remote DB —
   // when the spreadsheet is configured it's fetched fresh below and wins)
@@ -924,76 +967,102 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setHydrated(true)
   }, [])
 
-  // fetch the live spreadsheet (Members/Projects/Tasks) once, when configured
-  useEffect(() => {
+  // Settings シートの内容を反映する(初回の読み込みと「情報更新」で共通)
+  const applySettings = useCallback((s: RemoteSettings) => {
+    setSkillOptions(s.skillOptions.length ? uniq(s.skillOptions) : DEFAULT_SKILL_OPTIONS)
+    setCategoryOptions(
+      s.categoryOptions.length ? uniq(s.categoryOptions) : DEFAULT_CATEGORY_OPTIONS,
+    )
+    setRoleLevels(s.roleLevels.length ? uniq(s.roleLevels) : DEFAULT_ROLE_LEVELS)
+    setProjectTemplates(s.projectTemplates)
+    setRolePermissionsState(s.rolePermissions)
+    setRestrictedRolesState(s.restrictedRoles)
+    setTaskSetTemplates(s.taskSetTemplates)
+    setRecurringRules(s.recurringRules)
+    setJobRequirementsState(s.jobRequirements)
+    setSkillFieldOptions(
+      s.skillFieldOptions.length ? uniq(s.skillFieldOptions) : DEFAULT_SKILL_FIELD_OPTIONS,
+    )
+    setSkillFieldSkillsState(s.skillFieldSkills)
+    setSkillFieldThresholdState(s.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
+    setOrgNotificationEmails(s.orgNotificationEmails)
+    setSurveyInvitedIds(s.surveyInvitedIds)
+    if (s.orgName) { setOrgNameState(s.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, s.orgName) } catch {} }
+    if (s.orgLogoUrl) { setOrgLogoUrlState(s.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, s.orgLogoUrl) } catch {} }
+    if (s.themeColor) { setThemeColorState(s.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, s.themeColor) } catch {} }
+    setProjectOrderState(s.projectOrder)
+    if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
+    if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
+    if (s.radarAxes) setRadarAxes(s.radarAxes)
+    if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
+    if (s.expenseCategories) setExpenseCategories(s.expenseCategories)
+    if (s.customFormDefs) setCustomFormDefs(s.customFormDefs)
+    if (s.oneOnOneQuestions.length) setOneOnOneQuestionsState(s.oneOnOneQuestions)
+    if (s.initialTasks.length) setInitialTasksFromSettings(s.initialTasks)
+    if (s.departmentTreeConfig.length) setDepartmentTreeConfigState(s.departmentTreeConfig)
+    if (s.learningContents.length) setLearningContents(s.learningContents)
+    if (s.learningCourses.length) setLearningCourses(s.learningCourses)
+    if (s.trainingPrograms.length) setTrainingPrograms(s.trainingPrograms)
+    if (s.surveyQuestions.length) setSurveyQuestions(s.surveyQuestions)
+  }, [])
+
+  // 最後に読み込んだデータの版(getInitialData の knownVersion に使う)
+  const dataVersionRef = useRef<string | undefined>(undefined)
+  const applyInitialData = useCallback(
+    (res: InitialData) => {
+      if (res.data) {
+        setMembers(res.data.members)
+        setProjects(res.data.projects)
+        setTasks(applyLocalApprovalOverrides(res.data.tasks))
+      }
+      if (res.settings) applySettings(res.settings)
+      if (res.version) dataVersionRef.current = res.version
+    },
+    [applyLocalApprovalOverrides, applySettings],
+  )
+
+  // 経費申請(閲覧できるものだけ — gas/Code.gs の getExpenses)。初期表示を
+  // 待たせないよう、初期データとは別に後から読み込む
+  const loadExpenses = useCallback(() => {
     if (!isRemoteConfigured) return
-    setRemoteStatus('loading')
-    fetchRemoteData()
-      .then(({ members: m, projects: p, tasks: t }) => {
-        setMembers(m)
-        setProjects(p)
-        setTasks(applyLocalApprovalOverrides(t))
+    remoteApi
+      .getExpenses()
+      .then((apps) => setExpenseApplications(apps))
+      .catch(reportRemoteError)
+  }, [reportRemoteError])
+
+  // ログイン後(または再読み込み後の「続行」)にトークンを受け取り、GAS から
+  // 閲覧できるデータをまとめて読み込む。fresh=true は新しくログインした場合で、
+  // データの反映後に login() の処理(最終ログイン日時の更新・初期タスクの付与)を行う
+  const [pendingLoginId, setPendingLoginId] = useState<string | null>(null)
+  const signIn = useCallback(
+    async (token: string, fresh: boolean): Promise<'ok' | 'notRegistered'> => {
+      setGasAuthToken(token)
+      setRemoteStatus('loading')
+      setRemoteError(null)
+      try {
+        const res = await fetchInitialData()
+        if (!res.memberId) {
+          setGasAuthToken(null)
+          setRemoteStatus('idle')
+          return 'notRegistered'
+        }
+        applyInitialData(res)
+        setSettingsReady(true)
         setRemoteStatus('ready')
-        setRemoteError(null)
-      })
-      .catch((err) => {
+        if (fresh) setPendingLoginId(res.memberId)
+        else setCurrentUserId(res.memberId)
+        loadExpenses()
+        return 'ok'
+      } catch (err) {
+        setGasAuthToken(null)
         reportRemoteError(err)
         setRemoteStatus('error')
-      })
-  }, [reportRemoteError, applyLocalApprovalOverrides])
-
-  // fetch the optional Settings sheet once, when configured — this is the
-  // source of truth for the skill/category/role-level pools and project
-  // templates instead of each browser's own localStorage copy
-  useEffect(() => {
-    if (!isSettingsConfigured) return
-    fetchSettings()
-      .then((s) => {
-        setSkillOptions(s.skillOptions.length ? uniq(s.skillOptions) : DEFAULT_SKILL_OPTIONS)
-        setCategoryOptions(
-          s.categoryOptions.length ? uniq(s.categoryOptions) : DEFAULT_CATEGORY_OPTIONS,
-        )
-        setRoleLevels(s.roleLevels.length ? uniq(s.roleLevels) : DEFAULT_ROLE_LEVELS)
-        setProjectTemplates(s.projectTemplates)
-        setRolePermissionsState(s.rolePermissions)
-        setRestrictedRolesState(s.restrictedRoles)
-        setTaskSetTemplates(s.taskSetTemplates)
-        setRecurringRules(s.recurringRules)
-        setJobRequirementsState(s.jobRequirements)
-        setSkillFieldOptions(
-          s.skillFieldOptions.length ? uniq(s.skillFieldOptions) : DEFAULT_SKILL_FIELD_OPTIONS,
-        )
-        setSkillFieldSkillsState(s.skillFieldSkills)
-        setSkillFieldThresholdState(s.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
-        setOrgNotificationEmails(s.orgNotificationEmails)
-        setSurveyInvitedIds(s.surveyInvitedIds)
-        if (s.orgName) { setOrgNameState(s.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, s.orgName) } catch {} }
-        if (s.orgLogoUrl) { setOrgLogoUrlState(s.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, s.orgLogoUrl) } catch {} }
-        if (s.themeColor) { setThemeColorState(s.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, s.themeColor) } catch {} }
-        setProjectOrderState(s.projectOrder)
-        if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
-        if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
-        if (s.radarAxes) setRadarAxes(s.radarAxes)
-        if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
-        if (s.expenseCategories) setExpenseCategories(s.expenseCategories)
-        if (s.customFormDefs) setCustomFormDefs(s.customFormDefs)
-        if (s.oneOnOneQuestions.length) setOneOnOneQuestionsState(s.oneOnOneQuestions)
-        if (s.initialTasks.length) setInitialTasksFromSettings(s.initialTasks)
-        if (s.departmentTreeConfig.length) setDepartmentTreeConfigState(s.departmentTreeConfig)
-        if (s.learningContents.length) setLearningContents(s.learningContents)
-        if (s.learningCourses.length) setLearningCourses(s.learningCourses)
-        if (s.trainingPrograms.length) setTrainingPrograms(s.trainingPrograms)
-        if (s.surveyQuestions.length) setSurveyQuestions(s.surveyQuestions)
-        setRemoteError(null)
-        setSettingsReady(true)
-      })
-      .catch((err) => {
-        reportRemoteError(err)
-        // an error still means "stop waiting" — fall back to defaults
-        // rather than blocking dataReady forever
-        setSettingsReady(true)
-      })
-  }, [reportRemoteError])
+        throw err
+      }
+    },
+    [applyInitialData, loadExpenses, reportRemoteError],
+  )
 
   // manual refresh for the header's 情報更新 button. Deliberately doesn't
   // touch remoteStatus/settingsReady (those flipping to non-ready is what
@@ -1002,64 +1071,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // them to a loading screen or off the page they're on.
   const [refreshing, setRefreshing] = useState(false)
   const refreshAll = useCallback(() => {
-    if (!isRemoteConfigured && !isSettingsConfigured) return
+    if (!isRemoteConfigured) return
     setRefreshing(true)
-    Promise.all([
-      isRemoteConfigured ? fetchRemoteData() : null,
-      isSettingsConfigured ? fetchSettings() : null,
-    ])
-      .then(([remote, settings]) => {
-        if (remote) {
-          setMembers(remote.members)
-          setProjects(remote.projects)
-          setTasks(applyLocalApprovalOverrides(remote.tasks))
-        }
-        if (settings) {
-          setSkillOptions(settings.skillOptions.length ? uniq(settings.skillOptions) : DEFAULT_SKILL_OPTIONS)
-          setCategoryOptions(
-            settings.categoryOptions.length
-              ? uniq(settings.categoryOptions)
-              : DEFAULT_CATEGORY_OPTIONS,
-          )
-          setRoleLevels(settings.roleLevels.length ? uniq(settings.roleLevels) : DEFAULT_ROLE_LEVELS)
-          setProjectTemplates(settings.projectTemplates)
-          setRolePermissionsState(settings.rolePermissions)
-          setRestrictedRolesState(settings.restrictedRoles)
-          setTaskSetTemplates(settings.taskSetTemplates)
-          setRecurringRules(settings.recurringRules)
-          setJobRequirementsState(settings.jobRequirements)
-          setSkillFieldOptions(
-            settings.skillFieldOptions.length
-              ? uniq(settings.skillFieldOptions)
-              : DEFAULT_SKILL_FIELD_OPTIONS,
-          )
-          setSkillFieldSkillsState(settings.skillFieldSkills)
-          setSkillFieldThresholdState(settings.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
-          setOrgNotificationEmails(settings.orgNotificationEmails)
-          setSurveyInvitedIds(settings.surveyInvitedIds)
-          if (settings.orgName) { setOrgNameState(settings.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, settings.orgName) } catch {} }
-          if (settings.orgLogoUrl) { setOrgLogoUrlState(settings.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, settings.orgLogoUrl) } catch {} }
-          if (settings.themeColor) { setThemeColorState(settings.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, settings.themeColor) } catch {} }
-          setProjectOrderState(settings.projectOrder)
-          if (settings.skillLevelThresholds) setSkillLevelThresholds(settings.skillLevelThresholds)
-          if (settings.quizDefinitions) setQuizDefinitions(settings.quizDefinitions)
-          if (settings.radarAxes) setRadarAxes(settings.radarAxes)
-          if (settings.customMemberColumns) setCustomMemberColumns(settings.customMemberColumns)
-          if (settings.expenseCategories) setExpenseCategories(settings.expenseCategories)
-          if (settings.customFormDefs) setCustomFormDefs(settings.customFormDefs)
-          if (settings.oneOnOneQuestions.length) setOneOnOneQuestionsState(settings.oneOnOneQuestions)
-          if (settings.initialTasks.length) setInitialTasksFromSettings(settings.initialTasks)
-          if (settings.departmentTreeConfig.length) setDepartmentTreeConfigState(settings.departmentTreeConfig)
-          if (settings.learningContents.length) setLearningContents(settings.learningContents)
-          if (settings.learningCourses.length) setLearningCourses(settings.learningCourses)
-          if (settings.trainingPrograms.length) setTrainingPrograms(settings.trainingPrograms)
-          if (settings.surveyQuestions.length) setSurveyQuestions(settings.surveyQuestions)
-        }
+    // 前回読み込んだ版を送り、変わっていなければ中身を受け取らない
+    fetchInitialData(dataVersionRef.current)
+      .then((res) => {
+        if (res.memberId && !res.unchanged) applyInitialData(res)
         setRemoteError(null)
       })
       .catch(reportRemoteError)
       .finally(() => setRefreshing(false))
-  }, [reportRemoteError, applyLocalApprovalOverrides])
+    loadExpenses()
+  }, [reportRemoteError, applyInitialData, loadExpenses])
 
   // 定期タスク generation check (item 2/TSK-051の修正) — 生成の要否判定・
   // 実際の生成はGAS側のLockService付き関数(generateRecurringTasksLocked)
@@ -1515,7 +1538,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   // Discord Webhook 連携 — 確認待ち/期限超過タスクの通知先。書き込み専用:
   // Webhook URLはApps ScriptのPropertiesService（非公開）に保存され、
-  // Settingsシート（公開CSV）には一切乗らないので、クライアント側で読み
+  // Settingsシート（ログイン済みの全員に返る）には一切乗らないので、クライアント側で読み
   // 返す手段は意図的に用意していない（gas/README.md §4.7）。
   // 保存しただけでは本当にDiscordに届くか分からない(URLの入力ミス等が
   // 「保存しました」表示のまま気づかれない)ため、保存直後に実際にテスト
@@ -1744,8 +1767,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           }
           return result
         } catch (err) {
+          // 正解番号は全権管理者以外には届かない(サーバー側で採点する)ため、
+          // 手元での採点に切り替えず、エラーとして扱う
           reportRemoteError(err)
-          return { passed: false, score: localScore() }
+          throw err
         }
       } else {
         const score = localScore()
@@ -2155,7 +2180,29 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setCurrentUserId(null)
     setGasAuthToken(null)
     setCalendarToken(null)
+    if (isRemoteConfigured) {
+      // 読み込んだデータはメモリにだけ持っているので、ここで破棄する
+      setMembers([])
+      setProjects([])
+      setTasks([])
+      setExpenseApplications([])
+      setInputs(SEED_INPUTS)
+      dataVersionRef.current = undefined
+      setRemoteStatus('idle')
+      setSettingsReady(false)
+    }
+    clearFileCache()
+    clearTranslateCache()
+    clearPerUserBrowserData()
   }, [])
+
+  // 新規ログイン: データが反映された後で login() を呼ぶ(login() は読み込んだ
+  // プロジェクトや初期タスクの設定を使うため)
+  useEffect(() => {
+    if (!pendingLoginId || remoteStatus !== 'ready') return
+    login(pendingLoginId)
+    setPendingLoginId(null)
+  }, [pendingLoginId, remoteStatus, login])
 
   // ログイン画面から呼ばれる。以前はここでクライアント側が保持する全メンバー分の
   // emailと突き合わせていたが、セキュリティ対応でMembersの公開CSVからemailを
@@ -4156,7 +4203,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             : m,
         ),
       )
-      try { localStorage.removeItem(`ohsumi-avatar-url-${memberId}`) } catch {}
       if (isRemoteConfigured) runRemote(remoteApi.updateAvatar(memberId, avatarColor, trimmedInitials))
     },
     [runRemote],
@@ -4174,10 +4220,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         .uploadAvatarImage(memberId, dataUrl, filename)
         .then(({ url }) => {
           setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, avatarUrl: url } : m)))
-          // CSV cache can lag several minutes after GAS writes the URL to the
-          // sheet — persist the URL locally so it survives page reloads until
-          // the CSV catches up.
-          try { localStorage.setItem(`ohsumi-avatar-url-${memberId}`, url) } catch {}
           setRemoteError(null)
         })
         .catch((err) => {
@@ -4354,6 +4396,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     () => members.find((m) => m.id === currentUserId) ?? null,
     [members, currentUserId],
   )
+
+  // 再読み込み後の「〇〇さんとして続行」に出す名前を覚えておく
+  useEffect(() => {
+    if (!isRemoteConfigured || !currentUser) return
+    try {
+      window.localStorage.setItem(LAST_USER_NAME_KEY, currentUser.displayName || currentUser.name)
+    } catch {
+      /* ignore */
+    }
+  }, [currentUser])
 
   const visibleTasks = useMemo(() => {
     const canSeeExec = currentUser ? canSeeExecTasks(currentUser.role) : false
@@ -4780,6 +4832,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setOneOnOneQuestions,
     login,
     logout,
+    signIn,
     resolveLoginMember,
     setMode,
     addTasksFromInput,

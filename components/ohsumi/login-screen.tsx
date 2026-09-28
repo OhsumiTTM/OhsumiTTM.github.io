@@ -12,9 +12,13 @@ import {
   fetchGoogleUserInfo,
   setGasAuthToken,
 } from '@/lib/ohsumi/google-sheet-sync'
+import { isRemoteConfigured } from '@/lib/ohsumi/remote'
 
-export function LoginScreen() {
-  const { login, resolveLoginMember } = useOhsumi()
+// continueAs: 再読み込み後、前回ログインしていた人の名前。読み取りには毎回
+// Google のトークンが必要なため、ボタンを1回押して「続行」してもらう
+// (トークンの取得にはクリック操作が必要 — ポップアップを防がれないため)
+export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
+  const { login, logout, signIn, resolveLoginMember } = useOhsumi()
   const { t } = useI18n()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
@@ -32,6 +36,17 @@ export function LoginScreen() {
     setLoading(true)
     try {
       const token = await requestGoogleLoginToken()
+      if (isRemoteConfigured) {
+        // トークンを渡して、ログイン(メンバーの特定)と初期データの読み込みを
+        // GAS の getInitialData でまとめて行う
+        const result = await signIn(token, !continueAs)
+        if (result === 'notRegistered') {
+          const info = await fetchGoogleUserInfo(token).catch(() => null)
+          if (continueAs) logout()
+          setLoginError(t('login.notRegistered', { email: info?.email ?? '' }))
+        }
+        return
+      }
       // Cache the token so every subsequent GAS write can include it
       // for server-side authentication without re-prompting the user.
       setGasAuthToken(token)
@@ -84,8 +99,22 @@ export function LoginScreen() {
             disabled={loading}
           >
             <GoogleGlyph />
-            {loading ? t('login.signingIn') : t('login.googleSignIn')}
+            {loading
+              ? t('login.signingIn')
+              : continueAs
+                ? t('login.continueAs', { name: continueAs })
+                : t('login.googleSignIn')}
           </Button>
+
+          {continueAs && !loading && (
+            <button
+              type="button"
+              onClick={logout}
+              className="mt-3 text-xs text-muted-foreground underline-offset-2 hover:underline"
+            >
+              {t('login.useAnotherAccount')}
+            </button>
+          )}
 
           {error && (
             <div className="mt-3 flex items-center justify-center gap-1.5 text-xs text-destructive">

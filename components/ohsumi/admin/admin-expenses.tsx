@@ -6,6 +6,8 @@ import type { ApprovalStep, ExpenseApplication, ExpenseCategory } from '@/lib/oh
 import { Plus, Trash2, CheckCircle, XCircle, ChevronDown, ChevronUp, Undo2 } from 'lucide-react'
 import { Modal } from '@/components/ohsumi/modal'
 import { AdminAccessNote } from '@/components/ohsumi/primitives'
+import { useToast } from '@/components/ohsumi/toast'
+import { openStoredFile } from '@/lib/ohsumi/files'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
 
@@ -246,6 +248,7 @@ function ApplicationCard({
   getCategory: (id: string) => ExpenseCategory | undefined
 }) {
   const { t } = useI18n()
+  const toast = useToast()
   const [expanded, setExpanded] = useState(false)
   const [actionReason, setActionReason] = useState('')
   // EXP-008: 却下と差し戻しは理由入力モーダルを共有する
@@ -300,7 +303,19 @@ function ApplicationCard({
           {app.receiptUrl && (
             <div className="text-sm"><span className="text-muted-foreground">{t('admin.expenses.receiptLabel')}</span>
               {isSafeHttpUrl(app.receiptUrl) ? (
-                <a href={app.receiptUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">{t('admin.expenses.receiptShow')}</a>
+                <a
+                  href={app.receiptUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  // 領収書は非公開のため、権限を確認して GAS 経由で取得してから開く
+                  onClick={(e) => {
+                    e.preventDefault()
+                    void openStoredFile(app.receiptUrl!).then((ok) => {
+                      if (!ok) toast(t('admin.expenses.receiptOpenFailed'))
+                    })
+                  }}
+                  className="text-primary underline"
+                >{t('admin.expenses.receiptShow')}</a>
               ) : (
                 <span className="text-destructive">{t('admin.expenses.receiptUrlUnsafe')}</span>
               )}
