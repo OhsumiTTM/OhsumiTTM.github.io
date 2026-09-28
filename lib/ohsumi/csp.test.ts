@@ -74,8 +74,8 @@ describe('CSP の meta タグ', () => {
     expect(directive('img-src')).toBe("img-src 'self' data: blob: https:")
     expect(directive('object-src')).toBe("object-src 'none'")
     expect(policy).not.toContain('unsafe-eval')
-    // 以前のログイン方式だけが使う接続先(以前の方式のコードを削除する PR で外す)
-    expect(csp.LEGACY_LOGIN_CONNECT_SOURCES).toEqual(['https://www.googleapis.com/oauth2/v3/userinfo'])
+    // 以前のログイン方式(アクセストークン)だけが使っていた接続先は許可しない
+    expect(policy).not.toContain('https://www.googleapis.com/oauth2/')
   })
 
   it('出力フォルダの HTML すべてに入れ、<head> の無いファイル(サイト確認用)は変えない', () => {

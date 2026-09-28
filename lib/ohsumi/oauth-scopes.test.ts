@@ -1,6 +1,6 @@
 // フロントが要求する OAuth スコープを確かめる。本番では非機密のスコープ
-// (openid・email・drive.file)だけを要求し、spreadsheets・calendar・profile を
-// 要求する経路が残っていないこと。
+// (drive.file)のアクセストークンだけを要求し、spreadsheets・calendar・profile を
+// 要求する経路が残っていないこと。ログインは IDトークン(session.ts)で、アクセストークンは使わない。
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -58,15 +58,13 @@ describe('OAuth スコープ', () => {
     expect(src).not.toMatch(/['"`][^'"`]*\bprofile\b[^'"`]*['"`]/)
   })
 
-  it('ログインは openid email、個人シートは drive.file だけを要求する', async () => {
+  it('アクセストークンは個人シート用の drive.file だけを要求する(ログイン用のアクセストークンは無い)', async () => {
     const { mod, requested } = await loadWithGis({})
-    await mod.requestGoogleLoginToken()
-    await mod.refreshGasAuthToken()
+    expect(mod).not.toHaveProperty('requestGoogleLoginToken')
+    expect(mod).not.toHaveProperty('fetchGoogleUserInfo')
     await mod.requestDriveFileToken()
     await mod.requestDriveFileToken(true)
     expect(requested).toEqual([
-      'openid email',
-      'openid email',
       'https://www.googleapis.com/auth/drive.file',
       'https://www.googleapis.com/auth/drive.file',
     ])
