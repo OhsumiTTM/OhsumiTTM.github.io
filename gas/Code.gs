@@ -141,6 +141,7 @@ function setupOhsumi() {
   // MemberEmailsは新規作成した場合デフォルトで非公開(「ウェブに公開」未設定)
   // なので、ここで作成するだけでMembersのemail列を分離した効果が出る。
   ensureSheetHeaders(ss, SHEET_MEMBER_EMAILS, MEMBER_EMAILS_HEADERS)
+  bumpMemberEmailsVersion()
 
   // --- Settings の初期キーを確保（上書きはしない）---
   var DEFAULT_SETTINGS = [
@@ -3049,7 +3050,16 @@ function getMemberEmailValue(memberId) {
 }
 
 // メンバー1人分のメールを書く(行が無ければ追加、あれば上書き)。
+// ログイン用の対応表のキャッシュ(findMemberIdByEmailCached)を無効にする。
 function setMemberEmail(memberId, email) {
+  try {
+    writeMemberEmail(memberId, email)
+  } finally {
+    bumpMemberEmailsVersion()
+  }
+}
+
+function writeMemberEmail(memberId, email) {
   var sheet = getMemberEmailsSheet()
   var headers = headerRow(sheet)
   var idCol = headers.indexOf('id')
@@ -3253,6 +3263,8 @@ function removeMember(memberId) {
     }
   }
 
+  // メール行は残るが、ログイン用の対応表のキャッシュは念のため無効にする
+  bumpMemberEmailsVersion()
   return { removed: memberId }
 }
 
@@ -4824,8 +4836,44 @@ function bumpDataVersion() {
 
 // スプレッドシートを手で編集したときにキャッシュを無効にする(setupOhsumi で
 // インストール型トリガーとして登録する)。スクリプトからの書き込みでは発火しない。
+// どのシートが編集されたかは分からないため、メールアドレス表の版も新しくする。
 function onSpreadsheetChange(e) {
   bumpDataVersion()
+  bumpMemberEmailsVersion()
+}
+
+// ログイン用のメール→メンバーIDの対応表(findMemberIdByEmailCached)は、
+// データの版とは別の版でキャッシュする。タスクの更新などメールに関係のない
+// 書き込みのたびに MemberEmails シートを読み直さないようにするため。
+// 版を新しくするのは次の場合だけ:
+//   - setMemberEmail(addMember / convertCandidateToMember / updateEmail から呼ばれる)
+//   - removeMember(メール行は消さないが、念のため)
+//   - setupOhsumi(MemberEmails シートの作成・見出しの追加)
+//   - onSpreadsheetChange(スプレッドシートの手動編集)
+//   - resetMemberEmailsCache(エディタから手動で実行する)
+var MEMBER_EMAILS_VERSION_PROPERTY_KEY = 'MEMBER_EMAILS_VERSION'
+
+function getMemberEmailsVersion() {
+  return PropertiesService.getScriptProperties().getProperty(MEMBER_EMAILS_VERSION_PROPERTY_KEY) || '0'
+}
+
+function bumpMemberEmailsVersion() {
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      MEMBER_EMAILS_VERSION_PROPERTY_KEY,
+      String(Date.now()) + '-' + Math.floor(Math.random() * 1e6),
+    )
+  } catch (e) {
+    // 版の更新に失敗しても、キャッシュの有効期限(6時間)で最終的に反映される
+    Logger.log('bumpMemberEmailsVersion failed: ' + e)
+  }
+}
+
+// エディタから実行する: メールアドレス表のキャッシュを無効にする
+// (トリガーが動かなかった場合など、ログインできないときの確認用)
+function resetMemberEmailsCache() {
+  bumpMemberEmailsVersion()
+  console.log('メールアドレス表のキャッシュを無効にしました(版: ' + getMemberEmailsVersion() + ')')
 }
 
 // シートを {headers, rows} で読む。値は公開CSVと同じく「表示されている文字列」
@@ -5199,12 +5247,14 @@ function buildViewerData(data, memberId) {
 }
 
 // ログイン用のメール→メンバーIDの対応表(非公開の MemberEmails シート)。
-// 版ごとにキャッシュする(メールの変更も doPost 経由の書き込みなので版が変わる)。
+// メールアドレス表専用の版ごとにキャッシュする(getMemberEmailsVersion を参照)。
 function findMemberIdByEmailCached(email) {
   var normalized = String(email || '').trim().toLowerCase()
   if (!normalized) return null
   var cache = CacheService.getScriptCache()
-  var key = 'emails:' + getDataVersion()
+  // 版は MemberEmails を読む前に取得する(読んでいる間に書き込まれても、
+  // 古い内容は古い版のキーに入るだけになる)
+  var key = 'memberEmails:' + getMemberEmailsVersion()
   var map = null
   try {
     var raw = cache.get(key)
