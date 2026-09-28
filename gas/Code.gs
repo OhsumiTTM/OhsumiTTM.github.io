@@ -1320,6 +1320,8 @@ function authorizeAction(acting, action, body) {
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
+    'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)
+    'getFormSubmissions',      // フォームの回答の読み取り。閲覧できる回答だけを返す(canViewFormSubmission で絞り込む)
     'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
     'revokeMySessions',        // 全端末でログアウト(常に acting.id が対象、body の memberId は見ない)
   ]
@@ -1556,6 +1558,7 @@ function toErrorMessage(err) {
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
+  'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
   'revokeMySessions', 'revokeMemberSessions',
 ]
@@ -2144,6 +2147,12 @@ function doPost(e) {
         break
       case 'getExpenses':
         result = getExpenses(actingMember)
+        break
+      case 'getCandidates':
+        result = getCandidates(actingMember)
+        break
+      case 'getFormSubmissions':
+        result = getFormSubmissions(actingMember)
         break
       case 'getFiles':
         result = getFiles(actingMember, body.fileIds)
@@ -6320,6 +6329,144 @@ function getExpenses(acting) {
   // 新しい申請を先に(フロントの一覧と同じ並び)
   apps.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
   return apps
+}
+
+// ---- 採用の候補者(Candidates)の読み取り ------------------------------------------
+//
+// 候補者は電話番号・メールアドレス・履歴書などの個人情報を含むため、採用の権限を持つ人
+// (管理画面の「採用」を開ける人 — admin-screen.tsx の canAccessRecruiting と同じ基準)にだけ返す:
+//   代表 / 全権管理者 / 権限の例外(permission_overrides)で recruiting の edit・approve を持つ人
+// 返す列は、下の規則がある列だけ(READ_POLICY と同じく、規則の無い列は返さない。
+// 列を足した時は、ここに規則を足さない限り画面には届かない)。
+//   recruiting  採用の権限を持つ人
+var CANDIDATES_READ_POLICY = {
+  columns: {
+    id: 'recruiting',
+    name: 'recruiting',
+    email: 'recruiting',
+    phone: 'recruiting',
+    resume_text: 'recruiting',
+    interview_notes: 'recruiting',
+    status: 'recruiting',
+    created_at: 'recruiting',
+    updated_at: 'recruiting',
+  },
+}
+
+// 採用の権限を持つか(Google のサービスを使わない。restrictedRoles は Settings の restricted_roles)
+function canViewRecruiting(acting, restrictedRoles) {
+  var role = String(acting.role || '').trim()
+  if (role === '代表') return true
+  if (role && role !== '一般' && restrictedRoles.indexOf(role) < 0) return true
+  var overrides = Array.isArray(acting.permission_overrides) ? acting.permission_overrides : []
+  return overrides.some(function (ov) {
+    return ov && ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve')
+  })
+}
+
+function candidateRowToObject(headers, row) {
+  var get = function (name) {
+    if (CANDIDATES_READ_POLICY.columns[name] !== 'recruiting') return ''
+    var c = headers.indexOf(name)
+    var v = c >= 0 ? row[c] : ''
+    return v instanceof Date ? v.toISOString() : String(v == null ? '' : v)
+  }
+  return {
+    id: get('id'),
+    name: get('name'),
+    email: get('email') || undefined,
+    phone: get('phone') || undefined,
+    resumeText: get('resume_text') || undefined,
+    interviewNotes: get('interview_notes') || undefined,
+    status: get('status') || 'candidate',
+    createdAt: get('created_at'),
+    updatedAt: get('updated_at'),
+  }
+}
+
+function getCandidates(acting) {
+  if (!canViewRecruiting(acting, splitCsvList(getSettingValue('restricted_roles')))) return []
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CANDIDATES)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  var out = []
+  rows.forEach(function (row) {
+    var c = candidateRowToObject(headers, row)
+    if (c.id) out.push(c)
+  })
+  out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
+  return out
+}
+
+// ---- フォームの回答(FormSubmissions)の読み取り ----------------------------------
+//
+// 閲覧できるのは: 申請者本人 / そのフォームの承認ステップの担当者(指定メンバー、または同じ役職 —
+// approveCustomFormStep の担当者チェックと同じ基準) / 全権管理者 /
+// 管理画面の「フォーム」セクションを許可された役職(Settings の role_permissions)
+
+function makeFormViewer(acting) {
+  var role = String(acting.role || '').trim()
+  var sections = rolePermissionsFromSettings()[role]
+  return {
+    id: String(acting.id || ''),
+    role: role,
+    isFullAdmin: role === '代表' || isActingFullAdmin(acting),
+    canOpenFormsSection: Array.isArray(sections) && sections.indexOf('forms') >= 0,
+  }
+}
+
+// 1件の回答を閲覧できるか(Google のサービスを使わない純粋な関数)。
+// steps はその回答のフォームの承認ステップ(Settings の custom_form_defs)
+function canViewFormSubmission(viewer, sub, steps) {
+  if (viewer.isFullAdmin || viewer.canOpenFormsSection) return true
+  if (String(sub.submitterId) === viewer.id) return true
+  steps = Array.isArray(steps) ? steps : []
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i] || {}
+    if (step.type === 'member' && String(step.memberId || '') === viewer.id) return true
+    if (step.type === 'role' && step.role && String(step.role) === viewer.role) return true
+  }
+  return false
+}
+
+function formSubmissionRowToObject(headers, row) {
+  var get = function (name) {
+    var c = headers.indexOf(name)
+    return c >= 0 ? row[c] : ''
+  }
+  var createdAt = get('created_at')
+  return {
+    id: String(get('id')),
+    formId: String(get('form_id')),
+    submitterId: String(get('submitter_id')),
+    answers: parseJsonOr(get('answers_json'), {}),
+    approvals: parseJsonOr(get('approvals_json'), []),
+    currentStepIndex: Number(get('current_step_index')) || 0,
+    status: String(get('status') || 'pending'),
+    createdAt: createdAt instanceof Date ? createdAt.toISOString() : String(createdAt || ''),
+    rejectionReason: String(get('rejection_reason') || '') || undefined,
+  }
+}
+
+function getFormSubmissions(acting) {
+  var viewer = makeFormViewer(acting)
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FORM_SUBMISSIONS)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var stepsByForm = {}
+  parseJsonOr(getSettingValue('custom_form_defs'), []).forEach(function (f) {
+    if (f && f.id) stepsByForm[String(f.id)] = f.approvalSteps || []
+  })
+  var headers = headerRow(sheet)
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  var out = []
+  rows.forEach(function (row) {
+    var sub = formSubmissionRowToObject(headers, row)
+    if (!sub.id) return
+    if (canViewFormSubmission(viewer, sub, stepsByForm[sub.formId])) out.push(sub)
+  })
+  out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
+  return out
 }
 
 // ---- アップロードしたファイルの配信(非公開化) ----------------------------------
