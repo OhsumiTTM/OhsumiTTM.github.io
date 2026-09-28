@@ -105,6 +105,18 @@ export const ja = {
   'login.oauthNotConfigured': 'Google OAuthが設定されていません。管理者にお問い合わせください。',
   'login.failed': 'ログインできませんでした。もう一度お試しください。',
   'login.notRegistered': '{email} はOhsumiに登録されていません。',
+  'login.preparing': '準備中…',
+  'login.remember': 'この端末にログイン情報を保存する(再読み込み・再起動後もログインしたままになります)',
+  'login.sharedDeviceWarning': '共用のパソコンやスマートフォンでは、必ずチェックを外してください。チェックを外すと、タブを閉じた時点でログアウトします。',
+  'person.account.sessionsTitle': 'ログイン中の端末',
+  'person.account.sessionsDesc': 'スマートフォンの紛失や、共用のパソコンでログアウトし忘れた場合は、すべての端末からログアウトできます。この端末もログアウトします。',
+  'person.account.revokeAll': '全端末でログアウト',
+  'person.account.revokeAllConfirm': 'すべての端末(この端末を含む)からログアウトします。よろしいですか?',
+  'person.account.revokeAllFailed': 'ログアウトできませんでした: {error}',
+  'admin.members.revokeSessions': '全端末でログアウトさせる',
+  'admin.members.revokeSessionsConfirm': '{name} さんを、すべての端末からログアウトさせます。よろしいですか?',
+  'admin.members.revokeSessionsDone': '{name} さんをすべての端末からログアウトさせました',
+  'admin.members.revokeSessionsFailed': 'ログアウトさせられませんでした: {error}',
   'login.poweredByGoogle': 'Powered by Google',
 
   // ---- output / list-view ------------------------------------------------

@@ -105,6 +105,18 @@ export const en = {
   'login.oauthNotConfigured': 'Google OAuth is not configured. Please contact an administrator.',
   'login.failed': 'Sign-in failed. Please try again.',
   'login.notRegistered': '{email} is not registered in Ohsumi.',
+  'login.preparing': 'Preparing…',
+  'login.remember': 'Keep me signed in on this device (stay signed in after reloading or restarting)',
+  'login.sharedDeviceWarning': 'On a shared computer or phone, be sure to uncheck this. When unchecked, you are signed out when you close the tab.',
+  'person.account.sessionsTitle': 'Signed-in devices',
+  'person.account.sessionsDesc': 'If you lost your phone or forgot to sign out on a shared computer, you can sign out of every device. This device is signed out too.',
+  'person.account.revokeAll': 'Sign out of all devices',
+  'person.account.revokeAllConfirm': 'Sign out of every device, including this one?',
+  'person.account.revokeAllFailed': 'Could not sign out: {error}',
+  'admin.members.revokeSessions': 'Sign out of all devices',
+  'admin.members.revokeSessionsConfirm': 'Sign {name} out of every device?',
+  'admin.members.revokeSessionsDone': '{name} was signed out of every device',
+  'admin.members.revokeSessionsFailed': 'Could not sign them out: {error}',
   'login.poweredByGoogle': 'Powered by Google',
 
   // ---- output / list-view ------------------------------------------------

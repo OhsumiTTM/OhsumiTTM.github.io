@@ -52,6 +52,11 @@ import type {
 } from './types'
 import { STATUS_LABEL, isAdminRole } from './types'
 import { getGasAuthToken, refreshGasAuthToken } from './google-sheet-sync'
+import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
+
+// セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
+// store.tsx がログイン画面に戻す
+export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 
 // NEXT_PUBLIC_ vars are inlined at build time by Next.js. They must be
 // referenced by their literal full name (not a dynamic key) to be inlined.
@@ -523,6 +528,10 @@ export async function fetchInitialData(knownVersion?: string): Promise<InitialDa
     // eslint-disable-next-line no-console
     console.info(`[ohsumi] getInitialData ${Math.round(performance.now() - started)}ms${res.unchanged ? ' (unchanged)' : ''}`)
   }
+  return toInitialData(res)
+}
+
+function toInitialData(res: InitialDataResponse): InitialData {
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged }
   }
@@ -568,23 +577,83 @@ export interface CreateTaskPayload {
   relatedReviewTaskId?: string
 }
 
+type GasResponse<T> = {
+  ok: boolean
+  result?: T
+  error?: string
+  authError?: boolean
+  // 残りが半分を切ったセッションは、GAS が新しいトークンを返す(差し替える)
+  session?: { token: string; exp: number }
+}
+
+// 認証なしで GAS を呼ぶ(getLoginConfig・exchangeIdToken)
+async function callGas<T>(body: Record<string, unknown>): Promise<GasResponse<T>> {
+  if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+  })
+  const text = await res.text()
+  try {
+    return JSON.parse(text) as GasResponse<T>
+  } catch {
+    throw new Error('GASスクリプトからJSONが返りませんでした。GASのデプロイ設定を確認してください。')
+  }
+}
+
+/** ログイン前に団体ID(IDトークンの nonce に含める)を取得する。GAS が古い場合などは null */
+export async function fetchLoginConfig(): Promise<{ orgId: string } | null> {
+  try {
+    const json = await callGas<{ orgId: string }>({ action: 'getLoginConfig' })
+    return json.ok && json.result?.orgId ? { orgId: json.result.orgId } : null
+  } catch {
+    return null
+  }
+}
+
+export interface ExchangeResult extends InitialData {
+  // 登録されていないアカウントの場合、本人のメールアドレス(ログイン画面の表示用)
+  email?: string
+  session?: StoredSession
+}
+
+/** Google の IDトークンをセッショントークンに交換し、初期データもまとめて受け取る */
+export async function exchangeIdToken(idToken: string, nonceSecret: string, remember: boolean): Promise<ExchangeResult> {
+  const json = await callGas<InitialDataResponse & { email?: string; session?: StoredSession }>({
+    action: 'exchangeIdToken',
+    idToken,
+    nonceSecret,
+    remember,
+  })
+  if (!json.ok || !json.result) throw new Error(json.error || 'ログインに失敗しました')
+  const res = json.result
+  if (!res.memberId) return { memberId: null, email: res.email }
+  return { ...toInitialData(res), session: res.session }
+}
+
 async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
   if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
 
+  // 新しい方式(セッショントークン)があればそれを使い、無ければ移行期間中の
+  // 以前の方式(Google のアクセストークン)を使う
+  const sessionToken = getSessionToken()
+
   const doFetch = async (authToken: string | null) => {
+    const auth = sessionToken ? { sessionToken } : { authToken }
     const res = await fetch(GAS_URL!, {
       method: 'POST',
       // text/plain avoids a CORS preflight (Apps Script doesn't handle
       // OPTIONS); the body is still JSON, parsed server-side with JSON.parse.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, authToken, ...payload }),
+      body: JSON.stringify({ action, ...auth, ...payload }),
     })
     // GAS always returns JSON from doPost. A non-JSON response (HTML) means
     // the request was redirected to a login page (auth config issue) or the
     // script itself failed to load (syntax error, undeployed version, etc.).
     const text = await res.text()
     try {
-      return JSON.parse(text) as { ok: boolean; result?: T; error?: string; authError?: boolean }
+      return JSON.parse(text) as GasResponse<T>
     } catch {
       throw new Error(
         'GASスクリプトからJSONが返りませんでした。' +
@@ -593,9 +662,21 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
     }
   }
 
-  let json = await doFetch(getGasAuthToken())
+  const legacyToken = sessionToken ? null : getGasAuthToken()
+  let json = await doFetch(legacyToken)
 
-  // Auth error (expired token): silently refresh and retry once.
+  if (json.session) applyRenewedSession(json.session)
+
+  // セッションが無効(期限切れ・全端末でログアウト・鍵の変更など): 保存したトークンを消し、
+  // ログイン画面に戻す
+  // (セッションの期限がこの端末で切れている場合も、トークンを送らずに同じ扱いにする)
+  if (!legacyToken && !json.ok && json.authError) {
+    clearSession()
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: json.error }))
+    throw new Error(json.error || 'ログインの有効期限が切れました。再ログインしてください。')
+  }
+
+  // 以前の方式: Auth error (expired token): silently refresh and retry once.
   // GIS prompt:'' avoids showing a popup if the user's Google session is active.
   if (!json.ok && json.authError) {
     try {
@@ -755,6 +836,10 @@ export const remoteApi = {
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
   // サーバー側が自分の分のみ返すため、他人のメールを取得する手段にはならない
   getMyEmails: () => postToGas<{ email: string }>('getMyEmails', {}),
+  // 全端末でログアウト(自分)。発行済みのセッションがすべて無効になる
+  revokeMySessions: () => postToGas<{ revoked: boolean }>('revokeMySessions', {}),
+  // 全端末でログアウト(代表・全権管理者が他のメンバーに対して)
+  revokeMemberSessions: (memberId: string) => postToGas<{ revoked: boolean }>('revokeMemberSessions', { memberId }),
   updateSetting: (key: string, value: string) => postToGas('updateSetting', { key, value }),
   // Discord Webhook 連携 — deliberately NOT part of updateSetting/Settings
   // シート同期: every signed-in member receives the Settings sheet, so a
