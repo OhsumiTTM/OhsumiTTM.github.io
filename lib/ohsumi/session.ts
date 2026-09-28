@@ -147,6 +147,8 @@ export function getActiveOrgId(): string | null {
 export function clearSession(orgId?: string | null): void {
   const target = orgId ?? active?.orgId
   active = null
+  // 次のログインは新しい nonce で準備する
+  resetGoogleSignIn()
   if (target) {
     for (const kind of ['local', 'session'] as const) {
       try {
@@ -181,12 +183,92 @@ export async function createLoginNonce(orgId: string): Promise<{ nonce: string; 
 }
 
 // ---- Google Identity Services(IDトークン) -------------------------------------
+//
+// google.accounts.id.initialize() は「1回のログインの試行」につき1回だけ呼ぶ。
+//   - 画面の再描画やログイン画面の作り直しでは呼び直さない(同じ試行を使い続け、
+//     ボタンの表示だけやり直す)。initialize を呼び直すと、表示中の自動ログイン・
+//     One Tap(FedCM)が中断され、以前の nonce で発行された IDトークンが新しい
+//     callback に届くことがあるため
+//   - 新しい試行(新しい nonce と乱数)にするのは、ログインに失敗した時と、
+//     ログアウト・セッション切れ(clearSession)の後だけ。乱数は使い回さない
+//   - 受け取った IDトークンの nonce が、この試行の nonce と一致する時だけ乱数を送る
+//     (IDトークンの nonce と送る乱数が必ず対応する)
+
+interface SignInAttempt {
+  orgId: string
+  nonce: string
+  secret: string
+  // ready: IDトークン待ち / used: IDトークンを受け取り、乱数を送った(再利用しない)
+  status: 'ready' | 'used'
+}
+
+interface SignInHandlers {
+  onCredential: (idToken: string, secret: string) => void
+  // IDトークンの nonce が今の試行と一致しない(古い試行の IDトークン)。乱数は送らない
+  onNonceMismatch?: () => void
+}
+
+let attempt: SignInAttempt | null = null
+let creating: { orgId: string; promise: Promise<SignInAttempt | null> } | null = null
+let handlers: SignInHandlers | null = null
+
+/** IDトークンの nonce(署名は確かめない。検証は GAS が行う) */
+export function nonceOfIdToken(idToken: string): string | null {
+  try {
+    const payload = idToken.split('.')[1]
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'))
+    const bytes = Uint8Array.from(json, (c) => c.charCodeAt(0))
+    const nonce = (JSON.parse(new TextDecoder().decode(bytes)) as { nonce?: unknown }).nonce
+    return typeof nonce === 'string' ? nonce : null
+  } catch {
+    return null
+  }
+}
+
+function handleCredential(response: { credential?: string }) {
+  const current = attempt
+  if (!response.credential || !current || !handlers) return
+  // この試行の乱数は送った後。同じ乱数は2回送らない(ログインの処理はそのまま続ける)
+  if (current.status !== 'ready') return
+  if (nonceOfIdToken(response.credential) !== current.nonce) {
+    handlers.onNonceMismatch?.()
+    return
+  }
+  current.status = 'used'
+  handlers.onCredential(response.credential, current.secret)
+}
+
+async function createAttempt(orgId: string): Promise<SignInAttempt | null> {
+  const id = window.google?.accounts?.id
+  if (!id) throw new Error('Google Identity Services を読み込めませんでした')
+  const { nonce, secret } = await createLoginNonce(orgId)
+  // 待っている間に別の試行に切り替わった(団体IDが変わった・ログアウトした)場合は使わない
+  if (creating?.orgId !== orgId) return null
+  id.initialize({
+    client_id: CLIENT_ID!,
+    nonce,
+    auto_select: true,
+    use_fedcm_for_prompt: true,
+    itp_support: true,
+    cancel_on_tap_outside: true,
+    callback: handleCredential,
+  })
+  attempt = { orgId, nonce, secret, status: 'ready' }
+  return attempt
+}
+
+/** 今のログインの試行を終える。次に prepareGoogleSignIn を呼ぶと、新しい nonce で準備し直す */
+export function resetGoogleSignIn(): void {
+  attempt = null
+  creating = null
+}
 
 /**
- * Googleでログイン(IDトークン)を準備する。nonce は1回のログインごとに作り直す
- * ため、ログインが終わるたび(成功・失敗とも)に呼び直す。
- * shouldAutoPrompt() が true なら、自動ログイン・One Tap も試す(以前このアプリにログインし、
- * ブラウザの Google アカウントが1つの場合は、クリックなしでログインできる)。
+ * Googleでログイン(IDトークン)を準備する。準備済みの試行があれば initialize は呼ばず、
+ * ボタンの表示と callback の差し替えだけ行う(何度呼んでもよい)。
+ * ログインに失敗した後は resetGoogleSignIn() を呼んでから呼び直す。
+ * shouldAutoPrompt() が true なら、新しく準備した時だけ自動ログイン・One Tap も試す
+ * (以前このアプリにログインし、ブラウザの Google アカウントが1つの場合は、クリックなしでログインできる)。
  */
 export async function prepareGoogleSignIn(options: {
   orgId: string
@@ -195,23 +277,29 @@ export async function prepareGoogleSignIn(options: {
   shouldAutoPrompt: () => boolean
   locale?: string
   onCredential: (idToken: string, secret: string) => void
+  onNonceMismatch?: () => void
 }): Promise<void> {
   if (!CLIENT_ID) throw new Error('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID が設定されていません')
   await waitForGIS()
-  const id = window.google?.accounts?.id
-  if (!id) throw new Error('Google Identity Services を読み込めませんでした')
-  const { nonce, secret } = await createLoginNonce(options.orgId)
-  id.initialize({
-    client_id: CLIENT_ID,
-    nonce,
-    auto_select: true,
-    use_fedcm_for_prompt: true,
-    itp_support: true,
-    cancel_on_tap_outside: true,
-    callback: (response) => {
-      if (response.credential) options.onCredential(response.credential, secret)
-    },
-  })
+  handlers = { onCredential: options.onCredential, onNonceMismatch: options.onNonceMismatch }
+  let created = false
+  if (attempt?.orgId !== options.orgId) {
+    if (creating?.orgId !== options.orgId) {
+      const next = { orgId: options.orgId, promise: createAttempt(options.orgId) }
+      creating = next
+      // 失敗した場合は、次に呼んだ時に作り直す
+      next.promise.catch(() => {
+        if (creating === next) creating = null
+      })
+      created = true
+    }
+    const result = await creating.promise
+    if (!result || result !== attempt) return
+  }
+  // IDトークンを受け取って交換中(またはログイン済み)なら、ボタンは出し直さない
+  const current = attempt
+  if (!current || current.orgId !== options.orgId || current.status !== 'ready') return
+  const id = window.google!.accounts!.id!
   if (options.button) {
     options.button.innerHTML = ''
     id.renderButton(options.button, {
@@ -224,5 +312,5 @@ export async function prepareGoogleSignIn(options: {
       locale: options.locale,
     })
   }
-  if (options.shouldAutoPrompt()) id.prompt()
+  if (created && options.shouldAutoPrompt()) id.prompt()
 }

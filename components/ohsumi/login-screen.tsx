@@ -18,6 +18,7 @@ import {
   loadCachedLoginConfig,
   loadRememberPreference,
   prepareGoogleSignIn,
+  resetGoogleSignIn,
   saveLoginConfig,
   saveRememberPreference,
 } from '@/lib/ohsumi/session'
@@ -77,46 +78,69 @@ export function LoginScreen({ continueAs }: { continueAs?: string } = {}) {
     saveRememberPreference(value)
   }
 
-  // Googleでログインのボタンを用意する。nonce は1回ごとに作り直すため、ログインを
-  // 試すたびに呼び直す。初回だけ自動ログイン・One Tap も試す
+  // 再描画のたびに変わる値は ref で参照し、準備(google.accounts.id.initialize)を
+  // 呼び直す原因にしない
+  const signInRef = useRef(signInWithGoogle)
+  signInRef.current = signInWithGoogle
+  const tRef = useRef(t)
+  tRef.current = t
+  const localeRef = useRef(locale)
+  localeRef.current = locale
+
+  // Googleでログインのボタンを用意する。initialize はログインの試行ごとに1回だけ
+  // (lib/ohsumi/session.ts)。何度呼んでも、準備済みならボタンを出し直すだけ。
+  // 初回だけ自動ログイン・One Tap も試す
   const prepare = useCallback(() => {
     if (!orgId) return
     const autoPrompt = !autoPromptedRef.current
     autoPromptedRef.current = true
+    // ログインに失敗した時は、新しい nonce(新しい試行)で準備し直す
+    const retry = () => {
+      resetGoogleSignIn()
+      if (mountedRef.current) prepareRef.current()
+    }
     prepareGoogleSignIn({
       orgId,
       button: buttonRef.current,
       // 保存したセッションで自動的にログインし直す場合は、Google の自動ログインは試さない
       shouldAutoPrompt: () => autoPrompt && mountedRef.current && !hasSavedSession(),
-      locale,
+      locale: localeRef.current,
       onCredential: async (idToken, secret) => {
         setLoading(true)
         setError(false)
         setLoginError(null)
+        let ok = false
         try {
-          const result = await signInWithGoogle(idToken, secret, rememberRef.current, orgId)
+          const result = await signInRef.current(idToken, secret, rememberRef.current, orgId)
+          ok = result.status === 'ok'
           if (result.status === 'notRegistered') {
             // 同じアカウントで自動ログインを繰り返さないようにする
             window.google?.accounts?.id?.disableAutoSelect()
-            if (mountedRef.current) setLoginError(t('login.notRegistered', { email: result.email ?? '' }))
+            if (mountedRef.current) setLoginError(tRef.current('login.notRegistered', { email: result.email ?? '' }))
           }
         } catch (e) {
-          if (mountedRef.current) setLoginError(e instanceof Error ? e.message : t('login.failed'))
+          if (mountedRef.current) setLoginError(e instanceof Error ? e.message : tRef.current('login.failed'))
         } finally {
-          if (mountedRef.current) {
-            setLoading(false)
-            prepare()
-          }
+          if (mountedRef.current) setLoading(false)
+          // 成功した場合は準備し直さない(このままアプリの画面に切り替わる)
+          if (!ok) retry()
         }
+      },
+      onNonceMismatch: () => {
+        if (mountedRef.current) setLoginError(tRef.current('login.failed'))
+        retry()
       },
     }).catch(() => {
       if (mountedRef.current) setError(true)
     })
-  }, [orgId, locale, signInWithGoogle, t])
+  }, [orgId])
+  const prepareRef = useRef(prepare)
+  prepareRef.current = prepare
 
   useEffect(() => {
     if (mode === 'id') prepare()
-  }, [mode, prepare])
+    // 言語を切り替えた時は、準備済みの試行のままボタンの表示だけやり直す
+  }, [mode, prepare, locale])
 
   const handleGoogle = async () => {
     setError(false)
