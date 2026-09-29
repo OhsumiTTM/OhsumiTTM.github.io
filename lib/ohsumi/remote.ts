@@ -64,6 +64,7 @@ import {
   normalizeThresholdKeys,
 } from './code-normalize'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
+import { sendToGas, type GasResponse } from './gas-transport'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
@@ -580,29 +581,10 @@ export interface CreateTaskPayload {
   relatedReviewTaskId?: string
 }
 
-type GasResponse<T> = {
-  ok: boolean
-  result?: T
-  error?: string
-  authError?: boolean
-  // 残りが半分を切ったセッションは、GAS が新しいトークンを返す(差し替える)
-  session?: { token: string; exp: number }
-}
-
 // 認証なしで GAS を呼ぶ(getLoginConfig・exchangeIdToken)
-async function callGas<T>(body: Record<string, unknown>): Promise<GasResponse<T>> {
+async function callGas<T>(body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
   if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
-  const res = await fetch(GAS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ ...body, clientVersion: CLIENT_VERSION }),
-  })
-  const text = await res.text()
-  try {
-    return JSON.parse(text) as GasResponse<T>
-  } catch {
-    throw new Error('GASスクリプトからJSONが返りませんでした。GASのデプロイ設定を確認してください。')
-  }
+  return sendToGas<T>(GAS_URL, { ...body, clientVersion: CLIENT_VERSION })
 }
 
 /** ログイン前に団体ID(IDトークンの nonce に含める)を取得する。GAS が古い場合などは null */
@@ -641,26 +623,9 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   // セッショントークン(exchangeIdToken で発行されたもの)で認証する
   const sessionToken = getSessionToken()
 
-  const res = await fetch(GAS_URL, {
-    method: 'POST',
-    // text/plain avoids a CORS preflight (Apps Script doesn't handle
-    // OPTIONS); the body is still JSON, parsed server-side with JSON.parse.
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, sessionToken, clientVersion: CLIENT_VERSION, ...payload }),
-  })
-  // GAS always returns JSON from doPost. A non-JSON response (HTML) means
-  // the request was redirected to a login page (auth config issue) or the
-  // script itself failed to load (syntax error, undeployed version, etc.).
-  const text = await res.text()
-  let json: GasResponse<T>
-  try {
-    json = JSON.parse(text) as GasResponse<T>
-  } catch {
-    throw new Error(
-      'GASスクリプトからJSONが返りませんでした。' +
-      'GASのデプロイ設定（「全員」アクセス）またはスクリプトのコピーを確認してください。',
-    )
-  }
+  // 1本ずつ順番に送り、JSON が返らなければ送り直す(書き込みは requestId で二重に処理されない。
+  // gas-transport.ts)。何度送っても JSON が返らない場合は GasTransportError を投げる
+  const json = await sendToGas<T>(GAS_URL, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload })
 
   if (json.session) applyRenewedSession(json.session)
 
