@@ -5,7 +5,9 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Tag, SectionLabel, Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
-import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS, BASE_ROLE } from '@/lib/ohsumi/types'
+import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS } from '@/lib/ohsumi/types'
+import { sameRole, TOP_ROLE_ID, DEFAULT_TOP_ROLE_NAME } from '@/lib/ohsumi/roles'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import type { AdminSection, CustomMemberColumn, SkillLevelValue, SurveyQuestion } from '@/lib/ohsumi/types'
 import { SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from '@/lib/ohsumi/utils'
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
@@ -25,11 +27,9 @@ export function AdminTags() {
     addCategoryOption,
     removeCategoryOption,
     roleLevels,
+    baseRoleId,
     addRoleLevel,
-    removeRoleLevel,
-    reorderRoleLevel,
     restrictedRoles,
-    toggleRestrictedRole,
     rolePermissions,
     setRolePermissions,
     jobRequirements,
@@ -46,7 +46,8 @@ export function AdminTags() {
   const toast = useToast()
   const { t } = useI18n()
   // item 17: ポジション要件 — every role, including 一般, has a position
-  const jobTypes = [BASE_ROLE, ...roleLevels]
+  const jobTypes = [baseRoleId, ...roleLevels]
+  const roleName = useRoleLabel()
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-8">
@@ -87,42 +88,7 @@ export function AdminTags() {
           <p className="mt-1 text-xs text-muted-foreground">
             {t('admin.tags.permissionLevelsDesc')}
           </p>
-          <div className="mt-3 flex flex-col gap-1">
-            {roleLevels.map((level, i) => {
-              const isRestricted = restrictedRoles.includes(level)
-              return (
-                <div key={level} className="flex items-center gap-2">
-                  <div className="flex flex-col">
-                    <button
-                      onClick={() => reorderRoleLevel(level, 'up')}
-                      disabled={i === 0}
-                      className="text-muted-foreground hover:text-foreground disabled:opacity-20"
-                    >
-                      <ChevronUp className="size-3.5" />
-                    </button>
-                    <button
-                      onClick={() => reorderRoleLevel(level, 'down')}
-                      disabled={i === roleLevels.length - 1}
-                      className="text-muted-foreground hover:text-foreground disabled:opacity-20"
-                    >
-                      <ChevronDown className="size-3.5" />
-                    </button>
-                  </div>
-                  <Tag onRemove={() => removeRoleLevel(level)}>{level}</Tag>
-                  <button
-                    onClick={() => toggleRestrictedRole(level)}
-                    className={`rounded px-2 py-0.5 text-xs transition-colors ${
-                      isRestricted
-                        ? 'bg-warning/15 text-warning hover:bg-warning/25'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {isRestricted ? t('admin.tags.restricted') : t('admin.tags.unrestricted')}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
+          <RoleEditor />
           <RoleLevelAdd onAdd={addRoleLevel} />
         </div>
       </div>
@@ -176,7 +142,7 @@ export function AdminTags() {
           {jobTypes.map((role) => (
             <JobRequirementsRow
               key={role}
-              role={role}
+              role={roleName(role)}
               skills={jobRequirements[role] ?? []}
               options={skillOptions}
               onChange={(next) => setJobRequirements(role, next)}
@@ -199,7 +165,7 @@ export function AdminTags() {
             {restrictedRoles.filter((r) => roleLevels.includes(r)).map((role) => (
               <RolePermissionRow
                 key={role}
-                role={role}
+                role={roleName(role)}
                 sections={rolePermissions[role] ?? DEFAULT_NON_TOP_SECTIONS}
                 onChange={(next) => setRolePermissions(role, next)}
               />
@@ -318,6 +284,164 @@ function JobRequirementsRow({
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// 役職の一覧の編集(並び順・制限・名前・種類・削除)。
+// 名前の変更と最上位の役職の追加は、内部コードへの移行の後(Settings の roles がある時)だけ。
+// 使っているメンバーがいる役職は、別の役職に移してから削除する(GAS の deleteRole)
+function RoleEditor() {
+  const {
+    roles,
+    rolesFromSetting,
+    members,
+    currentUser,
+    isTopRef,
+    reorderRoleLevel,
+    toggleRestrictedRole,
+    renameRole,
+    setRoleTier,
+    removeRoleLevel,
+  } = useOhsumi()
+  const { t } = useI18n()
+  const roleName = useRoleLabel()
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [moveTo, setMoveTo] = useState('')
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null)
+  const isTop = isTopRef(currentUser?.role)
+  const countOf = (id: string) => members.filter((m) => sameRole(roles, m.role, id)).length
+  // 削除できない役職: 一般・最初の最上位(移行前は代表)
+  const fixed = (id: string) => {
+    const r = roles.find((x) => x.id === id)
+    return !r || r.tier === 'base' || r.id === TOP_ROLE_ID || (!rolesFromSetting && r.name === DEFAULT_TOP_ROLE_NAME)
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      {!rolesFromSetting && <p className="text-xs text-muted-foreground">{t('admin.tags.roles.beforeMigration')}</p>}
+      {roles.map((r, i) => {
+        const count = countOf(r.id)
+        return (
+          <div key={r.id} className="rounded-md border border-border/60 px-2 py-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {r.tier !== 'base' && (
+                <div className="flex flex-col">
+                  <button
+                    onClick={() => reorderRoleLevel(r.id, 'up')}
+                    disabled={i <= 1}
+                    aria-label={t('admin.tags.roles.moveUp')}
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-20"
+                  >
+                    <ChevronUp className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => reorderRoleLevel(r.id, 'down')}
+                    disabled={i === roles.length - 1}
+                    aria-label={t('admin.tags.roles.moveDown')}
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-20"
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </button>
+                </div>
+              )}
+              {editing?.id === r.id ? (
+                <input
+                  autoFocus
+                  value={editing.name}
+                  onChange={(e) => setEditing({ id: r.id, name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                    if (e.key === 'Enter') { renameRole(r.id, editing.name); setEditing(null) }
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                  onBlur={() => { renameRole(r.id, editing.name); setEditing(null) }}
+                  className="h-7 w-32 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+                />
+              ) : (
+                <span className="text-sm font-medium">{roleName(r.id)}</span>
+              )}
+              <span className="text-[11px] text-muted-foreground">{t('admin.tags.roles.memberCount', { count })}</span>
+              <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                {r.tier === 'base' && <span className="text-[11px] text-muted-foreground">{t('admin.tags.roles.tierBase')}</span>}
+                {r.tier !== 'base' && rolesFromSetting && isTop ? (
+                  <select
+                    value={r.tier}
+                    onChange={(e) => setRoleTier(r.id, e.target.value as 'top' | 'admin')}
+                    aria-label={t('admin.tags.roles.tierLabel')}
+                    className="h-7 rounded-md border border-border bg-background px-1 text-xs"
+                  >
+                    <option value="admin">{t('admin.tags.roles.tierAdmin')}</option>
+                    <option value="top">{t('admin.tags.roles.tierTop')}</option>
+                  </select>
+                ) : (
+                  r.tier === 'top' && <span className="text-[11px] text-muted-foreground">{t('admin.tags.roles.tierTop')}</span>
+                )}
+                {r.tier === 'admin' && (
+                  <button
+                    onClick={() => toggleRestrictedRole(r.id)}
+                    className={`rounded px-2 py-0.5 text-xs whitespace-nowrap transition-colors ${
+                      r.restricted ? 'bg-warning/15 text-warning hover:bg-warning/25' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {r.restricted ? t('admin.tags.restricted') : t('admin.tags.unrestricted')}
+                  </button>
+                )}
+                {rolesFromSetting && (
+                  <button
+                    onClick={() => setEditing({ id: r.id, name: r.name })}
+                    className="rounded px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
+                  >
+                    {t('admin.tags.roles.rename')}
+                  </button>
+                )}
+                {!fixed(r.id) && (
+                  <button
+                    onClick={() => { setDeleting(r.id); setMoveTo('') }}
+                    aria-label={t('admin.tags.roles.delete')}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </span>
+            </div>
+            {deleting === r.id && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-secondary/60 p-2 text-xs">
+                {count > 0 ? (
+                  <>
+                    <span>{t('admin.tags.roles.moveMembers', { count })}</span>
+                    <select
+                      value={moveTo}
+                      onChange={(e) => setMoveTo(e.target.value)}
+                      className="h-7 rounded-md border border-border bg-background px-1 text-xs"
+                    >
+                      <option value="">{t('admin.tags.roles.chooseMoveTo')}</option>
+                      {roles.filter((x) => x.id !== r.id).map((x) => (
+                        <option key={x.id} value={x.id}>{roleName(x.id)}</option>
+                      ))}
+                    </select>
+                    {!isTop && <span className="text-warning">{t('admin.tags.roles.moveNeedsTop')}</span>}
+                  </>
+                ) : (
+                  <span>{t('admin.tags.roles.deleteConfirm')}</span>
+                )}
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-7"
+                  disabled={count > 0 && (!moveTo || !isTop)}
+                  onClick={() => { removeRoleLevel(r.id, count > 0 ? moveTo : undefined); setDeleting(null) }}
+                >
+                  {t('admin.tags.roles.deleteButton')}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setDeleting(null)}>
+                  {t('common.cancel')}
+                </Button>
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

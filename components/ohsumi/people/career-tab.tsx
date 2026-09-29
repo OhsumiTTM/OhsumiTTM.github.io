@@ -1,5 +1,6 @@
 'use client'
 
+import { findRole } from '@/lib/ohsumi/roles'
 import { useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { SectionLabel, Avatar } from '@/components/ohsumi/primitives'
@@ -11,7 +12,7 @@ import { useI18n, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure } from '@/lib/ohsumi/utils'
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
-import { DIFFICULTY_LABEL, isTopRole } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL } from '@/lib/ohsumi/types'
 import { cn } from '@/lib/utils'
 import { X, Plus, GraduationCap, CheckCircle2, Download, Upload } from 'lucide-react'
 import type {
@@ -992,11 +993,13 @@ function TrainingHistorySection({
   onDecide: CareerTabProps['notifyTrainingDecision']
   rid: () => string
 }) {
-  const { currentUser, trainingPrograms } = useOhsumi()
+  const { isTopRef, currentUser, trainingPrograms, roles } = useOhsumi()
+  // 役職の名前(団体が付けた名前。研修の対象の層との部分一致に使う)
+  const roleNameRaw = findRole(roles, member.role)?.name ?? member.role
   const { t: trHint } = useI18n()
   // notifyTrainingDecisionはGAS側で常にisDaihyo固定（研修承認の記録自体
   // =updateTrainingHistoryはselfOrAdminで成功するが、通知メールだけ失敗する）
-  const notifyDecisionHint = !isTopRole(currentUser?.role) ? trHint('admin.accessNote.daihyo') : undefined
+  const notifyDecisionHint = !isTopRef(currentUser?.role) ? trHint('admin.accessNote.daihyo') : undefined
   const items = member.trainingHistory ?? []
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
@@ -1009,7 +1012,7 @@ function TrainingHistorySection({
   const matchingPrograms = trainingPrograms.filter(
     (p) =>
       p.targetSegments.length === 0 ||
-      p.targetSegments.some((seg) => member.role.includes(seg) || seg.includes(member.role)),
+      p.targetSegments.some((seg) => roleNameRaw.includes(seg) || seg.includes(roleNameRaw)),
   )
 
   // 管理者が直接記録する場合は即時「承認済み」、本人が申請する場合は

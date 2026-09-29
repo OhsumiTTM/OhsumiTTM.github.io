@@ -1220,7 +1220,8 @@ export const ja = {
 
   // ---- 基本ロール（BASE_ROLE。それ以外の追加ロールは組織の自由入力のため
   // 辞書化できず、自動翻訳（lib/ohsumi/translate.ts）の対象にする）------------
-  'role.一般': '一般',
+  'role.base': '一般',
+  'role.top': '代表',
 
   // ---- importance / schedule answer (codes.ts) --------------
   'importance.normal': '一般',
@@ -1286,8 +1287,23 @@ export const ja = {
   'admin.tags.requiredFields': '要求分野',
   'admin.tags.requiredFieldsDesc': '要求スキルの上位グルーピングです（例：デザイン、営業、AI活用）。メンバーに直接割り当てるのは要求スキルのみで、分野は下の「要求分野の構成」で紐づけたスキルの保有率から自動的に判定されます。',
   'admin.tags.categories': 'カテゴリ',
-  'admin.tags.permissionLevels': '権限レベル（一般より上）',
+  'admin.tags.permissionLevels': '役職',
   'admin.tags.permissionLevelsDesc': '「制限あり」にしたレベルは、見せるセクションを下の「権限レベルごとの表示範囲」で個別に設定できます。それ以外は全管理者権限を持ちます。',
+  'admin.tags.roles.beforeMigration': '役職の名前の変更と、代表以外の最上位の役職は、内部コードへの移行の後にできるようになります。',
+  'admin.tags.roles.moveUp': '上へ',
+  'admin.tags.roles.moveDown': '下へ',
+  'admin.tags.roles.memberCount': '{count}人',
+  'admin.tags.roles.tierLabel': '役職の種類',
+  'admin.tags.roles.tierBase': '一般(管理者ではない)',
+  'admin.tags.roles.tierAdmin': '管理者',
+  'admin.tags.roles.tierTop': '最上位',
+  'admin.tags.roles.rename': '名前を変更',
+  'admin.tags.roles.delete': '役職を削除',
+  'admin.tags.roles.moveMembers': 'この役職の{count}人を、次の役職に移してから削除します:',
+  'admin.tags.roles.chooseMoveTo': '移す先を選ぶ',
+  'admin.tags.roles.moveNeedsTop': 'メンバーを移すのは最上位の役職の人だけができます',
+  'admin.tags.roles.deleteConfirm': 'この役職を削除しますか?',
+  'admin.tags.roles.deleteButton': '削除',
   'admin.tags.restricted': '制限あり',
   'admin.tags.unrestricted': '制限なし',
   'admin.tags.fieldComposition': '要求分野の構成',

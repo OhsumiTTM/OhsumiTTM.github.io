@@ -1,5 +1,6 @@
 'use client'
 
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useState, useRef, useCallback, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -7,7 +8,6 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Download, Upload, Eye, Search } from 'lucide-react'
 import type { CustomMemberColumn, Member } from '@/lib/ohsumi/types'
-import { BASE_ROLE, isTopRole } from '@/lib/ohsumi/types'
 import { exportSkillExcel } from '@/lib/ohsumi/export-excel'
 import { computeYearsOfExperience } from '@/lib/ohsumi/utils'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -62,11 +62,11 @@ function parseSkillRows(
   return updates
 }
 
-function buildBaseCols(t: TranslationFn): ColDef[] {
+function buildBaseCols(t: TranslationFn, roleName: (ref: string) => string): ColDef[] {
   return [
     { key: 'name', label: t('admin.memberDb.col.name'), getValue: (m) => m.name, editable: false, width: 140 },
     { key: 'affiliation', label: t('admin.memberDb.col.affiliation'), getValue: (m) => m.affiliation, editable: false, width: 140, tooltip: t('admin.memberDb.col.affiliationTooltip') },
-    { key: 'role', label: t('admin.memberDb.col.role'), getValue: (m) => m.role, editable: false, width: 100 },
+    { key: 'role', label: t('admin.memberDb.col.role'), getValue: (m) => roleName(m.role), editable: false, width: 100 },
     { key: 'skills', label: t('admin.memberDb.col.skills'), getValue: (m) => (m.skills ?? []).join(', '), editable: false, width: 180 },
     // 経験年数はjoinedAt(所属日)からの自動計算に統一したため編集不可。
     // 所属日はjoinedAt列から変更する
@@ -172,7 +172,7 @@ function downloadCsv(filename: string, rows: string[][]) {
 // ---------- main component ----------
 
 export function AdminMemberDb() {
-  const {
+  const { isAdminRef, isTopRef,
     members,
     skillOptions,
     visibleTasks,
@@ -186,20 +186,21 @@ export function AdminMemberDb() {
     customMemberColumns,
     updateCustomField,
   } = useOhsumi()
+  const roleName = useRoleLabel()
   const { t } = useI18n()
 
   // true for any admin role (代表・班長 etc.), false for 一般
-  const isAnyAdmin = !!(currentUser?.role) && currentUser.role !== BASE_ROLE
+  const isAnyAdmin = !!(currentUser?.role) && isAdminRef(currentUser.role)
 
   // updateJoinedAtはGAS側で常にisDaihyo固定。このテーブルはisAnyAdmin
   // （代表以外の管理者ロールも含む）に編集可能な列として見えるため、
   // セルクリックで編集を試みると代表以外は保存時にエラーになる
-  const isDaihyo = isTopRole(currentUser?.role)
+  const isDaihyo = isTopRef(currentUser?.role)
 
   // Columns the current viewer is allowed to see/export — fixed cols +
   // dynamically-defined custom cols (Admin > Tags「カスタム項目」)
   const allCols = useMemo(() => {
-    const cols = [...buildBaseCols(t), ...buildCustomCols(customMemberColumns), ...buildSkillCols(skillOptions)]
+    const cols = [...buildBaseCols(t, roleName), ...buildCustomCols(customMemberColumns), ...buildSkillCols(skillOptions)]
     if (!isDaihyo) {
       const joinedAtCol = cols.find((c) => c.key === 'joinedAt')
       if (joinedAtCol) joinedAtCol.tooltip = t('admin.accessNote.daihyo')

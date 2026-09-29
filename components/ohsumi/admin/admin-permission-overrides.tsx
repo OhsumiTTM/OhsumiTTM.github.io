@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Trash2, Plus, ShieldCheck } from 'lucide-react'
 import type { Member, PermissionOverride } from '@/lib/ohsumi/types'
-import { DEPARTMENTS, isTopRole } from '@/lib/ohsumi/types'
+import { DEPARTMENTS } from '@/lib/ohsumi/types'
 import { useI18n, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 const ACCESS_LABEL_KEY: Record<string, TranslationKey> = {
@@ -30,13 +30,13 @@ interface OverrideEditorProps {
 }
 
 function OverrideEditor({ member, onClose }: OverrideEditorProps) {
-  const { updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOhsumi()
+  const { isTopRef, updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOhsumi()
   const toast = useToast()
   const { t: tr } = useI18n()
   // updatePermissionOverridesはGAS側で常にisDaihyo固定（人事機密のため）。
   // このボタンはisFullAdmin配下（admin-members.tsx）に表示されるため、
   // 代表以外の全権管理者にも見えてしまう
-  const isDaihyo = isTopRole(currentUser?.role)
+  const isDaihyo = isTopRef(currentUser?.role)
 
   const [overrides, setOverrides] = useState<PermissionOverride[]>(
     member.permissionOverrides ?? [],

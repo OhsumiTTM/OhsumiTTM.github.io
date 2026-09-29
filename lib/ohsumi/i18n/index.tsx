@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { ja } from './ja'
 import { en } from './en'
+import { DEFAULT_BASE_ROLE_NAME, DEFAULT_TOP_ROLE_NAME, findRole, type RoleDef } from '../roles'
 import type { TaskStatus, Priority, Difficulty, TaskImportance, ScheduleResponseValue } from '../types'
 
 // 新しい言語を追加するときは: 1) この配列に追記 2) 対応する辞書ファイル
@@ -92,10 +93,15 @@ export const SCHEDULE_ANSWER_KEY: Record<ScheduleResponseValue, TranslationKey> 
   no: 'scheduleAnswer.no',
 }
 
-// BASE_ROLE（'一般'）のみ辞書化。それ以外の組織定義ロールはこの関数を通さず
-// 元の文字列のまま（または自動翻訳経由で）表示する。
-export function roleLabelKey(role: string): TranslationKey | null {
-  return role === '一般' ? 'role.一般' : null
+// 役職の表示名。役職名は団体が付ける名前なのでそのまま表示する。ただし一般・最上位の
+// 役職が既定の名前(一般・代表)のままなら翻訳する(英語表示で片方だけ日本語に残らないように)。
+// 一覧に無い役職(移行前の古い役職名など)は、その値をそのまま表示する
+export function roleLabel(t: (key: TranslationKey) => string, roles: RoleDef[], ref: string | null | undefined): string {
+  const role = ref ? findRole(roles, ref) : roles.find((r) => r.tier === 'base')
+  if (!role) return String(ref ?? '')
+  if (role.tier === 'base' && role.name === DEFAULT_BASE_ROLE_NAME) return t('role.base')
+  if (role.tier === 'top' && role.name === DEFAULT_TOP_ROLE_NAME) return t('role.top')
+  return role.name
 }
 
 function isLocale(v: string | null): v is Locale {

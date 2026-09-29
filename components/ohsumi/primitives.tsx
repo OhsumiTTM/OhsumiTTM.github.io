@@ -8,8 +8,7 @@ import {
   type Difficulty,
   type Priority,
   type TaskStatus,
-  isTopRole,
-} from '@/lib/ohsumi/types'
+  } from '@/lib/ohsumi/types'
 import type { Member, Department, Task } from '@/lib/ohsumi/types'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, departmentLabel } from '@/lib/ohsumi/i18n'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -246,9 +245,9 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 // - daihyo: 常にisDaihyo固定のアクション（メンバー削除・ロール変更・
 //   権限例外編集・採用管理など）。isFullAdminとは無関係に代表のみ。
 export function AdminAccessNote({ level, className }: { level: 'fullAdmin' | 'daihyo'; className?: string }) {
-  const { isFullAdmin, currentUser } = useOhsumi()
+  const { isTopRef, isFullAdmin, currentUser } = useOhsumi()
   const { t } = useI18n()
-  const blocked = level === 'fullAdmin' ? !isFullAdmin : !isTopRole(currentUser?.role)
+  const blocked = level === 'fullAdmin' ? !isFullAdmin : !isTopRef(currentUser?.role)
   if (!blocked) return null
   return (
     <p className={cn('flex items-start gap-1.5 text-xs text-warning', className)}>

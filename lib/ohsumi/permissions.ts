@@ -3,30 +3,24 @@
 // without mounting the whole React context. These are the actual functions
 // the app calls, not a parallel reimplementation — keep them in sync by
 // editing here, not by re-inlining the logic elsewhere.
-import { ADMIN_SECTIONS, BASE_ROLE, DEFAULT_NON_TOP_SECTIONS, STATUS_ORDER } from './types'
+import { ADMIN_SECTIONS, STATUS_ORDER } from './types'
+import { isAdminRoleRef, isFullAdminRoleRef, restrictedSections, type RoleDef } from './roles'
 import type { AdminSection, Role, TaskImportance, TaskStatus } from './types'
 
-// A role is full admin when it is neither BASE_ROLE nor in the explicit
-// restrictedRoles list (configured per-role in the Tags admin screen).
-// An empty restrictedRoles means all configured roles are full admin.
+// 全権管理者: 最上位の役職、または制限の無い管理者の役職(roles.ts)。
 // See store.tsx's isFullAdminMember for the Member-object wrapper.
-export function isFullAdminRole(role: Role | null | undefined, restrictedRoles: string[]): boolean {
-  if (!role || role === BASE_ROLE) return false
-  return !restrictedRoles.includes(role)
+export function isFullAdminRole(roles: RoleDef[], role: Role | null | undefined): boolean {
+  return isFullAdminRoleRef(roles, role)
 }
 
 // Which admin-screen sections a role can see — falls back to
 // DEFAULT_NON_TOP_SECTIONS (everything but Members/Tags/Analytics) when no
 // explicit per-role choice was configured. See store.tsx's
 // visibleAdminSections for the currentUser-bound wrapper.
-export function resolveVisibleAdminSections(
-  role: Role | null | undefined,
-  restrictedRoles: string[],
-  rolePermissions: Record<string, AdminSection[]>,
-): AdminSection[] {
-  if (isFullAdminRole(role, restrictedRoles)) return ADMIN_SECTIONS.map((s) => s.key)
-  if (!role || role === BASE_ROLE) return []
-  const sections = rolePermissions[role] ?? DEFAULT_NON_TOP_SECTIONS
+export function resolveVisibleAdminSections(roles: RoleDef[], role: Role | null | undefined): AdminSection[] {
+  if (isFullAdminRoleRef(roles, role)) return ADMIN_SECTIONS.map((s) => s.key)
+  if (!isAdminRoleRef(roles, role)) return []
+  const sections = restrictedSections(roles, role)
   // dashboard is the redirect target for a disallowed section, so it must
   // always stay reachable to avoid a redirect loop
   return sections.includes('dashboard') ? sections : ['dashboard', ...sections]

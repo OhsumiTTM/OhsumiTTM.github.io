@@ -22,6 +22,8 @@ function loadGas(props: Record<string, string> = {}): Gas {
     },
   })
   vm.runInContext(CODE_GS, ctx)
+  // 役職の設定はシートから読まず、既定(今までの設定が空)にする
+  ;(ctx as unknown as { readRoleSettings: () => object }).readRoleSettings = () => ({})
   return ctx as unknown as Gas
 }
 

@@ -6,7 +6,6 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { useTheme } from '@/lib/ohsumi/theme'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
-import { isAdminRole } from '@/lib/ohsumi/types'
 import { Avatar, OhsumiMark, StoredImage } from './primitives'
 import { cn } from '@/lib/utils'
 import {
@@ -37,7 +36,7 @@ import {
 
 
 export function Header() {
-  const {
+  const { isAdminRef,
     currentUser,
     setMode,
     logout,
@@ -132,7 +131,7 @@ export function Header() {
     screen.name === 'person' ||
     screen.name === 'project'
   const isAdminActive = screen.name === 'admin'
-  const isAdmin = isAdminRole(currentUser.role)
+  const isAdmin = isAdminRef(currentUser.role)
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur">

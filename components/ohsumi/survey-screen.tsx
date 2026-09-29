@@ -30,7 +30,7 @@ export function buildDefaultQuestions(t: (key: import('@/lib/ohsumi/i18n').Trans
 }
 
 export function SurveyScreen() {
-  const { currentUser, members, surveyInvitedIds, surveyResponses, submitSurveyResponse, surveyQuestions } = useOhsumi()
+  const { isAdminRef, currentUser, members, surveyInvitedIds, surveyResponses, submitSurveyResponse, surveyQuestions } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const DEFAULT_QUESTIONS = surveyQuestions.length > 0 ? surveyQuestions : buildDefaultQuestions(t)
@@ -38,7 +38,7 @@ export function SurveyScreen() {
   const [answers, setAnswers] = useState<Record<string, number | string>>({})
   const [submitted, setSubmitted] = useState(false)
 
-  const isAdmin = !!currentUser && currentUser.role !== '一般'
+  const isAdmin = !!currentUser && isAdminRef(currentUser.role)
   // 招待制アンケート: invitedIdsが空なら全員回答可。管理者は設定のため常にアクセス可
   const isInvited =
     surveyInvitedIds.length === 0 || isAdmin || (!!currentUser && surveyInvitedIds.includes(currentUser.id))

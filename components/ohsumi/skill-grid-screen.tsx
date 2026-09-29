@@ -7,7 +7,7 @@ import { useToast } from './toast'
 import { Avatar } from './primitives'
 import { Modal } from './modal'
 import { Button } from '@/components/ui/button'
-import { isAdminRole, type Member, type SkillLevel, type SkillLevelValue, type Task } from '@/lib/ohsumi/types'
+import { type Member, type SkillLevel, type SkillLevelValue, type Task } from '@/lib/ohsumi/types'
 import { ArrowLeft, Pencil, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -39,14 +39,14 @@ function setMemberSkillLevel(existing: SkillLevel[], skill: string, level: Skill
 }
 
 export function SkillGridScreen() {
-  const { members, skillOptions, currentUser, visibleTasks, updateSkillLevels, bulkUpdateSkills } = useOhsumi()
+  const { isAdminRef, members, skillOptions, currentUser, visibleTasks, updateSkillLevels, bulkUpdateSkills } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()
 
   // isLeader相当 — 一般以外の全ロール。人材DB(admin-member-db.tsx)等と
   // 同じ判定基準（isAdminRole = role !== BASE_ROLE）を使う
-  const isLeader = !!currentUser && isAdminRole(currentUser.role)
+  const isLeader = !!currentUser && isAdminRef(currentUser.role)
 
   const [editMode, setEditMode] = useState(false)
   const [approving, setApproving] = useState<{ member: Member; skill: string; level: SkillLevelValue } | null>(null)

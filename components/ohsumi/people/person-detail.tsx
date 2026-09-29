@@ -1,5 +1,6 @@
 'use client'
 
+import { findRole } from '@/lib/ohsumi/roles'
 import { useRef, useState, useEffect } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
@@ -14,8 +15,9 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
-import { isAdminRole, BASE_ROLE, DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member, isTopRole } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member } from '@/lib/ohsumi/types'
 import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useI18n, SUPPORTED_LOCALES, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TIMEZONE_OPTIONS, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
@@ -86,7 +88,7 @@ function resizeImageToDataUrl(file: File, t: (key: TranslationKey) => string, si
 }
 
 export function PersonDetail({ id }: { id: string }) {
-  const {
+  const { roles, isAdminRef, isTopRef,
     getMember,
     visibleTasks: tasks,
     archivedTasks,
@@ -144,6 +146,7 @@ export function PersonDetail({ id }: { id: string }) {
   const { go } = useNav()
   const toast = useToast()
   const { t, locale, setLocale } = useI18n()
+  const roleName = useRoleLabel()
   // 個人ページを開いたときは、自分・他人問わずプロフィール詳細(Overview)
   // ではなくタスクに関する内容を最初に見せる(item: 「対象:個人」で個人名を
   // クリックしたときもタスクの内容だけ表示してほしい)。自分の場合の
@@ -362,7 +365,7 @@ export function PersonDetail({ id }: { id: string }) {
 
   // item 17: ポジション要件 — this member's role's required skills vs what
   // they already have
-  const positionRequirements = jobRequirements[member.role] ?? []
+  const positionRequirements = jobRequirements[findRole(roles, member.role)?.id ?? member.role] ?? []
   const positionHas = positionRequirements.filter((s) => member.skills.includes(s))
   const positionMissing = positionRequirements.filter((s) => !member.skills.includes(s))
 
@@ -385,7 +388,7 @@ export function PersonDetail({ id }: { id: string }) {
   )
 
   const isSelf = currentUser?.id === member.id
-  const isAdmin = !!currentUser && isAdminRole(currentUser.role)
+  const isAdmin = !!currentUser && isAdminRef(currentUser.role)
   const displayName = member.displayName || member.name
 
   return (
@@ -465,7 +468,7 @@ export function PersonDetail({ id }: { id: string }) {
             </h1>
           )}
           <p className="mt-0.5 text-sm text-muted-foreground">
-            {member.role !== BASE_ROLE ? member.role : member.affiliation}
+            {isAdminRef(member.role) ? roleName(member.role) : member.affiliation}
           </p>
           {isAdmin ? (
             // メンバーは複数部署に同時所属できるため、タグ形式でその場編集する
@@ -513,7 +516,7 @@ export function PersonDetail({ id }: { id: string }) {
                 className="rounded-md p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
                 aria-label={t('person.avatar.editJoinedAt')}
                 // updateJoinedAtはGAS側で常にisDaihyo固定（本人による編集も含む）
-                title={!isTopRole(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
+                title={!isTopRef(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
               >
                 <Pencil className="size-3" />
               </button>
@@ -688,7 +691,7 @@ export function PersonDetail({ id }: { id: string }) {
                   value={member.mentorId ?? ''}
                   onChange={(e) => updateMentor(member.id, e.target.value || null)}
                   // updateMentorはGAS側で常にisDaihyo固定
-                  title={!isTopRole(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
+                  title={!isTopRef(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
                   className="h-8 cursor-pointer rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
                 >
                   <option value="">{t('person.growth.mentor.unsetOption')}</option>
