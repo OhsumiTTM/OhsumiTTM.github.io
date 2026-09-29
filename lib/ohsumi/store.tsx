@@ -97,6 +97,7 @@ import {
   fetchInitialData,
   exchangeIdToken,
   SESSION_ENDED_EVENT,
+  type BackgroundData,
   type InitialData,
   type RemoteSettings,
   initialsForName,
@@ -1031,7 +1032,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setMyEmail(MEMBERS.find((m) => m.id === currentUserId)?.email ?? '')
       return
     }
-    // GAS を使う時は、裏での読み込み(getBackgroundData)で受け取る(loadRecords)
+    // GAS を使う時は、初期データの応答(withBackground)か getBackgroundData で受け取る(applyOrLoadRecords)
   }, [currentUserId])
 
   // hydrate from localStorage once (only meaningful without a remote DB —
@@ -1169,24 +1170,42 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       ]).then(() => undefined),
     [reportLoadError],
   )
+  const applyBackgroundData = useCallback(
+    (data: BackgroundData) => {
+      if (data.expenses) setExpenseApplications(data.expenses)
+      if (data.formSubmissions) setCustomFormSubmissions(data.formSubmissions)
+      if (data.candidates) setCandidates(data.candidates)
+      if (typeof data.myEmail === 'string') setMyEmail(data.myEmail)
+      const failed = Object.entries(data.errors ?? {}).filter(([key]) => key !== 'myEmail')
+      if (failed.length) reportLoadError(new Error(failed.map(([key, msg]) => `${key}: ${msg}`).join(' / ')))
+    },
+    [reportLoadError],
+  )
   const loadRecords = useCallback(() => {
     if (!isRemoteConfigured) return
     remoteApi
       .getBackgroundData()
-      .then((data) => {
-        if (data.expenses) setExpenseApplications(data.expenses)
-        if (data.formSubmissions) setCustomFormSubmissions(data.formSubmissions)
-        if (data.candidates) setCandidates(data.candidates)
-        if (typeof data.myEmail === 'string') setMyEmail(data.myEmail)
-        const failed = Object.entries(data.errors ?? {}).filter(([key]) => key !== 'myEmail')
-        if (failed.length) reportLoadError(new Error(failed.map(([key, msg]) => `${key}: ${msg}`).join(' / ')))
-      })
+      .then(applyBackgroundData)
       .catch((err: unknown) => {
         if (err instanceof Error && /Unknown action/.test(err.message)) return loadRecordsSeparately()
         reportLoadError(err)
       })
       .finally(reportLoadTime)
-  }, [reportLoadError, loadRecordsSeparately, reportLoadTime])
+  }, [reportLoadError, loadRecordsSeparately, reportLoadTime, applyBackgroundData])
+  // 初期データ(ログイン・再読み込み・情報更新)の応答に裏での読み込みが入っていれば、それを使う
+  // (通信は1回で済む)。GAS が古い・裏での読み込みだけ失敗した時は、別に getBackgroundData を送る
+  const applyOrLoadRecords = useCallback(
+    (res: { background?: BackgroundData; backgroundError?: string }) => {
+      if (!isRemoteConfigured) return
+      if (res.background) {
+        applyBackgroundData(res.background)
+        reportLoadTime()
+        return
+      }
+      loadRecords()
+    },
+    [applyBackgroundData, loadRecords, reportLoadTime],
+  )
 
   // ログインの後、データが反映されてから login() の処理(最終ログイン日時の更新・
   // 初期タスクの付与)を行うメンバー
@@ -1213,13 +1232,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         setSettingsReady(true)
         setRemoteStatus('ready')
         setPendingLoginId(res.memberId)
-        loadRecords()
+        applyOrLoadRecords(res)
         return { status: 'ok' as const }
       } catch (err) {
         throw err
       }
     },
-    [applyInitialData, loadRecords],
+    [applyInitialData, applyOrLoadRecords],
   )
 
   // 再読み込み後: この端末に保存したセッションがあれば、そのままログインし直す
@@ -1241,7 +1260,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         setSettingsReady(true)
         setRemoteStatus('ready')
         setCurrentUserId(res.memberId)
-        loadRecords()
+        applyOrLoadRecords(res)
       })
       .catch((err) => {
         if (!getSessionToken()) {
@@ -1258,7 +1277,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       })
       .finally(() => setSessionResuming(false))
     return true
-  }, [applyInitialData, loadRecords, reportLoadError])
+  }, [applyInitialData, applyOrLoadRecords, reportLoadError])
   useEffect(() => {
     if (!hydrated || !isRemoteConfigured || resumeTriedRef.current) return
     resumeTriedRef.current = true
@@ -1276,15 +1295,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setRefreshing(true)
     // 前回読み込んだ版を送り、変わっていなければ中身を受け取らない
     setLoadError(null)
+    // 裏での読み込みも同じ応答で受け取る(1回の通信)
     fetchInitialData(dataVersionRef.current)
       .then((res) => {
         if (res.memberId && !res.unchanged) applyInitialData(res)
         setRemoteError(null)
+        if (res.memberId) applyOrLoadRecords(res)
       })
       .catch(reportLoadError)
       .finally(() => setRefreshing(false))
-    loadRecords()
-  }, [reportLoadError, applyInitialData, loadRecords])
+  }, [reportLoadError, applyInitialData, applyOrLoadRecords])
 
   // 「もう一度試す」
   const retryLoad = useCallback(() => {

@@ -20,7 +20,10 @@
 //    (タグを除いた文字。トークンのような文字列は伏せる)も記録する。
 //    成功した時は、往復の時間と GAS の中での処理時間の内訳(gas/Code.gs の timing)を記録する。
 // 4. Google のログイン情報(Cookie)は送らない(credentials: 'omit')。GAS が GET で受け取った時
-//    (POST が転送の途中で GET に変わり、本文が失われた)は getReceived を返すので、原因を記録して送り直す。
+//    (echo が返事を渡さずに exec への GET に送り返した・POST が転送の途中で GET に変わった)は
+//    getReceived(bounced)を返すので、原因を記録して送り直す。読み取りは待たずにすぐ送り直す
+//    (書き込みは requestId を保ったまま、いつもの待ち時間の後に送り直す)。
+// 5. 切り分け用の ping(pingGas)。GAS は何もせずに返すので、往復の時間と GAS の中の時間を比べられる。
 
 export interface GasResponse<T = unknown> {
   ok: boolean
@@ -34,6 +37,8 @@ export interface GasResponse<T = unknown> {
   replayed?: boolean
   // GAS の doGet が応答した(POST の本文が失われて GET で届いた。何も処理していない)
   getReceived?: boolean
+  // doGet の応答(結果の受け渡しの途中で GET に送り返された)
+  bounced?: boolean
   // GAS の中での処理時間の内訳(gas/Code.gs の jsonOutput)
   timing?: GasTiming
   // 残りが半分を切ったセッションは、GAS が新しいトークンを返す(差し替える)
@@ -53,6 +58,7 @@ export const READ_ACTIONS = new Set([
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
+  'ping',
 ])
 
 // 送り直さない(1回しか使えない値を送る)
@@ -106,6 +112,9 @@ export interface GasTiming {
   readError?: string
   filterMs?: number
   verifyMs?: number
+  authFrom?: 'snapshot' | 'sheet'
+  // 初期データと同じ応答に入れた裏での読み込み(withBackground)
+  backgroundMs?: number
 }
 
 // ---- コンソールに出す文字の整え方 ----
@@ -160,6 +169,7 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.readError) parts.push(`Sheets API で読めなかった理由: ${timing.readError}`)
   if (timing.cacheWriteMs != null) parts.push(`キャッシュ書き込み ${timing.cacheWriteMs}`)
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
+  if (timing.backgroundMs != null) parts.push(`裏での読み込み ${timing.backgroundMs}`)
   return `GAS ${timing.totalMs}ms${parts.length ? `: ${parts.join('・')}` : ''}`
 }
 
@@ -314,7 +324,7 @@ function startReads(): void {
 
 type Attempt =
   | { kind: 'ok'; json: GasResponse; ms: number; split: { execMs: number; echoMs: number } | null }
-  | { kind: 'fail'; reason: string; detail?: string }
+  | { kind: 'fail'; reason: string; detail?: string; bounced?: boolean }
 
 async function fetchWithTimeout(url: string, body: string, timeoutMs: number): Promise<FetchedResponse> {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -366,7 +376,16 @@ async function attemptOnce(url: string, body: string, timeoutMs: number): Promis
     return { kind: 'fail', reason: `JSON ではない応答(HTTP ${res.status})`, detail: `${where}、本文の先頭: ${bodySnippet(text)}` }
   }
   const r = json as GasResponse
-  if (r.getReceived) return { kind: 'fail', reason: 'GAS に GET で届きました(POST の本文が転送の途中で失われた)', detail: where }
+  if (r.getReceived) {
+    return {
+      kind: 'fail',
+      reason: r.bounced
+        ? 'GAS に GET で届きました(結果の受け渡し(echo)が exec への GET に送り返した)'
+        : 'GAS に GET で届きました(POST の本文が転送の途中で失われた)',
+      detail: `${where}、${Date.now() - started}ms`,
+      bounced: true,
+    }
+  }
   if (r.retryLater) return { kind: 'fail', reason: `GAS が処理できませんでした(${r.error ?? '混み合っています'})` }
   return { kind: 'ok', json: r, ms: Date.now() - started, split: split() }
 }
@@ -374,10 +393,13 @@ async function attemptOnce(url: string, body: string, timeoutMs: number): Promis
 async function sendWithRetry<T>(url: string, action: string, body: string, maxAttempts: number, queuedMs: number): Promise<GasResponse<T>> {
   const started = Date.now()
   let reason = ''
+  let bounced = false
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
-      deps.log.warn(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}/${maxAttempts - 1}(原因: ${reason})`)
-      await deps.sleep(RETRY_DELAYS_MS[attempt - 2] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1])
+      // 送り返された読み取りは、GAS が何も処理していないので待たずに送り直す
+      const immediate = bounced && !isWriteAction(action)
+      deps.log.warn(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}/${maxAttempts - 1}${immediate ? '(すぐ送り直します)' : ''}(原因: ${reason})`)
+      if (!immediate) await deps.sleep(RETRY_DELAYS_MS[attempt - 2] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1])
     }
     const r = await attemptOnce(url, body, attemptTimeoutOf(action))
     if (r.kind === 'ok') {
@@ -390,6 +412,7 @@ async function sendWithRetry<T>(url: string, action: string, body: string, maxAt
       return r.json as GasResponse<T>
     }
     reason = r.reason
+    bounced = r.bounced === true
     if (r.detail) deps.log.warn(`[ohsumi] GAS ${action}: ${r.reason}。${r.detail}`)
   }
   deps.log.error(`[ohsumi] GAS ${action}: ${maxAttempts}回送りましたが、応答を受け取れませんでした(原因: ${reason})`)
@@ -413,4 +436,41 @@ export function sendToGas<T = unknown>(url: string, body: Record<string, unknown
     return writeChain.then(() => enqueueRead('foreground', () => task(Date.now() - queuedAt)))
   }
   return enqueueRead(priorityOf(action), task)
+}
+
+// ---- 切り分け用の ping ----
+
+export interface PingResult {
+  ok: boolean
+  // 画面から見た往復(fetch を始めてから JSON を受け取るまで)
+  roundTripMs: number
+  // exec への往復と echo の取得(分けられない時は null)
+  split: { execMs: number; echoMs: number } | null
+  // GAS の中の時間(ping は何もしないので、ほぼ実行の開始から終わりまで)
+  gasMs: number | null
+  error?: string
+}
+
+/**
+ * 何もしない ping を count 回、1回ずつ順に送り、往復の時間と GAS の中の時間を並べてコンソールに出す。
+ * 列には入れず(ほかのリクエストを待たない)、再試行もしない。ping でも遅ければ、Google 側か回線側の問題
+ */
+export async function pingGas(url: string, count = 3): Promise<PingResult[]> {
+  const results: PingResult[] = []
+  for (let i = 1; i <= count; i++) {
+    const started = Date.now()
+    const r = await attemptOnce(url, JSON.stringify({ action: 'ping' }), ATTEMPT_TIMEOUT_MS.read)
+    const roundTripMs = Date.now() - started
+    const result: PingResult =
+      r.kind === 'ok'
+        ? { ok: r.json.ok === true, roundTripMs, split: r.split, gasMs: r.json.timing?.totalMs ?? null, error: r.json.ok ? undefined : r.json.error }
+        : { ok: false, roundTripMs, split: null, gasMs: null, error: r.reason }
+    results.push(result)
+    const line =
+      `[ohsumi] ping ${i}/${count}: 往復 ${roundTripMs}ms(${describeRoundTrip(result.split)})・GAS の中 ${result.gasMs ?? '-'}ms` +
+      (result.error ? `・失敗: ${result.error}` : '')
+    if (result.ok) deps.log.info(line)
+    else deps.log.warn(line + (r.kind === 'fail' && r.detail ? `。${r.detail}` : ''))
+  }
+  return results
 }

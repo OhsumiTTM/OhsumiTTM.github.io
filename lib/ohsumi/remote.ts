@@ -64,7 +64,7 @@ import {
   normalizeThresholdKeys,
 } from './code-normalize'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
-import { GasTransportError, sendToGas, type GasResponse } from './gas-transport'
+import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
 import { checkGasUrl } from './gas-url'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
@@ -84,6 +84,16 @@ if (typeof window !== 'undefined' && GAS_URL) {
 }
 
 export const isRemoteConfigured = !!GAS_URL
+
+// 切り分け用: ブラウザのコンソールで ohsumiPing() を実行すると、何もしない ping を3回送り、
+// 往復の時間と GAS の中の時間を並べて出す(gas-transport.ts の pingGas)
+export function pingGasServer(count = 3) {
+  if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
+  return pingGas(GAS_URL, count)
+}
+if (typeof window !== 'undefined' && GAS_URL) {
+  ;(window as unknown as { ohsumiPing?: (count?: number) => Promise<unknown> }).ohsumiPing = (count?: number) => pingGasServer(count)
+}
 
 // image uploads go to a Drive folder that GAS manages itself (created by
 // setupOhsumi() and kept in a script property), so they only need GAS.
@@ -521,6 +531,10 @@ export interface InitialData {
   unchanged?: boolean
   data?: RemoteData
   settings?: RemoteSettings
+  // 同じ応答に入れた裏での読み込み(withBackground)。GAS が古い時は無い
+  background?: BackgroundData
+  // 裏での読み込みだけ失敗した(画面が getBackgroundData を送り直す)
+  backgroundError?: string
 }
 
 interface InitialDataResponse {
@@ -528,24 +542,30 @@ interface InitialDataResponse {
   version?: string
   unchanged?: boolean
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
+  background?: BackgroundData
+  backgroundError?: string
 }
 
 // Signs in (resolves the member) and loads Members/Projects/Tasks/Settings
 // in one GAS call. Pass the version from the previous load to skip the
 // payload when nothing changed.
+// 裏での読み込み(経費・フォームの回答・候補者・自分のメール)も同じ応答で受け取る(withBackground)。
+// 通信の回数そのものを減らす(1回ごとに、結果の受け渡しで止まる機会がある)
 // 所要時間と GAS の中の内訳は、gas-transport.ts がコンソールに出す
 export async function fetchInitialData(knownVersion?: string): Promise<InitialData> {
-  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion } : {})
+  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion, withBackground: true } : { withBackground: true })
   return toInitialData(res)
 }
 
 function toInitialData(res: InitialDataResponse): InitialData {
+  const extra = { background: res.background, backgroundError: res.backgroundError }
   if (!res.memberId || res.unchanged || !res.sheets) {
-    return { memberId: res.memberId, version: res.version, unchanged: res.unchanged }
+    return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }
   }
   const { Members, Projects, Tasks, Settings } = res.sheets
   const settings = parseSettings(tableToRecords(Settings))
   return {
+    ...extra,
     memberId: res.memberId,
     version: res.version,
     data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks), settings.roles, settings.departments),
@@ -627,6 +647,7 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
       idToken,
       nonceSecret,
       remember,
+      withBackground: true,
     })
   } catch (err) {
     // IDトークンは1回しか使えないため、送り直さない。ログイン画面は新しい試行でボタンを出し直すので、

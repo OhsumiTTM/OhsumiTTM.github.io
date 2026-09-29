@@ -15,6 +15,7 @@ import {
   safeResponseUrl,
   RETRY_DELAYS_MS,
   isWriteAction,
+  pingGas,
   priorityOf,
   sendToGas,
   setGasTransportDepsForTest,
@@ -235,7 +236,7 @@ describe('原因を調べるための記録', () => {
       log: { info: (t: string) => logs.push(t), warn: (t: string) => logs.push(t), error: (t: string) => logs.push(t) },
     })
     expect((await sendToGas(URL, { action: 'getExpenses' })).result).toBe(1)
-    expect(logs[0]).toBe('[ohsumi] GAS getExpenses: GAS に GET で届きました(POST の本文が転送の途中で失われた)。応答の URL: https://script.googleusercontent.com/macros/echo?…(転送あり)、exec と echo の内訳は取れません')
+    expect(logs[0]).toMatch(/^\[ohsumi\] GAS getExpenses: GAS に GET で届きました\(POST の本文が転送の途中で失われた\)。応答の URL: https:\/\/script\.googleusercontent\.com\/macros\/echo\?…\(転送あり\)、exec と echo の内訳は取れません、\d+ms$/)
     expect(logs.join('\n')).not.toContain('SECRETKEY123')
   })
 
@@ -317,11 +318,62 @@ describe('GAS と食い違わない', () => {
     vm.runInContext(code, ctx)
     const exempt = (ctx as unknown as { LOCK_EXEMPT_ACTIONS: string[] }).LOCK_EXEMPT_ACTIONS
     for (const a of READ_ACTIONS) {
-      if (a === 'getLoginConfig' || a === 'getInitialData') continue
+      if (a === 'getLoginConfig' || a === 'getInitialData' || a === 'ping') continue
       expect(exempt, a).toContain(a)
     }
     expect(isWriteAction('getInitialData')).toBe(false)
     expect(isWriteAction('updateTaskStatus')).toBe(true)
     expect(isWriteAction('checkAndGenerateRecurringTasks')).toBe(true)
+  })
+})
+
+describe('結果の受け渡しの途中で GET に送り返された時(bounced)', () => {
+  const bounced = json({ ok: false, getReceived: true, bounced: true, error: 'GET' })
+
+  it('読み取りは待たずにすぐ送り直す', async () => {
+    let n = 0
+    const h = harness(() => (++n === 1 ? bounced : json({ ok: true, result: 'data' })))
+    expect((await sendToGas(URL, { action: 'getInitialData' })).result).toBe('data')
+    expect(h.sent).toHaveLength(2)
+    expect(h.sleeps).toEqual([])
+    expect(h.logs.map((l) => l.text).join('\n')).toMatch(/echo\)が exec への GET に送り返した/)
+    expect(h.logs.map((l) => l.text).join('\n')).toMatch(/再試行 1\/2\(すぐ送り直します\)/)
+  })
+
+  it('書き込みは同じ requestId のまま、いつもの待ち時間の後に送り直す(二重に処理されない)', async () => {
+    let n = 0
+    const h = harness(() => (++n === 1 ? bounced : json({ ok: true, result: 'written' })))
+    expect((await sendToGas(URL, { action: 'updateTaskStatus', taskId: 't1' })).result).toBe('written')
+    expect(h.sent).toHaveLength(2)
+    expect(h.sent[0].requestId).toBe(h.sent[1].requestId)
+    expect(h.sleeps).toEqual([RETRY_DELAYS_MS[0]])
+  })
+
+  it('送り返しの後に別の失敗なら、いつもどおり待つ', async () => {
+    let n = 0
+    const h = harness(() => (++n === 1 ? bounced : n === 2 ? echo404 : json({ ok: true })))
+    await sendToGas(URL, { action: 'getExpenses' })
+    expect(h.sent).toHaveLength(3)
+    expect(h.sleeps).toEqual([RETRY_DELAYS_MS[1]])
+  })
+})
+
+describe('切り分け用の ping', () => {
+  it('列に入れず1回ずつ送り、往復の時間と GAS の中の時間を並べて出す(再試行しない)', async () => {
+    let n = 0
+    const h = harness(() => (++n === 2 ? echo404 : json({ ok: true, result: { pong: true }, timing: { totalMs: 3 } })))
+    const results = await pingGas(URL, 3)
+    expect(h.sent.map((b) => b.action)).toEqual(['ping', 'ping', 'ping'])
+    expect(h.sent[0]).toEqual({ action: 'ping' })
+    expect(results.map((r) => r.ok)).toEqual([true, false, true])
+    expect(results[0].gasMs).toBe(3)
+    expect(h.logs[0].text).toMatch(/^\[ohsumi\] ping 1\/3: 往復 \d+ms\(exec と echo の内訳は取れません\)・GAS の中 3ms$/)
+    expect(h.logs[1]).toMatchObject({ level: 'warn' })
+    expect(h.logs[1].text).toMatch(/ping 2\/3: .*失敗: JSON ではない応答\(HTTP 404\)/)
+    expect(h.sleeps).toEqual([])
+  })
+
+  it('ping は読み取り(requestId を付けない)', () => {
+    expect(isWriteAction('ping')).toBe(false)
   })
 })
