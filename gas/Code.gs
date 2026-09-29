@@ -8973,6 +8973,7 @@ function migrationRoles(settings, memberRoleRefs, topRoleName, report) {
     var listed = splitCsvList(settings.role_levels).indexOf(DEFAULT_TOP_ROLE_NAME) >= 0
     if (!used && !listed) roles = roles.filter(function (r) { return r.name !== DEFAULT_TOP_ROLE_NAME })
   }
+  roles = orderMigrationRoles(roles, report)
   // ID を付ける: 一般 → base、最上位(指定した役職)→ top、ほかは新しい ID
   roles = roles.map(function (r) {
     var copy = {}
@@ -8985,12 +8986,37 @@ function migrationRoles(settings, memberRoleRefs, topRoleName, report) {
   return { roles: roles, created: true }
 }
 
+// 役職を上下関係の順(一般 → 管理者の役職 → 最上位の役職)に並べる。管理者の役職の中では今の順を保つので、
+// 役職の一覧に無かった役職(最後に足したもの)は既存の管理者の役職の後ろ、つまり最上位の役職のすぐ下に入る。
+// 最上位の役職より後ろに並んでいた管理者の役職(role_levels で代表の後ろに書いたものなど)も、最上位の役職の下へ移す。
+// 入れた位置・移した位置は report.rolePlacements に出す
+function orderMigrationRoles(roles, report) {
+  var byTier = function (tier) { return roles.filter(function (r) { return r.tier === tier }) }
+  var tops = byTier('top')
+  var ordered = byTier('base').concat(byTier('admin'), tops)
+  var created = report.createdRoles || []
+  var firstTop = tops.length ? roles.indexOf(tops[0]) : -1
+  ordered.forEach(function (r, i) {
+    if (r.tier !== 'admin') return
+    var isCreated = created.indexOf(r.name) >= 0
+    var wasAboveTop = firstTop >= 0 && roles.indexOf(r) > firstTop
+    if (!isCreated && !wasAboveTop) return
+    report.rolePlacements.push({
+      name: r.name,
+      reason: isCreated ? 'created' : 'moved',
+      below: i > 0 ? ordered[i - 1].name : '',
+      above: i < ordered.length - 1 ? ordered[i + 1].name : '',
+    })
+  })
+  return ordered
+}
+
 // 移行の計画を作る(Google のサービスを使わない純粋な関数)。
 // snapshot: { Tasks, Members, Settings, Expenses } の { headers, rows }。opts: { topRoleName }
 // 返り値: { cells: { シート名: [[行, 列, 新しい値], ...] }, settings: { キー: 値 }, report }
 function planMigration(snapshot, opts) {
   opts = opts || {}
-  var report = { counts: {}, examples: {}, unknown: {}, createdRoles: [], roles: [], roleMembers: {}, errors: [] }
+  var report = { counts: {}, examples: {}, unknown: {}, createdRoles: [], rolePlacements: [], roles: [], roleMembers: {}, errors: [] }
   var cells = {}
   var settingsOut = {}
   var table = function (name) { return snapshot[name] || { headers: [], rows: [] } }
@@ -9040,7 +9066,7 @@ function planMigration(snapshot, opts) {
   var built = migrationRoles(settings, memberRoleRefs, opts.topRoleName, report)
   var roles = built.roles
   if (built.created) settingsOut.roles = JSON.stringify(roles)
-  report.roles = roles.map(function (r) { return { id: r.id, name: r.name, tier: r.tier } })
+  report.roles = roles.map(function (r) { return { id: r.id, name: r.name, tier: r.tier, restricted: r.tier === 'admin' && r.restricted === true } })
   var roleRefToId = function (key, ref) {
     var v = String(ref === null || ref === undefined ? '' : ref).trim()
     if (!v) return null
@@ -9224,11 +9250,19 @@ function formatMigrationReport(plan, mode) {
   uk.sort().forEach(function (k) {
     lines.push('  ' + k + ': ' + Object.keys(r.unknown[k]).map(function (v) { return '「' + v + '」' + r.unknown[k][v] + '件' }).join('、'))
   })
-  lines.push('■ 移行後の役職(上下関係の順。人数)')
+  lines.push('■ 移行後の役職(下の役職から順。種類・人数)')
   r.roles.forEach(function (role) {
-    lines.push('  ' + role.name + '(' + role.tier + '、ID: ' + role.id + ')' + (r.roleMembers[role.id] || 0) + '人')
+    var kind = role.tier === 'admin' ? (role.restricted ? '、制限付きの管理者' : '、全権の管理者') : ''
+    lines.push('  ' + role.name + '(' + role.tier + kind + '、ID: ' + role.id + ')' + (r.roleMembers[role.id] || 0) + '人')
   })
   if (r.createdRoles.length) lines.push('■ 役職の一覧に無かったため、管理者の役職として作る役職: ' + r.createdRoles.join('、'))
+  if (r.rolePlacements.length) {
+    lines.push('■ 役職を入れる位置(管理者の役職は、一般より上・最上位の役職より下に並べます)')
+    r.rolePlacements.forEach(function (p) {
+      var why = p.reason === 'created' ? '役職の一覧に無かった役職' : '最上位の役職より後ろに並んでいた役職'
+      lines.push('  ' + p.name + ': 「' + p.below + '」の上、「' + p.above + '」の下(' + why + ')')
+    })
+  }
   var sk = Object.keys(plan.settings)
   if (sk.length) lines.push('■ 書き換える Settings のキー: ' + sk.join('、'))
   if (r.errors.length) {
