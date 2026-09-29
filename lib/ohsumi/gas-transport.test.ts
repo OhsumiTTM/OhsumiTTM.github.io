@@ -8,6 +8,8 @@ import {
   ATTEMPT_TIMEOUT_MS,
   GasTransportError,
   READ_ACTIONS,
+  READ_CONCURRENCY,
+  splitRoundTrip,
   attemptTimeoutOf,
   bodySnippet,
   safeResponseUrl,
@@ -28,24 +30,26 @@ function harness(replies: (body: Record<string, unknown>) => Reply | Promise<Rep
   const sent: Record<string, unknown>[] = []
   const logs: { level: string; text: string }[] = []
   const sleeps: number[] = []
-  let inFlight = 0
-  let maxInFlight = 0
+  const inFlight = { read: 0, write: 0 }
+  const maxInFlight = { read: 0, write: 0 }
   let ids = 0
   setGasTransportDepsForTest({
     fetch: async (_url, init) => {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       sent.push(body)
-      inFlight++
-      maxInFlight = Math.max(maxInFlight, inFlight)
+      const kind = READ_ACTIONS.has(String(body.action)) ? 'read' : 'write'
+      inFlight[kind]++
+      maxInFlight[kind] = Math.max(maxInFlight[kind], inFlight[kind])
       try {
         await new Promise((r) => setTimeout(r, 1))
         const r = await replies(body)
         if (r.throws) throw new TypeError(r.throws)
         return { status: r.status ?? 200, text: async () => r.text ?? '' }
       } finally {
-        inFlight--
+        inFlight[kind]--
       }
     },
+    resourceTimings: () => [],
     sleep: async (ms) => { sleeps.push(ms) },
     log: {
       info: (t: string) => logs.push({ level: 'info', text: t }),
@@ -54,36 +58,75 @@ function harness(replies: (body: Record<string, unknown>) => Reply | Promise<Rep
     },
     newId: () => `req-${++ids}`,
   })
-  return { sent, logs, sleeps, maxInFlight: () => maxInFlight }
+  return { sent, logs, sleeps, maxInFlight: () => ({ ...maxInFlight }) }
 }
 
 afterEach(() => setGasTransportDepsForTest(null))
 
-describe('同時に送らない', () => {
-  it('同時に呼んでも1本ずつ送り、画面の操作(書き込み・初期データ)を裏の読み込みより先に送る', async () => {
+// 外から終わらせられる返事(詰まった1本を再現する)
+function gate<T>() {
+  let open!: (v: T) => void
+  const promise = new Promise<T>((r) => { open = r })
+  return { promise, open }
+}
+const tick = () => new Promise((r) => setTimeout(r, 5))
+
+describe('送る順番', () => {
+  it('書き込みは呼ばれた順に1本ずつ送る', async () => {
+    const h = harness(() => json({ ok: true }))
+    await Promise.all(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'].map((a) => sendToGas(URL, { action: a })))
+    expect(h.maxInFlight().write).toBe(1)
+    expect(h.sent.map((b) => b.action)).toEqual(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'])
+  })
+
+  it('読み取りは3本まで同時に送る', async () => {
     const h = harness(() => json({ ok: true, result: [] }))
-    // 再読み込みの後と同じ順に呼ぶ
-    await Promise.all([
-      sendToGas(URL, { action: 'getInitialData' }),
-      sendToGas(URL, { action: 'getExpenses' }),
-      sendToGas(URL, { action: 'getFormSubmissions' }),
-      sendToGas(URL, { action: 'getCandidates' }),
-      sendToGas(URL, { action: 'checkAndGenerateRecurringTasks' }),
-      sendToGas(URL, { action: 'updateLastLogin' }),
-      sendToGas(URL, { action: 'getMyEmails' }),
-    ])
-    expect(h.maxInFlight()).toBe(1)
-    expect(h.sent.map((b) => b.action)).toEqual([
-      'getInitialData', 'updateLastLogin',
-      'getExpenses', 'getFormSubmissions', 'getCandidates', 'checkAndGenerateRecurringTasks', 'getMyEmails',
-    ])
+    await Promise.all(Array.from({ length: 7 }, (_, i) => sendToGas(URL, { action: 'getFiles', fileIds: [String(i)] })))
+    expect(READ_CONCURRENCY).toBe(3)
+    expect(h.maxInFlight().read).toBe(3)
+    expect(h.sent).toHaveLength(7)
+  })
+
+  it('1本の読み取りが詰まっても、ほかの読み取りと書き込みは待たされない', async () => {
+    const stuck = gate<Reply>()
+    const h = harness((b) => (b.action === 'getBackgroundData' ? stuck.promise : json({ ok: true, result: [] })))
+    const slow = sendToGas(URL, { action: 'getBackgroundData' })
+    await tick()
+    await Promise.all([sendToGas(URL, { action: 'getFiles', fileIds: ['a'] }), sendToGas(URL, { action: 'getFiles', fileIds: ['b'] }), sendToGas(URL, { action: 'updateTaskStatus' })])
+    expect(h.sent.map((b) => b.action)).toEqual(['getBackgroundData', 'getFiles', 'getFiles', 'updateTaskStatus'])
+    stuck.open(json({ ok: true, result: {} }))
+    expect((await slow).ok).toBe(true)
+  })
+
+  it('読み取りの枠が埋まっている時は、画面の操作に必要な読み取りを、裏の読み込みより先に送る', async () => {
+    const gates = [gate<Reply>(), gate<Reply>(), gate<Reply>()]
+    let n = 0
+    const h = harness(() => (n < 3 ? gates[n++].promise : json({ ok: true, result: [] })))
+    const background = [0, 1, 2, 3].map(() => sendToGas(URL, { action: 'getBackgroundData' }))
+    await tick()
+    const files = sendToGas(URL, { action: 'getFiles', fileIds: ['x'] })
+    gates.forEach((g) => g.open(json({ ok: true, result: {} })))
+    await Promise.all([...background, files])
+    expect(h.sent.map((b) => b.action).slice(3)).toEqual(['getFiles', 'getBackgroundData'])
+  })
+
+  it('初期データ(getInitialData)は、それより前に呼ばれた書き込みが終わってから送る', async () => {
+    const write = gate<Reply>()
+    const h = harness((b) => (b.action === 'updateTaskStatus' ? write.promise : json({ ok: true, result: {} })))
+    const w = sendToGas(URL, { action: 'updateTaskStatus' })
+    const r = sendToGas(URL, { action: 'getInitialData' })
+    await tick()
+    expect(h.sent.map((b) => b.action)).toEqual(['updateTaskStatus'])
+    write.open(json({ ok: true }))
+    await Promise.all([w, r])
+    expect(h.sent.map((b) => b.action)).toEqual(['updateTaskStatus', 'getInitialData'])
   })
 
   it('裏の読み込みの種類', () => {
-    for (const a of ['getExpenses', 'getFormSubmissions', 'getCandidates', 'getMyEmails', 'checkAndGenerateRecurringTasks', 'getLoginConfig']) {
+    for (const a of ['getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getMyEmails', 'getLoginConfig']) {
       expect(priorityOf(a), a).toBe('background')
     }
-    for (const a of ['getInitialData', 'exchangeIdToken', 'updateTaskStatus', 'getFiles']) expect(priorityOf(a), a).toBe('foreground')
+    for (const a of ['getInitialData', 'getFiles']) expect(priorityOf(a), a).toBe('foreground')
   })
 })
 
@@ -97,10 +140,10 @@ describe('JSON が返らなかった時の再試行', () => {
     expect(h.sent[0].requestId).toBeUndefined()
     expect(h.sleeps).toEqual([RETRY_DELAYS_MS[0]])
     expect(h.logs.map((l) => l.level + ' ' + l.text)).toEqual([
-      'warn [ohsumi] GAS getInitialData: JSON ではない応答(HTTP 404)。応答の URL: (不明)、本文の先頭: Sorry, unable to open the file at this time.',
+      'warn [ohsumi] GAS getInitialData: JSON ではない応答(HTTP 404)。応答の URL: (不明)、exec と echo の内訳は取れません、本文の先頭: Sorry, unable to open the file at this time.',
       'warn [ohsumi] GAS getInitialData: 再試行 1/2(原因: JSON ではない応答(HTTP 404))',
       'info [ohsumi] GAS getInitialData: 再試行 1回目で成功しました',
-      expect.stringMatching(/^info \[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms・2回目・GAS の内訳なし\)$/),
+      expect.stringMatching(/^info \[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・2回目・GAS の内訳なし\)$/),
     ])
   })
 
@@ -166,7 +209,7 @@ describe('JSON が返らなかった時の再試行', () => {
     const h = harness((b) => (b.action === 'getExpenses' ? echo404 : json({ ok: true })))
     const results = await Promise.allSettled([sendToGas(URL, { action: 'getExpenses' }), sendToGas(URL, { action: 'getCandidates' })])
     expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled'])
-    expect(h.sent.at(-1)?.action).toBe('getCandidates')
+    expect(h.sent.map((b) => b.action)).toContain('getCandidates')
   })
 })
 
@@ -192,7 +235,7 @@ describe('原因を調べるための記録', () => {
       log: { info: (t: string) => logs.push(t), warn: (t: string) => logs.push(t), error: (t: string) => logs.push(t) },
     })
     expect((await sendToGas(URL, { action: 'getExpenses' })).result).toBe(1)
-    expect(logs[0]).toBe('[ohsumi] GAS getExpenses: GAS に GET で届きました(POST の本文が転送の途中で失われた)。応答の URL: https://script.googleusercontent.com/macros/echo?…(転送あり)')
+    expect(logs[0]).toBe('[ohsumi] GAS getExpenses: GAS に GET で届きました(POST の本文が転送の途中で失われた)。応答の URL: https://script.googleusercontent.com/macros/echo?…(転送あり)、exec と echo の内訳は取れません')
     expect(logs.join('\n')).not.toContain('SECRETKEY123')
   })
 
@@ -230,6 +273,28 @@ describe('原因を調べるための記録', () => {
     }
   })
 
+  it('exec への往復と echo の取得を、ブラウザの通信の記録から分ける(分けられない時は分けない)', () => {
+    const e = (startTime: number, redirectEnd: number, responseEnd: number) => ({ name: URL, startTime, duration: responseEnd - startTime, redirectStart: redirectEnd ? startTime + 1 : 0, redirectEnd, responseEnd })
+    // 送り始めた時刻に最も近い記録を使う(前の通信の記録は使わない)
+    expect(splitRoundTrip([e(50, 400, 900), e(1000, 1700.4, 2000)], 1000)).toEqual({ execMs: 700, echoMs: 300 })
+    // Timing-Allow-Origin が無いと転送の時刻が 0 になる
+    expect(splitRoundTrip([e(1000, 0, 2000)], 1000)).toBeNull()
+    expect(splitRoundTrip([], 1000)).toBeNull()
+  })
+
+  it('分けられた時は、成功の1行に exec と echo の時間を出す', async () => {
+    const logs: string[] = []
+    setGasTransportDepsForTest({
+      fetch: async () => ({ status: 200, text: async () => '{"ok":true}' }),
+      perfNow: () => 1000,
+      resourceTimings: () => [{ name: URL, startTime: 1001, duration: 999, redirectStart: 1002, redirectEnd: 1801, responseEnd: 2000 }],
+      sleep: async () => {},
+      log: { info: (t: string) => logs.push(t), warn: (t: string) => logs.push(t), error: (t: string) => logs.push(t) },
+    })
+    await sendToGas(URL, { action: 'getInitialData' })
+    expect(logs.at(-1)).toMatch(/往復 \d+ms\(exec 800ms・echo 199ms\)/)
+  })
+
   it('応答の URL は、クエリ(echo の user_content_key など)を除いて出す', () => {
     expect(safeResponseUrl('https://script.googleusercontent.com/macros/echo?user_content_key=abc&lib=M')).toBe('https://script.googleusercontent.com/macros/echo?…')
     expect(safeResponseUrl('https://script.google.com/macros/u/1/s/ID/exec')).toBe('https://script.google.com/macros/u/1/s/ID/exec')
@@ -240,7 +305,7 @@ describe('原因を調べるための記録', () => {
     const h = harness(() => json({ ok: true, timing: { totalMs: 812, authMs: 20, cache: 'miss', cacheReadMs: 15, readMs: 640, read: 'spreadsheetApp', readError: 'HTTP 403', filterMs: 90 } }))
     await sendToGas(URL, { action: 'getInitialData' })
     expect(h.logs.at(-1)!.text).toMatch(
-      /^\[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms・GAS 812ms: 認証 20・キャッシュ miss 15・シート読み込み 640\(予備の方式\)・Sheets API で読めなかった理由: HTTP 403・絞り込み 90\)$/,
+      /^\[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・GAS 812ms: 認証 20・キャッシュ miss 15・シート読み込み 640\(予備の方式\)・Sheets API で読めなかった理由: HTTP 403・絞り込み 90\)$/,
     )
   })
 })
