@@ -4765,13 +4765,11 @@ function getMemberEmailValueCached(memberId) {
   } else {
     noteTiming('myEmailCache', 'miss')
     map = {}
-    var sheet = getMemberEmailsSheet()
-    var headers = headerRow(sheet)
-    var idCol = headers.indexOf('id')
-    var emailCol = headers.indexOf('email')
-    var lastRow = sheet.getLastRow()
-    if (lastRow >= 2 && idCol >= 0 && emailCol >= 0) {
-      sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().forEach(function (row) {
+    var table = readWholeSheet(SHEET_MEMBER_EMAILS, 'myEmail')
+    var idCol = table ? table.headers.indexOf('id') : -1
+    var emailCol = table ? table.headers.indexOf('email') : -1
+    if (table && idCol >= 0 && emailCol >= 0) {
+      table.rows.forEach(function (row) {
         var id = String(row[idCol])
         if (!(id in map)) map[id] = String(row[emailCol] || '')
       })
@@ -5486,7 +5484,8 @@ function getBackgroundData(acting, body) {
     noteTiming('filesCount', out.files.length)
   }
   BACKGROUND_DATA_PARTS.forEach(function (part) {
-    var t = Date.now()
+    // 区間として計る(中のシートの読み込みの時間は、この中に含まれる)
+    var t = beginTiming()
     var allowed = true
     try {
       authorizeAction(acting, part.action, body)
@@ -5498,7 +5497,7 @@ function getBackgroundData(acting, body) {
     } catch (err) {
       out.errors[part.key] = toErrorMessage(err)
     }
-    noteTiming(part.key + 'Ms', Date.now() - t)
+    endTiming(part.key + 'Ms', t)
   })
   return out
 }
@@ -8045,12 +8044,9 @@ function getCandidates(acting) {
 }
 
 function readAllCandidates() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CANDIDATES)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return candidateRowToObject(headers, row)
-  })
+  var table = readWholeSheet(SHEET_CANDIDATES, 'candidates')
+  if (!table) return []
+  return table.rows.map(function (row) { return candidateRowToObject(table.headers, row) })
 }
 
 // ---- フォームの回答(FormSubmissions)の読み取り ----------------------------------
@@ -8138,12 +8134,13 @@ var GET_FILES_MAX_IDS = 30
 var GET_FILES_MAX_BYTES = 8 * 1024 * 1024
 var FILE_CACHE_MAX_CHARS = 95000
 
+// フォルダの設定は、リクエストの最初にまとめて読んだスクリプトプロパティ(requestProps)から読む
 function allowedUploadFolderIds() {
-  var props = PropertiesService.getScriptProperties()
+  var props = requestProps()
   var ids = []
-  var current = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  var current = props[UPLOAD_FOLDER_PROPERTY_KEY]
   if (current) ids.push(current)
-  splitCsvList(props.getProperty(LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY)).forEach(function (id) {
+  splitCsvList(props[LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY]).forEach(function (id) {
     if (ids.indexOf(id) < 0) ids.push(id)
   })
   return ids
@@ -8186,15 +8183,13 @@ var FILE_META_TTL = 21600
 // 1件のファイルの種類を返す。アップロード用フォルダの外・見つからない時は null。
 // file は Drive から開いた時だけ入る(キャッシュから分かった時は null)。
 // cachedOnly の時は Drive を開かない(キャッシュに無ければ undefined)
-function uploadedFileMeta(id, allowed, cache, cachedOnly) {
+// prefetched: getFiles が最初に getAll でまとめて読んだキャッシュ(キー → 値)
+function uploadedFileMeta(id, allowed, cache, cachedOnly, prefetched) {
   var metaKey = 'filemeta:' + id
-  var t = Date.now()
-  var cached = null
-  try { cached = cache.get(metaKey) } catch (e) { cached = null }
-  addTiming('fileCacheMs', Date.now() - t)
+  var cached = prefetched ? prefetched[metaKey] || null : null
   if (cached) return { kind: cached, file: null }
   if (cachedOnly) return undefined
-  t = Date.now()
+  var t = Date.now()
   try {
     var file = DriveApp.getFileById(id)
     if (!isInAllowedFolder(file, allowed)) return null
@@ -8217,6 +8212,15 @@ function getFiles(acting, fileIds, options) {
   var allowed = allowedUploadFolderIds()
   addTiming('folderPropsMs', Date.now() - t)
   var cache = CacheService.getScriptCache()
+  // ファイルの種類と画像のキャッシュを、1回の getAll でまとめて読む(1件ずつ読むと、1回ごとに待ち時間がかかる)
+  var prefetched = {}
+  var ct = Date.now()
+  try {
+    var keys = []
+    ids.forEach(function (id) { keys.push('filemeta:' + id, 'file:' + id) })
+    if (keys.length) prefetched = cache.getAll(keys) || {}
+  } catch (e) { prefetched = {} }
+  addTiming('fileCacheMs', Date.now() - ct)
   var expenseViewer = null
   var expenses = null
   var totalBytes = 0
@@ -8224,7 +8228,7 @@ function getFiles(acting, fileIds, options) {
   var out = []
   ids.forEach(function (id) {
     if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) { out.push({ id: id, ok: false, error: 'invalid' }); return }
-    var meta = uploadedFileMeta(id, allowed, cache, options.cachedOnly)
+    var meta = uploadedFileMeta(id, allowed, cache, options.cachedOnly, prefetched)
     if (meta === undefined) return
     if (!meta) { out.push({ id: id, ok: false, error: 'notFound' }); return }
     var kind = meta.kind === 'other' ? '' : meta.kind
@@ -8245,10 +8249,7 @@ function getFiles(acting, fileIds, options) {
     // 領収書はキャッシュしない
     var cacheKey = 'file:' + id
     if (kind !== 'receipt') {
-      var ct = Date.now()
-      var hit = null
-      try { hit = cache.get(cacheKey) } catch (e) { hit = null }
-      addTiming('fileCacheMs', Date.now() - ct)
+      var hit = prefetched[cacheKey] || null
       if (hit) {
         var sep = hit.indexOf('|')
         var cachedData = hit.slice(sep + 1)
@@ -8324,22 +8325,31 @@ function initialImageFileIds(snapshotData, memberId) {
 // ログインの応答に入れる画像の合計の上限(base64 の文字数)
 var INITIAL_FILES_MAX_CHARS = 1500000
 
+// シート1枚を1回の呼び出しで読む(getDataRange)。これまでは最終行・見出し・本文を別々に読んでいて、
+// 呼び出しごとに待ち時間がかかっていた。timing に <prefix>SheetMs(読み込みの時間)・<prefix>Rows・<prefix>Cols を記録する。
+// 返り値は { headers, rows }(見出しは前後の空白を除く)。シートが無ければ null
+function readWholeSheet(name, prefix) {
+  var t = Date.now()
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  if (!sheet) return null
+  var values = sheet.getDataRange().getValues()
+  noteTiming(prefix + 'SheetMs', Date.now() - t)
+  noteTiming(prefix + 'Rows', Math.max(values.length - 1, 0))
+  noteTiming(prefix + 'Cols', values.length ? values[0].length : 0)
+  if (!values.length) return { headers: [], rows: [] }
+  return { headers: values[0].map(function (h) { return String(h).trim() }), rows: values.slice(1) }
+}
+
 function readAllFormSubmissions() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FORM_SUBMISSIONS)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return formSubmissionRowToObject(headers, row)
-  })
+  var table = readWholeSheet(SHEET_FORM_SUBMISSIONS, 'formSubmissions')
+  if (!table) return []
+  return table.rows.map(function (row) { return formSubmissionRowToObject(table.headers, row) })
 }
 
 function readAllExpenses() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return expenseRowToApplication(headers, row)
-  })
+  var table = readWholeSheet(SHEET_EXPENSES, 'expenses')
+  if (!table) return []
+  return table.rows.map(function (row) { return expenseRowToApplication(table.headers, row) })
 }
 
 // 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
