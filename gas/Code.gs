@@ -5432,15 +5432,22 @@ function attachBackgroundData(data, memberId, body) {
 function getBackgroundData(acting, body) {
   var out = { errors: {} }
   // ログインの直後に表示する画像(団体ロゴ・プロフィール画像)のうち、キャッシュにあるもの。
-  // Drive は開かない(キャッシュに無いものは、画面が getFiles で別に取る)
-  var ft = beginTiming()
-  try {
-    var fileIds = initialImageFileIds(loadSnapshot().data, acting.id)
-    out.files = fileIds.length ? getFiles(acting, fileIds, { cachedOnly: true, maxBytes: INITIAL_FILES_MAX_CHARS }) : []
-  } catch (err) {
-    out.files = []
+  // Drive は開かない(キャッシュに無いものは、画面が getFiles で別に取る)。
+  // 画面が withFiles: false を送った時は入れない(応答の大きさと往復の時間を比べるため)
+  if (!body || body.withFiles !== false) {
+    var ft = beginTiming()
+    try {
+      var fileIds = initialImageFileIds(loadSnapshot().data, acting.id)
+      out.files = fileIds.length ? getFiles(acting, fileIds, { cachedOnly: true, maxBytes: INITIAL_FILES_MAX_CHARS }) : []
+    } catch (err) {
+      out.files = []
+    }
+    endTiming('filesMs', ft)
+    var chars = 0
+    out.files.forEach(function (f) { chars += f.data ? f.data.length : 0 })
+    noteTiming('filesKB', Math.round(chars / 1024))
+    noteTiming('filesCount', out.files.length)
   }
-  endTiming('filesMs', ft)
   BACKGROUND_DATA_PARTS.forEach(function (part) {
     var t = Date.now()
     var allowed = true

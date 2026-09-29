@@ -298,5 +298,16 @@ describe('ログインの応答に入れる画像', () => {
     expect(warm.result.files.map((f: { id: string }) => f.id)).toEqual(['AVATAR_M2_xxxxx'])
     expect(t.driveCalls).toHaveLength(calls)
     expect(typeof warm.timing.filesMs).toBe('number')
+    expect(warm.timing.filesCount).toBe(1)
+    expect(typeof warm.timing.filesKB).toBe('number')
+  })
+
+  it('画面が withFiles: false を送った時は、画像を入れない(応答の大きさと往復の時間を比べるため)', () => {
+    const t = setup()
+    t.post({ action: 'getFiles', sessionToken: 'm2', fileIds: ['AVATAR_M2_xxxxx'] })
+    const res = t.post({ action: 'getBackgroundData', sessionToken: 'm2', withFiles: false })
+    expect(res.result.files).toBeUndefined()
+    expect(res.timing.filesMs).toBeUndefined()
+    expect(res.result.expenses).toBeDefined()
   })
 })

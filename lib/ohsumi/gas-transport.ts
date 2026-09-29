@@ -136,6 +136,9 @@ export interface GasTiming {
   candidatesMs?: number
   myEmailMs?: number
   filesMs?: number
+  // ログインの応答に入れた画像の件数と大きさ(base64 の KB)
+  filesCount?: number
+  filesKB?: number
   expensesCache?: 'hit' | 'miss'
   formSubmissionsCache?: 'hit' | 'miss'
   candidatesCache?: 'hit' | 'miss'
@@ -214,7 +217,7 @@ function describeTiming(timing: GasTiming | undefined): string {
     if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache)}`)
     if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache)}`)
     if (timing.myEmailMs != null) inner.push(`メール ${withCache(timing.myEmailMs, timing.myEmailCache)}`)
-    if (timing.filesMs != null) inner.push(`画像 ${timing.filesMs}`)
+    if (timing.filesMs != null) inner.push(`画像 ${timing.filesMs}${timing.filesCount != null ? `(${timing.filesCount}件 ${timing.filesKB ?? 0}KB)` : ''}`)
     const label = timing.backgroundMs != null ? `裏での読み込み ${timing.backgroundMs}` : '裏での読み込み'
     parts.push(inner.length ? `${label}(${inner.join('・')})` : label)
   }
@@ -272,6 +275,12 @@ export function splitRoundTrip(entries: ResourceTimingLike[], startedAt: number)
   const e = candidates[0]
   if (!e || !(e.redirectEnd > 0) || e.redirectEnd < e.startTime || !(e.responseEnd >= e.redirectEnd)) return null
   return { execMs: Math.round(e.redirectEnd - e.startTime), echoMs: Math.round(e.responseEnd - e.redirectEnd) }
+}
+
+/** 応答の本文の大きさ(KB、UTF-8 のバイト数から) */
+export function responseKB(text: string): number {
+  const bytes = typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(text).length : text.length
+  return Math.round((bytes / 1024) * 10) / 10
 }
 
 function describeRoundTrip(split: { execMs: number; echoMs: number } | null): string {
@@ -382,7 +391,7 @@ function startReads(): void {
 // ---- 1回送る ----
 
 type Attempt =
-  | { kind: 'ok'; json: GasResponse; ms: number; split: { execMs: number; echoMs: number } | null }
+  | { kind: 'ok'; json: GasResponse; ms: number; split: { execMs: number; echoMs: number } | null; kb: number }
   | { kind: 'fail'; reason: string; detail?: string; bounced?: boolean }
 
 async function fetchWithTimeout(url: string, body: string, timeoutMs: number): Promise<FetchedResponse> {
@@ -446,7 +455,7 @@ async function attemptOnce(url: string, body: string, timeoutMs: number): Promis
     }
   }
   if (r.retryLater) return { kind: 'fail', reason: `GAS が処理できませんでした(${r.error ?? '混み合っています'})` }
-  return { kind: 'ok', json: r, ms: Date.now() - started, split: split() }
+  return { kind: 'ok', json: r, ms: Date.now() - started, split: split(), kb: responseKB(text) }
 }
 
 async function sendWithRetry<T>(url: string, action: string, body: string, maxAttempts: number, queuedMs: number): Promise<GasResponse<T>> {
@@ -465,7 +474,7 @@ async function sendWithRetry<T>(url: string, action: string, body: string, maxAt
       if (attempt > 1) deps.log.info(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}回目で成功しました`)
       if (r.json.replayed) deps.log.info(`[ohsumi] GAS ${action}: 前回の処理の結果を受け取りました(処理はやり直していません)`)
       deps.log.info(
-        `[ohsumi] GAS ${action}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})` +
+        `[ohsumi] GAS ${action}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})・応答 ${r.kb}KB` +
           `${attempt > 1 ? `・${attempt}回目` : ''}・${describeTiming(r.json.timing)})`,
       )
       return r.json as GasResponse<T>

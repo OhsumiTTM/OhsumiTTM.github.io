@@ -17,6 +17,7 @@ import {
   isWriteAction,
   pingGas,
   priorityOf,
+  responseKB,
   sendToGas,
   setGasTransportDepsForTest,
 } from './gas-transport'
@@ -144,7 +145,7 @@ describe('JSON が返らなかった時の再試行', () => {
       'warn [ohsumi] GAS getInitialData: JSON ではない応答(HTTP 404)。応答の URL: (不明)、exec と echo の内訳は取れません、本文の先頭: Sorry, unable to open the file at this time.',
       'warn [ohsumi] GAS getInitialData: 再試行 1/2(原因: JSON ではない応答(HTTP 404))',
       'info [ohsumi] GAS getInitialData: 再試行 1回目で成功しました',
-      expect.stringMatching(/^info \[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・2回目・GAS の内訳なし\)$/),
+      expect.stringMatching(/^info \[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・応答 [\d.]+KB・2回目・GAS の内訳なし\)$/),
     ])
   })
 
@@ -306,7 +307,7 @@ describe('原因を調べるための記録', () => {
     const h = harness(() => json({ ok: true, timing: { totalMs: 812, authMs: 20, cache: 'miss', cacheReadMs: 15, readMs: 640, read: 'spreadsheetApp', readError: 'HTTP 403', filterMs: 90 } }))
     await sendToGas(URL, { action: 'getInitialData' })
     expect(h.logs.at(-1)!.text).toMatch(
-      /^\[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・GAS 812ms: 認証 20・キャッシュ miss 15・シート読み込み 640\(予備の方式\)・Sheets API で読めなかった理由: HTTP 403・絞り込み 90\)$/,
+      /^\[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms\(exec と echo の内訳は取れません\)・応答 [\d.]+KB・GAS 812ms: 認証 20・キャッシュ miss 15・シート読み込み 640\(予備の方式\)・Sheets API で読めなかった理由: HTTP 403・絞り込み 90\)$/,
     )
   })
 })
@@ -386,15 +387,24 @@ describe('内訳の記録(ログインの遅さの切り分け)', () => {
         result: 1,
         timing: body.action === 'getFiles'
           ? { totalMs: 750, authMs: 122, folderPropsMs: 20, driveMs: 400, fileCacheMs: 30, fileCacheHits: 2, blobMs: 90, otherMs: 10 }
-          : { totalMs: 3000, backgroundMs: 1725, expensesMs: 400, expensesCache: 'miss', formSubmissionsMs: 600, formSubmissionsCache: 'hit', candidatesMs: 20, myEmailMs: 300, myEmailCache: 'miss', filesMs: 40, lastLoginMs: 12, lastLogin: 'queued', otherMs: 50 },
+          : { totalMs: 3000, backgroundMs: 1725, expensesMs: 400, expensesCache: 'miss', formSubmissionsMs: 600, formSubmissionsCache: 'hit', candidatesMs: 20, myEmailMs: 300, myEmailCache: 'miss', filesMs: 40, filesCount: 3, filesKB: 180, lastLoginMs: 12, lastLogin: 'queued', otherMs: 50 },
       }),
     )
     await sendToGas(URL, { action: 'getInitialData' })
     await sendToGas(URL, { action: 'getFiles', fileIds: [] })
     const lines = h.logs.map((l) => l.text).join('\n')
-    expect(lines).toContain('裏での読み込み 1725(経費 400 miss・フォームの回答 600 hit・候補者 20・メール 300 miss・画像 40)')
+    expect(lines).toContain('裏での読み込み 1725(経費 400 miss・フォームの回答 600 hit・候補者 20・メール 300 miss・画像 40(3件 180KB))')
+    expect(lines).toMatch(/・応答 [\d.]+KB・/)
     expect(lines).toContain('最終ログイン日時の記録 12(書き込み待ちに追加)')
     expect(lines).toContain('その他 50')
     expect(lines).toContain('フォルダの設定 20・Drive 400・画像のキャッシュ 30(2件 hit)・ファイルの読み込み 90')
+  })
+})
+
+describe('応答の大きさ', () => {
+  it('UTF-8 のバイト数から KB(小数1桁)を出す', () => {
+    expect(responseKB('a'.repeat(2048))).toBe(2)
+    expect(responseKB('あ'.repeat(1024))).toBe(3) // 1文字3バイト
+    expect(responseKB('')).toBe(0)
   })
 })
