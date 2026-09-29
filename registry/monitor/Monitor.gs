@@ -80,7 +80,23 @@ function monitorProps() {
   return PropertiesService.getScriptProperties().getProperties() || {}
 }
 
+// レジストリの URL は、デプロイの「ウェブアプリの URL」そのもの(/macros/s/<ID>/exec)を使う。
+// /u/1/ を含む URL や /dev の URL では、転送で POST の本文が失われる
+var REGISTRY_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
+
+// JSON ではない応答の本文の先頭(タグを除き、鍵のような文字列は伏せる。JSON の断片は出さない)
+function responseSnippet(text) {
+  var t = String(text || '').trim()
+  if (!t) return '(空)'
+  if (/^[{[]/.test(t)) return '(JSON の途中で切れた可能性。' + t.length + '文字)'
+  return t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/[A-Za-z0-9_-]{32,}/g, '[伏せた値]').slice(0, 120)
+}
+
 function fetchHealth(props) {
+  if (!REGISTRY_URL_PATTERN.test(String(props.REGISTRY_URL || ''))) {
+    return { ok: false, error: 'REGISTRY_URL の形が正しくありません(デプロイの「ウェブアプリの URL」…/macros/s/…/exec をそのまま入れてください)' }
+  }
   try {
     var res = UrlFetchApp.fetch(props.REGISTRY_URL, {
       method: 'post',
@@ -89,8 +105,12 @@ function fetchHealth(props) {
       muteHttpExceptions: true,
       followRedirects: true,
     })
+    var text = res.getContentText()
+    var json
+    try { json = JSON.parse(text) } catch (e) { return { ok: false, error: 'JSON ではない応答(HTTP ' + res.getResponseCode() + '。本文の先頭: ' + responseSnippet(text) + ')' } }
+    if (json && json.getReceived) return { ok: false, error: 'レジストリに GET で届きました(POST の本文が転送の途中で失われた)' }
     if (res.getResponseCode() !== 200) return { ok: false, error: 'HTTP ' + res.getResponseCode() }
-    try { return JSON.parse(res.getContentText()) } catch (e) { return { ok: false, error: 'JSON ではない応答' } }
+    return json
   } catch (e) {
     return { ok: false, error: '通信エラー(' + (e && e.message ? e.message : e) + ')' }
   }

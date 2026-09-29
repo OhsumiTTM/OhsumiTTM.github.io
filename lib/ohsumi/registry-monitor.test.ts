@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 const CODE = readFileSync(join(__dirname, '..', '..', 'registry', 'monitor', 'Monitor.gs'), 'utf8')
 
-type Health = Record<string, unknown> | 'down'
+type Health = Record<string, unknown> | 'down' | { raw: string; status: number }
 
 function setup() {
   const props: Record<string, string> = {
@@ -35,6 +35,8 @@ function setup() {
         }
         sentKeys.push(JSON.parse(opts.payload).key)
         if (health === 'down') throw new Error('Address unavailable')
+        const h = health as { raw?: string; status?: number }
+        if (typeof h.raw === 'string') return { getResponseCode: () => h.status ?? 200, getContentText: () => h.raw! }
         return { getResponseCode: () => 200, getContentText: () => JSON.stringify(health) }
       },
     },
@@ -114,6 +116,19 @@ describe('実行(checkRegistry)', () => {
     t.setHealth(good({ lastBackupAt: new Date().toISOString() }))
     t.gas.checkRegistry()
     expect(t.mails.at(-1)!.subject).toMatch(/復旧しました/)
+  })
+
+  it('GET で届いた応答・JSON ではない応答・形の違う URL は、原因が分かる形で「届かない」とする', () => {
+    const t = setup()
+    const reasonOf = () => plain(t.gas.evaluateHealth(t.gas.fetchHealth(t.props), NOW)).reason as string
+    t.setHealth({ ok: false, getReceived: true })
+    expect(reasonOf()).toMatch(/GET で届きました/)
+    t.setHealth({ raw: '<html><head><title>Error</title></head><body><p>Sorry, unable to open the file at this time.</p></body></html>', status: 200 })
+    expect(reasonOf()).toBe('JSON ではない応答(HTTP 200。本文の先頭: Error Sorry, unable to open the file at this time.)')
+    t.setHealth({ raw: '{"ok":true,"secret":"x', status: 200 })
+    expect(reasonOf()).toMatch(/JSON の途中で切れた可能性/)
+    t.props.REGISTRY_URL = 'https://script.google.com/macros/u/1/s/REG/exec'
+    expect(reasonOf()).toMatch(/REGISTRY_URL の形が正しくありません/)
   })
 
   it('毎朝の「動いています」は Discord にだけ送る', () => {

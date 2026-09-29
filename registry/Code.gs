@@ -40,8 +40,15 @@ var RATE_LIMITS = { all: 600, health: 60 }
 
 // ---- 入口 ----
 
+// レジストリには POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、本文が失われた
+// 可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。送った側が原因を記録して送り直せるよう、
+// JSON で返す(何も処理していない)
 function doGet() {
-  return ContentService.createTextOutput('Ohsumi registry').setMimeType(ContentService.MimeType.TEXT)
+  return registryJson({
+    ok: false,
+    getReceived: true,
+    error: 'レジストリに GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
+  })
 }
 
 function doPost(e) {
