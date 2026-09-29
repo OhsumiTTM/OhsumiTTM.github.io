@@ -3,16 +3,21 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    # edited: 積んだ PR の向き先を main に変えた時にも動かす。
+    # 題名・説明だけの変更では、下の jobs.check.if で実行しない
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
+  # 題名・説明だけの変更は別のグループにして、実行中の CI を止めないようにする
+  group: ci-${{ github.event.pull_request.number }}${{ github.event.action == 'edited' && !github.event.changes.base && '-edited' || '' }}
   cancel-in-progress: true
 
 jobs:
   check:
+    if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
