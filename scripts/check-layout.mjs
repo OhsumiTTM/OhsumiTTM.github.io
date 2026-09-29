@@ -2,7 +2,8 @@
 //
 //   1. テスト用の設定(GAS の URL など)でビルドする(--no-build で省略)
 //   2. gas/Code.gs のサンプルのデータ(buildSampleData)を、GAS の読み取りの絞り込み
-//      (buildViewerData)に通して、一般のメンバーが受け取るデータを作る
+//      (buildViewerData)に通して、そのメンバーが受け取るデータを作る。
+//      一般のメンバー(OUTPUT・タスク詳細・個人ページ)と、代表(管理画面のすべてのセクション)の2回開く
 //   3. out/ を配信し、ヘッドレスの Chrome で開く。GAS・Google への通信は偽の応答を返す
 //   4. 画面ごとに、ページの幅が画面より広くなっていないか・画面の外にはみ出した要素が無いか・
 //      ボタンの文字が1文字ずつ折り返していないか・依存関係のカードの中身が切れていないかを調べる
@@ -21,6 +22,7 @@ export const WIDTH = Number(process.env.LAYOUT_WIDTH || 375)
 const GAS_URL = 'https://script.google.com/macros/s/LAYOUT_CHECK/exec'
 const ORG = 'org-layout'
 const MEMBER = 'sample-m-05' // 一般のメンバー(サンプルのデータの base の枠)
+export const ADMIN_MEMBER = 'sample-m-01' // 代表(サンプルのデータの top の枠)
 
 // 画面を開く手順。ラベルは日本語の画面の表示(lib/ohsumi/i18n/ja.ts)と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で、ja.ts にあることを確かめる)
@@ -43,10 +45,18 @@ export const STEPS = [
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
 ]
 
+// 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
+// buildNav と、ja.ts の admin.nav.*)と同じ文字にする(lib/ohsumi/check-layout.test.ts で確かめる)
+export const ADMIN_STEPS = [
+  { name: '管理画面(Dashboard)', do: 'admin' },
+  ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', 'Org Tree', '検定', '学習コンテンツ',
+    'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+]
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ---- サンプルのデータ(一般のメンバーが受け取る分) ----
-export function viewerData() {
+export function viewerData(memberId = MEMBER) {
   const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
   const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } })
   vm.runInContext(code, ctx)
@@ -63,7 +73,7 @@ export function viewerData() {
     Tasks: table('Tasks', data.sheets.Tasks),
     Settings: { headers: ['key', 'value'], rows: Object.entries(settings).map(([k, v]) => [k, v]) },
   }
-  return ctx.buildViewerData(JSON.parse(JSON.stringify(snapshot)), MEMBER)
+  return ctx.buildViewerData(JSON.parse(JSON.stringify(snapshot)), memberId)
 }
 
 // ---- out/ の配信 ----
@@ -146,7 +156,9 @@ async function run({ build = true } = {}) {
     console.warn('Chrome が見つからないため、確認をとばしました')
     return []
   }
-  const view = viewerData()
+  // 開いているメンバーと、そのメンバーが受け取るデータ(2回目は代表に切り替える)
+  let member = MEMBER
+  let view = viewerData(MEMBER)
   const server = await serve(join(ROOT, 'out'))
   const base = `http://127.0.0.1:${server.address().port}`
   const port = 9300 + Math.floor(Math.random() * 500)
@@ -178,8 +190,8 @@ async function run({ build = true } = {}) {
     const gas = (body) => {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
-        case 'getInitialData': return { memberId: MEMBER, version: 'layout', sheets: view }
-        case 'getExpenses': case 'fetchDailyReports': case 'getFiles': return []
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view }
+        case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
         default: return {}
@@ -213,7 +225,14 @@ async function run({ build = true } = {}) {
       localStorage.setItem('ohsumi-session-${ORG}', JSON.stringify({ token: 'v1.layout.check', exp: Math.floor(Date.now() / 1000) + 86400 }))`)
 
     await navigate('/')
-    for (const step of STEPS) {
+    const passes = [
+      { member: MEMBER, steps: STEPS },
+      { member: ADMIN_MEMBER, steps: ADMIN_STEPS },
+    ]
+    for (const pass of passes) {
+    member = pass.member
+    view = viewerData(pass.member)
+    for (const step of pass.steps) {
       try {
         if (step.do === 'login') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/') }
         if (step.do === 'home') {
@@ -221,7 +240,13 @@ async function run({ build = true } = {}) {
           await clickText('あとで設定する').catch(() => {})
           await sleep(800)
         }
-        if (step.do === 'click') { await clickText(step.text); await sleep(1200) }
+        if (step.do === 'admin') {
+          await signIn(); await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          await clickText('ADMIN'); await sleep(1500)
+        }
+        if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
           await clickText(step.view); await sleep(800)
@@ -244,6 +269,7 @@ async function run({ build = true } = {}) {
         console.log(`✗ ${step.name}`)
         failures.push(`${step.name}: 画面を開けませんでした(${e.message})`)
       }
+    }
     }
     ws.close()
   } finally {

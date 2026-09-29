@@ -93,7 +93,7 @@ export function AdminRadarAxes() {
         <AdminAccessNote level="fullAdmin" className="mt-1" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Axes editor */}
         <div>
           <div className="mb-3 flex flex-col gap-2">
@@ -196,7 +196,7 @@ export function AdminRadarAxes() {
         </div>
         <p className="mb-3 text-xs text-muted-foreground">{t('admin.radarAxes.team.desc')}</p>
 
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">
               {t('admin.radarAxes.team.projectFilterLabel')}

@@ -461,7 +461,7 @@ export function AdminMembers() {
                             onClick={() => setAssigningProjects(m)}
                             disabled={!isDaihyo}
                             title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
-                            className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <FolderKanban className="size-3.5" />
                             {t('admin.members.projectsCount', { count: (m.projectIds ?? []).length })}
@@ -512,7 +512,7 @@ export function AdminMembers() {
                         <button
                           onClick={() => toggleMemberInactive(m.id)}
                           title={m.inactive ? t('admin.members.resumeActivity') : t('admin.members.pauseActivity')}
-                          className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                          className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium whitespace-nowrap transition-colors ${
                             m.inactive
                               ? 'border-amber-300/50 bg-amber-50 text-amber-600 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-400'
                               : 'border-border text-muted-foreground hover:bg-secondary'
@@ -545,7 +545,7 @@ export function AdminMembers() {
                           onClick={() => setRemoving(m)}
                           disabled={!isDaihyo}
                           title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
-                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <UserMinus className="size-3.5" />
                           {t('admin.members.remove')}

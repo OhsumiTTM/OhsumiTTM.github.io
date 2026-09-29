@@ -34,6 +34,34 @@ describe('スマホの幅の表示の確認', () => {
     expect(values.has('プロフィール')).toBe(true)
   })
 
+  it('代表で、管理画面のすべてのセクションを開く(ラベルは管理画面のメニューと同じ)', () => {
+    const steps = layout.ADMIN_STEPS as { do: string; text?: string; from?: string }[]
+    expect(steps[0].do).toBe('admin')
+    const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
+    // メニューの項目(buildNav と採用)の数だけ開く(ダッシュボードは最初の手順)
+    const navKeys = [...nav.matchAll(/\{ key: '(\w+)', label:/g)].map((m) => m[1])
+    expect(navKeys.length).toBeGreaterThan(10)
+    const texts = steps.filter((s) => s.do === 'click').map((s) => s.text!)
+    expect(texts.length + 1).toBe(navKeys.length + (navKeys.includes('recruiting') ? 0 : 1))
+    for (const text of texts) {
+      // ラベルは buildNav に直接書いた英語か、ja.ts の admin.nav.* の値
+      const inNav = nav.includes(`label: '${text}'`)
+      const inJa = Object.entries(ja).some(([k, v]) => k.startsWith('admin.nav.') && v === text)
+      expect(inNav || inJa, text).toBe(true)
+    }
+    // 管理画面のメニューのボタンだけを押す(同じ名前のほかのボタンを押さないように)
+    expect(steps.filter((s) => s.do === 'click').every((s) => s.from === 'aside nav button')).toBe(true)
+  })
+
+  it('管理画面は、サンプルのデータの代表(最上位の役職)で開く', () => {
+    const view = layout.viewerData(layout.ADMIN_MEMBER) as Record<string, { headers: string[]; rows: string[][] }>
+    const members = view.Members
+    const me = members.rows.find((r) => r[members.headers.indexOf('id')] === layout.ADMIN_MEMBER)!
+    expect(me[members.headers.indexOf('role')]).toBe('代表')
+    // 代表は幹部限定のタスクも受け取る
+    expect(view.Tasks.rows.some((r) => r[view.Tasks.headers.indexOf('visibility')] === '幹部')).toBe(true)
+  })
+
   it('一般のメンバーが受け取るサンプルのデータで確かめる(長い名前などの極端な例を含む)', () => {
     const view = layout.viewerData() as Record<string, { headers: string[]; rows: string[][] }>
     const tasks = view.Tasks

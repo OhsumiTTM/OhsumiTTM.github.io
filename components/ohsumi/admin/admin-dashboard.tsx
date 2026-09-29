@@ -189,7 +189,7 @@ export function AdminDashboard() {
       {/* Attention required */}
       <div className="mt-8">
         <h2 className="text-sm font-semibold">{tr('admin.dashboard.attentionRequired')}</h2>
-        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+        <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
           <AttentionGroup
             title={tr('admin.dashboard.label.pending')}
             icon={<FileClock className="size-4 text-primary" />}
@@ -418,7 +418,7 @@ export function AdminDashboard() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         <span
-                          className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${
+                          className={`rounded-md px-1.5 py-0.5 text-xs font-medium whitespace-nowrap ${
                             h.health === 'good'
                               ? 'bg-primary-muted text-accent-foreground'
                               : h.health === 'watch'
@@ -501,7 +501,7 @@ function AttentionGroup({
                   <div className="truncate text-sm font-medium">{t.name}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">{renderMeta(t)}</div>
                 </div>
-                <ProjectTag name={getProject(t.projectId)?.name ?? ''} />
+                <ProjectTag name={getProject(t.projectId)?.name ?? ''} className="max-w-[40%]" />
               </button>
             </li>
           ))}
