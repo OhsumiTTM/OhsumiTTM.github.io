@@ -95,7 +95,7 @@ describe('ログインの中での最終ログイン日時', () => {
   })
 
   it('exchangeIdToken は結果に lastLoginRecorded を付ける', () => {
-    expect(CODE_GS).toMatch(/data\.lastLoginRecorded = recordLastLogin\(memberId\)/)
+    expect(CODE_GS).toMatch(/data\.lastLoginRecorded = .*recordLastLogin\(memberId\)/)
   })
 })
 

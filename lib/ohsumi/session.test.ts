@@ -138,6 +138,18 @@ describe('GAS との通信', () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: remote.SESSION_ENDED_EVENT }))
   })
 
+  it('権限が足りない(forbidden)だけなら、保存したトークンは消さず、ログイン画面に戻す合図も送らない', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    mockGas([{ ok: false, forbidden: true, error: 'この操作は代表または管理者のみ実行できます。' }])
+    await expect(remote.remoteApi.getBackgroundData()).rejects.toThrow(/管理者のみ/)
+    expect(s.loadSession('org_a')).toMatchObject({ token: 'valid' })
+    expect(s.getSessionToken()).toBe('valid')
+    const dispatch = (window as unknown as { dispatchEvent: ReturnType<typeof vi.fn> }).dispatchEvent
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it('IDトークンを交換し、未登録のアカウントでは本人のメールだけを受け取る', async () => {
     const remote = await import('./remote')
     const bodies = mockGas([
@@ -236,5 +248,19 @@ describe('Googleでログインの準備(google.accounts.id.initialize)', () => 
     const third = lastConfig().nonce
     expect(id.initialize).toHaveBeenCalledTimes(3)
     expect(new Set([first, second, third]).size).toBe(3)
+  })
+
+  it('このページで initialize を呼んだかを覚える(ログアウト・セッション切れの後は、ページを読み込み直してから準備する)', async () => {
+    const s = await import('./session')
+    expect(s.googleSignInInitializedThisPage()).toBe(false)
+    await prepare(s)
+    expect(s.googleSignInInitializedThisPage()).toBe(true)
+    // ログアウトしても、このページで呼んだことは変わらない(読み込み直すまで)
+    s.clearSession()
+    expect(s.googleSignInInitializedThisPage()).toBe(true)
+    const reload = vi.fn()
+    ;(window as unknown as { location: unknown }).location = { reload }
+    s.reloadPage()
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 })

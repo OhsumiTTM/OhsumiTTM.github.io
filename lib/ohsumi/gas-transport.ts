@@ -29,7 +29,10 @@ export interface GasResponse<T = unknown> {
   ok: boolean
   result?: T
   error?: string
+  // セッションが無効・期限切れ(画面はログイン画面に戻す)
   authError?: boolean
+  // 権限が足りない(セッションは有効。ログイン画面には戻さない)
+  forbidden?: boolean
   reloadRequired?: boolean
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)
   retryLater?: boolean
@@ -115,6 +118,16 @@ export interface GasTiming {
   authFrom?: 'snapshot' | 'sheet'
   // 初期データと同じ応答に入れた裏での読み込み(withBackground)
   backgroundMs?: number
+  // スクリプトプロパティの読み込みと画面の版の確認
+  propsMs?: number
+  // ログイン: メールアドレスからメンバーを探す・セッションの発行・最終ログイン日時の記録
+  emailLookupMs?: number
+  sessionMs?: number
+  lastLoginMs?: number
+  // データの版の読み込み
+  versionMs?: number
+  // 内訳に無い時間(合計から、重ならない内訳を引いたもの)
+  otherMs?: number
 }
 
 // ---- コンソールに出す文字の整え方 ----
@@ -161,15 +174,21 @@ export function bodySnippet(text: string, max = 300): string {
 function describeTiming(timing: GasTiming | undefined): string {
   if (!timing || typeof timing.totalMs !== 'number') return 'GAS の内訳なし'
   const parts: string[] = []
+  if (timing.propsMs != null) parts.push(`設定の読み込み ${timing.propsMs}`)
   if (timing.authMs != null) parts.push(`認証 ${timing.authMs}`)
   if (timing.lockMs != null) parts.push(`ロック待ち ${timing.lockMs}`)
   if (timing.verifyMs != null) parts.push(`IDトークン確認 ${timing.verifyMs}`)
+  if (timing.emailLookupMs != null) parts.push(`メンバーの照合 ${timing.emailLookupMs}`)
+  if (timing.versionMs != null) parts.push(`版の読み込み ${timing.versionMs}`)
   if (timing.cache) parts.push(`キャッシュ ${timing.cache}${timing.cacheReadMs != null ? ` ${timing.cacheReadMs}` : ''}`)
   if (timing.readMs != null) parts.push(`シート読み込み ${timing.readMs}(${timing.read === 'api' ? 'Sheets API' : '予備の方式'})`)
   if (timing.readError) parts.push(`Sheets API で読めなかった理由: ${timing.readError}`)
   if (timing.cacheWriteMs != null) parts.push(`キャッシュ書き込み ${timing.cacheWriteMs}`)
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
   if (timing.backgroundMs != null) parts.push(`裏での読み込み ${timing.backgroundMs}`)
+  if (timing.sessionMs != null) parts.push(`セッションの発行 ${timing.sessionMs}`)
+  if (timing.lastLoginMs != null) parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}`)
+  if (timing.otherMs != null) parts.push(`その他 ${timing.otherMs}`)
   return `GAS ${timing.totalMs}ms${parts.length ? `: ${parts.join('・')}` : ''}`
 }
 

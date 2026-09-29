@@ -209,6 +209,9 @@ interface SignInHandlers {
 }
 
 let attempt: SignInAttempt | null = null
+// このページで initialize を呼んだか。ログアウト・セッション切れでログイン画面に戻る時は、
+// ページを読み込み直して、新しい試行の initialize をそのページの1回目にする(同じページで2回呼ばない)
+let initializedThisPage = false
 let creating: { orgId: string; promise: Promise<SignInAttempt | null> } | null = null
 let handlers: SignInHandlers | null = null
 
@@ -253,8 +256,23 @@ async function createAttempt(orgId: string): Promise<SignInAttempt | null> {
     cancel_on_tap_outside: true,
     callback: handleCredential,
   })
+  initializedThisPage = true
   attempt = { orgId, nonce, secret, status: 'ready' }
   return attempt
+}
+
+/** このページで google.accounts.id.initialize() を呼んだか */
+export function googleSignInInitializedThisPage(): boolean {
+  return initializedThisPage
+}
+
+/** ページを読み込み直す(ログイン画面を新しいページで出す) */
+export function reloadPage(): void {
+  try {
+    window.location.reload()
+  } catch {
+    /* テストの環境など、読み込み直せない時は何もしない */
+  }
 }
 
 /** 今のログインの試行を終える。次に prepareGoogleSignIn を呼ぶと、新しい nonce で準備し直す */
