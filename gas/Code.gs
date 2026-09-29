@@ -998,7 +998,7 @@ function setupValueFormat(ss) {
   }
   console.log(
     'ℹ️ 選択肢の値の形式: 日本語のまま書き込みます(既にデータがあるシート: ' + withData.join('・') + ')。' +
-      'VALUE_FORMAT は変えていません。内部コードへの移行は、移行の関数 migrateToInternalCodes()(今後の版で追加します)で行ってください。' +
+      'VALUE_FORMAT は変えていません。内部コードへの移行は、移行の関数 migrateToInternalCodes() で行ってください(gas/README.md の「内部コードへの移行」)。' +
       'VALUE_FORMAT を手で設定しないでください',
   )
   return 'hasData'
@@ -8919,4 +8919,403 @@ function deleteSampleData() {
     console.log(msg)
     return msg
   })
+}
+
+// ---- 内部コードへの移行(migrateToInternalCodes) ---------------------------------------
+//
+// Apps Script エディタから手動で実行する。スクリプトプロパティ MIGRATION_MODE で動きを切り替える。
+//   dryRun(既定): 何も書き込まず、変換される件数と例・当てはまらない値・作られる役職を実行ログに出す
+//   apply: スプレッドシートのバックアップのコピー(誰とも共有しない)を作ってから書き換え、
+//          VALUE_FORMAT=codes にする。終わったら MIGRATION_MODE を dryRun に戻す
+// 何度実行しても結果は同じ(2回目は何も変わらない)。列は見出しの名前で探すので、列や設定が無くても動く。
+// 最上位の役職は「代表」。名前を変えている団体は、スクリプトプロパティ MIGRATION_TOP_ROLE_NAME で指定する。
+// 変換の表は VALUE_CODES・役職・部門の一覧。当てはまらない値は変えずに残し、報告する。
+
+var MIGRATION_TASK_CODE_COLUMNS = {
+  status: 'status', difficulty: 'difficulty', priority: 'priority',
+  importance: 'importance', visibility: 'visibility', approval_status: 'approval',
+}
+
+// 表(VALUE_CODES)にある値ならコードを、無ければ null を返す(空は呼ぶ側で扱う)
+function knownCode(kind, value) {
+  var v = String(value === null || value === undefined ? '' : value).trim()
+  var table = VALUE_CODES[kind]
+  if (table.codes.indexOf(v) >= 0) return v
+  for (var i = 0; i < table.codes.length; i++) if (table.sheetLabels[table.codes[i]] === v) return table.codes[i]
+  if (Object.prototype.hasOwnProperty.call(table.aliases, v)) return table.aliases[v]
+  return null
+}
+
+// 移行後の役職の一覧を作る(roles が既にあればそれを使う)
+function migrationRoles(settings, memberRoleRefs, topRoleName, report) {
+  var existing = parseRolesSetting(settings.roles)
+  if (existing) return { roles: existing, created: false }
+  var roles = rolesFromLegacy(settings)
+  // メンバーにあって役職の一覧に無い役職名は、管理者の役職として作る(今までも管理者として扱っていた)
+  memberRoleRefs.forEach(function (ref) {
+    var v = String(ref || '').trim()
+    if (!v || findRole(roles, v)) return
+    roles.push({ id: v, name: v, tier: 'admin', restricted: false })
+    report.createdRoles.push(v)
+  })
+  var topName = String(topRoleName || '').trim() || DEFAULT_TOP_ROLE_NAME
+  var top = null
+  roles.forEach(function (r) { if (r.name === topName) top = r })
+  if (!top) {
+    report.errors.push('最上位の役職「' + topName + '」が見つかりません。MIGRATION_TOP_ROLE_NAME に、最上位にする役職の名前を指定してください。')
+    return { roles: roles, created: true }
+  }
+  if (topName !== DEFAULT_TOP_ROLE_NAME) {
+    top.tier = 'top'
+    delete top.restricted
+    // 自動で足した「代表」を、使っている人がいなければ外す
+    var used = memberRoleRefs.some(function (ref) { return String(ref || '').trim() === DEFAULT_TOP_ROLE_NAME })
+    var listed = splitCsvList(settings.role_levels).indexOf(DEFAULT_TOP_ROLE_NAME) >= 0
+    if (!used && !listed) roles = roles.filter(function (r) { return r.name !== DEFAULT_TOP_ROLE_NAME })
+  }
+  // ID を付ける: 一般 → base、最上位(指定した役職)→ top、ほかは新しい ID
+  roles = roles.map(function (r) {
+    var copy = {}
+    Object.keys(r).forEach(function (k) { copy[k] = r[k] })
+    if (r.tier === 'base') copy.id = BASE_ROLE_ID
+    else if (r === top) copy.id = TOP_ROLE_ID
+    else copy.id = newRoleId()
+    return copy
+  })
+  return { roles: roles, created: true }
+}
+
+// 移行の計画を作る(Google のサービスを使わない純粋な関数)。
+// snapshot: { Tasks, Members, Settings, Expenses } の { headers, rows }。opts: { topRoleName }
+// 返り値: { cells: { シート名: [[行, 列, 新しい値], ...] }, settings: { キー: 値 }, report }
+function planMigration(snapshot, opts) {
+  opts = opts || {}
+  var report = { counts: {}, examples: {}, unknown: {}, createdRoles: [], roles: [], roleMembers: {}, errors: [] }
+  var cells = {}
+  var settingsOut = {}
+  var table = function (name) { return snapshot[name] || { headers: [], rows: [] } }
+  var note = function (key, from, to) {
+    report.counts[key] = (report.counts[key] || 0) + 1
+    report.examples[key] = report.examples[key] || []
+    if (report.examples[key].length < 5) report.examples[key].push(String(from) + ' → ' + String(to))
+  }
+  var unknown = function (key, value) {
+    report.unknown[key] = report.unknown[key] || {}
+    var v = String(value)
+    report.unknown[key][v] = (report.unknown[key][v] || 0) + 1
+  }
+  var setCell = function (sheet, r, c, value) {
+    cells[sheet] = cells[sheet] || []
+    cells[sheet].push([r, c, value])
+  }
+
+  // Settings(key → value)
+  var st = table('Settings')
+  var keyCol = st.headers.indexOf('key')
+  var valueCol = st.headers.indexOf('value')
+  var settings = {}
+  if (keyCol >= 0 && valueCol >= 0) st.rows.forEach(function (r) { settings[String(r[keyCol])] = String(r[valueCol] === null || r[valueCol] === undefined ? '' : r[valueCol]) })
+  var departments = departmentsFromSettings(settings)
+
+  // 部門の値: 表にあれば ID、無ければ null
+  var knownDept = function (value) {
+    var v = String(value === null || value === undefined ? '' : value).trim()
+    if (v === UNCATEGORIZED_NAME) return ''
+    var d = findDepartment(departments, v)
+    return d ? d.id : null
+  }
+  var convertValue = function (key, kind, value) {
+    var v = String(value === null || value === undefined ? '' : value).trim()
+    if (!v) return { value: value, changed: false }
+    var code = kind === 'department' ? knownDept(v) : knownCode(kind, v)
+    if (code === null) { unknown(key, v); return { value: value, changed: false } }
+    return { value: code, changed: code !== v }
+  }
+
+  // 役職
+  var mt = table('Members')
+  var mRole = mt.headers.indexOf('role')
+  var mInactive = mt.headers.indexOf('inactive')
+  var memberRoleRefs = mRole >= 0 ? mt.rows.map(function (r) { return r[mRole] }) : []
+  var built = migrationRoles(settings, memberRoleRefs, opts.topRoleName, report)
+  var roles = built.roles
+  if (built.created) settingsOut.roles = JSON.stringify(roles)
+  report.roles = roles.map(function (r) { return { id: r.id, name: r.name, tier: r.tier } })
+  var roleRefToId = function (key, ref) {
+    var v = String(ref === null || ref === undefined ? '' : ref).trim()
+    if (!v) return null
+    var role = findRole(roles, v)
+    if (!role) { unknown(key, v); return null }
+    return role.id === v ? null : role.id
+  }
+
+  // Tasks
+  var tt = table('Tasks')
+  Object.keys(MIGRATION_TASK_CODE_COLUMNS).forEach(function (col) {
+    var c = tt.headers.indexOf(col)
+    if (c < 0) return
+    tt.rows.forEach(function (row, i) {
+      var res = convertValue('Tasks.' + col, MIGRATION_TASK_CODE_COLUMNS[col], row[c])
+      if (res.changed) { note('Tasks.' + col, row[c], res.value); setCell('Tasks', i, c, res.value) }
+    })
+  })
+  var dc = tt.headers.indexOf('department')
+  if (dc >= 0) {
+    tt.rows.forEach(function (row, i) {
+      var v = String(row[dc] === null || row[dc] === undefined ? '' : row[dc]).trim()
+      if (!v) return
+      var id = knownDept(v)
+      if (id === null) { unknown('Tasks.department', v); return }
+      if (id !== v) { note('Tasks.department', v, id === '' ? '(空)' : id); setCell('Tasks', i, dc, id) }
+    })
+  }
+  var hc = tt.headers.indexOf('history_json')
+  if (hc >= 0) {
+    tt.rows.forEach(function (row, i) {
+      var list = parseJsonOr(row[hc], null)
+      if (!Array.isArray(list)) return
+      var changed = false
+      var next = list.map(function (h) {
+        var kind = h && HISTORY_CODE_FIELDS[h.field]
+        if (!kind) return h
+        var copy = {}
+        Object.keys(h).forEach(function (k) { copy[k] = h[k] })
+        ;['from', 'to'].forEach(function (side) {
+          var res = convertValue('Tasks.history_json(' + h.field + ')', kind, h[side])
+          if (res.changed) { copy[side] = res.value; changed = true }
+        })
+        return copy
+      })
+      if (changed) { note('Tasks.history_json', '(変更の記録)', '(コード)'); setCell('Tasks', i, hc, JSON.stringify(next)) }
+    })
+  }
+  var sc = tt.headers.indexOf('schedule_json')
+  if (sc >= 0) {
+    tt.rows.forEach(function (row, i) {
+      var schedule = parseJsonOr(row[sc], null)
+      if (!schedule || !schedule.responses) return
+      var changed = false
+      Object.keys(schedule.responses).forEach(function (mid) {
+        var answers = schedule.responses[mid] || {}
+        Object.keys(answers).forEach(function (cid) {
+          var res = convertValue('Tasks.schedule_json', 'scheduleAnswer', answers[cid])
+          if (res.changed) { answers[cid] = res.value; changed = true }
+        })
+      })
+      if (changed) { note('Tasks.schedule_json', '(日程調整の回答)', '(コード)'); setCell('Tasks', i, sc, JSON.stringify(schedule)) }
+    })
+  }
+
+  // Members
+  if (mRole >= 0) {
+    mt.rows.forEach(function (row, i) {
+      var id = roleRefToId('Members.role', row[mRole])
+      if (id) { note('Members.role', row[mRole], id); setCell('Members', i, mRole, id) }
+    })
+  }
+  var oc = mt.headers.indexOf('permission_overrides_json')
+  if (oc >= 0) {
+    mt.rows.forEach(function (row, i) {
+      var list = parseJsonOr(row[oc], null)
+      if (!Array.isArray(list)) return
+      var changed = false
+      list.forEach(function (ov) {
+        if (!ov || ov.targetType !== 'department') return
+        var res = convertValue('Members.permission_overrides_json(部門)', 'department', ov.targetId)
+        if (res.changed) { ov.targetId = res.value; changed = true }
+      })
+      if (changed) { note('Members.permission_overrides_json', '(部門の権限の例外)', '(部門 ID)'); setCell('Members', i, oc, JSON.stringify(list)) }
+    })
+  }
+  // 最上位の役職を持つ有効なメンバーが1人以上いること
+  if (mRole >= 0) {
+    var tops = 0
+    mt.rows.forEach(function (row) {
+      var inactive = mInactive >= 0 && String(row[mInactive] || '').trim().toUpperCase() === 'TRUE'
+      var role = findRole(roles, row[mRole])
+      var roleId = role ? role.id : String(row[mRole] || '').trim()
+      report.roleMembers[roleId || BASE_ROLE_ID] = (report.roleMembers[roleId || BASE_ROLE_ID] || 0) + 1
+      if (!inactive && isTopRoleRef(roles, row[mRole])) tops++
+    })
+    if (tops === 0 && mt.rows.length > 0) report.errors.push('最上位の役職を持つ有効なメンバーがいません。MIGRATION_TOP_ROLE_NAME を確かめてください。')
+  }
+
+  // 承認ステップの役職(経費申請の各行・経費のカテゴリ・フォームの定義)
+  var convertSteps = function (key, steps) {
+    if (!Array.isArray(steps)) return false
+    var changed = false
+    steps.forEach(function (step) {
+      if (!step || step.type !== 'role') return
+      var id = roleRefToId(key, step.role)
+      if (id) { step.role = id; changed = true }
+    })
+    return changed
+  }
+  var et = table('Expenses')
+  var ec = et.headers.indexOf('approval_steps_json')
+  if (ec >= 0) {
+    et.rows.forEach(function (row, i) {
+      var steps = parseJsonOr(row[ec], null)
+      if (convertSteps('Expenses.approval_steps_json(承認ステップの役職)', steps)) {
+        note('Expenses.approval_steps_json', '(承認ステップの役職)', '(役職 ID)')
+        setCell('Expenses', i, ec, JSON.stringify(steps))
+      }
+    })
+  }
+  ;['custom_form_defs', 'expense_categories'].forEach(function (key) {
+    var defs = parseJsonOr(settings[key], null)
+    if (!Array.isArray(defs)) return
+    var changed = false
+    defs.forEach(function (d) { if (d && convertSteps('Settings.' + key + '(承認ステップの役職)', d.approvalSteps)) changed = true })
+    if (changed) { note('Settings.' + key, '(承認ステップの役職)', '(役職 ID)'); settingsOut[key] = JSON.stringify(defs) }
+  })
+
+  // Settings のテンプレート・定期タスク(部門・難易度・優先度・きっかけのステータス)
+  var convertItem = function (key, item) {
+    if (!item || typeof item !== 'object') return false
+    var changed = false
+    ;[['department', 'department'], ['difficulty', 'difficulty'], ['priority', 'priority'], ['triggerOnStatus', 'status']].forEach(function (p) {
+      if (!(p[0] in item)) return
+      var res = convertValue(key + '(' + p[0] + ')', p[1], item[p[0]])
+      if (res.changed) { item[p[0]] = res.value; changed = true }
+    })
+    return changed
+  }
+  var pt = parseJsonOr(settings.project_templates, null)
+  if (pt && typeof pt === 'object' && !Array.isArray(pt)) {
+    var ptChanged = false
+    Object.keys(pt).forEach(function (name) { (Array.isArray(pt[name]) ? pt[name] : []).forEach(function (it) { if (convertItem('Settings.project_templates', it)) ptChanged = true }) })
+    if (ptChanged) { note('Settings.project_templates', '(テンプレート)', '(コード)'); settingsOut.project_templates = JSON.stringify(pt) }
+  }
+  var tst = parseJsonOr(settings.task_set_templates, null)
+  if (Array.isArray(tst)) {
+    var tstChanged = false
+    tst.forEach(function (tpl) { (tpl && Array.isArray(tpl.items) ? tpl.items : []).forEach(function (it) { if (convertItem('Settings.task_set_templates', it)) tstChanged = true }) })
+    if (tstChanged) { note('Settings.task_set_templates', '(業務テンプレート)', '(コード)'); settingsOut.task_set_templates = JSON.stringify(tst) }
+  }
+  var rr = parseJsonOr(settings.recurring_rules, null)
+  if (Array.isArray(rr)) {
+    var rrChanged = false
+    rr.forEach(function (rule) { if (convertItem('Settings.recurring_rules', rule)) rrChanged = true })
+    if (rrChanged) { note('Settings.recurring_rules', '(定期タスク)', '(コード)'); settingsOut.recurring_rules = JSON.stringify(rr) }
+  }
+  var th = parseJsonOr(settings.skill_level_thresholds, null)
+  if (th && typeof th === 'object' && Object.prototype.hasOwnProperty.call(th, LEGACY_DEFAULT_THRESHOLD_KEY)) {
+    var nextTh = {}
+    Object.keys(th).forEach(function (k) {
+      if (k === LEGACY_DEFAULT_THRESHOLD_KEY) { if (!(DEFAULT_THRESHOLD_KEY in th)) nextTh[DEFAULT_THRESHOLD_KEY] = th[k] } else nextTh[k] = th[k]
+    })
+    note('Settings.skill_level_thresholds', LEGACY_DEFAULT_THRESHOLD_KEY, DEFAULT_THRESHOLD_KEY)
+    settingsOut.skill_level_thresholds = JSON.stringify(nextTh)
+  }
+
+  return { cells: cells, settings: settingsOut, report: report }
+}
+
+// 計画の報告を実行ログの行にする
+function formatMigrationReport(plan, mode) {
+  var r = plan.report
+  var lines = ['==== 内部コードへの移行(' + mode + ') ====']
+  var keys = Object.keys(r.counts)
+  lines.push(keys.length ? '■ 変換される値(シート.列: 件数 / 例)' : '■ 変換される値はありません(移行済み、またはデータがありません)')
+  keys.sort().forEach(function (k) { lines.push('  ' + k + ': ' + r.counts[k] + '件 / ' + r.examples[k].join('、')) })
+  var uk = Object.keys(r.unknown)
+  lines.push(uk.length ? '■ 当てはまらない値(変換せずに残します。必要なら手で直してから、もう一度 dryRun してください)' : '■ 当てはまらない値はありません')
+  uk.sort().forEach(function (k) {
+    lines.push('  ' + k + ': ' + Object.keys(r.unknown[k]).map(function (v) { return '「' + v + '」' + r.unknown[k][v] + '件' }).join('、'))
+  })
+  lines.push('■ 移行後の役職(上下関係の順。人数)')
+  r.roles.forEach(function (role) {
+    lines.push('  ' + role.name + '(' + role.tier + '、ID: ' + role.id + ')' + (r.roleMembers[role.id] || 0) + '人')
+  })
+  if (r.createdRoles.length) lines.push('■ 役職の一覧に無かったため、管理者の役職として作る役職: ' + r.createdRoles.join('、'))
+  var sk = Object.keys(plan.settings)
+  if (sk.length) lines.push('■ 書き換える Settings のキー: ' + sk.join('、'))
+  if (r.errors.length) {
+    lines.push('■ エラー(このままでは apply できません)')
+    r.errors.forEach(function (e) { lines.push('  ' + e) })
+  }
+  return lines
+}
+
+// 移行に使うシートを読む
+function readMigrationSnapshot() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var out = {}
+  ;[SHEET_TASKS, SHEET_MEMBERS, SHEET_SETTINGS, SHEET_EXPENSES].forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (!sheet || sheet.getLastRow() < 1) { out[name] = { headers: [], rows: [] }; return }
+    var headers = headerRow(sheet)
+    var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
+    out[name] = { headers: headers, rows: rows }
+  })
+  return out
+}
+
+// スプレッドシートのバックアップのコピーを作り、誰とも共有しない状態にする。
+// コピーには Apps Script のプロジェクトも複製されるが、そのコピーの GAS はデプロイしない
+function createPrivateBackupCopy() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+  var copy = DriveApp.getFileById(ss.getId()).makeCopy(ss.getName() + '(内部コードへの移行前のバックアップ ' + stamp + ')', DriveApp.getRootFolder())
+  copy.getEditors().forEach(function (u) { try { copy.removeEditor(u) } catch (e) { /* 自分自身など */ } })
+  copy.getViewers().forEach(function (u) { try { copy.removeViewer(u) } catch (e) { /* 自分自身など */ } })
+  try { copy.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE) } catch (e) { /* 組織の設定で変えられない場合 */ }
+  return copy
+}
+
+// 計画どおりにシートと設定を書き換える
+function applyMigrationPlan(plan) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  Object.keys(plan.cells).forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (!sheet) return
+    var headers = headerRow(sheet)
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+    var touchedCols = {}
+    plan.cells[name].forEach(function (cell) { data[cell[0]][cell[1]] = cell[2]; touchedCols[cell[1]] = true })
+    // 変えた列だけを書き戻す
+    Object.keys(touchedCols).forEach(function (c) {
+      var col = Number(c)
+      var range = sheet.getRange(2, col + 1, data.length, 1)
+      range.setNumberFormat('@')
+      range.setValues(data.map(function (row) { return [row[col]] }))
+    })
+  })
+  Object.keys(plan.settings).forEach(function (key) { updateSetting(key, plan.settings[key]) })
+}
+
+function migrateToInternalCodes() {
+  var props = PropertiesService.getScriptProperties()
+  var mode = props.getProperty('MIGRATION_MODE') === 'apply' ? 'apply' : 'dryRun'
+  var lock = LockService.getScriptLock()
+  if (!lock.tryLock(30000)) throw new Error('ほかの処理が実行中です。少し待ってからもう一度実行してください。')
+  try {
+    resetRequestProps()
+    var plan = planMigration(readMigrationSnapshot(), { topRoleName: props.getProperty('MIGRATION_TOP_ROLE_NAME') })
+    formatMigrationReport(plan, mode).forEach(function (line) { console.log(line) })
+    if (mode !== 'apply') {
+      console.log('dryRun のため、何も書き込んでいません。内容を確かめてから、スクリプトプロパティ MIGRATION_MODE を apply にして、もう一度実行してください。')
+      return plan.report
+    }
+    if (plan.report.errors.length) throw new Error('エラーがあるため移行しませんでした。上のエラーを直してから、もう一度実行してください。')
+
+    var copy = createPrivateBackupCopy()
+    console.log('💾 バックアップのコピーを作りました(誰とも共有していません): ' + copy.getName() + ' ' + copy.getUrl())
+    console.log('⚠️ このコピーには Apps Script(GAS)も一緒に複製されていますが、コピーの GAS はデプロイしないでください(同じ団体のデータの窓口が2つになります)。')
+    console.log('   移行の後、しばらく(目安: 1か月)問題がなければ、このコピーは削除して構いません。')
+
+    applyMigrationPlan(plan)
+    updateSetting('migrated_at', new Date().toISOString())
+    props.setProperty('VALUE_FORMAT', 'codes')
+    props.setProperty('MIGRATION_MODE', 'dryRun')
+    resetRequestProps()
+    try { SpreadsheetApp.flush() } catch (e) { /* 実行の終了時にも確定する */ }
+    bumpDataVersion()
+    console.log('✅ 移行しました。VALUE_FORMAT=codes にし、MIGRATION_MODE を dryRun に戻しました。')
+    console.log('   開いているタブは、再読み込みするまで GAS に断られます(「ページを再読み込みしてください」と表示されます)。')
+    return plan.report
+  } finally {
+    lock.releaseLock()
+  }
 }
