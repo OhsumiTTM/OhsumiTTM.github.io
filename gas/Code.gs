@@ -1232,15 +1232,18 @@ function logGetRequest(e) {
   }
 }
 
-// 画面は GAS に POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、
-// 本文が失われた可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。画面が原因を記録して
-// 送り直せるよう、HTML ではなく JSON で返す(何も処理していないので、送り直してよい)
+// 画面は GAS に POST しか送らない。GET で届くのは、POST の結果の受け渡し(echo)が返事を渡さずに
+// exec への GET に送り返した時か、URL が /exec ではない・/u/1/ を含むなどで POST が GET に変わった時。
+// どちらも本文は失われている。画面がすぐ送り直せるよう、シートもプロパティも読まずに JSON で返す
+// (bounced: true。何も処理していないので送り直してよい。書き込みは requestId で二重に処理されない)
 function doGet(e) {
+  startRequestTiming()
   logGetRequest(e)
   return jsonOutput({
     ok: false,
     getReceived: true,
-    error: 'GAS に GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
+    bounced: true,
+    error: 'GAS に GET で届きました(結果の受け渡しの途中で送り返された、または POST の本文が転送の途中で失われた)。何も処理していません。',
   })
 }
 
@@ -1584,7 +1587,7 @@ function exchangeIdToken(body) {
   data.session = issueSessionToken(memberId, body.remember !== false, nowSec())
   // 最終ログイン日時も、ここで記録する(画面が別に updateLastLogin を送らなくてよいように)
   data.lastLoginRecorded = recordLastLogin(memberId)
-  return data
+  return attachBackgroundData(data, memberId, body)
 }
 
 // ログインの時に最終ログイン日時を記録する。ほかの書き込みを長く待たせないよう、ロックは2秒だけ待ち、
@@ -2617,6 +2620,9 @@ function doPost(e) {
   try {
     startRequestTiming()
     var body = JSON.parse(e.postData.contents)
+    // ping: 何もせずにすぐ返す(認証・スクリプトプロパティ・シートを読まない)。
+    // 画面の往復時間と GAS の中の時間(timing.totalMs)を比べて、遅さが Google 側・回線側か切り分ける
+    if (body.action === 'ping') return jsonOutput({ ok: true, result: { pong: true } })
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
     resetRequestProps()
 
@@ -2658,7 +2664,7 @@ function doPost(e) {
       try {
         return jsonOutput({
           ok: true,
-          result: getInitialDataForMember(initAuth.memberId, body.knownVersion),
+          result: attachBackgroundData(getInitialDataForMember(initAuth.memberId, body.knownVersion), initAuth.memberId, body),
           session: initAuth.renewed || undefined,
         })
       } catch (initErr) {
@@ -5195,6 +5201,7 @@ var _requestTiming = null
 
 function startRequestTiming() {
   _requestTiming = { start: Date.now() }
+  _requestSnapshot = null
 }
 
 function noteTiming(key, value) {
@@ -5235,6 +5242,23 @@ var BACKGROUND_DATA_PARTS = [
   { key: 'candidates', action: 'getCandidates', load: function (acting) { return getCandidates(acting) } },
   { key: 'myEmail', action: 'getMyEmails', load: function (acting) { return getMemberEmailValue(acting.id) } },
 ]
+
+// withBackground: getInitialData・exchangeIdToken の応答に、裏での読み込み(getBackgroundData と同じもの)も
+// 入れる。画面の通信を1回減らす(ログイン・再読み込みとも1回で全部そろう)。
+// 失敗しても初期データは返す(background の代わりに backgroundError。画面は getBackgroundData を送り直す)
+function attachBackgroundData(data, memberId, body) {
+  if (!body || !body.withBackground || !data || !data.memberId) return data
+  var t = Date.now()
+  try {
+    var acting = getActingMember(memberId, 'getBackgroundData')
+    authorizeAction(acting, 'getBackgroundData', body)
+    data.background = getBackgroundData(acting, body)
+  } catch (err) {
+    data.backgroundError = toErrorMessage(err)
+  }
+  noteTiming('backgroundMs', Date.now() - t)
+  return data
+}
 
 function getBackgroundData(acting, body) {
   var out = { errors: {} }
@@ -6682,13 +6706,28 @@ function snapshotCacheKey(version, suffix) {
   return 'snap:' + version + ':' + suffix
 }
 
+// スナップショットを使う最長の時間(ミリ秒)。スプレッドシートの直接の編集は onSpreadsheetChange で
+// すぐ版が変わるが、トリガーが無い・失敗した時でも、この時間を過ぎたらシートから読み直す
+var SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000
+
+// 目録は「分割数:作った時刻(ミリ秒)」。作った時刻が無い(前の形式)・古すぎる時は使わない
+function snapshotMetaUsable(meta, now) {
+  var parts = String(meta || '').split(':')
+  var count = Number(parts[0])
+  var savedAt = Number(parts[1])
+  if (!(count > 0) || !(savedAt > 0)) return 0
+  var age = now - savedAt
+  if (age < 0 || age > SNAPSHOT_MAX_AGE_MS) return 0
+  return count
+}
+
 function readSnapshotCache(version) {
   try {
     var cache = CacheService.getScriptCache()
     var meta = cache.get(snapshotCacheKey(version, 'meta'))
     if (!meta) return null
-    var count = Number(meta)
-    if (!(count > 0)) return null
+    var count = snapshotMetaUsable(meta, Date.now())
+    if (!count) return null
     var keys = []
     for (var i = 0; i < count; i++) keys.push(snapshotCacheKey(version, i))
     var parts = cache.getAll(keys)
@@ -6718,7 +6757,7 @@ function writeSnapshotCache(version, data) {
     var cache = CacheService.getScriptCache()
     cache.putAll(entries, SNAPSHOT_CACHE_TTL)
     // 目録は最後に書く(途中で失敗したら目録が無く、次回は読み直しになる)
-    cache.put(snapshotCacheKey(version, 'meta'), String(count), SNAPSHOT_CACHE_TTL)
+    cache.put(snapshotCacheKey(version, 'meta'), count + ':' + Date.now(), SNAPSHOT_CACHE_TTL)
     return true
   } catch (e) {
     return false
@@ -6727,17 +6766,24 @@ function writeSnapshotCache(version, data) {
 
 // 4シート分のスナップショットを返す。版は必ずシートより先に読む(書き込みと
 // 同時に読んでも、古い版のキーに新しいデータが入るだけで逆は起きない)。
+// 1つのリクエストの中では、同じ版のスナップショットを使い回す(初期データと裏での読み込みを
+// 1回で返す時に、キャッシュを2回読まない)
+var _requestSnapshot = null
+
 function loadSnapshot() {
   var version = getDataVersion()
+  if (_requestSnapshot && _requestSnapshot.version === version) return _requestSnapshot
   var cached = timed('cacheReadMs', function () { return readSnapshotCache(version) })
   if (cached) {
     noteTiming('cache', 'hit')
-    return { version: version, data: cached, cacheHit: true }
+    _requestSnapshot = { version: version, data: cached, cacheHit: true }
+    return _requestSnapshot
   }
   noteTiming('cache', 'miss')
   var data = readSheetTables(SNAPSHOT_SHEETS)
   timed('cacheWriteMs', function () { writeSnapshotCache(version, data) })
-  return { version: version, data: data, cacheHit: false }
+  _requestSnapshot = { version: version, data: data, cacheHit: false }
+  return _requestSnapshot
 }
 
 // ---- 読み取りの権限表(閲覧範囲の判定はここに集約する) -----------------------
