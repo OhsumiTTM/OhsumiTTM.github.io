@@ -70,7 +70,7 @@ import type {
   NotifyFrequency,
   PermissionOverride,
 } from './types'
-import { canSeeExecTasks, BASE_ROLE, STATUS_LABEL } from './types'
+import { canSeeExecTasks, BASE_ROLE, UNCATEGORIZED_DEPARTMENT, type TaskVisibility } from './types'
 import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
@@ -301,7 +301,7 @@ interface OhsumiContextValue extends OhsumiState {
       skills: string[]
       difficulty: Difficulty
       priority: Priority
-      visibility: 'all' | '幹部'
+      visibility: TaskVisibility
       importance: TaskImportance
       requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
     },
@@ -2203,7 +2203,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         // チェックが本来の判定）。他のタスクが既にあっても2人目以降の新規
         // メンバーに初期タスクを付与できるよう、組織全体のタスク有無は見ない。
         const now = new Date().toISOString()
-        const base = { assigneeIds: [userId], status: 'todo' as const, progressHistory: [] as import('./types').ProgressEntry[], department: '未分類' as const, category: '未分類', skills: [], priority: '中' as const, difficulty: '新人歓迎' as const, deadline: null, createdAt: now, lastActivity: now.slice(0, 10) }
+        const base = { assigneeIds: [userId], status: 'todo' as const, progressHistory: [] as import('./types').ProgressEntry[], department: UNCATEGORIZED_DEPARTMENT, category: '未分類', skills: [], priority: 'medium' as const, difficulty: 'beginner' as const, deadline: null, createdAt: now, lastActivity: now.slice(0, 10) }
         const taskDefs = initialTasksFromSettings.length ? initialTasksFromSettings : HARDCODED_INITIAL_TASKS
         const newTasks: import('./types').Task[] = taskDefs.map((t, i) => ({
           ...base,
@@ -2795,7 +2795,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         skills: string[]
         difficulty: Difficulty
         priority: Priority
-        visibility: 'all' | '幹部'
+        visibility: TaskVisibility
         importance: TaskImportance
         requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
       },
@@ -2825,7 +2825,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           next = appendHistory(next, 'difficulty', t.difficulty, details.difficulty)
           next = appendHistory(next, 'priority', t.priority, details.priority)
           next = appendHistory(next, 'visibility', t.visibility ?? 'all', details.visibility)
-          next = appendHistory(next, 'importance', t.importance ?? '一般', details.importance)
+          next = appendHistory(next, 'importance', t.importance ?? 'normal', details.importance)
           return next
         }),
       )
@@ -2940,8 +2940,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         deadline: null,
         category: '確認',
         skills: [],
-        difficulty: '誰でも可',
-        priority: '中',
+        difficulty: 'anyone',
+        priority: 'medium',
         status: 'todo',
         lastActivity: today,
         createdById: currentUserId ?? undefined,
@@ -3002,8 +3002,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                 completedDate: status === 'done' ? today : null,
               },
               'status',
-              STATUS_LABEL[t.status],
-              STATUS_LABEL[status],
+              t.status,
+              status,
             )
           : t,
       )
@@ -3974,8 +3974,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             return appendHistory(
               { ...t, schedule: nextSchedule, status: 'done', completedDate: today, lastActivity: today },
               'status',
-              STATUS_LABEL[t.status],
-              STATUS_LABEL.done,
+              t.status,
+              'done',
             )
           }
           return { ...t, schedule: nextSchedule }
@@ -4005,13 +4005,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         name,
         description: '',
         projectId,
-        department: '未分類',
+        department: UNCATEGORIZED_DEPARTMENT,
         assigneeIds: [],
         deadline: null,
         category: '日程調整',
         skills: [],
-        difficulty: '新人歓迎',
-        priority: '中',
+        difficulty: 'beginner',
+        priority: 'medium',
         status: 'todo',
         lastActivity: today,
         createdById: currentUserId ?? undefined,
@@ -4029,11 +4029,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               tempId,
               title: name,
               projectId,
-              department: '未分類',
+              department: UNCATEGORIZED_DEPARTMENT,
               category: '日程調整',
               skills: [],
-              difficulty: '新人歓迎',
-              priority: '中',
+              difficulty: 'beginner',
+              priority: 'medium',
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
@@ -4092,8 +4092,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             return appendHistory(
               { ...t, form: nextForm, status: 'done', completedDate: today, lastActivity: today },
               'status',
-              STATUS_LABEL[t.status],
-              STATUS_LABEL.done,
+              t.status,
+              'done',
             )
           }
           return { ...t, form: nextForm }
@@ -4115,13 +4115,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         name,
         description: '',
         projectId,
-        department: '未分類',
+        department: UNCATEGORIZED_DEPARTMENT,
         assigneeIds: [],
         deadline: null,
         category: 'フォーム',
         skills: [],
-        difficulty: '新人歓迎',
-        priority: '中',
+        difficulty: 'beginner',
+        priority: 'medium',
         status: 'todo',
         lastActivity: today,
         createdById: currentUserId ?? undefined,
@@ -4139,11 +4139,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               tempId,
               title: name,
               projectId,
-              department: '未分類',
+              department: UNCATEGORIZED_DEPARTMENT,
               category: 'フォーム',
               skills: [],
-              difficulty: '新人歓迎',
-              priority: '中',
+              difficulty: 'beginner',
+              priority: 'medium',
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
@@ -4480,7 +4480,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       (t) =>
         !t.pendingApproval &&
         !isArchived(t) &&
-        (t.visibility !== '幹部' || canSeeExec),
+        (t.visibility !== 'leaders' || canSeeExec),
     )
   }, [tasks, currentUser])
   const pendingTasks = useMemo(() => tasks.filter((t) => t.pendingApproval), [tasks])

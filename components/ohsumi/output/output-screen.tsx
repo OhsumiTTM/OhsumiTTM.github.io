@@ -61,13 +61,13 @@ const TASK_SORT_KEY: Record<TaskSort, TranslationKey> = {
   difficulty: 'output.sort.difficulty',
   created: 'output.sort.created',
 }
-const PRIORITY_RANK: Record<Priority, number> = { '高': 0, '中': 1, '低': 2 }
+const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 }
 const DIFFICULTY_RANK: Record<Difficulty, number> = {
-  '誰でも可': 0,
-  '新人歓迎': 1,
-  '少し経験必要': 2,
-  '経験者向け': 3,
-  '上級者向け': 4,
+  anyone: 0,
+  beginner: 1,
+  some_exp: 2,
+  experienced: 3,
+  advanced: 4,
 }
 
 function sortTasksBy(tasks: Task[], sort: TaskSort): Task[] {

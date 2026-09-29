@@ -1,6 +1,9 @@
 export type TaskStatus = 'todo' | 'hold' | 'progress' | 'support' | 'review' | 'fix' | 'done'
 
-export type Difficulty = '誰でも可' | '新人歓迎' | '少し経験必要' | '経験者向け' | '上級者向け'
+import { VALUE_CODES, type CodeOf } from './codes'
+
+// 選択肢の値は内部コードで持つ(表示名は i18n、シートとの対応は codes.ts)
+export type Difficulty = CodeOf<'difficulty'>
 
 // 一般 is the fixed, implicit baseline every member starts at — it carries
 // no admin access. Everything above it is an admin-defined permission
@@ -10,6 +13,14 @@ export type Difficulty = '誰でも可' | '新人歓迎' | '少し経験必要' 
 export type Role = string
 
 export const BASE_ROLE = '一般'
+
+// 最上位の役職(代表専用の操作ができる)。役職の設定(PR-B)で役職IDに
+// 変えるまでは名前で判定する。判定はこの関数だけで行う
+export const TOP_ROLE = '代表'
+
+export function isTopRole(role: Role | null | undefined): boolean {
+  return role === TOP_ROLE
+}
 
 export function isAdminRole(role: Role): boolean {
   return role !== BASE_ROLE
@@ -76,28 +87,25 @@ export function canSeeExecTasks(role: Role): boolean {
   return role !== BASE_ROLE
 }
 
-export type Priority = '高' | '中' | '低'
+export type Priority = CodeOf<'priority'>
 
-export const PRIORITIES: Priority[] = ['高', '中', '低']
+export const PRIORITIES: Priority[] = [...VALUE_CODES.priority.codes]
 
 // item 9: 承認ルートの拡張 — 重要/対外公開のタスクは最上位管理者のみが
 // 承認できる（Task.importance / admin-approvals.tsx）
-export type TaskImportance = '一般' | '重要' | '対外公開'
+export type TaskImportance = CodeOf<'importance'>
 
-export const TASK_IMPORTANCE: TaskImportance[] = ['一般', '重要', '対外公開']
+export const TASK_IMPORTANCE: TaskImportance[] = [...VALUE_CODES.importance.codes]
 
-export const DEPARTMENTS = [
-  '運営',
-  '広報',
-  '開発',
-  'デザイン',
-  '渉外',
-  'イベント',
-  'リサーチ',
-  '未分類',
-] as const
+// 部門は部門ID('ops' など)。未分類は空。一覧に無い値(以前の独自の部門名)
+// もそのまま持てるよう string にしている(部門の設定は PR-B)
+export type Department = string
 
-export type Department = (typeof DEPARTMENTS)[number]
+export const DEPARTMENTS: Department[] = [...VALUE_CODES.department.codes]
+
+export const UNCATEGORIZED_DEPARTMENT: Department = ''
+
+export type TaskVisibility = CodeOf<'visibility'>
 
 export interface ProgressEntry {
   id: string
@@ -464,8 +472,8 @@ export type RecurrenceFrequency = 'weekly' | 'monthly'
 
 /**
  * スキルごとのレベルアップ閾値マップ (Settings キー: "skill_level_thresholds")
- * 例: { "デフォルト": 100, "デザイン": 150, "プログラミング": 200 }
- * キーが存在しないスキルは "デフォルト" の値を使う。
+ * 例: { "_default": 100, "デザイン": 150, "プログラミング": 200 }
+ * キーが存在しないスキルは "_default" の値を使う(移行前のシートでは "デフォルト")。
  */
 export type SkillLevelThresholds = Record<string, number>
 
@@ -632,8 +640,8 @@ export interface Task {
   // ids of tasks that must happen before this one can start — powers the
   // 依存関係 (dependency tree) view, separate from the ワークフロー kanban
   dependsOnIds?: string[]
-  // '幹部' restricts visibility to 班長/代表 (see canSeeExecTasks); undefined/'all' = everyone
-  visibility?: 'all' | '幹部'
+  // 'leaders' restricts visibility to 班長/代表 (see canSeeExecTasks); undefined/'all' = everyone
+  visibility?: TaskVisibility
   // タスクの重要度（item 9: 承認ルートの拡張）— 重要/対外公開のタスクは
   // 登録者の報告先ではなく、最上位の管理者（isFullAdmin）のみ承認できる。
   // 未設定/一般は既存どおり報告先チェーンで承認できる。
@@ -707,7 +715,7 @@ export interface TaskRetrospective {
 // 候補ごとに〇×△で回答する。全員が全候補に回答し終えると自動的に
 // status: 'done' になり、作成者へ結果とともに通知が飛ぶ
 // （store.tsx の respondToSchedule / gas/Code.gs の notifyScheduleResult）
-export type ScheduleResponseValue = '○' | '×' | '△'
+export type ScheduleResponseValue = CodeOf<'scheduleAnswer'>
 
 export interface ScheduleCandidate {
   id: string
@@ -806,7 +814,7 @@ export interface ParsedTask {
   priority: Priority
   assigneeIds: string[]
   approved: boolean
-  visibility?: 'all' | '幹部'
+  visibility?: TaskVisibility
   // suggested/entered estimate at registration time — see Task.estimatedHours
   estimatedHours?: number
   // see Task.importance
@@ -843,20 +851,14 @@ export const STATUS_COLOR: Record<TaskStatus, string> = {
   done: 'var(--status-done)',
 }
 
-export const DIFFICULTY_LABEL: Difficulty[] = [
-  '誰でも可',
-  '新人歓迎',
-  '少し経験必要',
-  '経験者向け',
-  '上級者向け',
-]
+export const DIFFICULTY_LABEL: Difficulty[] = [...VALUE_CODES.difficulty.codes]
 
 // Priority accent line color (used on card left edge). Uses CSS vars so it
 // adapts to dark mode.
 export const PRIORITY_LINE: Record<Priority, string> = {
-  高: 'var(--priority-high)',
-  中: 'var(--priority-medium)',
-  低: 'var(--priority-low)',
+  high: 'var(--priority-high)',
+  medium: 'var(--priority-medium)',
+  low: 'var(--priority-low)',
 }
 
 // Email notification frequency per notification kind.

@@ -1,6 +1,7 @@
 // ログイン情報(セッショントークン)の保存場所と、GAS との通信での扱いを確かめる。
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CLIENT_VERSION } from './codes'
 
 class MemoryStorage {
   data = new Map<string, string>()
@@ -144,7 +145,7 @@ describe('GAS との通信', () => {
       { ok: true, result: { memberId: 'm1', version: 'v1', unchanged: true, session: { token: 't', exp: 1, remember: false } } },
     ])
     expect(await remote.exchangeIdToken('id.token.x', 'secret', true)).toEqual({ memberId: null, email: 'stranger@example.com' })
-    expect(bodies[0]).toEqual({ action: 'exchangeIdToken', idToken: 'id.token.x', nonceSecret: 'secret', remember: true })
+    expect(bodies[0]).toEqual({ action: 'exchangeIdToken', idToken: 'id.token.x', nonceSecret: 'secret', remember: true, clientVersion: CLIENT_VERSION })
     expect(await remote.exchangeIdToken('id.token.y', 'secret', false)).toMatchObject({ memberId: 'm1', session: { token: 't' } })
   })
 

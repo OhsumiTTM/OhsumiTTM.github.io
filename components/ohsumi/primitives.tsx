@@ -8,9 +8,10 @@ import {
   type Difficulty,
   type Priority,
   type TaskStatus,
+  isTopRole,
 } from '@/lib/ohsumi/types'
 import type { Member, Department, Task } from '@/lib/ohsumi/types'
-import { useI18n, STATUS_KEY, DIFFICULTY_KEY, DEPARTMENT_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
+import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, departmentLabel } from '@/lib/ohsumi/i18n'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useFileUrl } from '@/lib/ohsumi/files'
 
@@ -97,11 +98,11 @@ export function StatusDot({ status }: { status: TaskStatus }) {
 }
 
 const difficultyStyles: Record<Difficulty, string> = {
-  誰でも可: 'bg-primary/10 text-primary border-primary/20',
-  新人歓迎: 'bg-success-muted text-success border-success-border',
-  少し経験必要: 'bg-warning-muted text-warning border-warning-border',
-  経験者向け: 'bg-danger-muted text-danger border-danger-border',
-  上級者向け: 'bg-purple-500/10 text-purple-600 border-purple-300 dark:text-purple-400 dark:border-purple-700',
+  anyone: 'bg-primary/10 text-primary border-primary/20',
+  beginner: 'bg-success-muted text-success border-success-border',
+  some_exp: 'bg-warning-muted text-warning border-warning-border',
+  experienced: 'bg-danger-muted text-danger border-danger-border',
+  advanced: 'bg-purple-500/10 text-purple-600 border-purple-300 dark:text-purple-400 dark:border-purple-700',
 }
 
 export function DifficultyBadge({ difficulty }: { difficulty: Difficulty }) {
@@ -163,7 +164,7 @@ export function DepartmentTag({ name }: { name: Department }) {
   const { t } = useI18n()
   return (
     <span className="inline-flex items-center whitespace-nowrap rounded-md border border-info-border bg-info-muted px-1.5 py-0.5 text-[11px] font-medium text-info">
-      {t(DEPARTMENT_KEY[name])}
+      {departmentLabel(t, name)}
     </span>
   )
 }
@@ -189,7 +190,7 @@ export function PriorityBadge({ priority }: { priority: Priority }) {
     <span
       className={cn(
         'inline-flex items-center gap-1 text-[11px] font-medium',
-        priority === '高' ? 'text-danger' : 'text-muted-foreground',
+        priority === 'high' ? 'text-danger' : 'text-muted-foreground',
       )}
     >
       <span
@@ -247,7 +248,7 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
 export function AdminAccessNote({ level, className }: { level: 'fullAdmin' | 'daihyo'; className?: string }) {
   const { isFullAdmin, currentUser } = useOhsumi()
   const { t } = useI18n()
-  const blocked = level === 'fullAdmin' ? !isFullAdmin : currentUser?.role !== '代表'
+  const blocked = level === 'fullAdmin' ? !isFullAdmin : !isTopRole(currentUser?.role)
   if (!blocked) return null
   return (
     <p className={cn('flex items-start gap-1.5 text-xs text-warning', className)}>

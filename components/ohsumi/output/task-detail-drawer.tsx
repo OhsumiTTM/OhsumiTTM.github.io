@@ -20,6 +20,7 @@ import {
 import {
   DEPARTMENTS,
   DIFFICULTY_LABEL,
+  PRIORITIES,
   TASK_IMPORTANCE,
   isAdminRole,
   type Department,
@@ -39,10 +40,12 @@ import {
   type TaskImportance,
   type TaskRetrospective,
   type TaskStatus,
+  type TaskVisibility,
 } from '@/lib/ohsumi/types'
+import { departmentName } from '@/lib/ohsumi/codes'
 import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, type WorkloadCapacity } from '@/lib/ohsumi/utils'
 import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
-import { useI18n, STATUS_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
 import { formatDateTimeInTz, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
@@ -107,6 +110,8 @@ function historyValueLabel(
   projects: Project[],
   t: (key: TranslationKey) => string,
 ): string {
+  // 部門の空は未分類
+  if (field === 'department') return departmentLabel(t, raw)
   if (!raw) return t('common.notSet')
   if (field === 'assignee') {
     return raw
@@ -125,9 +130,14 @@ function historyValueLabel(
   if (field === 'project') {
     return projects.find((p) => p.id === raw)?.name ?? raw
   }
+  // status などの値は、読み込む時にコードにそろえている(normalizeHistoryEntry)
   if (field === 'visibility') {
-    return raw === '幹部' ? t('taskDrawer.execOnly') : t('common.everyone')
+    return raw === 'leaders' ? t('taskDrawer.execOnly') : t('common.everyone')
   }
+  if (field === 'status' && raw in STATUS_KEY) return t(STATUS_KEY[raw as TaskStatus])
+  if (field === 'priority' && raw in PRIORITY_KEY) return t(PRIORITY_KEY[raw as Priority])
+  if (field === 'difficulty' && raw in DIFFICULTY_KEY) return t(DIFFICULTY_KEY[raw as Difficulty])
+  if (field === 'importance' && raw in IMPORTANCE_KEY) return t(IMPORTANCE_KEY[raw as TaskImportance])
   return raw
 }
 
@@ -221,7 +231,7 @@ export function TaskDetailDrawer({
       difficulty: task.difficulty,
       priority: task.priority,
       visibility: task.visibility ?? 'all',
-      importance: task.importance ?? '一般',
+      importance: task.importance ?? 'normal',
       requiredSkillLevels: task.requiredSkillLevels,
       ...patch,
     })
@@ -392,7 +402,7 @@ export function TaskDetailDrawer({
         <p className="mb-2 text-xs text-muted-foreground">{tr('taskDrawer.assign.hint')}</p>
         {(() => {
           const deptTops = task?.department
-            ? getDepartmentTopsBySegment(task.department, members)
+            ? getDepartmentTopsBySegment(departmentName(task.department), members)
             : []
           const topIds = new Set(deptTops.map((m) => m.id))
           return (
@@ -621,7 +631,7 @@ export function TaskDetailDrawer({
         {(() => {
           const currentIds = task?.reviewerIds ?? (task?.reviewerId ? [task.reviewerId] : [])
           const deptTops = task?.department
-            ? getDepartmentTopsBySegment(task.department, members)
+            ? getDepartmentTopsBySegment(departmentName(task.department), members)
             : []
           const topIds = new Set(deptTops.map((m) => m.id))
           const roleTreeManagers = task?.assigneeIds
@@ -1114,7 +1124,7 @@ function ScheduleModal({
   )
 }
 
-const PRIORITY_OPTIONS: Priority[] = ['高', '中', '低']
+const PRIORITY_OPTIONS: Priority[] = PRIORITIES
 
 function DrawerBody({
   task,
@@ -1209,7 +1219,7 @@ function DrawerBody({
   onUpdateSkills: (skills: string[]) => void
   onUpdateDifficulty: (difficulty: Difficulty) => void
   onUpdatePriority: (priority: Priority) => void
-  onUpdateVisibility: (visibility: 'all' | '幹部') => void
+  onUpdateVisibility: (visibility: TaskVisibility) => void
   onUpdateImportance: (importance: TaskImportance) => void
   onOpenDelete: () => void
   onOpenAward: () => void
@@ -1234,7 +1244,7 @@ function DrawerBody({
   const overdue = isOverdue(task, currentUserTz)
   const calendarUrl = googleCalendarUrl(task, {
     projectName,
-    department: task.department,
+    department: departmentName(task.department),
     category: task.category,
   })
   const isAssignee = !!currentUserId && task.assigneeIds.includes(currentUserId)
@@ -1305,14 +1315,14 @@ function DrawerBody({
               {t('taskDrawer.pendingApproval')}
             </span>
           )}
-          {task.visibility === '幹部' && (
+          {task.visibility === 'leaders' && (
             <span className="shrink-0 rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">
               {t('taskDrawer.execOnly')}
             </span>
           )}
-          {(task.importance === '重要' || task.importance === '対外公開') && (
+          {(task.importance === 'important' || task.importance === 'external') && (
             <span className="shrink-0 rounded-md bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
-              {task.importance}
+              {t(IMPORTANCE_KEY[task.importance])}
             </span>
           )}
           {isAdmin && (
@@ -1592,7 +1602,7 @@ function DrawerBody({
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
                   {DEPARTMENTS.map((d) => (
-                    <option key={d} value={d}>{d}</option>
+                    <option key={d} value={d}>{departmentLabel(t, d)}</option>
                   ))}
                 </select>
               ) : (
@@ -1665,7 +1675,7 @@ function DrawerBody({
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
                   {DIFFICULTY_LABEL.map((d) => (
-                    <option key={d} value={d}>{d}</option>
+                    <option key={d} value={d}>{t(DIFFICULTY_KEY[d])}</option>
                   ))}
                 </select>
               ) : (
@@ -1701,40 +1711,40 @@ function DrawerBody({
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
                   {PRIORITY_OPTIONS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
+                    <option key={p} value={p}>{t(PRIORITY_KEY[p])}</option>
                   ))}
                 </select>
               ) : (
-                <span>{task.priority}</span>
+                <span>{t(PRIORITY_KEY[task.priority])}</span>
               )}
             </InfoField>
             <InfoField label={t('taskDrawer.edit.visibilityLabel')}>
               {isAdmin ? (
                 <select
                   value={task.visibility ?? 'all'}
-                  onChange={(e) => onUpdateVisibility(e.target.value as 'all' | '幹部')}
+                  onChange={(e) => onUpdateVisibility(e.target.value as TaskVisibility)}
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
                   <option value="all">{t('common.everyone')}</option>
-                  <option value="幹部">{t('taskDrawer.execOnly')}</option>
+                  <option value="leaders">{t('taskDrawer.execOnly')}</option>
                 </select>
               ) : (
-                <span>{task.visibility === '幹部' ? t('taskDrawer.execOnly') : t('common.everyone')}</span>
+                <span>{task.visibility === 'leaders' ? t('taskDrawer.execOnly') : t('common.everyone')}</span>
               )}
             </InfoField>
             <InfoField label={t('taskDrawer.edit.importanceLabel')}>
               {isAdmin ? (
                 <select
-                  value={task.importance ?? '一般'}
+                  value={task.importance ?? 'normal'}
                   onChange={(e) => onUpdateImportance(e.target.value as TaskImportance)}
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
                   {TASK_IMPORTANCE.map((i) => (
-                    <option key={i} value={i}>{i}</option>
+                    <option key={i} value={i}>{t(IMPORTANCE_KEY[i])}</option>
                   ))}
                 </select>
               ) : (
-                <span>{task.importance ?? '一般'}</span>
+                <span>{t(IMPORTANCE_KEY[task.importance ?? 'normal'])}</span>
               )}
             </InfoField>
             <InfoField label={t('taskDrawer.row.startDate')}>
@@ -2464,11 +2474,11 @@ function TimerWidget({
   )
 }
 
-const SCHEDULE_RESPONSE_OPTIONS: ScheduleResponseValue[] = ['○', '△', '×']
+const SCHEDULE_RESPONSE_OPTIONS: ScheduleResponseValue[] = ['yes', 'maybe', 'no']
 const SCHEDULE_RESPONSE_COLOR: Record<ScheduleResponseValue, string> = {
-  '○': 'bg-emerald-50 text-emerald-700',
-  '△': 'bg-amber-50 text-amber-700',
-  '×': 'bg-rose-50 text-rose-700',
+  yes: 'bg-emerald-50 text-emerald-700',
+  maybe: 'bg-amber-50 text-amber-700',
+  no: 'bg-rose-50 text-rose-700',
 }
 
 // Googleカレンダーへの追加ボタン — 日程調整完了後に表示する
@@ -2632,7 +2642,7 @@ function ScheduleSection({
                               : 'bg-secondary text-muted-foreground hover:bg-secondary/70',
                           )}
                         >
-                          {v}
+                          {t(SCHEDULE_ANSWER_KEY[v])}
                         </button>
                       ))}
                     </div>
@@ -2684,7 +2694,7 @@ function ScheduleSection({
                                 SCHEDULE_RESPONSE_COLOR[resp],
                               )}
                             >
-                              {resp}
+                              {t(SCHEDULE_ANSWER_KEY[resp])}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">{t('taskDrawer.noResponse')}</span>

@@ -50,7 +50,17 @@ import type {
   SkillPoints,
   SurveyQuestion,
 } from './types'
-import { STATUS_LABEL, isAdminRole } from './types'
+import { isAdminRole, type TaskVisibility } from './types'
+import { CLIENT_VERSION, normalizeCode } from './codes'
+import {
+  normalizeHistoryEntry,
+  normalizePermissionOverride,
+  normalizeProjectTemplates,
+  normalizeRecurringRules,
+  normalizeSchedule,
+  normalizeTaskSetTemplates,
+  normalizeThresholdKeys,
+} from './code-normalize'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
@@ -185,7 +195,7 @@ function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Proje
     oneOnOnes: parseJsonArray<OneOnOneRecord>(r.one_on_ones_json),
     // ---- 組織階層・権限・スキルポイント ----------------------------------------
     departmentPaths: splitTags(r.department_path),
-    permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json),
+    permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json)?.map(normalizePermissionOverride),
     skillPoints: parseJsonObject<SkillPoints>(r.skill_points_json),
     inactive: r.inactive === 'TRUE' ? true : undefined,
     absentDates: splitTags(r.absent_dates),
@@ -224,14 +234,8 @@ function mapProjectRow(r: Record<string, string>): Project {
   }
 }
 
-const STATUS_FROM_LABEL: Record<string, TaskStatus> = Object.fromEntries(
-  (Object.entries(STATUS_LABEL) as [TaskStatus, string][]).map(([k, v]) => [v, k]),
-)
-
-function statusFromSheet(status: string): TaskStatus {
-  // any unrecognized value (blank cell, typo) falls back to 進行中
-  return STATUS_FROM_LABEL[status] ?? 'progress'
-}
+// シートの値は、移行の前は日本語、移行の後はコード。どちらでもコードにそろえる
+// (読めない値は、以前と同じ既定値になる。ステータスは進行中など)
 
 function mapTaskRow(r: Record<string, string>): Task {
   return {
@@ -239,7 +243,7 @@ function mapTaskRow(r: Record<string, string>): Task {
     name: r.title,
     description: r.description ?? '',
     projectId: r.project_id,
-    department: (r.department || '未分類') as Department,
+    department: normalizeCode('department', r.department),
     assigneeIds: splitTags(r.assignee_id),
     assignType: r.assign_type || 'open_bid',
     openBidApplicantIds: splitTags(r.open_bid_applicant_ids), // TSK-027
@@ -248,9 +252,9 @@ function mapTaskRow(r: Record<string, string>): Task {
     dueTime: r.due_time || null,
     category: r.category || '',
     skills: splitTags(r.skills),
-    difficulty: (r.difficulty || '新人歓迎') as Difficulty,
-    priority: (r.priority || '中') as Priority,
-    status: statusFromSheet(r.status),
+    difficulty: normalizeCode('difficulty', r.difficulty || 'beginner'),
+    priority: normalizeCode('priority', r.priority || 'medium'),
+    status: normalizeCode('status', r.status),
     completedDate: r.completed_date || null,
     lastActivity: r.last_activity || r.created_at || undefined,
     originalInputId: r.original_input_id || undefined,
@@ -259,21 +263,21 @@ function mapTaskRow(r: Record<string, string>): Task {
     progress: r.progress_note || undefined,
     progressPercent: r.progress_percent !== '' && r.progress_percent != null ? Number(r.progress_percent) : undefined,
     progressHistory: parseJsonArray<ProgressEntry>(r.progress_history_json) ?? [],
-    pendingApproval: r.approval_status === '承認待ち',
+    pendingApproval: normalizeCode('approval', r.approval_status) === 'pending',
     dependsOnIds: splitTags(r.depends_on_ids),
-    visibility: r.visibility === '幹部' ? '幹部' : 'all',
+    visibility: normalizeCode('visibility', r.visibility),
     reviewerId: r.reviewer_id || undefined,
     reviewerIds: r.reviewer_ids ? splitTags(r.reviewer_ids) : (r.reviewer_id ? [r.reviewer_id] : undefined),
     blocker: r.blocker_note ? { note: r.blocker_note, since: r.blocker_since || '' } : undefined,
     holdReason: r.hold_reason_note ? { note: r.hold_reason_note, since: r.hold_reason_since || '' } : undefined,
     deliverables: parseJsonArray<TaskDeliverable>(r.deliverables_json),
-    history: parseJsonArray<TaskHistoryEntry>(r.history_json),
+    history: parseJsonArray<TaskHistoryEntry>(r.history_json)?.map(normalizeHistoryEntry),
     comments: parseJsonArray<TaskComment>(r.comments_json),
     estimatedHours: r.estimated_hours ? Number(r.estimated_hours) : undefined,
     actualHours: r.actual_hours ? Number(r.actual_hours) : undefined,
     retrospective: parseJsonObject<TaskRetrospective>(r.retrospective_json),
-    importance: (r.importance || undefined) as Task['importance'],
-    schedule: parseJsonObject<TaskSchedule>(r.schedule_json),
+    importance: r.importance ? normalizeCode('importance', r.importance) : undefined,
+    schedule: normalizeSchedule(parseJsonObject<TaskSchedule>(r.schedule_json)),
     form: parseJsonObject<TaskForm>(r.form_json),
     awardedPoints: parseJsonObject<SkillPoints>(r.awarded_points_json),
     requiredApprovals: r.required_approvals
@@ -441,10 +445,10 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     skillOptions: splitTags(byKey.get('skill_options')),
     categoryOptions: splitTags(byKey.get('category_options')),
     roleLevels: splitTags(byKey.get('role_levels')),
-    projectTemplates,
+    projectTemplates: normalizeProjectTemplates(projectTemplates),
     rolePermissions,
-    taskSetTemplates,
-    recurringRules,
+    taskSetTemplates: normalizeTaskSetTemplates(taskSetTemplates),
+    recurringRules: normalizeRecurringRules(recurringRules),
     jobRequirements,
     skillFieldOptions: splitTags(byKey.get('skill_field_options')),
     skillFieldSkills,
@@ -457,7 +461,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     projectOrder: splitTags(byKey.get('project_order')),
     restrictedRoles: splitTags(byKey.get('restricted_roles')),
     skillLevelThresholds: (() => {
-      try { const r = byKey.get('skill_level_thresholds'); return r ? JSON.parse(r) : {} } catch { return {} }
+      try { const r = byKey.get('skill_level_thresholds'); return r ? normalizeThresholdKeys(JSON.parse(r)) : {} } catch { return {} }
     })(),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
@@ -570,9 +574,9 @@ export interface CreateTaskPayload {
   creatorId?: string
   originalInputId?: string
   pendingApproval?: boolean
-  visibility?: 'all' | '幹部'
+  visibility?: TaskVisibility
   estimatedHours?: number
-  importance?: string
+  importance?: TaskImportance
   relatedReviewTaskId?: string
 }
 
@@ -591,7 +595,7 @@ async function callGas<T>(body: Record<string, unknown>): Promise<GasResponse<T>
   const res = await fetch(GAS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, clientVersion: CLIENT_VERSION }),
   })
   const text = await res.text()
   try {
@@ -642,7 +646,7 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
     // text/plain avoids a CORS preflight (Apps Script doesn't handle
     // OPTIONS); the body is still JSON, parsed server-side with JSON.parse.
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, sessionToken, ...payload }),
+    body: JSON.stringify({ action, sessionToken, clientVersion: CLIENT_VERSION, ...payload }),
   })
   // GAS always returns JSON from doPost. A non-JSON response (HTML) means
   // the request was redirected to a login page (auth config issue) or the
@@ -693,7 +697,7 @@ export const remoteApi = {
   createTasks: (tasks: CreateTaskPayload[]) =>
     postToGas<{ tempId: string; id: string }[]>('createTasks', { tasks }),
   updateTaskStatus: (taskId: string, status: TaskStatus) =>
-    postToGas('updateTaskStatus', { taskId, status: STATUS_LABEL[status] }),
+    postToGas('updateTaskStatus', { taskId, status }),
   assignTask: (taskId: string, assigneeIds: string[]) =>
     postToGas('assignTask', { taskId, assigneeIds }),
   // TSK-027: 公募タスクへの応募(承認制)。applicantIdsは常に更新後の全体を
@@ -715,7 +719,7 @@ export const remoteApi = {
       skills: string[]
       difficulty: Difficulty
       priority: Priority
-      visibility: 'all' | '幹部'
+      visibility: TaskVisibility
       importance: TaskImportance
       requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
     },
@@ -778,7 +782,7 @@ export const remoteApi = {
     postToGas('updateSchedule', { taskId, startDate, deadline }),
   updateDependsOn: (taskId: string, dependsOnIds: string[]) =>
     postToGas('updateDependsOn', { taskId, dependsOnIds }),
-  updateVisibility: (taskId: string, visibility: 'all' | '幹部') =>
+  updateVisibility: (taskId: string, visibility: TaskVisibility) =>
     postToGas('updateVisibility', { taskId, visibility }),
   updateAvatar: (memberId: string, avatarColor: string, initials: string) =>
     postToGas('updateAvatar', { memberId, avatarColor, initials }),

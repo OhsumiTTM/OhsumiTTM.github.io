@@ -1,5 +1,5 @@
 import type { Difficulty, Member, Project, ProjectHealthLevel, Qualification, RadarAxis, SkillLevelValue, Task } from './types'
-import { DIFFICULTY_LABEL, STATUS_LABEL } from './types'
+import { DIFFICULTY_LABEL } from './types'
 import { todayStrInTz, DEFAULT_TIMEZONE } from './timezone'
 
 // F5: 成果物リンク・経費の領収書URLなど、ユーザーが自由に入力したURLを
@@ -400,17 +400,16 @@ export function computeTaskPerformanceScore(
 // 日数で返す。差し戻し(review→fix→review→...)後に再度reviewを経由した
 // 場合も、完了直前の(=最後の)review遷移を起点にする。該当する遷移が
 // history上に無ければ(確認者未設定で一度もreviewを経由していない等)nullを返す。
-// history[].to にはstore.tsxのupdateTaskStatusがSTATUS_LABEL経由で書き込む
-// 日本語ラベル('完了'/'確認待ち')が保存されているため、内部enum値
-// ('done'/'review')ではなくSTATUS_LABEL.done/STATUS_LABEL.reviewと比較する。
+// history[].from/to は、読み込む時にコード('done'/'review')にそろえている
+// (以前の記録は日本語のラベル。remote.ts の normalizeHistoryEntry)
 export function computeReviewTurnaroundDays(task: Task): number | null {
   const history = task.history ?? []
-  const doneEntries = history.filter((h) => h.field === 'status' && h.to === STATUS_LABEL.done)
+  const doneEntries = history.filter((h) => h.field === 'status' && h.to === 'done')
   if (doneEntries.length === 0) return null
   const doneAt = new Date(doneEntries[doneEntries.length - 1].at).getTime()
 
   const reviewEntries = history
-    .filter((h) => h.field === 'status' && h.to === STATUS_LABEL.review)
+    .filter((h) => h.field === 'status' && h.to === 'review')
     .map((h) => new Date(h.at).getTime())
     .filter((t) => t <= doneAt)
   if (reviewEntries.length === 0) return null

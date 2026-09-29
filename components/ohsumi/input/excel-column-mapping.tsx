@@ -21,7 +21,7 @@ import type {
 } from '@/lib/ohsumi/import-excel'
 import { Button } from '@/components/ui/button'
 import { FileSpreadsheet, TriangleAlert } from 'lucide-react'
-import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { useI18n, departmentLabel, DIFFICULTY_KEY, PRIORITY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 const IMPORT_FIELD_KEY: Record<ImportField, TranslationKey> = {
   name: 'excelMapping.importField.name',
@@ -190,11 +190,11 @@ function ValueMappingSection({
       case 'project':
         return projects.map((p) => ({ value: p.id, label: p.name }))
       case 'department':
-        return DEPARTMENTS.map((d) => ({ value: d, label: d }))
+        return DEPARTMENTS.map((d) => ({ value: d, label: departmentLabel(t, d) }))
       case 'priority':
-        return PRIORITIES.map((p) => ({ value: p, label: p }))
+        return PRIORITIES.map((p) => ({ value: p, label: t(PRIORITY_KEY[p]) }))
       case 'difficulty':
-        return DIFFICULTY_LABEL.map((d) => ({ value: d, label: d }))
+        return DIFFICULTY_LABEL.map((d) => ({ value: d, label: t(DIFFICULTY_KEY[d]) }))
       case 'assignee':
         return members.map((m) => ({ value: m.id, label: m.displayName || m.name }))
     }

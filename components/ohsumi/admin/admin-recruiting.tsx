@@ -1,5 +1,6 @@
 'use client'
 
+import { isTopRole } from '@/lib/ohsumi/types'
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
@@ -45,7 +46,7 @@ function CandidateEditor({
   const { addCandidate, updateCandidate, currentUser } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
   const hasRecruitingOverride = (currentUser?.permissionOverrides ?? []).some(
     (ov) => ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve'),
   )
@@ -151,7 +152,7 @@ export function AdminRecruiting() {
   // checkPermissionOverride経由で許可される。そのため単純にrole!=='代表'
   // では判定しきれない — 代表でもrecruitingの override 保持者でもない
   // （＝isFullAdmin経由でこの画面に到達しただけの）場合にのみ警告する。
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
   const hasRecruitingOverride = (currentUser?.permissionOverrides ?? []).some(
     (ov) => ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve'),
   )

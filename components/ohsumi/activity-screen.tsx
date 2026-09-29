@@ -5,8 +5,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { MessageSquare, TrendingUp, CheckCircle2, Filter } from 'lucide-react'
-import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
-import { STATUS_LABEL } from '@/lib/ohsumi/types'
+import { useI18n, STATUS_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 type ActivityKind = 'all' | 'comment' | 'progress' | 'review'
 
@@ -72,14 +71,14 @@ export function ActivityScreen() {
       if (kind === 'all' || kind === 'review') {
         task.history?.forEach((h) => {
           if (h.field !== 'status') return
-          if (h.to !== STATUS_LABEL.review && h.to !== STATUS_LABEL.done) return
+          if (h.to !== 'review' && h.to !== 'done') return
           if (memberId && h.byId !== memberId) return
           items.push({
             id: `h-${h.id}`,
             kind: 'review',
             taskId: task.id,
             taskName: task.name,
-            text: t('activity.review.statusChanged', { status: h.to }),
+            text: t('activity.review.statusChanged', { status: t(STATUS_KEY[h.to]) }),
             at: h.at,
           })
         })

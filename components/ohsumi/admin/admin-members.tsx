@@ -11,7 +11,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play, LogOut } from 'lucide-react'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
-import { BASE_ROLE } from '@/lib/ohsumi/types'
+import { BASE_ROLE, isTopRole } from '@/lib/ohsumi/types'
 import type { Member, Role } from '@/lib/ohsumi/types'
 import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
 import { PermissionOverridesButton } from './admin-permission-overrides'
@@ -67,7 +67,7 @@ export function AdminMembers() {
   } = useOhsumi()
   // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
   // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()

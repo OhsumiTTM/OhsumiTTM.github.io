@@ -11,7 +11,7 @@ import { findSimilarTasks, formatDeadline } from '@/lib/ohsumi/utils'
 import { canApproveTask, isEscalatedTask } from '@/lib/ohsumi/permissions'
 import type { Task } from '@/lib/ohsumi/types'
 import { Check, FileClock, ShieldCheck, TriangleAlert, X } from 'lucide-react'
-import { useI18n } from '@/lib/ohsumi/i18n'
+import { useI18n, IMPORTANCE_KEY } from '@/lib/ohsumi/i18n'
 
 export function AdminApprovals() {
   const {
@@ -71,7 +71,7 @@ export function AdminApprovals() {
                         <DifficultyBadge difficulty={t.difficulty} />
                         {escalated && (
                           <span className="rounded-md bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">
-                            {t.importance}
+                            {t.importance && tr(IMPORTANCE_KEY[t.importance])}
                           </span>
                         )}
                       </div>
@@ -93,7 +93,7 @@ export function AdminApprovals() {
                           {escalated ? (
                             <span className="flex items-center gap-1 text-destructive">
                               <ShieldCheck className="size-3.5" />
-                              {tr('admin.approvals.escalatedNote', { importance: t.importance ?? '' })}
+                              {tr('admin.approvals.escalatedNote', { importance: t.importance ? tr(IMPORTANCE_KEY[t.importance]) : '' })}
                             </span>
                           ) : (
                             approver && (

@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import type { Member, Project, Task } from './types'
 import { STATUS_LABEL } from './types'
+import { sheetLabel } from './codes'
 import { formatDeadlineFull } from './utils'
 
 function memberLabel(members: Member[], id: string): string {
@@ -24,11 +25,11 @@ function taskRows(tasks: Task[], projects: Project[], members: Member[]) {
   return tasks.map((t) => ({
     タスク名: t.name,
     プロジェクト: projects.find((p) => p.id === t.projectId)?.name ?? '',
-    部門: t.department,
+    部門: sheetLabel('department', t.department),
     担当: t.assigneeIds.map((id) => memberLabel(members, id)).join('、'),
     ステータス: STATUS_LABEL[t.status],
-    優先度: t.priority,
-    難易度: t.difficulty,
+    優先度: sheetLabel('priority', t.priority),
+    難易度: sheetLabel('difficulty', t.difficulty),
     カテゴリ: t.category,
     必要スキル: t.skills.join('、'),
     開始日: t.startDate ?? '',

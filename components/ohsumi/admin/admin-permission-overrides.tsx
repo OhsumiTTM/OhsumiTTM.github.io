@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Trash2, Plus, ShieldCheck } from 'lucide-react'
 import type { Member, PermissionOverride } from '@/lib/ohsumi/types'
-import { DEPARTMENTS } from '@/lib/ohsumi/types'
-import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { DEPARTMENTS, isTopRole } from '@/lib/ohsumi/types'
+import { useI18n, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 const ACCESS_LABEL_KEY: Record<string, TranslationKey> = {
   view: 'admin.permissionOverrides.access.view',
@@ -36,7 +36,7 @@ function OverrideEditor({ member, onClose }: OverrideEditorProps) {
   // updatePermissionOverridesはGAS側で常にisDaihyo固定（人事機密のため）。
   // このボタンはisFullAdmin配下（admin-members.tsx）に表示されるため、
   // 代表以外の全権管理者にも見えてしまう
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
 
   const [overrides, setOverrides] = useState<PermissionOverride[]>(
     member.permissionOverrides ?? [],
@@ -75,13 +75,14 @@ function OverrideEditor({ member, onClose }: OverrideEditorProps) {
       : targetType === 'project'
         ? projects.map((p) => ({ id: p.id, label: p.name }))
         : targetType === 'department'
-          ? DEPARTMENTS.map((d) => ({ id: d, label: d }))
+          ? DEPARTMENTS.map((d) => ({ id: d, label: departmentLabel(tr, d) }))
           : []
 
   const labelFor = (ov: PermissionOverride) => {
     if (ov.targetType === 'task') return tasks.find((t) => t.id === ov.targetId)?.name ?? ov.targetId
     if (ov.targetType === 'project') return projects.find((p) => p.id === ov.targetId)?.name ?? ov.targetId
     if (ov.targetType === 'recruiting') return tr('admin.permissionOverrides.targetType.recruiting')
+    if (ov.targetType === 'department') return departmentLabel(tr, ov.targetId)
     return ov.targetId
   }
 
