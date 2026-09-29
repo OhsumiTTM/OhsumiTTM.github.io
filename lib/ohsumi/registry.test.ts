@@ -1,127 +1,18 @@
 // レジストリ(registry/Code.gs)の R1-a: シートの用意・死活の確認・回数の上限・操作の記録・
 // 記録の無い直接の編集の検出・毎日のバックアップを、メモリ上のスプレッドシートと Drive で確かめる
-import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
+import { setup } from './registry-harness'
 
-const CODE = readFileSync(join(__dirname, '..', '..', 'registry', 'Code.gs'), 'utf8')
-
-class FakeSheet {
-  rows: unknown[][] = []
-  protections: object[] = []
-  constructor(public name: string) {}
-  getLastRow() { return this.rows.length }
-  getLastColumn() { return Math.max(0, ...this.rows.map((r) => r.length)) }
-  getRange(row: number, col: number, numRows = 1, numCols = 1) {
-    return {
-      getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? '')),
-      setValues: (vals: unknown[][]) => vals.forEach((vs, r) => {
-        const target = (this.rows[row - 1 + r] ??= [])
-        vs.forEach((v, c) => { target[col - 1 + c] = v })
-      }),
-    }
-  }
-  appendRow(values: unknown[]) { this.rows.push(values) }
-  setFrozenRows() {}
-  getProtections() { return this.protections }
-  protect() {
-    const p = { description: '', removed: [] as string[], setDescription(d: string) { this.description = d; return this }, getEditors: () => ['someone@example.com'], removeEditor(u: string) { this.removed.push(u) } }
-    this.protections.push(p)
-    return p
-  }
-}
-
-type DriveFile = { name: string; created: number; trashed: boolean; removedEditors: string[]; removedViewers: string[]; sharing: unknown[] }
-
-function setup(opts: { props?: Record<string, string>; now?: number } = {}) {
-  const props: Record<string, string> = { ...(opts.props ?? {}) }
-  const sheets = new Map<string, FakeSheet>()
-  const cache = new Map<string, string>()
-  const triggers: { handler: string; hour?: number }[] = []
-  const files: DriveFile[] = []
-  const logs: string[] = []
-  const newFile = (name: string, created = Date.now()): DriveFile => ({ name, created, trashed: false, removedEditors: [], removedViewers: [], sharing: [] })
-  const driveHandle = (f: DriveFile) => ({
-    getName: () => f.name,
-    getId: () => 'folder-1',
-    getDateCreated: () => new Date(f.created),
-    setTrashed: (v: boolean) => { f.trashed = v },
-    getEditors: () => ['editor@example.com'],
-    getViewers: () => ['viewer@example.com'],
-    removeEditor: (u: string) => f.removedEditors.push(u),
-    removeViewer: (u: string) => f.removedViewers.push(u),
-    setSharing: (...a: unknown[]) => f.sharing.push(a),
-  })
-  const folder = newFile('folder')
-  const folderHandle = {
-    ...driveHandle(folder),
-    getFiles: () => {
-      const list = files.filter((f) => !f.trashed)
-      let i = 0
-      return { hasNext: () => i < list.length, next: () => driveHandle(list[i++]) }
-    },
-  }
-  const ctx = vm.createContext({
-    console: { log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error() {} },
-    Logger: { log() {} },
-    PropertiesService: { getScriptProperties: () => ({
-      getProperties: () => ({ ...props }),
-      getProperty: (k: string) => props[k] ?? null,
-      setProperty: (k: string, v: string) => { props[k] = v },
-    }) },
-    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => { cache.set(k, v) } }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: (text: string) => ({ text, setMimeType() { return this } }) },
-    Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
-    Utilities: {
-      DigestAlgorithm: { SHA_256: 'sha256' },
-      Charset: { UTF_8: 'utf8' },
-      computeDigest: (_a: string, text: string) => Array.from(createHash('sha256').update(String(text)).digest()).map((b) => (b > 127 ? b - 256 : b)),
-      base64EncodeWebSafe: (bytes: number[]) => Buffer.from(bytes.map((b) => b & 0xff)).toString('base64url'),
-      getUuid: () => Math.random().toString(36),
-      formatDate: () => '2026-10-01',
-    },
-    SpreadsheetApp: {
-      ProtectionType: { SHEET: 'SHEET' },
-      getActiveSpreadsheet: () => ({
-        getId: () => 'ss1',
-        getSheetByName: (n: string) => sheets.get(n) ?? null,
-        insertSheet: (n: string) => { const s = new FakeSheet(n); sheets.set(n, s); return s },
-      }),
-    },
-    DriveApp: {
-      Access: { PRIVATE: 'PRIVATE' },
-      Permission: { NONE: 'NONE' },
-      createFolder: () => folderHandle,
-      getFolderById: () => folderHandle,
-      getFileById: () => ({ makeCopy: (name: string) => { const f = newFile(name); files.push(f); return driveHandle(f) } }),
-    },
-    ScriptApp: {
-      getProjectTriggers: () => triggers.map((t) => ({ getHandlerFunction: () => t.handler, t })),
-      deleteTrigger: (h: { t: object }) => { triggers.splice(triggers.indexOf(h.t as never), 1) },
-      newTrigger: (handler: string) => {
-        const t: { handler: string; hour?: number } = { handler }
-        const b = { timeBased: () => b, everyDays: () => b, atHour: (h: number) => { t.hour = h; return b }, create: () => { triggers.push(t) } }
-        return b
-      },
-    },
-  })
-  vm.runInContext(CODE, ctx)
-  const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
-  const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
-  return { gas, props, sheets, cache, triggers, files, logs, post, newFile }
-}
-
-const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'AuditLog', 'Admins']
+// 管理者は ADMIN_EMAILS(スクリプトプロパティ)で決めるので、Admins シートは作らない(R1-b から)
+const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'AuditLog']
 
 describe('シートの用意(setupRegistry)', () => {
   it('すべてのシートを見出し付きで作り、Secrets と AuditLog を保護し、鍵とバックアップのトリガーを作る', () => {
     const t = setup()
     t.gas.setupRegistry()
     expect([...t.sheets.keys()]).toEqual(EXPECTED_SHEETS)
-    expect(t.sheets.get('Orgs')!.rows[0]).toEqual(['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version'])
+    expect(t.sheets.get('Orgs')!.rows[0]).toEqual(['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
+      'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at'])
     expect(t.sheets.get('Secrets')!.protections).toHaveLength(1)
     expect(t.sheets.get('AuditLog')!.protections).toHaveLength(1)
     expect(t.sheets.get('Orgs')!.protections).toHaveLength(0)
