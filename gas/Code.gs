@@ -631,6 +631,24 @@ function updateRoles(acting, newRoles) {
     }
   })
   assertTopRemains({ roles: parsed })
+  // 名前を変えた役職を、古い名前のまま持っているメンバー(移行の漏れなど)は、役職の ID にそろえる
+  // (名前を変えると、古い名前ではもう引けないため)
+  var renamed = {}
+  parsed.forEach(function (r) {
+    var before = byId[r.id]
+    if (before && before.name !== r.name) renamed[before.name] = r.id
+  })
+  if (Object.keys(renamed).length) {
+    var sheet = getSheet(SHEET_MEMBERS)
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var roleCol = headers.indexOf('role')
+    var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
+    rows.forEach(function (r) {
+      var name = String(r[roleCol] || '').trim()
+      if (Object.prototype.hasOwnProperty.call(renamed, name)) updateMemberFields(String(r[idCol]), { role: renamed[name] })
+    })
+  }
   writeRoles(parsed)
   return { roles: parsed }
 }
