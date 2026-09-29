@@ -16,7 +16,7 @@ import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorklo
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
 import { isAdminRole, BASE_ROLE, DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member, isTopRole } from '@/lib/ohsumi/types'
 import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
-import { useI18n, SUPPORTED_LOCALES, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { useI18n, SUPPORTED_LOCALES, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TIMEZONE_OPTIONS, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
 import {
@@ -816,7 +816,7 @@ export function PersonDetail({ id }: { id: string }) {
                     </span>
                     <span className="font-medium">{skill}</span>
                     <span className="text-xs text-muted-foreground">
-                      {t('person.growth.roadmap.estimate', { difficulty: DIFFICULTY_LABEL[Math.round(unlocked.reduce((s, task) => s + DIFFICULTY_LABEL.indexOf(task.difficulty), 0) / unlocked.length)] })}
+                      {t('person.growth.roadmap.estimate', { difficulty: t(DIFFICULTY_KEY[DIFFICULTY_LABEL[Math.round(unlocked.reduce((s, task) => s + DIFFICULTY_LABEL.indexOf(task.difficulty), 0) / unlocked.length)]]) })}
                     </span>
                   </li>
                 ))}

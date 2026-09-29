@@ -93,7 +93,7 @@ export function AdminApprovals() {
                           {escalated ? (
                             <span className="flex items-center gap-1 text-destructive">
                               <ShieldCheck className="size-3.5" />
-                              {tr('admin.approvals.escalatedNote', { importance: t.importance ?? '' })}
+                              {tr('admin.approvals.escalatedNote', { importance: t.importance ? tr(IMPORTANCE_KEY[t.importance]) : '' })}
                             </span>
                           ) : (
                             approver && (

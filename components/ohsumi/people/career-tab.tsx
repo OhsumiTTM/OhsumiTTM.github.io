@@ -7,7 +7,7 @@ import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ohsumi/modal'
 import { useToast } from '@/components/ohsumi/toast'
-import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { useI18n, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure } from '@/lib/ohsumi/utils'
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
@@ -1412,7 +1412,7 @@ function EvaluationHistorySection({
             : t('career.evaluation.performanceRefNoDeadline', { count: perf.completedCount })}
           {perf.avgDifficulty != null &&
             t('career.evaluation.performanceRefDifficulty', {
-              difficulty: DIFFICULTY_LABEL[Math.round(perf.avgDifficulty)],
+              difficulty: t(DIFFICULTY_KEY[DIFFICULTY_LABEL[Math.round(perf.avgDifficulty)]]),
             })}
         </p>
       )}

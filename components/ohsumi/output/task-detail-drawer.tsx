@@ -1244,7 +1244,7 @@ function DrawerBody({
   const overdue = isOverdue(task, currentUserTz)
   const calendarUrl = googleCalendarUrl(task, {
     projectName,
-    department: task.department,
+    department: departmentName(task.department),
     category: task.category,
   })
   const isAssignee = !!currentUserId && task.assigneeIds.includes(currentUserId)
