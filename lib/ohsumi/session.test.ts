@@ -150,6 +150,22 @@ describe('GAS との通信', () => {
     expect(dispatch).not.toHaveBeenCalled()
   })
 
+  it('ohsumiInitialImages(false) の後は、ログインと初期データに withFiles: false を付ける(元に戻せる)', async () => {
+    const remote = await import('./remote')
+    const w = window as unknown as { ohsumiInitialImages: (on?: boolean) => string }
+    expect(w.ohsumiInitialImages(false)).toMatch(/入れません/)
+    const bodies = mockGas([
+      { ok: true, result: { memberId: null, email: 'x@example.com' } },
+      { ok: true, result: { memberId: null, email: 'x@example.com' } },
+    ])
+    await remote.exchangeIdToken('id.token.x', 'secret', true)
+    expect(bodies[0]).toMatchObject({ withBackground: true, withFiles: false })
+    w.ohsumiInitialImages(true)
+    await remote.exchangeIdToken('id.token.y', 'secret', true)
+    expect(bodies[1]).toMatchObject({ withBackground: true })
+    expect(bodies[1]).not.toHaveProperty('withFiles')
+  })
+
   it('IDトークンを交換し、未登録のアカウントでは本人のメールだけを受け取る', async () => {
     const remote = await import('./remote')
     const bodies = mockGas([

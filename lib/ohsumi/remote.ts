@@ -93,6 +93,36 @@ export function pingGasServer(count = 3) {
 }
 if (typeof window !== 'undefined' && GAS_URL) {
   ;(window as unknown as { ohsumiPing?: (count?: number) => Promise<unknown> }).ohsumiPing = (count?: number) => pingGasServer(count)
+  ;(window as unknown as { ohsumiInitialImages?: (on?: boolean) => string }).ohsumiInitialImages = setInitialImages
+}
+
+// ログイン・再読み込みの応答に画像を入れるか(比べるための切り替え。この端末のブラウザだけに保存する)。
+// コンソールで ohsumiInitialImages(false) で入れない、ohsumiInitialImages(true) で入れる(既定)
+const INITIAL_IMAGES_KEY = 'ohsumi-initial-images'
+
+function initialImagesEnabled(): boolean {
+  try {
+    return typeof window === 'undefined' || window.localStorage?.getItem(INITIAL_IMAGES_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+function setInitialImages(on = true): string {
+  try {
+    if (on) window.localStorage.removeItem(INITIAL_IMAGES_KEY)
+    else window.localStorage.setItem(INITIAL_IMAGES_KEY, 'off')
+  } catch {
+    /* 保存できなければ何もしない */
+  }
+  return on
+    ? 'ログインの応答に画像を入れます(次のログイン・再読み込みから)'
+    : 'ログインの応答に画像を入れません(次のログイン・再読み込みから)。元に戻すには ohsumiInitialImages(true)'
+}
+
+/** 初期データ・ログインに付ける、裏での読み込みの指定 */
+function backgroundOptions(): Record<string, unknown> {
+  return initialImagesEnabled() ? { withBackground: true } : { withBackground: true, withFiles: false }
 }
 
 // image uploads go to a Drive folder that GAS manages itself (created by
@@ -553,7 +583,7 @@ interface InitialDataResponse {
 // 通信の回数そのものを減らす(1回ごとに、結果の受け渡しで止まる機会がある)
 // 所要時間と GAS の中の内訳は、gas-transport.ts がコンソールに出す
 export async function fetchInitialData(knownVersion?: string): Promise<InitialData> {
-  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion, withBackground: true } : { withBackground: true })
+  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion, ...backgroundOptions() } : backgroundOptions())
   return toInitialData(res)
 }
 
@@ -627,6 +657,8 @@ export interface BackgroundData {
   formSubmissions?: import('./types').CustomFormSubmission[]
   candidates?: import('./types').Candidate[]
   myEmail?: string
+  // ログインの直後に表示する画像(団体ロゴ・プロフィール画像)のうち、GAS のキャッシュにあったもの
+  files?: FetchedFile[]
   errors?: Record<string, string>
 }
 
@@ -647,7 +679,7 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
       idToken,
       nonceSecret,
       remember,
-      withBackground: true,
+      ...backgroundOptions(),
     })
   } catch (err) {
     // IDトークンは1回しか使えないため、送り直さない。ログイン画面は新しい試行でボタンを出し直すので、

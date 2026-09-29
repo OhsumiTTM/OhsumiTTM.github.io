@@ -128,6 +128,33 @@ export interface GasTiming {
   versionMs?: number
   // 内訳に無い時間(合計から、重ならない内訳を引いたもの)
   otherMs?: number
+  // 最終ログイン日時: recent(1時間以内に記録済みで書かない)・queued(書き込み待ちに入れた)・
+  // dropped(書き込み待ちが上限に達していて入れなかった)
+  lastLogin?: 'recent' | 'queued' | 'dropped'
+  // 裏での読み込みの内訳(backgroundMs の中)と、それぞれのキャッシュ
+  expensesMs?: number
+  formSubmissionsMs?: number
+  candidatesMs?: number
+  myEmailMs?: number
+  filesMs?: number
+  // ログインの応答に入れた画像の件数と大きさ(base64 の KB)
+  filesCount?: number
+  filesKB?: number
+  expensesCache?: 'hit' | 'miss'
+  formSubmissionsCache?: 'hit' | 'miss'
+  candidatesCache?: 'hit' | 'miss'
+  myEmailCache?: 'hit' | 'miss'
+  // getFiles の内訳
+  folderPropsMs?: number
+  driveMs?: number
+  fileCacheMs?: number
+  fileCacheHits?: number
+  permissionMs?: number
+  blobMs?: number
+}
+
+function withCache(ms: number | undefined, cache: string | undefined): string {
+  return `${ms}${cache ? ` ${cache}` : ''}`
 }
 
 // ---- コンソールに出す文字の整え方 ----
@@ -185,9 +212,30 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.readError) parts.push(`Sheets API で読めなかった理由: ${timing.readError}`)
   if (timing.cacheWriteMs != null) parts.push(`キャッシュ書き込み ${timing.cacheWriteMs}`)
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
-  if (timing.backgroundMs != null) parts.push(`裏での読み込み ${timing.backgroundMs}`)
+  if (timing.backgroundMs != null || timing.expensesMs != null) {
+    const inner: string[] = []
+    if (timing.expensesMs != null) inner.push(`経費 ${withCache(timing.expensesMs, timing.expensesCache)}`)
+    if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache)}`)
+    if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache)}`)
+    if (timing.myEmailMs != null) inner.push(`メール ${withCache(timing.myEmailMs, timing.myEmailCache)}`)
+    if (timing.filesMs != null) inner.push(`画像 ${timing.filesMs}${timing.filesCount != null ? `(${timing.filesCount}件 ${timing.filesKB ?? 0}KB)` : ''}`)
+    const label = timing.backgroundMs != null ? `裏での読み込み ${timing.backgroundMs}` : '裏での読み込み'
+    parts.push(inner.length ? `${label}(${inner.join('・')})` : label)
+  }
+  if (timing.folderPropsMs != null) parts.push(`フォルダの設定 ${timing.folderPropsMs}`)
+  if (timing.driveMs != null) parts.push(`Drive ${timing.driveMs}`)
+  if (timing.fileCacheMs != null) parts.push(`画像のキャッシュ ${timing.fileCacheMs}${timing.fileCacheHits ? `(${timing.fileCacheHits}件 hit)` : ''}`)
+  if (timing.permissionMs != null) parts.push(`領収書の権限 ${timing.permissionMs}`)
+  if (timing.blobMs != null) parts.push(`ファイルの読み込み ${timing.blobMs}`)
   if (timing.sessionMs != null) parts.push(`セッションの発行 ${timing.sessionMs}`)
-  if (timing.lastLoginMs != null) parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}`)
+  if (timing.lastLoginMs != null) {
+    const how =
+      timing.lastLogin === 'recent' ? '(1時間以内に記録済み)'
+        : timing.lastLogin === 'queued' ? '(書き込み待ちに追加)'
+          : timing.lastLogin === 'dropped' ? '(書き込み待ちが上限のため記録せず)'
+            : ''
+    parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}${how}`)
+  }
   if (timing.otherMs != null) parts.push(`その他 ${timing.otherMs}`)
   return `GAS ${timing.totalMs}ms${parts.length ? `: ${parts.join('・')}` : ''}`
 }
@@ -232,6 +280,12 @@ export function splitRoundTrip(entries: ResourceTimingLike[], startedAt: number)
   const e = candidates[0]
   if (!e || !(e.redirectEnd > 0) || e.redirectEnd < e.startTime || !(e.responseEnd >= e.redirectEnd)) return null
   return { execMs: Math.round(e.redirectEnd - e.startTime), echoMs: Math.round(e.responseEnd - e.redirectEnd) }
+}
+
+/** 応答の本文の大きさ(KB、UTF-8 のバイト数から) */
+export function responseKB(text: string): number {
+  const bytes = typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(text).length : text.length
+  return Math.round((bytes / 1024) * 10) / 10
 }
 
 function describeRoundTrip(split: { execMs: number; echoMs: number } | null): string {
@@ -342,7 +396,7 @@ function startReads(): void {
 // ---- 1回送る ----
 
 type Attempt =
-  | { kind: 'ok'; json: GasResponse; ms: number; split: { execMs: number; echoMs: number } | null }
+  | { kind: 'ok'; json: GasResponse; ms: number; split: { execMs: number; echoMs: number } | null; kb: number }
   | { kind: 'fail'; reason: string; detail?: string; bounced?: boolean }
 
 async function fetchWithTimeout(url: string, body: string, timeoutMs: number): Promise<FetchedResponse> {
@@ -406,7 +460,7 @@ async function attemptOnce(url: string, body: string, timeoutMs: number): Promis
     }
   }
   if (r.retryLater) return { kind: 'fail', reason: `GAS が処理できませんでした(${r.error ?? '混み合っています'})` }
-  return { kind: 'ok', json: r, ms: Date.now() - started, split: split() }
+  return { kind: 'ok', json: r, ms: Date.now() - started, split: split(), kb: responseKB(text) }
 }
 
 async function sendWithRetry<T>(url: string, action: string, body: string, maxAttempts: number, queuedMs: number): Promise<GasResponse<T>> {
@@ -425,7 +479,7 @@ async function sendWithRetry<T>(url: string, action: string, body: string, maxAt
       if (attempt > 1) deps.log.info(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}回目で成功しました`)
       if (r.json.replayed) deps.log.info(`[ohsumi] GAS ${action}: 前回の処理の結果を受け取りました(処理はやり直していません)`)
       deps.log.info(
-        `[ohsumi] GAS ${action}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})` +
+        `[ohsumi] GAS ${action}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})・応答 ${r.kb}KB` +
           `${attempt > 1 ? `・${attempt}回目` : ''}・${describeTiming(r.json.timing)})`,
       )
       return r.json as GasResponse<T>

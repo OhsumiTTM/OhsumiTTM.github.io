@@ -96,6 +96,7 @@ function setup() {
   c.getFormSubmissions = () => []
   c.getCandidates = () => []
   c.getMemberEmailValue = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
   c.bumpDataVersion = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } }
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
