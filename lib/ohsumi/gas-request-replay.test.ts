@@ -32,7 +32,10 @@ function setup(opts: { lockBusy?: boolean } = {}) {
   c.updateTaskFields = (taskId: string) => { writes.push(taskId); return { ok: true, n: writes.length } }
   const post = (body: Record<string, unknown>) => {
     const out = (ctx as unknown as { doPost: (e: object) => { text: string } }).doPost({ postData: { contents: JSON.stringify(body) } })
-    return JSON.parse(out.text)
+    // 処理時間の内訳(timing)は別のテストで確かめる
+    const { timing, ...rest } = JSON.parse(out.text)
+    expect(typeof timing.totalMs).toBe('number')
+    return rest
   }
   return { post, writes, cache, ctx: c }
 }

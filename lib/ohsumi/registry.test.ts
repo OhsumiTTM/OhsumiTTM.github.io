@@ -174,6 +174,14 @@ describe('死活の確認(health)', () => {
   })
 })
 
+describe('GET で届いた時(doGet)', () => {
+  it('HTML ではなく、GET で届いたことが分かる JSON を返す(何も処理していない)', () => {
+    const t = setup()
+    const res = JSON.parse((t.gas.doGet as () => { text: string })().text)
+    expect(res).toMatchObject({ ok: false, getReceived: true })
+  })
+})
+
 describe('リクエストの受け付け', () => {
   it('大きすぎる本文・JSON でない本文・知らない操作は断る', () => {
     const t = setup()

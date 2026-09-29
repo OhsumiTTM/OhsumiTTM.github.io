@@ -1214,10 +1214,15 @@ function appendRowByHeaders(sheet, sheetName, obj) {
 // client-side (lib/ohsumi/store.tsx) since it only needs data already in
 // hand. This file only handles writes coming from the browser.
 
+// 画面は GAS に POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、
+// 本文が失われた可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。画面が原因を記録して
+// 送り直せるよう、HTML ではなく JSON で返す(何も処理していないので、送り直してよい)
 function doGet(e) {
-  return ContentService.createTextOutput('Ohsumi GAS endpoint is up.').setMimeType(
-    ContentService.MimeType.TEXT,
-  )
+  return jsonOutput({
+    ok: false,
+    getReceived: true,
+    error: 'GAS に GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
+  })
 }
 
 // ---- Authentication & Authorization ----------------------------------------
@@ -1482,7 +1487,7 @@ function verifyGoogleIdToken(idToken, nonceSecret) {
 
 // exchangeIdToken: IDトークンをセッショントークンに交換し、初期データもまとめて返す
 function exchangeIdToken(body) {
-  var google = verifyGoogleIdToken(body.idToken, body.nonceSecret)
+  var google = timed('verifyMs', function () { return verifyGoogleIdToken(body.idToken, body.nonceSecret) })
   var memberId = findMemberIdByEmailCached(google.email)
   // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
   if (!memberId) return { memberId: null, email: google.email }
@@ -2497,6 +2502,7 @@ function doPost(e) {
   // 書き込みの requestId(同じ ID の結果を覚えておき、送り直された時は前回の結果を返す)
   var replayKey = null
   try {
+    startRequestTiming()
     var body = JSON.parse(e.postData.contents)
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
     resetRequestProps()
@@ -2532,7 +2538,7 @@ function doPost(e) {
     if (body.action === 'getInitialData') {
       var initAuth
       try {
-        initAuth = authenticateRequest(body)
+        initAuth = timed('authMs', function () { return authenticateRequest(body) })
       } catch (initAuthErr) {
         return jsonOutput({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
       }
@@ -2558,10 +2564,12 @@ function doPost(e) {
     var actingMember
     var renewedSession = null
     try {
+      var authStart = Date.now()
       var auth = authenticateRequest(body)
       renewedSession = auth.renewed
       actingMember = getActingMemberById(auth.memberId)
       authorizeAction(actingMember, body.action, body)
+      noteTiming('authMs', Date.now() - authStart)
     } catch (authErr) {
       return jsonOutput({ ok: false, error: toErrorMessage(authErr), authError: true })
     }
@@ -2572,9 +2580,12 @@ function doPost(e) {
     // かった場合はエラーを返す(finallyで確実にreleaseLockする)。
     if (LOCK_EXEMPT_ACTIONS.indexOf(body.action) < 0) {
       lock = LockService.getScriptLock()
+      var lockStart = Date.now()
       try {
         lock.waitLock(10000)
+        noteTiming('lockMs', Date.now() - lockStart)
       } catch (lockErr) {
+        noteTiming('lockMs', Date.now() - lockStart)
         lock = null
         // まだ何も処理していないので、フロントは少し待ってから送り直してよい
         return jsonOutput({ ok: false, error: '混み合っています。少し待って再度お試しください。', retryLater: true })
@@ -5051,7 +5062,45 @@ function respondAndRemember(key, obj) {
   return jsonOutput(obj)
 }
 
+// ---- 処理時間の内訳 ----------------------------------------------------------
+//
+// doPost の応答に、GAS の中での処理時間の内訳(timing)を付ける。画面はこれをコンソールに出し、
+// 往復にかかった時間のうち、どこまでが GAS の処理かを分けて見られるようにする。
+//   totalMs   doPost の開始から応答を作るまで
+//   authMs    セッションの確認・メンバーの特定・権限の確認
+//   lockMs    ロックの待ち(書き込みだけ。読み取りはロックを取らない)
+//   cache     初期データ: unchanged(版が同じ)/ hit(キャッシュ)/ miss(シートから読んだ)
+//   readMs    シートの読み込み(キャッシュが無い時)
+//   read      読み込みの方式: api(Sheets API の batchGet)/ spreadsheetApp(予備の方式)
+//   readError Sheets API で読めなかった理由(予備の方式に切り替えた時)
+//   filterMs  閲覧者ごとの絞り込み
+//   verifyMs  IDトークンの確認(exchangeIdToken)
+var _requestTiming = null
+
+function startRequestTiming() {
+  _requestTiming = { start: Date.now() }
+}
+
+function noteTiming(key, value) {
+  if (_requestTiming) _requestTiming[key] = value
+}
+
+// 処理にかかった時間を記録しながら fn を実行する
+function timed(key, fn) {
+  var t = Date.now()
+  try {
+    return fn()
+  } finally {
+    noteTiming(key, Date.now() - t)
+  }
+}
+
 function jsonOutput(obj) {
+  if (_requestTiming) {
+    var timing = { totalMs: Date.now() - _requestTiming.start }
+    Object.keys(_requestTiming).forEach(function (k) { if (k !== 'start') timing[k] = _requestTiming[k] })
+    obj.timing = timing
+  }
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
     ContentService.MimeType.JSON,
   )
@@ -6368,10 +6417,15 @@ function readSheetTables(names) {
   }
   if (viaApi.tables) {
     console.log('readSheetTables: Sheets API(batchGet)で読み込み ' + (Date.now() - start) + 'ms')
+    noteTiming('read', 'api')
+    noteTiming('readMs', Date.now() - start)
     return viaApi.tables
   }
   var t = Date.now()
   var tables = readSheetTablesViaSpreadsheetApp(names)
+  noteTiming('read', 'spreadsheetApp')
+  noteTiming('readMs', Date.now() - start)
+  noteTiming('readError', String(viaApi.error).slice(0, 200))
   console.warn(
     'readSheetTables: Sheets API で読み込めなかったため、SpreadsheetApp(getDisplayValues)で読み込み ' +
       (Date.now() - t) + 'ms。理由: ' + viaApi.error,
@@ -6533,10 +6587,14 @@ function writeSnapshotCache(version, data) {
 // 同時に読んでも、古い版のキーに新しいデータが入るだけで逆は起きない)。
 function loadSnapshot() {
   var version = getDataVersion()
-  var cached = readSnapshotCache(version)
-  if (cached) return { version: version, data: cached, cacheHit: true }
+  var cached = timed('cacheReadMs', function () { return readSnapshotCache(version) })
+  if (cached) {
+    noteTiming('cache', 'hit')
+    return { version: version, data: cached, cacheHit: true }
+  }
+  noteTiming('cache', 'miss')
   var data = readSheetTables(SNAPSHOT_SHEETS)
-  writeSnapshotCache(version, data)
+  timed('cacheWriteMs', function () { writeSnapshotCache(version, data) })
   return { version: version, data: data, cacheHit: false }
 }
 
@@ -6877,10 +6935,11 @@ function findMemberIdByEmailCached(email) {
 function getInitialDataForMember(memberId, knownVersion) {
   var version = getDataVersion()
   if (knownVersion && String(knownVersion) === version) {
+    noteTiming('cache', 'unchanged')
     return { memberId: memberId, version: version, unchanged: true }
   }
   var snapshot = loadSnapshot()
-  var sheets = buildViewerData(snapshot.data, memberId)
+  var sheets = timed('filterMs', function () { return buildViewerData(snapshot.data, memberId) })
   if (!sheets) return { memberId: null }
   return { memberId: memberId, version: snapshot.version, sheets: sheets }
 }
