@@ -334,6 +334,367 @@ function sheetSettingValue(key, value) {
   return JSON.stringify(out)
 }
 
+// ---- 役職 ------------------------------------------------------------------------
+//
+// 役職は Settings の roles(JSON)に、上下関係の順(一般 → … → 最上位)で持つ。
+//   { id, name, tier: 'top' | 'admin' | 'base', restricted?, sections?, requiredSkills? }
+// 移行(VALUE_FORMAT=codes)の前は roles が無く、今までの設定(role_levels・
+// restricted_roles・role_permissions・job_requirements)から組み立てる(ID は役職名)。
+// 役職は ID でも名前でも引ける(findRole)ので、移行の途中でも判定は変わらない。
+// lib/ohsumi/roles.ts と同じ内容(一致することを lib/ohsumi/roles.test.ts で確かめる)。
+
+var TOP_ROLE_ID = 'top'
+var BASE_ROLE_ID = 'base'
+var DEFAULT_TOP_ROLE_NAME = '代表'
+var DEFAULT_BASE_ROLE_NAME = '一般'
+var DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
+// 制限付きの管理者が、セクションを指定していない時に見られる管理画面(types.ts と同じ)
+var DEFAULT_NON_TOP_SECTIONS = ['dashboard', 'approvals', 'assignments', 'projects', 'memberdb']
+// Settings のうち役職の設定
+var ROLE_SETTING_KEYS = ['roles', 'role_levels', 'restricted_roles', 'role_permissions', 'job_requirements']
+
+function defaultRoles() {
+  return [
+    { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
+    { id: 'r_leader', name: '班長', tier: 'admin', restricted: false },
+    { id: 'r_manager', name: '事業責任者', tier: 'admin', restricted: false },
+    { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
+  ]
+}
+
+function roleParseObject(value) {
+  try {
+    var parsed = value ? JSON.parse(value) : {}
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch (e) {
+    return {}
+  }
+}
+
+function roleStringArray(v) {
+  return Array.isArray(v) ? v.map(String) : undefined
+}
+
+function rolesFromLegacy(settings) {
+  var levels = splitCsvList(settings.role_levels)
+  var names = (levels.length ? levels : DEFAULT_ROLE_LEVELS).filter(function (n) { return n !== DEFAULT_BASE_ROLE_NAME })
+  if (names.indexOf(DEFAULT_TOP_ROLE_NAME) < 0) names.push(DEFAULT_TOP_ROLE_NAME)
+  var restricted = splitCsvList(settings.restricted_roles)
+  // restricted_roles にだけある役職も、今までどおり制限付きの管理者として扱う
+  restricted.forEach(function (n) {
+    if (names.indexOf(n) < 0 && n !== DEFAULT_BASE_ROLE_NAME && n !== DEFAULT_TOP_ROLE_NAME) names.splice(names.indexOf(DEFAULT_TOP_ROLE_NAME), 0, n)
+  })
+  var permissions = roleParseObject(settings.role_permissions)
+  var requirements = roleParseObject(settings.job_requirements)
+  var roles = [{ id: DEFAULT_BASE_ROLE_NAME, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' }]
+  var baseSkills = roleStringArray(requirements[DEFAULT_BASE_ROLE_NAME])
+  if (baseSkills) roles[0].requiredSkills = baseSkills
+  var seen = {}
+  names.forEach(function (name) {
+    if (seen[name]) return
+    seen[name] = true
+    var role = { id: name, name: name, tier: name === DEFAULT_TOP_ROLE_NAME ? 'top' : 'admin' }
+    if (role.tier === 'admin') role.restricted = restricted.indexOf(name) >= 0
+    var sections = roleStringArray(permissions[name])
+    if (sections) role.sections = sections
+    var skills = roleStringArray(requirements[name])
+    if (skills) role.requiredSkills = skills
+    roles.push(role)
+  })
+  return roles
+}
+
+function parseRolesSetting(value) {
+  if (!value) return null
+  var parsed
+  try { parsed = JSON.parse(value) } catch (e) { return null }
+  if (!Array.isArray(parsed)) return null
+  var roles = []
+  for (var i = 0; i < parsed.length; i++) {
+    var o = parsed[i]
+    if (!o || typeof o !== 'object') return null
+    var tier = o.tier
+    if (typeof o.id !== 'string' || !o.id || typeof o.name !== 'string' || !o.name) return null
+    if (tier !== 'top' && tier !== 'admin' && tier !== 'base') return null
+    var role = { id: o.id, name: o.name, tier: tier }
+    if (tier === 'admin') role.restricted = o.restricted === true
+    var sections = roleStringArray(o.sections)
+    if (sections) role.sections = sections
+    var skills = roleStringArray(o.requiredSkills)
+    if (skills) role.requiredSkills = skills
+    roles.push(role)
+  }
+  return validateRoles(roles).length === 0 ? roles : null
+}
+
+function rolesFromSettings(settings) {
+  return parseRolesSetting(settings.roles) || rolesFromLegacy(settings)
+}
+
+function validateRoles(roles) {
+  var errors = []
+  var ids = {}
+  var names = {}
+  roles.forEach(function (r) {
+    if (ids[r.id]) errors.push('役職のIDが重複しています: ' + r.id)
+    if (names[r.name]) errors.push('役職の名前が重複しています: ' + r.name)
+    ids[r.id] = true
+    names[r.name] = true
+  })
+  if (roles.filter(function (r) { return r.tier === 'base' }).length !== 1) errors.push('一般の役職はちょうど1つ必要です')
+  if (roles.filter(function (r) { return r.tier === 'top' }).length < 1) errors.push('最上位の役職が1つ以上必要です')
+  return errors
+}
+
+function findRole(roles, ref) {
+  var v = String(ref === null || ref === undefined ? '' : ref).trim()
+  if (!v) return undefined
+  for (var i = 0; i < roles.length; i++) if (roles[i].id === v) return roles[i]
+  for (var j = 0; j < roles.length; j++) if (roles[j].name === v) return roles[j]
+  return undefined
+}
+
+function roleTier(roles, ref) {
+  var v = String(ref === null || ref === undefined ? '' : ref).trim()
+  if (!v) return 'base'
+  var role = findRole(roles, v)
+  return role ? role.tier : 'admin'
+}
+
+function isTopRoleRef(roles, ref) { return roleTier(roles, ref) === 'top' }
+function isAdminRoleRef(roles, ref) { return roleTier(roles, ref) !== 'base' }
+
+function isFullAdminRoleRef(roles, ref) {
+  var tier = roleTier(roles, ref)
+  if (tier === 'top') return true
+  if (tier === 'base') return false
+  var role = findRole(roles, ref)
+  return !(role && role.restricted)
+}
+
+function sameRole(roles, a, b) {
+  var x = String(a === null || a === undefined ? '' : a).trim()
+  var y = String(b === null || b === undefined ? '' : b).trim()
+  if (!x || !y) return false
+  if (x === y) return true
+  var rx = findRole(roles, x)
+  var ry = findRole(roles, y)
+  return !!rx && !!ry && rx.id === ry.id
+}
+
+function restrictedSections(roles, ref) {
+  var role = findRole(roles, ref)
+  return (role && role.sections) || DEFAULT_NON_TOP_SECTIONS
+}
+
+function rolesToLegacySettings(roles) {
+  var nonBase = roles.filter(function (r) { return r.tier !== 'base' })
+  var permissions = {}
+  var requirements = {}
+  roles.forEach(function (r) {
+    if (r.sections) permissions[r.name] = r.sections
+    if (r.requiredSkills) requirements[r.name] = r.requiredSkills
+  })
+  return {
+    role_levels: nonBase.map(function (r) { return r.name }).join(','),
+    restricted_roles: nonBase.filter(function (r) { return r.tier === 'admin' && r.restricted }).map(function (r) { return r.name }).join(','),
+    role_permissions: JSON.stringify(permissions),
+    job_requirements: JSON.stringify(requirements),
+  }
+}
+
+// Settings の key → value(役職の設定だけ)。1回の読み込みで全部取る
+function readRoleSettings() {
+  var out = {}
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SETTINGS)
+  if (!sheet || sheet.getLastRow() < 2) return out
+  var headers = headerRow(sheet)
+  var keyCol = headers.indexOf('key')
+  var valueCol = headers.indexOf('value')
+  if (keyCol === -1 || valueCol === -1) return out
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().forEach(function (r) {
+    var key = String(r[keyCol])
+    if (ROLE_SETTING_KEYS.indexOf(key) >= 0) out[key] = String(r[valueCol] || '')
+  })
+  return out
+}
+
+// このリクエストでの役職の一覧(1回だけ読む。役職の設定を変えたら invalidateRoles)
+var _requestRoles = null
+function getRoles() {
+  if (!_requestRoles) {
+    var settings = readRoleSettings()
+    var parsed = parseRolesSetting(settings.roles)
+    _requestRoles = { roles: parsed || rolesFromLegacy(settings), fromSetting: !!parsed }
+  }
+  return _requestRoles.roles
+}
+function invalidateRoles() { _requestRoles = null }
+
+// Settings の roles を使っているか(移行の後・新しく導入した団体)。使っていなければ、
+// 今までの設定から組み立てた役職(ID は役職名)
+function hasRolesSetting() {
+  getRoles()
+  return _requestRoles.fromSetting
+}
+
+// メンバーの role 列に書く値。役職の ID(roles が無い間は、ID は役職名そのもの)
+function sheetRoleRef(ref) {
+  var role = findRole(getRoles(), ref)
+  return role ? role.id : String(ref || '').trim()
+}
+
+// roles が無い団体の役職(ID は役職名)に、移行後と同じ ID を付ける。
+// 一般 → base、代表 → top、ほかは新しい ID(メンバーの role 列の役職名は、名前で引けるのでそのままでよい)
+function rolesWithCodeIds(roles) {
+  return roles.map(function (r) {
+    var copy = {}
+    Object.keys(r).forEach(function (k) { copy[k] = r[k] })
+    if (r.tier === 'base') copy.id = BASE_ROLE_ID
+    else if (r.name === DEFAULT_TOP_ROLE_NAME) copy.id = TOP_ROLE_ID
+    else copy.id = newRoleId()
+    return copy
+  })
+}
+
+function newRoleId() {
+  return 'r_' + Math.random().toString(36).slice(2, 8)
+}
+
+// ---- 役職の編集(updateRoles・deleteRole)と、最上位の締め出しの防止 ----------------
+
+function baseRoleRef() {
+  var roles = getRoles()
+  for (var i = 0; i < roles.length; i++) if (roles[i].tier === 'base') return roles[i].id
+  return DEFAULT_BASE_ROLE_NAME
+}
+
+// 一覧に無い役職は受け付けない(役職の付け間違いで管理者扱いにならないように)
+function requireKnownRole(ref) {
+  var role = findRole(getRoles(), ref)
+  if (!role) throw userError('役職が見つかりません: ' + ref)
+  return role
+}
+
+// 変更の後に、最上位の役職を持つ有効な(休止中でない)メンバーが1人以上残るか確かめる。
+// change: { roles?: 変更後の役職の一覧, members?: { メンバーID: { role?, inactive?, removed? } } }
+function assertTopRemains(change) {
+  var roles = change.roles || getRoles()
+  var overrides = change.members || {}
+  var sheet = getSheet(SHEET_MEMBERS)
+  var headers = headerRow(sheet)
+  var idCol = headers.indexOf('id')
+  var roleCol = headers.indexOf('role')
+  var inactiveCol = headers.indexOf('inactive')
+  var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
+  var count = 0
+  rows.forEach(function (r) {
+    var o = overrides[String(r[idCol])] || {}
+    if (o.removed) return
+    var inactive = o.inactive !== undefined ? o.inactive : String(inactiveCol >= 0 ? r[inactiveCol] : '').trim().toUpperCase() === 'TRUE'
+    if (inactive) return
+    var role = o.role !== undefined ? o.role : r[roleCol]
+    if (isTopRoleRef(roles, role)) count++
+  })
+  if (count === 0) {
+    throw userError('最上位の役職を持つ有効なメンバーが0人になるため、この操作はできません。先に別のメンバーを最上位の役職にしてください。')
+  }
+}
+
+// 役職の一覧を保存する(並び順・種類・制限・セクション・必要スキル・名前)。
+// 役職の削除は deleteRole で行う(使っているメンバーを移す必要があるため)。
+// 全権管理者が行える。最上位の役職にかかわる変更は、最上位の役職を持つ人だけ
+function updateRoles(acting, newRoles) {
+  if (!Array.isArray(newRoles)) throw userError('役職の一覧の形式が正しくありません。')
+  var parsed = parseRolesSetting(JSON.stringify(newRoles))
+  if (!parsed) throw userError('役職の一覧が正しくありません: ' + validateRoles(newRoles.filter(Boolean)).join(' / '))
+  var current = getRoles()
+  var byId = {}
+  current.forEach(function (r) { byId[r.id] = r })
+  var newIds = {}
+  parsed.forEach(function (r) { newIds[r.id] = true })
+  current.forEach(function (r) {
+    if (!newIds[r.id]) throw userError('役職「' + r.name + '」を消すには、役職の削除を使ってください。')
+  })
+  var topOf = function (list) { return list.filter(function (r) { return r.tier === 'top' }).map(function (r) { return r.id }).sort().join(',') }
+  if (topOf(current) !== topOf(parsed) && !isTopRoleRef(current, acting.role)) {
+    throw userError('最上位の役職にかかわる変更は、最上位の役職を持つメンバーだけが行えます。')
+  }
+  parsed.forEach(function (r) {
+    var before = byId[r.id]
+    if (before && before.tier === 'base' && r.tier !== 'base') throw userError('一般の役職の種類は変えられません。')
+    if (before && before.tier !== 'base' && r.tier === 'base') throw userError('一般の役職は1つだけです。')
+    if (!hasRolesSetting()) {
+      // 移行の前は役職名が ID を兼ねるため、名前の変更と、代表以外の最上位の役職は作れない
+      if (r.name !== r.id) throw userError('役職の名前の変更は、内部コードへの移行の後にできるようになります。')
+      if (r.tier === 'top' && r.name !== DEFAULT_TOP_ROLE_NAME) throw userError('代表以外の最上位の役職は、内部コードへの移行の後に作れるようになります。')
+    }
+  })
+  assertTopRemains({ roles: parsed })
+  // 名前を変えた役職を、古い名前のまま持っているメンバー(移行の漏れなど)は、役職の ID にそろえる
+  // (名前を変えると、古い名前ではもう引けないため)
+  var renamed = {}
+  parsed.forEach(function (r) {
+    var before = byId[r.id]
+    if (before && before.name !== r.name) renamed[before.name] = r.id
+  })
+  if (Object.keys(renamed).length) {
+    var sheet = getSheet(SHEET_MEMBERS)
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var roleCol = headers.indexOf('role')
+    var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
+    rows.forEach(function (r) {
+      var name = String(r[roleCol] || '').trim()
+      if (Object.prototype.hasOwnProperty.call(renamed, name)) updateMemberFields(String(r[idCol]), { role: renamed[name] })
+    })
+  }
+  writeRoles(parsed)
+  return { roles: parsed }
+}
+
+// 役職を削除する。使っているメンバー(休止中を含む)は moveToRoleId の役職に移す。
+// 最上位(top)・一般の役職は削除できない。メンバーを移す場合は最上位の役職を持つ人だけ
+function deleteRole(acting, roleId, moveToRoleId) {
+  var roles = getRoles()
+  var target = requireKnownRole(roleId)
+  if (target.tier === 'base' || target.id === TOP_ROLE_ID || (!hasRolesSetting() && target.name === DEFAULT_TOP_ROLE_NAME)) {
+    throw userError('この役職は削除できません: ' + target.name)
+  }
+  var sheet = getSheet(SHEET_MEMBERS)
+  var headers = headerRow(sheet)
+  var idCol = headers.indexOf('id')
+  var roleCol = headers.indexOf('role')
+  var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
+  var holders = rows.filter(function (r) { return sameRole(roles, r[roleCol], target.id) }).map(function (r) { return String(r[idCol]) })
+  var moveTo = null
+  if (holders.length > 0) {
+    if (!isTopRoleRef(roles, acting.role)) throw userError('メンバーのいる役職を削除する(メンバーを別の役職に移す)のは、最上位の役職を持つメンバーだけが行えます。')
+    moveTo = requireKnownRole(moveToRoleId)
+    if (moveTo.id === target.id) throw userError('移す先の役職が、削除する役職と同じです。')
+  }
+  var remaining = roles.filter(function (r) { return r.id !== target.id })
+  var memberChanges = {}
+  holders.forEach(function (id) { memberChanges[id] = { role: moveTo.id } })
+  assertTopRemains({ roles: remaining, members: memberChanges })
+  holders.forEach(function (id) {
+    updateMemberFields(id, { role: moveTo.id })
+  })
+  writeRoles(remaining)
+  return { roles: remaining, moved: holders.length }
+}
+
+// 役職の一覧を、今の保存先に書く(roles が無い間は今までの設定、ある時は roles)
+function writeRoles(roles) {
+  if (hasRolesSetting()) {
+    updateSetting('roles', JSON.stringify(roles))
+  } else {
+    var legacy = rolesToLegacySettings(roles)
+    Object.keys(legacy).forEach(function (key) { updateSetting(key, legacy[key]) })
+  }
+  invalidateRoles()
+}
+
 // ---- 初期セットアップ --------------------------------------------------------
 //
 // GASエディタ上部の関数ドロップダウンで "setupOhsumi" を選び、▶ 実行 を押す。
@@ -346,6 +707,21 @@ function sheetSettingValue(key, value) {
 //   4. 実行結果をエディタ下部のログに出力する
 //
 // デプロイ後に一度だけ実行すればOK。再実行しても重複は起きない。
+
+// コードで書く団体(VALUE_FORMAT=codes)で役職の設定(roles)がまだ無ければ作る。
+// 今までの役職の設定があればそれを元に、無ければ既定の役職で作る
+function setupRolesSetting() {
+  if (!isCodesFormat()) return 'legacy'
+  invalidateRoles()
+  if (hasRolesSetting()) return 'already'
+  var legacy = readRoleSettings()
+  var hasLegacy = ['role_levels', 'restricted_roles', 'role_permissions', 'job_requirements'].some(function (k) { return !!legacy[k] })
+  var roles = hasLegacy ? rolesWithCodeIds(getRoles()) : defaultRoles()
+  updateSetting('roles', JSON.stringify(roles))
+  invalidateRoles()
+  console.log('🆕 役職の設定(roles)を作成しました: ' + roles.map(function (r) { return r.name }).join('・'))
+  return 'created'
+}
 
 // Settings のうち、中に選択肢の値を持つキー(sheetSettingValue で形式を変えるもの)
 var CODE_SETTING_KEYS = ['project_templates', 'task_set_templates', 'recurring_rules', 'skill_level_thresholds']
@@ -432,6 +808,7 @@ function setupOhsumi() {
 
   // --- 選択肢の値の形式(新しく導入する団体は最初からコードで書く)---
   setupValueFormat(ss)
+  setupRolesSetting()
 
   // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
   var createdSecrets = ensureSessionSecrets()
@@ -682,6 +1059,7 @@ var _requestProps = null
 
 function resetRequestProps() {
   _requestProps = null
+  _requestRoles = null
 }
 
 function requestProps() {
@@ -1007,7 +1385,7 @@ function checkPermissionOverride(acting, action, body) {
   } else if (scope === 'recruiting') {
     // 候補者を一般以外の役職でメンバー登録するのは役職の付与にあたるため、
     // 代表専用(採用の例外では許可しない)
-    if (action === 'convertCandidateToMember' && String(body.role || '一般') !== '一般') return false
+    if (action === 'convertCandidateToMember' && roleTier(getRoles(), body.role) !== 'base') return false
     targets.recruiting = true
   }
 
@@ -1178,7 +1556,7 @@ function awardSkillPoints(taskId, memberId, points) {
  * scores the answers, and if pass rate is met, auto-levels the skill.
  */
 function submitQuizResult(quizId, memberId, answers, acting) {
-  if (memberId !== acting.id && acting.role === '一般') {
+  if (memberId !== acting.id && !isAdminRoleRef(getRoles(), acting.role)) {
     throw userError('他のメンバーの代わりに検定を受けることはできません。')
   }
   var defs = getQuizDefinitions()
@@ -1246,11 +1624,7 @@ function submitQuizResult(quizId, memberId, answers, acting) {
 // role が空または '一般' なら false、Settings の restricted_roles に含まれていれば false、それ以外は true。
 // 代表は authorizeAction の先頭で早期 return するため、実質的には「restrictedRoles に含まれない班長」を判定する。
 function isActingFullAdmin(acting) {
-  var role = String(acting.role || '').trim()
-  if (!role || role === '一般') return false
-  var restrictedRaw = getSettingValue('restricted_roles') || ''
-  var restricted = restrictedRaw.split(',').map(function(s) { return s.trim() }).filter(Boolean)
-  return restricted.indexOf(role) < 0
+  return isFullAdminRoleRef(getRoles(), acting.role)
 }
 
 function authorizeAction(acting, action, body) {
@@ -1258,8 +1632,9 @@ function authorizeAction(acting, action, body) {
   // isLeader: true for any role that is not '一般' (i.e. any admin-level role).
   // We cannot enumerate all possible role names (they are user-configurable in Admin → Tags),
   // so we match '代表' specially and treat everything else non-一般 as 班長-equivalent.
-  var isDaihyo = role === '代表'
-  var isLeader = !isDaihyo && role !== '一般' && role !== ''
+  // 役職の種類で判定する(名前・ID のどちらでも。役職の名前を変えても同じ)
+  var isDaihyo = isTopRoleRef(getRoles(), role)
+  var isLeader = !isDaihyo && isAdminRoleRef(getRoles(), role)
 
   // 代表 can do anything
   if (isDaihyo) return
@@ -1300,7 +1675,7 @@ function authorizeAction(acting, action, body) {
   // restricted_roles に含まれないロール) であれば許可。「事業責任者を代表と
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
-  if (action === 'updateSetting' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+  if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin(acting)) return
     if (checkPermissionOverride(acting, action, body)) return
     throw userError('この操作は代表または全権管理者のみ実行できます。')
@@ -1385,7 +1760,7 @@ function authorizeAction(acting, action, body) {
             var expStep = expSteps[expIdx]
             if (expStep) {
               if (expStep.type === 'member' && expStep.memberId === acting.id) approverCheckPassed = true
-              if (expStep.type === 'role' && expStep.role === acting.role) approverCheckPassed = true
+              if (expStep.type === 'role' && sameRole(getRoles(), expStep.role, acting.role)) approverCheckPassed = true
             }
           }
         } else {
@@ -1400,7 +1775,7 @@ function authorizeAction(acting, action, body) {
             var fmStepObj = fmDef ? (fmDef.approvalSteps || [])[fmIdx] : null
             if (fmStepObj) {
               if (fmStepObj.type === 'member' && fmStepObj.memberId === acting.id) approverCheckPassed = true
-              if (fmStepObj.type === 'role' && fmStepObj.role === acting.role) approverCheckPassed = true
+              if (fmStepObj.type === 'role' && sameRole(getRoles(), fmStepObj.role, acting.role)) approverCheckPassed = true
             }
           }
         }
@@ -1643,7 +2018,7 @@ function authorizeAction(acting, action, body) {
     if (action === 'updateComments') {
       var ucTask = findRow(SHEET_TASKS, String(body.taskId || ''))
       if (!ucTask) throw userError('対象のタスクが見つかりません。')
-      if (normalizeCode('visibility', ucTask.visibility) === 'leaders' && acting.role === '一般') {
+      if (normalizeCode('visibility', ucTask.visibility) === 'leaders' && !isAdminRoleRef(getRoles(), acting.role)) {
         throw userError('この操作は幹部限定タスクを閲覧できるメンバーのみ実行できます。')
       }
       validateCommentsUpdate(ucTask, body.comments, acting)
@@ -2076,6 +2451,7 @@ function doPost(e) {
         result = removeProject(body.projectId)
         break
       case 'removeMember':
+        assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { removed: true }; return m })() })
         result = removeMember(body.memberId)
         break
       case 'updateNotify':
@@ -2089,7 +2465,15 @@ function doPost(e) {
         })
         break
       case 'updateRole':
-        result = updateMemberFields(body.memberId, { role: body.role })
+        requireKnownRole(body.role)
+        assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { role: body.role }; return m })() })
+        result = updateMemberFields(body.memberId, { role: sheetRoleRef(body.role) })
+        break
+      case 'updateRoles':
+        result = updateRoles(actingMember, body.roles)
+        break
+      case 'deleteRole':
+        result = deleteRole(actingMember, body.roleId, body.moveToRoleId)
         break
       case 'updatePermissionOverrides':
         result = updateMemberFields(body.memberId, {
@@ -2272,6 +2656,7 @@ function doPost(e) {
         result = uploadAvatar(body.memberId, body.dataUrl, body.filename)
         break
       case 'addMember':
+        if (body.role) requireKnownRole(body.role)
         result = addMember(body.name, body.email, body.affiliation, body.role)
         break
       case 'addCandidate':
@@ -2284,6 +2669,7 @@ function doPost(e) {
         result = removeCandidate(body.candidateId)
         break
       case 'convertCandidateToMember':
+        if (body.role) requireKnownRole(body.role)
         result = convertCandidateToMember(body.candidateId, body.role)
         break
       case 'updateEducationInfo':
@@ -2322,7 +2708,13 @@ function doPost(e) {
         result = { email: getMemberEmailValue(actingMember.id) }
         break
       case 'updateSetting':
+        // 役職の設定は updateRoles・deleteRole で変える(最上位の役職の確認があるため)。
+        // 移行前の古いタブが今までの設定を書く場合だけ、以前と同じく受け付ける
+        if (body.key === 'roles' || (hasRolesSetting() && ROLE_SETTING_KEYS.indexOf(body.key) >= 0)) {
+          throw userError('役職の設定は、管理画面の役職の編集から変更してください。')
+        }
         result = updateSetting(body.key, sheetSettingValue(body.key, body.value))
+        if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles()
         break
       case 'uploadOrgLogo':
         result = uploadOrgLogo(body.dataUrl, body.filename)
@@ -2348,6 +2740,7 @@ function doPost(e) {
         })
         break
       case 'updateMemberInactive':
+        if (body.inactive) assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { inactive: true }; return m })() })
         result = updateMemberFields(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
         break
       case 'updateMemberDepartmentPath':
@@ -3169,7 +3562,7 @@ function notifyAdmins(subject, body, preferredEmails) {
         // any admin-level role (i.e. not blank and not "一般") counts as a
         // fallback recipient — role names are freely renamed/added/removed
         // from Admin > Tags, so this can't hardcode a specific role string
-        else if (roleCol !== -1 && String(r[roleCol] || '').trim() && r[roleCol] !== '一般') reps.push(email)
+        else if (roleCol !== -1 && isAdminRoleRef(getRoles(), r[roleCol])) reps.push(email)
       })
     }
     var recipients = uniqueEmails((opted.length > 0 ? opted : reps).concat(orgEmails))
@@ -3782,7 +4175,7 @@ function addMember(name, email, affiliation, role) {
       case 'name':
         return name
       case 'role':
-        return role || '一般'
+        return sheetRoleRef(role || baseRoleRef())
       case 'notify_new_task':
         return 'FALSE'
       default:
@@ -5082,7 +5475,7 @@ function processExpenseStep(applicationId, stepId, actorId, action, comment) {
         if (mRoleCol >= 0 && mIdCol >= 0 && mSheet.getLastRow() > 1) {
           var mRows = mSheet.getRange(2, 1, mSheet.getLastRow() - 1, mHeaders.length).getValues()
           mRows.forEach(function(r) {
-            if (String(r[mRoleCol]).trim() === nextStep.role) notifyIds.push(String(r[mIdCol]))
+            if (sameRole(getRoles(), r[mRoleCol], nextStep.role)) notifyIds.push(String(r[mIdCol]))
           })
         }
       } catch(e) {}
@@ -5150,7 +5543,7 @@ function setExpenseStatus(applicationId, status, reason, actorId) {
             if (wRoleCol >= 0 && wIdCol >= 0 && wSheet.getLastRow() > 1) {
               var wRows = wSheet.getRange(2, 1, wSheet.getLastRow() - 1, wHeaders.length).getValues()
               wRows.forEach(function(r) {
-                if (String(r[wRoleCol]).trim() === currentStepW.role) withdrawNotifyIds.push(String(r[wIdCol]))
+                if (sameRole(getRoles(), r[wRoleCol], currentStepW.role)) withdrawNotifyIds.push(String(r[wIdCol]))
               })
             }
           }
@@ -5229,7 +5622,7 @@ function saveCustomFormSubmission(submission, acting) {
           var mRows = mSheet.getRange(2, 1, mSheet.getLastRow() - 1, mHeaders.length).getValues()
           var roleIds = []
           mRows.forEach(function (r) {
-            if (String(r[mRoleCol]).trim() === firstStep.role) roleIds.push(String(r[mIdCol]))
+            if (sameRole(getRoles(), r[mRoleCol], firstStep.role)) roleIds.push(String(r[mIdCol]))
           })
           emails = memberEmailsByIds(roleIds)
         }
@@ -5314,7 +5707,7 @@ function processFormStep(submissionId, stepId, actorId, action, comment) {
         if (fmMRoleCol >= 0 && fmMIdCol >= 0 && fmMSheet.getLastRow() > 1) {
           var fmMRows = fmMSheet.getRange(2, 1, fmMSheet.getLastRow() - 1, fmMHeaders.length).getValues()
           fmMRows.forEach(function(r) {
-            if (String(r[fmMRoleCol]).trim() === nextFmStep.role) fmNotifyIds.push(String(r[fmMIdCol]))
+            if (sameRole(getRoles(), r[fmMRoleCol], nextFmStep.role)) fmNotifyIds.push(String(r[fmMIdCol]))
           })
         }
       } catch(e2) {}
@@ -5500,7 +5893,7 @@ function removeCandidate(candidateId) {
 function convertCandidateToMember(candidateId, role) {
   var candidate = findRow(SHEET_CANDIDATES, candidateId)
   if (!candidate) throw userError('候補者が見つかりません: ' + candidateId)
-  var created = addMember(String(candidate.name || ''), String(candidate.email || ''), '', role || '一般')
+  var created = addMember(String(candidate.name || ''), String(candidate.email || ''), '', role || baseRoleRef())
   updateRowFields(SHEET_CANDIDATES, candidateId, { status: 'hired', updated_at: new Date().toISOString() })
   return { memberId: created.id }
 }
@@ -5929,6 +6322,7 @@ var READ_POLICY = {
     keys: {
       skill_options: 'all',
       category_options: 'all',
+      roles: 'all',
       role_levels: 'all',
       project_templates: 'all',
       role_permissions: 'all',
@@ -5966,17 +6360,16 @@ function splitCsvList(value) {
   return String(value || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
 }
 
-// 閲覧者の情報(判定に使う値だけ)。restrictedRoles は Settings の restricted_roles。
-// 全権管理者の判定は lib/ohsumi/permissions.ts の isFullAdminRole と同じ基準
-// (代表は常に全権管理者として扱う — authorizeAction と同じ)。
-function makeViewer(memberRow, restrictedRoles) {
+// 閲覧者の情報(判定に使う値だけ)。roles は役職の一覧(rolesFromSettings)。
+// 全権管理者の判定は lib/ohsumi/roles.ts の isFullAdminRoleRef と同じ基準
+// (最上位は常に全権管理者 — authorizeAction と同じ)。
+function makeViewer(memberRow, roles) {
   var role = String(memberRow.role || '').trim()
-  var isAdminRole = role !== '' && role !== '一般'
   return {
     id: String(memberRow.id || ''),
     role: role,
-    isAdminRole: isAdminRole,
-    isFullAdmin: role === '代表' || (isAdminRole && restrictedRoles.indexOf(role) < 0),
+    isAdminRole: isAdminRoleRef(roles, role),
+    isFullAdmin: isFullAdminRoleRef(roles, role),
   }
 }
 
@@ -6088,15 +6481,19 @@ function filterSettingsForViewer(table, viewer) {
   return out
 }
 
-function restrictedRolesFromSnapshot(data) {
+// スナップショットの Settings から役職の一覧を作る
+function rolesFromSnapshot(data) {
   var settings = data.Settings || { headers: [], rows: [] }
   var keyCol = settings.headers.indexOf('key')
   var valueCol = settings.headers.indexOf('value')
-  if (keyCol < 0 || valueCol < 0) return []
-  for (var i = 0; i < settings.rows.length; i++) {
-    if (String(settings.rows[i][keyCol]) === 'restricted_roles') return splitCsvList(settings.rows[i][valueCol])
+  var map = {}
+  if (keyCol >= 0 && valueCol >= 0) {
+    settings.rows.forEach(function (r) {
+      var key = String(r[keyCol])
+      if (ROLE_SETTING_KEYS.indexOf(key) >= 0) map[key] = String(r[valueCol] || '')
+    })
   }
-  return []
+  return rolesFromSettings(map)
 }
 
 function findMemberInSnapshot(data, memberId) {
@@ -6114,7 +6511,7 @@ function findMemberInSnapshot(data, memberId) {
 function buildViewerData(data, memberId) {
   var memberRow = findMemberInSnapshot(data, memberId)
   if (!memberRow) return null
-  var viewer = makeViewer(memberRow, restrictedRolesFromSnapshot(data))
+  var viewer = makeViewer(memberRow, rolesFromSnapshot(data))
   var empty = { headers: [], rows: [] }
   return {
     Members: filterTableForViewer('Members', data.Members || empty, viewer),
@@ -6592,25 +6989,19 @@ function clearReadMeasurements() {
 // getExpenses で、閲覧者が見てよい申請だけを返す。
 //   申請者本人 / 承認ステップに該当する人(指定メンバー、または同じ役職 —
 //   approveExpenseStep の担当者チェックと同じ基準) / 全権管理者 /
-//   管理画面の「経費」セクションを許可された役職(Settings の role_permissions)
+//   管理画面の「経費」セクションを許可された役職(役職の sections)
 
-function rolePermissionsFromSettings() {
-  try {
-    var raw = getSettingValue('role_permissions')
-    var parsed = raw ? JSON.parse(raw) : {}
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch (e) {
-    return {}
-  }
-}
 
 function makeExpenseViewer(acting) {
+  var roles = getRoles()
   var role = String(acting.role || '').trim()
-  var sections = rolePermissionsFromSettings()[role]
+  var found = findRole(roles, role)
+  var sections = found && found.sections
   return {
     id: String(acting.id || ''),
     role: role,
-    isFullAdmin: role === '代表' || isActingFullAdmin(acting),
+    roles: roles,
+    isFullAdmin: isFullAdminRoleRef(roles, role),
     canOpenExpensesSection: Array.isArray(sections) && sections.indexOf('expenses') >= 0,
   }
 }
@@ -6623,7 +7014,7 @@ function canViewExpense(viewer, app) {
   for (var i = 0; i < steps.length; i++) {
     var step = steps[i] || {}
     if (step.type === 'member' && String(step.memberId || '') === viewer.id) return true
-    if (step.type === 'role' && step.role && String(step.role) === viewer.role) return true
+    if (step.type === 'role' && sameRole(viewer.roles || [], step.role, viewer.role)) return true
   }
   return false
 }
@@ -6696,11 +7087,9 @@ var CANDIDATES_READ_POLICY = {
   },
 }
 
-// 採用の権限を持つか(Google のサービスを使わない。restrictedRoles は Settings の restricted_roles)
-function canViewRecruiting(acting, restrictedRoles) {
-  var role = String(acting.role || '').trim()
-  if (role === '代表') return true
-  if (role && role !== '一般' && restrictedRoles.indexOf(role) < 0) return true
+// 採用の権限を持つか(Google のサービスを使わない。roles は役職の一覧)
+function canViewRecruiting(acting, roles) {
+  if (isFullAdminRoleRef(roles, acting.role)) return true
   var overrides = Array.isArray(acting.permission_overrides) ? acting.permission_overrides : []
   return overrides.some(function (ov) {
     return ov && ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve')
@@ -6728,7 +7117,7 @@ function candidateRowToObject(headers, row) {
 }
 
 function getCandidates(acting) {
-  if (!canViewRecruiting(acting, splitCsvList(getSettingValue('restricted_roles')))) return []
+  if (!canViewRecruiting(acting, getRoles())) return []
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CANDIDATES)
   if (!sheet || sheet.getLastRow() < 2) return []
   var headers = headerRow(sheet)
@@ -6746,15 +7135,18 @@ function getCandidates(acting) {
 //
 // 閲覧できるのは: 申請者本人 / そのフォームの承認ステップの担当者(指定メンバー、または同じ役職 —
 // approveCustomFormStep の担当者チェックと同じ基準) / 全権管理者 /
-// 管理画面の「フォーム」セクションを許可された役職(Settings の role_permissions)
+// 管理画面の「フォーム」セクションを許可された役職(役職の sections)
 
 function makeFormViewer(acting) {
+  var roles = getRoles()
   var role = String(acting.role || '').trim()
-  var sections = rolePermissionsFromSettings()[role]
+  var found = findRole(roles, role)
+  var sections = found && found.sections
   return {
     id: String(acting.id || ''),
     role: role,
-    isFullAdmin: role === '代表' || isActingFullAdmin(acting),
+    roles: roles,
+    isFullAdmin: isFullAdminRoleRef(roles, role),
     canOpenFormsSection: Array.isArray(sections) && sections.indexOf('forms') >= 0,
   }
 }
@@ -6768,7 +7160,7 @@ function canViewFormSubmission(viewer, sub, steps) {
   for (var i = 0; i < steps.length; i++) {
     var step = steps[i] || {}
     if (step.type === 'member' && String(step.memberId || '') === viewer.id) return true
-    if (step.type === 'role' && step.role && String(step.role) === viewer.role) return true
+    if (step.type === 'role' && sameRole(viewer.roles || [], step.role, viewer.role)) return true
   }
   return false
 }
@@ -7957,6 +8349,22 @@ function sampleParseJson(raw, fallback) {
 }
 
 // current: { キー: 今の値(文字列) } → { values: { キー: 書き込む値 }, state: 元に戻すための記録 }
+// 役職の設定(roles)を使う団体向けに、サンプルの役職(サンプル班長)を今までの設定
+// (role_levels など)ではなく roles の1件として足す形に変える
+function sampleSettingsWithRoles(settings) {
+  var out = JSON.parse(JSON.stringify(settings))
+  var name = SAMPLE_ROLES.restricted
+  var role = { id: SAMPLE_ID_PREFIX + 'role-restricted', name: name, tier: 'admin', restricted: true }
+  if (out.maps.role_permissions && out.maps.role_permissions[name]) role.sections = out.maps.role_permissions[name]
+  if (out.maps.job_requirements && out.maps.job_requirements[name]) role.requiredSkills = out.maps.job_requirements[name]
+  delete out.lists.role_levels
+  delete out.lists.restricted_roles
+  delete out.maps.role_permissions
+  delete out.maps.job_requirements
+  out.items.roles = [role]
+  return out
+}
+
 function mergeSampleSettings(current, additions) {
   var values = {}
   var state = { lists: {}, items: {}, values: {}, maps: {}, scalars: {} }
@@ -8234,7 +8642,9 @@ function seedSampleData() {
       appendRowByHeaders(emailSheet, SHEET_MEMBER_EMAILS, { id: SAMPLE_ACCOUNT_SLOTS[slot], email: accounts[slot] })
     })
 
-    var merged = mergeSampleSettings(readSettingsValues(sampleSettingKeys(data.settings)), data.settings)
+    // 役職の設定(roles)を使っている団体では、サンプルの役職を roles に足す
+    var sampleSettings = hasRolesSetting() ? sampleSettingsWithRoles(data.settings) : data.settings
+    var merged = mergeSampleSettings(readSettingsValues(sampleSettingKeys(sampleSettings)), sampleSettings)
     Object.keys(merged.values).forEach(function (k) { updateSetting(k, sheetSettingValue(k, merged.values[k])) })
     props.setProperty(SAMPLE_SETTINGS_STATE_KEY, JSON.stringify(merged.state))
 

@@ -6,7 +6,7 @@ import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES, isTopRole } from '@/lib/ohsumi/types'
+import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import type {
   Department,
   Difficulty,
@@ -63,7 +63,7 @@ function calcStaffingRatio(projectId: string, tasks: Task[], members: Member[]):
 }
 
 export function AdminProjects() {
-  const {
+  const { isTopRef,
     adminProjects: projects,
     adminTasks: visibleTasks,
     members,
@@ -97,7 +97,7 @@ export function AdminProjects() {
   const toast = useToast()
   const { t } = useI18n()
   // removeProjectはGAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = isTopRole(currentUser?.role)
+  const isDaihyo = isTopRef(currentUser?.role)
   const [removing, setRemoving] = useState<Project | null>(null)
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null)
   const [applyingTo, setApplyingTo] = useState<Project | null>(null)

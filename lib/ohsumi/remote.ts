@@ -50,7 +50,8 @@ import type {
   SkillPoints,
   SurveyQuestion,
 } from './types'
-import { isAdminRole, type TaskVisibility } from './types'
+import { type TaskVisibility } from './types'
+import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
 import { CLIENT_VERSION, normalizeCode } from './codes'
 import {
   normalizeHistoryEntry,
@@ -130,22 +131,21 @@ export function initialsForName(name: string): string {
   return cleaned.slice(0, 2).toUpperCase()
 }
 
-// Admins can define custom permission levels above the fixed 一般 baseline
-// (see store.tsx's roleLevels), so any non-blank sheet value is trusted
-// as-is — only a blank cell falls back to the baseline.
-function roleFromSheet(role: string): Role {
-  return role && role.trim() ? role.trim() : '一般'
+// role 列は役職の ID(移行前は役職名)。空は一般の役職
+function roleFromSheet(role: string, roles: RoleDef[]): Role {
+  if (role && role.trim()) return role.trim()
+  return roles.find((r) => r.tier === 'base')?.id ?? DEFAULT_BASE_ROLE_NAME
 }
 
-function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Project>): Member {
+function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Project>, roles: RoleDef[]): Member {
   const projectIds = splitTags(r.project_ids)
   const will = splitTags(r.will_tags)
   const judgment = splitTags(r.judgment_tags)
-  const role = roleFromSheet(r.role)
+  const role = roleFromSheet(r.role, roles)
   const affiliation =
     projectIds.length > 0
       ? projectIds.map((pid) => projectsById.get(pid)?.name ?? pid).join(' / ')
-      : isAdminRole(role)
+      : isAdminRoleRef(roles, role)
         ? '運営'
         : ''
   return {
@@ -324,10 +324,12 @@ export function mapRemoteData(
   memberRows: Record<string, string>[],
   projectRows: Record<string, string>[],
   taskRows: Record<string, string>[],
+  // 役職の一覧(Settings から。省略時は今までの設定の既定)
+  roles: RoleDef[] = rolesFromLegacy({}),
 ): RemoteData {
   const projects = projectRows.map(mapProjectRow)
   const projectsById = new Map(projects.map((p) => [p.id, p]))
-  const members = memberRows.map((r) => mapMemberRow(r, projectsById))
+  const members = memberRows.map((r) => mapMemberRow(r, projectsById, roles))
   const tasks = taskRows.map(mapTaskRow)
   return { members, projects, tasks }
 }
@@ -335,13 +337,14 @@ export function mapRemoteData(
 export interface RemoteSettings {
   skillOptions: string[]
   categoryOptions: string[]
-  roleLevels: string[]
+  // 役職の一覧(Settings の roles。無ければ今までの設定 role_levels などから組み立てる)
+  roles: RoleDef[]
+  // Settings の roles を使っているか(移行の後・新しく導入した団体)。使っていない間は
+  // 役職の ID が役職名そのもので、名前の変更と代表以外の最上位の役職は作れない
+  rolesFromSetting: boolean
   projectTemplates: Record<string, ProjectTemplateTask[]>
-  rolePermissions: Record<string, AdminSection[]>
   taskSetTemplates: TaskSetTemplate[]
   recurringRules: RecurringTaskRule[]
-  // item 17: ポジション要件 — jobType (role level string) -> required skills
-  jobRequirements: Record<string, string[]>
   // 要求分野: field name pool + field -> constituent skills + acquisition threshold
   skillFieldOptions: string[]
   skillFieldSkills: Record<string, string[]>
@@ -354,9 +357,6 @@ export interface RemoteSettings {
   // プロジェクトの表示順（プロジェクトIDの配列）— Admin > Projectsのドラッグ
   // 並び替えで設定。載っていないIDは末尾に元の順序のまま追加される
   projectOrder: string[]
-  // 制限付きロール — Tags画面で「制限あり」に設定されたロール名のリスト。
-  // リストにないロールは全管理者権限を持つ
-  restrictedRoles: string[]
   // スキルポイントのレベルアップ閾値 — { "デフォルト": 100, "デザイン": 150 }
   skillLevelThresholds: SkillLevelThresholds
   // 検定定義リスト — Settings キー "quiz_definitions"
@@ -404,13 +404,6 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   } catch {
     // malformed JSON in the sheet — fall back to empty rather than throwing
   }
-  let rolePermissions: Record<string, AdminSection[]> = {}
-  try {
-    const raw = byKey.get('role_permissions')
-    if (raw) rolePermissions = JSON.parse(raw)
-  } catch {
-    // malformed JSON in the sheet — fall back to empty rather than throwing
-  }
   let taskSetTemplates: TaskSetTemplate[] = []
   try {
     const raw = byKey.get('task_set_templates')
@@ -425,13 +418,8 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   } catch {
     // malformed JSON in the sheet — fall back to empty rather than throwing
   }
-  let jobRequirements: Record<string, string[]> = {}
-  try {
-    const raw = byKey.get('job_requirements')
-    if (raw) jobRequirements = JSON.parse(raw)
-  } catch {
-    // malformed JSON in the sheet — fall back to empty rather than throwing
-  }
+  const roleSettings = Object.fromEntries(ROLE_SETTING_KEYS.map((k) => [k, byKey.get(k)]))
+  const rolesSetting = parseRolesSetting(roleSettings.roles)
   let skillFieldSkills: Record<string, string[]> = {}
   try {
     const raw = byKey.get('skill_field_skills')
@@ -444,12 +432,11 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   return {
     skillOptions: splitTags(byKey.get('skill_options')),
     categoryOptions: splitTags(byKey.get('category_options')),
-    roleLevels: splitTags(byKey.get('role_levels')),
+    roles: rolesSetting ?? rolesFromLegacy(roleSettings),
+    rolesFromSetting: !!rolesSetting,
     projectTemplates: normalizeProjectTemplates(projectTemplates),
-    rolePermissions,
     taskSetTemplates: normalizeTaskSetTemplates(taskSetTemplates),
     recurringRules: normalizeRecurringRules(recurringRules),
-    jobRequirements,
     skillFieldOptions: splitTags(byKey.get('skill_field_options')),
     skillFieldSkills,
     skillFieldThreshold: Number.isFinite(skillFieldThreshold) ? skillFieldThreshold : null,
@@ -459,7 +446,6 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     orgLogoUrl: byKey.get('org_logo_url') ?? '',
     themeColor: byKey.get('theme_color') ?? '',
     projectOrder: splitTags(byKey.get('project_order')),
-    restrictedRoles: splitTags(byKey.get('restricted_roles')),
     skillLevelThresholds: (() => {
       try { const r = byKey.get('skill_level_thresholds'); return r ? normalizeThresholdKeys(JSON.parse(r)) : {} } catch { return {} }
     })(),
@@ -539,11 +525,12 @@ function toInitialData(res: InitialDataResponse): InitialData {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged }
   }
   const { Members, Projects, Tasks, Settings } = res.sheets
+  const settings = parseSettings(tableToRecords(Settings))
   return {
     memberId: res.memberId,
     version: res.version,
-    data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks)),
-    settings: parseSettings(tableToRecords(Settings)),
+    data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks), settings.roles),
+    settings,
   }
 }
 
@@ -760,6 +747,11 @@ export const remoteApi = {
   updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) =>
     postToGas('updateNotifySettings', { memberId, settings }),
   updateRole: (memberId: string, role: Role) => postToGas('updateRole', { memberId, role }),
+  // 役職の一覧を保存する(並び順・種類・制限・セクション・必要スキル・名前)
+  updateRoles: (roles: RoleDef[]) => postToGas<{ roles: RoleDef[] }>('updateRoles', { roles }),
+  // 役職を削除する。使っているメンバーは moveToRoleId の役職に移す
+  deleteRole: (roleId: string, moveToRoleId?: string) =>
+    postToGas<{ roles: RoleDef[]; moved: number }>('deleteRole', { roleId, moveToRoleId }),
   updateReportsTo: (memberId: string, reportsToId: string | null) =>
     postToGas('updateReportsTo', { memberId, reportsToId }),
   updateMentor: (memberId: string, mentorId: string | null) =>

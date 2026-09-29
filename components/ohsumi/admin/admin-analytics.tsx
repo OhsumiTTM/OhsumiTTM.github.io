@@ -1,5 +1,6 @@
 'use client'
 
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -167,6 +168,7 @@ const WORKLOAD_LABEL_KEY: Record<WorkloadCapacity, TranslationKey> = {
 
 export function AdminAnalytics() {
   const { members, visibleTasks, archivedTasks, surveyResponses, surveyQuestions } = useOhsumi()
+  const roleName = useRoleLabel()
   const { t } = useI18n()
 
   // ANL-012/014/015: カスタム設問も組み合わせ分析の対象に含めるため、
@@ -183,7 +185,7 @@ export function AdminAnalytics() {
   const roleCounts = new Map<string, number>()
   const affiliationCounts = new Map<string, number>()
   members.forEach((m) => {
-    roleCounts.set(m.role, (roleCounts.get(m.role) ?? 0) + 1)
+    roleCounts.set(roleName(m.role), (roleCounts.get(roleName(m.role)) ?? 0) + 1)
     const aff = m.affiliation || t('admin.analytics.unset')
     affiliationCounts.set(aff, (affiliationCounts.get(aff) ?? 0) + 1)
   })
@@ -450,7 +452,7 @@ export function AdminAnalytics() {
       if (surveyComboAxis === 'workload') {
         key = t(WORKLOAD_LABEL_KEY[memberWorkloadCapacity(m.id, allTasks)])
       } else if (surveyComboAxis === 'role') {
-        key = m.role
+        key = roleName(m.role)
       } else if (surveyComboAxis === 'affiliation') {
         key = m.affiliation || t('admin.analytics.unset')
       } else if (surveyComboAxis === 'tenure') {

@@ -12,19 +12,8 @@ export type Difficulty = CodeOf<'difficulty'>
 // free-form string rather than a fixed union.
 export type Role = string
 
-export const BASE_ROLE = '一般'
-
-// 最上位の役職(代表専用の操作ができる)。役職の設定(PR-B)で役職IDに
-// 変えるまでは名前で判定する。判定はこの関数だけで行う
-export const TOP_ROLE = '代表'
-
-export function isTopRole(role: Role | null | undefined): boolean {
-  return role === TOP_ROLE
-}
-
-export function isAdminRole(role: Role): boolean {
-  return role !== BASE_ROLE
-}
+// 役職の判定(一般・管理者・最上位)は roles.ts の関数で行う。Member.role は役職の
+// ID(移行前は役職名)で、役職の一覧(Settings の roles)から引く
 
 // admin-screen sidebar sections — used by store.tsx's rolePermissions to
 // gate which sections each non-top admin role level can see (Admin → Tags)
@@ -81,11 +70,6 @@ export const DEFAULT_NON_TOP_SECTIONS: AdminSection[] = [
   'projects',
   'memberdb',
 ]
-
-// visibility gate for 幹部 (leadership)-only tasks — see Task.visibility
-export function canSeeExecTasks(role: Role): boolean {
-  return role !== BASE_ROLE
-}
 
 export type Priority = CodeOf<'priority'>
 

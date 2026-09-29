@@ -478,12 +478,13 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 |---|---|---|
 | `skill_options` | 要求スキルの選択肢 | カンマ区切り文字列 |
 | `category_options` | カテゴリの選択肢 | カンマ区切り文字列 |
-| `role_levels` | 権限レベルの一覧（下位〜上位） | カンマ区切り文字列 |
-| `role_permissions` | 権限レベルごとの管理画面表示範囲 | JSON文字列 |
+| `roles` | 役職の一覧（「4.6.1. 役職」を参照。移行の後・新しく導入した団体で使う） | JSON配列 |
+| `role_levels` | 権限レベルの一覧（下位〜上位。`roles` が無い間だけ使う） | カンマ区切り文字列 |
+| `role_permissions` | 権限レベルごとの管理画面表示範囲（`roles` が無い間だけ使う） | JSON文字列 |
 | `project_templates` | プロジェクト種類ごとのテンプレートタスク | JSON文字列 |
 | `task_set_templates` | 業務テンプレート | JSON文字列 |
 | `recurring_rules` | 定期タスクのルール | JSON文字列 |
-| `job_requirements` | ポジション要件（スキルマップ） | JSON文字列 |
+| `job_requirements` | ポジション要件（スキルマップ。`roles` が無い間だけ使う） | JSON文字列 |
 | `skill_field_options` | 要求分野の選択肢 | カンマ区切り文字列 |
 | `skill_field_skills` | 分野ごとの対応スキル | JSON文字列 |
 | `skill_field_threshold` | 分野認定の閾値（0〜1） | 数値文字列 |
@@ -513,6 +514,29 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 > こちらも Admin → フォームの GUI から編集できます。
 
 ---
+
+### 4.6.1. 役職
+
+役職は **上下関係の順（一般 → … → 最上位）** に並んだ一覧で、それぞれに **種類** があります。権限の判定は
+種類だけで行い、役職の名前は見ません（名前を変えても権限は変わりません）。
+
+| 種類 | 内容 |
+|---|---|
+| 最上位（`top`） | 代表専用の操作ができる全権管理者。1つ以上必要（既定は「代表」） |
+| 管理者（`admin`） | 制限なし＝全権管理者。「制限あり」にすると、指定した管理画面のセクションだけが見える |
+| 一般（`base`） | 管理者ではない。ちょうど1つ（既定は「一般」） |
+
+- **保存先**: Settings に `roles`（JSON）がある団体（内部コードへの移行の後・新しく導入した団体）は `roles` に、
+  無い団体（移行前）は今までの `role_levels`・`restricted_roles`・`role_permissions`・`job_requirements` に書きます。
+  移行前は役職名が ID を兼ねるため、**役職の名前の変更と、代表以外の最上位の役職は、移行の後にできるようになります**。
+- **メンバーの役職**（Members の `role`）は役職の ID（移行前は役職名）です。役職は ID でも名前でも引けるので、
+  移行の途中で両方が混ざっていても同じ役職として扱います。経費・フォームの承認ステップの役職も同じです。
+- **表示名**: 一般・最上位の役職の名前が既定（「一般」「代表」）のままなら、画面の言語に合わせて翻訳します
+  （英語では General・President）。名前を変えた場合は、その名前をそのまま表示します。
+- **削除**: 一般と、最初の最上位の役職は削除できません。使っているメンバー（休止中を含む）がいる役職は、
+  Admin → Tags で移す先の役職を選び、メンバーを移してから削除します。
+- **締め出しの防止**: 最上位の役職を持つ有効な（休止中でない）メンバーが0人になる操作（役職の変更・メンバーの
+  削除・休止・役職の種類の変更・役職の削除）は、GAS が拒否します。
 
 ## 4.7. Discord Webhook 連携（任意）
 
@@ -619,14 +643,14 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 
 | アクション | 必要な権限 |
 |---|---|
-| updateRole, removeMember, removeProject, uploadOrgLogo, addMember, updateEmail, updateJoinedAt, updateReportsTo, updateMentor, notifyTrainingDecision, updatePermissionOverrides, updateMemberProjects | 最上位ロール（代表）のみ |
-| updateSetting, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 代表 または 全権管理者（`restricted_roles`に含まれないロール。団体ごとにAdmin → Tagsで調整可能） |
+| updateRole, removeMember, removeProject, uploadOrgLogo, addMember, updateEmail, updateJoinedAt, updateReportsTo, updateMentor, notifyTrainingDecision, updatePermissionOverrides, updateMemberProjects | 最上位の役職（既定は代表）のみ |
+| updateSetting, updateRoles, deleteRole, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 最上位の役職 または 全権管理者（制限の無い管理者の役職。団体ごとにAdmin → Tagsで調整可能）。ただし updateRoles で最上位の役職を増やす・減らす変更と、deleteRole でメンバーを別の役職に移す削除は、最上位の役職のみ |
 | approveTask, assignTask, updateTaskDetails, setBlocker, createProject, updateProject, updatePriority, updateReviewer(s), removeTask, bulkUpdateSkills, updateExpenseStatus, addExpenseApplication, manageCustomForm, updateEvaluationHistory, updateTransferHistory, updateOneOnOnes, updateCompetencies, notifyProjectHealth, updateProjectHealthRecord, approveTaskReview 等 | 任意の管理者ロール（代表 または 班長以上） |
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |
 | createTasks, updateProgress, updateTaskStatus（担当者のみ）, submitSurveyResponse 等 | ログイン済みなら誰でも |
 | updateDeliverables, updateHistory, updateEstimatedHours, updateActualHours, updateRetrospective, updateTaskSchedule, updateTaskForm | そのタスクの担当者・確認者・作成者・全権管理者のみ(updateHistoryはさらに、他人が記録した既存データの書き換え・削除を拒否) |
-| updateComments(新規コメント追加) | そのタスクを閲覧できるメンバーなら誰でも(フロントの`canSeeExecTasks`と同じ基準: 幹部限定タスクは`role !== '一般'`のメンバーのみ)。投稿者ID( `byId` )はクライアント値を信用せず認証済み本人IDで固定する |
+| updateComments(新規コメント追加) | そのタスクを閲覧できるメンバーなら誰でも(幹部限定タスクは一般以外の役職のメンバーのみ)。投稿者ID( `byId` )はクライアント値を信用せず認証済み本人IDで固定する |
 | updateComments(既存コメントの編集・削除) | 投稿者本人 または 全権管理者のみ |
 | getInitialData(読み取り) | ログイン済みなら誰でも。ただし `Code.gs` の `READ_POLICY` に従い、閲覧権限のない行・列・設定キーを取り除いて返す |
 | getExpenses(読み取り) | ログイン済みなら誰でも。申請者本人・承認ステップの担当者・全権管理者・「経費」セクションを許可された役職が閲覧できる申請だけを返す |

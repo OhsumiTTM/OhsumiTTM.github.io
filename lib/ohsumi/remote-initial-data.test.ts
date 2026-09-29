@@ -76,7 +76,8 @@ describe('fetchInitialData', () => {
       pendingApproval: false,
     })
     expect(res.settings!.orgName).toBe('テスト団体')
-    expect(res.settings!.restrictedRoles).toEqual(['班長'])
+    expect(res.settings!.roles.filter((r) => r.restricted).map((r) => r.id)).toEqual(['班長'])
+    expect(res.settings!.rolesFromSetting).toBe(false)
     // 一般に届く「対象外」の値は、どのメンバーIDとも一致しない
     expect(res.settings!.surveyInvitedIds).toEqual(['__not_invited__'])
   })

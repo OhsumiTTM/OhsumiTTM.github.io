@@ -7,70 +7,84 @@ import {
   isEscalatedTask,
   canApproveTask,
 } from './permissions'
-import { BASE_ROLE, STATUS_ORDER } from './types'
+import { STATUS_ORDER } from './types'
+import { rolesFromLegacy } from './roles'
 
-// restrictedRoles is the explicit list of role names with restricted access.
-// In this test suite, only '班長' is restricted.
-const RESTRICTED = ['班長']
+// 役職の一覧(移行前の設定から組み立てたもの)。この中では '班長' だけが制限付き
+const ROLES = rolesFromLegacy({ restricted_roles: '班長' })
+const UNRESTRICTED = rolesFromLegacy({})
+// 移行後の役職の一覧(ID で持つ。名前を変えても判定は変わらない)
+const CODED = [
+  { id: 'base', name: 'Member', tier: 'base' as const },
+  { id: 'r_leader', name: 'Team lead', tier: 'admin' as const, restricted: true, sections: ['projects' as const] },
+  { id: 'top', name: 'President', tier: 'top' as const },
+]
 
 describe('isFullAdminRole', () => {
-  it('一般 (BASE_ROLE) is never full admin', () => {
-    expect(isFullAdminRole(BASE_ROLE, RESTRICTED)).toBe(false)
+  it('一般 is never full admin', () => {
+    expect(isFullAdminRole(ROLES, '一般')).toBe(false)
   })
 
   it('null/undefined role is never full admin', () => {
-    expect(isFullAdminRole(null, RESTRICTED)).toBe(false)
-    expect(isFullAdminRole(undefined, RESTRICTED)).toBe(false)
+    expect(isFullAdminRole(ROLES, null)).toBe(false)
+    expect(isFullAdminRole(ROLES, undefined)).toBe(false)
   })
 
-  it('a role in restrictedRoles is not full admin', () => {
-    expect(isFullAdminRole('班長', RESTRICTED)).toBe(false)
+  it('a restricted role is not full admin', () => {
+    expect(isFullAdminRole(ROLES, '班長')).toBe(false)
   })
 
-  it('roles not in restrictedRoles are full admin', () => {
-    expect(isFullAdminRole('事業責任者', RESTRICTED)).toBe(true)
-    expect(isFullAdminRole('代表', RESTRICTED)).toBe(true)
+  it('unrestricted admin roles and the top role are full admin', () => {
+    expect(isFullAdminRole(ROLES, '事業責任者')).toBe(true)
+    expect(isFullAdminRole(ROLES, '代表')).toBe(true)
   })
 
-  it('with an empty restrictedRoles list, any non-一般 role is full admin', () => {
-    expect(isFullAdminRole('班長', [])).toBe(true)
-    expect(isFullAdminRole('代表', [])).toBe(true)
-    expect(isFullAdminRole(BASE_ROLE, [])).toBe(false)
+  it('with no restricted roles, any non-一般 role is full admin', () => {
+    expect(isFullAdminRole(UNRESTRICTED, '班長')).toBe(true)
+    expect(isFullAdminRole(UNRESTRICTED, '代表')).toBe(true)
+    expect(isFullAdminRole(UNRESTRICTED, '一般')).toBe(false)
   })
 
-  it('a role name not in restrictedRoles is still full admin', () => {
-    expect(isFullAdminRole('未知の役職', RESTRICTED)).toBe(true)
+  it('a role name not in the list is still full admin (as before)', () => {
+    expect(isFullAdminRole(ROLES, '未知の役職')).toBe(true)
+  })
+
+  it('after migration, roles are judged by their type, whatever their names are', () => {
+    expect(isFullAdminRole(CODED, 'top')).toBe(true)
+    expect(isFullAdminRole(CODED, 'President')).toBe(true)
+    expect(isFullAdminRole(CODED, 'r_leader')).toBe(false)
+    expect(isFullAdminRole(CODED, 'base')).toBe(false)
   })
 })
 
 describe('resolveVisibleAdminSections', () => {
   it('a full admin sees every admin section', () => {
-    const sections = resolveVisibleAdminSections('代表', RESTRICTED, {})
+    const sections = resolveVisibleAdminSections(ROLES, '代表')
     expect(sections).toEqual(
       expect.arrayContaining(['dashboard', 'approvals', 'assignments', 'projects', 'members', 'analytics', 'tags']),
     )
   })
 
   it('一般 sees no admin sections at all', () => {
-    expect(resolveVisibleAdminSections(BASE_ROLE, RESTRICTED, {})).toEqual([])
+    expect(resolveVisibleAdminSections(ROLES, '一般')).toEqual([])
   })
 
   it('a restricted role falls back to DEFAULT_NON_TOP_SECTIONS when unconfigured', () => {
-    const sections = resolveVisibleAdminSections('班長', RESTRICTED, {})
+    const sections = resolveVisibleAdminSections(ROLES, '班長')
     expect(sections).toEqual(expect.arrayContaining(['dashboard', 'approvals', 'assignments', 'projects']))
     expect(sections).not.toContain('members')
     expect(sections).not.toContain('tags')
   })
 
-  it('an explicit rolePermissions entry overrides the default for a restricted role', () => {
-    const sections = resolveVisibleAdminSections('班長', RESTRICTED, { 班長: ['projects'] })
+  it('an explicit sections entry overrides the default for a restricted role', () => {
+    const roles = rolesFromLegacy({ restricted_roles: '班長', role_permissions: JSON.stringify({ 班長: ['projects'] }) })
+    const sections = resolveVisibleAdminSections(roles, '班長')
     expect(sections).toEqual(expect.arrayContaining(['projects', 'dashboard']))
     expect(sections).not.toContain('approvals')
   })
 
   it('always includes dashboard even if the configured list omits it, to avoid a redirect loop', () => {
-    const sections = resolveVisibleAdminSections('班長', RESTRICTED, { 班長: ['projects'] })
-    expect(sections).toContain('dashboard')
+    expect(resolveVisibleAdminSections(CODED, 'r_leader')).toEqual(['dashboard', 'projects'])
   })
 })
 

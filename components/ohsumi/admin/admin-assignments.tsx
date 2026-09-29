@@ -251,6 +251,7 @@ function CandidateCard({
   weeklyHours?: number
 }) {
   const { t } = useI18n()
+  const { isAdminRef } = useOhsumi()
   return (
     <div
       className={`rounded-lg border bg-card p-4 ${
@@ -262,7 +263,7 @@ function CandidateCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">{member.displayName || member.name}</span>
-            {member.role === '一般' && (
+            {!isAdminRef(member.role) && (
               <span className="text-xs text-muted-foreground">{member.affiliation}</span>
             )}
             {!!weeklyHours && (

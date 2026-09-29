@@ -20,6 +20,7 @@ function loadGas() {
   // シートを読む関数を差し替える(関数の呼び出しは実行時に context から解決される)
   context.findRow = (_sheet: string, id: string) => TASKS[id] ?? null
   context.getSettingValue = (key: string) => (key === 'restricted_roles' ? '班長' : '')
+  context.readRoleSettings = () => ({ restricted_roles: '班長' })
   return context as unknown as {
     authorizeAction: (acting: unknown, action: string, body: unknown) => void
     checkPermissionOverride: (acting: unknown, action: string, body: unknown) => boolean

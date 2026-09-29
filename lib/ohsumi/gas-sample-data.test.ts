@@ -1,5 +1,6 @@
 // gas/Code.gs の画面確認用のサンプルのデータ(seedSampleData / deleteSampleData)を確かめる。
 // 作るデータの中身(buildSampleData)と、メモリ上の簡易なスプレッドシート・Drive での作成・削除。
+import { DEFAULT_ROLE_LEVELS } from './roles'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
@@ -278,8 +279,8 @@ describe('サンプルのデータの中身', () => {
     expect(hold?.holdReason?.note).toBeTruthy()
     const merged = base.gas.mergeSampleSettings({}, data.settings) as { values: Record<string, string> }
     const settings = parseSettings(Object.entries(merged.values).map(([key, value]) => ({ key, value })))
-    expect(settings.roleLevels).toEqual(expect.arrayContaining(['代表', '班長', '事業責任者', 'サンプル班長']))
-    expect(settings.restrictedRoles).toEqual(['サンプル班長'])
+    expect(settings.roles.map((r) => r.name)).toEqual(expect.arrayContaining(['一般', '代表', '班長', '事業責任者', 'サンプル班長']))
+    expect(settings.roles.filter((r) => r.restricted).map((r) => r.name)).toEqual(['サンプル班長'])
     expect(settings.quizDefinitions).toHaveLength(1)
     expect(settings.orgLogoUrl).toContain('LOGO')
   })
@@ -332,7 +333,9 @@ describe('Settings の追加と元に戻す処理', () => {
     expect(base.gas.SAMPLE_LIST_DEFAULTS.skill_options).toEqual(arr('DEFAULT_SKILL_OPTIONS'))
     expect(base.gas.SAMPLE_LIST_DEFAULTS.category_options).toEqual(arr('DEFAULT_CATEGORY_OPTIONS'))
     expect(base.gas.SAMPLE_LIST_DEFAULTS.skill_field_options).toEqual(arr('DEFAULT_SKILL_FIELD_OPTIONS'))
-    expect(base.gas.SAMPLE_LIST_DEFAULTS.role_levels).toEqual(arr('DEFAULT_ROLE_LEVELS'))
+    // 役職の既定は roles.ts(GAS の DEFAULT_ROLE_LEVELS も同じ)
+    expect(base.gas.SAMPLE_LIST_DEFAULTS.role_levels).toEqual(DEFAULT_ROLE_LEVELS)
+    expect([...(base.gas as unknown as { DEFAULT_ROLE_LEVELS: string[] }).DEFAULT_ROLE_LEVELS]).toEqual(DEFAULT_ROLE_LEVELS)
   })
 })
 

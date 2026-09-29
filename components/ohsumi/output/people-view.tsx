@@ -3,11 +3,12 @@
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { useNav } from '@/lib/ohsumi/nav'
-import { BASE_ROLE } from '@/lib/ohsumi/types'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 export function PeopleView() {
-  const { members, visibleTasks: tasks } = useOhsumi()
+  const { members, visibleTasks: tasks, isAdminRef } = useOhsumi()
+  const roleName = useRoleLabel()
   const { go } = useNav()
   const { t } = useI18n()
 
@@ -31,7 +32,7 @@ export function PeopleView() {
                   {m.displayName || m.name}
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
-                  {m.role !== BASE_ROLE ? m.role : m.affiliation}
+                  {isAdminRef(m.role) ? roleName(m.role) : m.affiliation}
                 </p>
               </div>
             </div>

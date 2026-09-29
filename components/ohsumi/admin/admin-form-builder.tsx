@@ -1,5 +1,7 @@
 'use client'
 
+import { findRole } from '@/lib/ohsumi/roles'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, CustomFormDef, CustomFormField, CustomFormFieldType } from '@/lib/ohsumi/types'
@@ -21,6 +23,8 @@ function ApprovalStepEditor({
   roleLevels: string[]
 }) {
   const { t } = useI18n()
+  const { roles } = useOhsumi()
+  const roleName = useRoleLabel()
   const addStep = () =>
     onChange([...steps, { id: crypto.randomUUID(), type: 'member', memberId: members[0]?.id ?? '' }])
   const removeStep = (id: string) => onChange(steps.filter((s) => s.id !== id))
@@ -54,11 +58,11 @@ function ApprovalStepEditor({
             ) : (
               <>
                 <select
-                  value={step.role ?? ''}
+                  value={findRole(roles, step.role)?.id ?? step.role ?? ''}
                   onChange={(e) => updateStep(step.id, { role: e.target.value })}
                   className="rounded border border-border bg-background px-2 py-1 text-xs"
                 >
-                  {roleLevels.map((r) => (<option key={r} value={r}>{r}</option>))}
+                  {roleLevels.map((r) => (<option key={r} value={r}>{roleName(r)}</option>))}
                 </select>
                 <input
                   type="text"

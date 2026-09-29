@@ -22,7 +22,6 @@ import {
   DIFFICULTY_LABEL,
   PRIORITIES,
   TASK_IMPORTANCE,
-  isAdminRole,
   type Department,
   type Difficulty,
   type FormAnswerValue,
@@ -148,7 +147,7 @@ export function TaskDetailDrawer({
   taskId: string | null
   onClose: () => void
 }) {
-  const {
+  const { isAdminRef,
     tasks,
     projects,
     currentUser,
@@ -212,7 +211,7 @@ export function TaskDetailDrawer({
   const dependsOnTasks = (task?.dependsOnIds ?? [])
     .map((id) => tasks.find((t) => t.id === id))
     .filter(Boolean) as Task[]
-  const isAdmin = !!currentUser && isAdminRole(currentUser.role)
+  const isAdmin = !!currentUser && isAdminRef(currentUser.role)
   const reviewer = getMember(task?.reviewerId ?? null) ?? null
   const reviewers = (task?.reviewerIds ?? (task?.reviewerId ? [task.reviewerId] : [])).map((id) => getMember(id)).filter(Boolean) as ReturnType<typeof getMember>[]
 

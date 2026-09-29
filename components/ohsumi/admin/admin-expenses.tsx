@@ -1,5 +1,7 @@
 'use client'
 
+import { findRole } from '@/lib/ohsumi/roles'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, ExpenseApplication, ExpenseCategory } from '@/lib/ohsumi/types'
@@ -25,6 +27,8 @@ function ApprovalStepEditor({
   roleLevels: string[]
 }) {
   const { t } = useI18n()
+  const { roles } = useOhsumi()
+  const roleName = useRoleLabel()
   const addStep = () => {
     onChange([
       ...steps,
@@ -64,12 +68,12 @@ function ApprovalStepEditor({
             ) : (
               <>
                 <select
-                  value={step.role ?? ''}
+                  value={findRole(roles, step.role)?.id ?? step.role ?? ''}
                   onChange={(e) => updateStep(step.id, { role: e.target.value })}
                   className="rounded border border-border bg-background px-2 py-1 text-xs"
                 >
                   {roleLevels.map((r) => (
-                    <option key={r} value={r}>{r}</option>
+                    <option key={r} value={r}>{roleName(r)}</option>
                   ))}
                 </select>
                 <input
@@ -248,6 +252,7 @@ function ApplicationCard({
   getCategory: (id: string) => ExpenseCategory | undefined
 }) {
   const { t } = useI18n()
+  const roleName = useRoleLabel()
   const toast = useToast()
   const [expanded, setExpanded] = useState(false)
   const [actionReason, setActionReason] = useState('')
@@ -345,7 +350,7 @@ function ApplicationCard({
                   <span>
                     {step.type === 'member'
                       ? (getMember(step.memberId ?? null)?.displayName ?? getMember(step.memberId ?? null)?.name ?? step.memberId)
-                      : `${step.role}${step.department ? `（${step.department}）` : ''}`}
+                      : `${roleName(step.role)}${step.department ? `（${step.department}）` : ''}`}
                   </span>
                   {isDone && <span className="text-green-600">{t('admin.expenses.approvedCount', { count: approvedHere.length })}</span>}
                   {isCurrent && <span className="font-semibold text-primary">{t('admin.expenses.currentStep')}</span>}

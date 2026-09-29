@@ -70,7 +70,18 @@ import type {
   NotifyFrequency,
   PermissionOverride,
 } from './types'
-import { canSeeExecTasks, BASE_ROLE, UNCATEGORIZED_DEPARTMENT, type TaskVisibility } from './types'
+import { UNCATEGORIZED_DEPARTMENT, type TaskVisibility } from './types'
+import {
+  DEFAULT_BASE_ROLE_NAME,
+  isAdminRoleRef,
+  isTopRoleRef,
+  newRoleId,
+  rolesFromLegacy,
+  rolesToLegacySettings,
+  sameRole,
+  withMemberRoles,
+  type RoleDef,
+} from './roles'
 import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
@@ -135,10 +146,10 @@ const DEFAULT_SKILL_FIELD_SKILLS: Record<string, string[]> = {
 // 数字は仮 — Admin → Tagsから変更可能
 const DEFAULT_SKILL_FIELD_THRESHOLD = 0.8
 
-// Admin-defined permission levels above the fixed 一般 baseline (see
-// types.ts's BASE_ROLE/isAdminRole) — freely add/removable from Admin →
-// Tags, same pattern as skill/category option pools.
-const DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
+
+function splitTagsLocal(value: string): string[] {
+  return value.split(',').map((s) => s.trim()).filter(Boolean)
+}
 
 function isArchived(t: Task): boolean {
   if (t.status !== 'done' || !t.completedDate) return false
@@ -187,18 +198,30 @@ interface OhsumiContextValue extends OhsumiState {
   removeSkillOption: (name: string) => void
   addCategoryOption: (name: string) => void
   removeCategoryOption: (name: string) => void
+  // 役職の一覧(上下関係の順: 一般 → … → 最上位)。判定は roles.ts の関数で行う
+  roles: RoleDef[]
+  // Settings の roles を使っているか。使っていない間(移行前)は ID = 役職名で、
+  // 名前の変更と代表以外の最上位の役職はできない
+  rolesFromSetting: boolean
+  // 一般の役職の ID
+  baseRoleId: string
+  // 一般より上の役職の ID(上下関係の順)
   roleLevels: string[]
   addRoleLevel: (name: string) => void
-  removeRoleLevel: (name: string) => void
-  reorderRoleLevel: (name: string, direction: 'up' | 'down') => void
-  // roles with restricted section visibility — all others are full admin
+  // 役職を削除する。使っているメンバーは moveToRoleId の役職に移す
+  removeRoleLevel: (roleId: string, moveToRoleId?: string) => void
+  reorderRoleLevel: (roleId: string, direction: 'up' | 'down') => void
+  renameRole: (roleId: string, name: string) => void
+  setRoleTier: (roleId: string, tier: 'top' | 'admin') => void
+  // 制限付きの管理者の役職の ID — それ以外の管理者は全権管理者
   restrictedRoles: string[]
-  toggleRestrictedRole: (role: string) => void
-  // per-role-level admin-screen section visibility (see types.ts's
-  // AdminSection/DEFAULT_NON_TOP_SECTIONS); only roles in restrictedRoles
-  // are affected; full-admin roles always see everything
+  toggleRestrictedRole: (roleId: string) => void
+  // 制限付きの管理者が見られる管理画面のセクション(役職の ID → セクション)
   rolePermissions: Record<string, AdminSection[]>
-  setRolePermissions: (role: string, sections: AdminSection[]) => void
+  setRolePermissions: (roleId: string, sections: AdminSection[]) => void
+  // 役職の判定(ID・名前のどちらでも)
+  isAdminRef: (ref: string | null | undefined) => boolean
+  isTopRef: (ref: string | null | undefined) => boolean
   // admin-screen sections currentUser's role is allowed to see
   visibleAdminSections: AdminSection[]
   projectTemplates: Record<string, ProjectTemplateTask[]>
@@ -212,9 +235,9 @@ interface OhsumiContextValue extends OhsumiState {
   applyTaskSetTemplate: (templateId: string, projectId: string) => void
   importTasksFromProject: (sourceProjectId: string, targetProjectId: string, taskIds: string[]) => void
   recurringRules: RecurringTaskRule[]
-  // item 17: ポジション要件 — jobType (role level string) -> required skills
+  // item 17: ポジション要件 — 役職の ID -> required skills
   jobRequirements: Record<string, string[]>
-  setJobRequirements: (jobType: string, skills: string[]) => void
+  setJobRequirements: (roleId: string, skills: string[]) => void
   // 要求分野 — a field (デザイン/営業/AI活用...) groups several 要求スキル;
   // members are only ever assigned individual skills, and a field counts as
   // "acquired" once skillFieldThreshold's share of its skills is held
@@ -799,14 +822,31 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [settingsReady, setSettingsReady] = useState(!isSettingsConfigured)
   const [skillOptions, setSkillOptions] = useState<string[]>(DEFAULT_SKILL_OPTIONS)
   const [categoryOptions, setCategoryOptions] = useState<string[]>(DEFAULT_CATEGORY_OPTIONS)
-  const [roleLevels, setRoleLevels] = useState<string[]>(DEFAULT_ROLE_LEVELS)
-  const [restrictedRoles, setRestrictedRolesState] = useState<string[]>([])
-  const [rolePermissions, setRolePermissionsState] = useState<Record<string, AdminSection[]>>({})
+  // 役職の一覧(Settings の roles、無ければ今までの設定から組み立てたもの)
+  const [storedRoles, setStoredRoles] = useState<RoleDef[]>(() => rolesFromLegacy({}))
+  const [rolesFromSetting, setRolesFromSetting] = useState(false)
+  // 画面で使う役職の一覧。移行前は、メンバーの役職名のうち一覧に無いものも足す
+  // (今までの画面と同じく選択肢に出す。判定は GAS と同じく制限の無い管理者)
+  const roles = useMemo(
+    () => (rolesFromSetting ? storedRoles : withMemberRoles(storedRoles, members.map((m) => m.role))),
+    [storedRoles, rolesFromSetting, members],
+  )
+  const baseRoleId = useMemo(() => roles.find((r) => r.tier === 'base')?.id ?? DEFAULT_BASE_ROLE_NAME, [roles])
+  const roleLevels = useMemo(() => roles.filter((r) => r.tier !== 'base').map((r) => r.id), [roles])
+  const restrictedRoles = useMemo(() => roles.filter((r) => r.tier === 'admin' && r.restricted).map((r) => r.id), [roles])
+  const rolePermissions = useMemo(
+    () => Object.fromEntries(roles.filter((r) => r.sections).map((r) => [r.id, r.sections as AdminSection[]])),
+    [roles],
+  )
+  const jobRequirements = useMemo(
+    () => Object.fromEntries(roles.filter((r) => r.requiredSkills).map((r) => [r.id, r.requiredSkills as string[]])),
+    [roles],
+  )
+  const isAdminRef = useCallback((ref: string | null | undefined) => isAdminRoleRef(roles, ref), [roles])
+  const isTopRef = useCallback((ref: string | null | undefined) => isTopRoleRef(roles, ref), [roles])
   const [projectTemplates, setProjectTemplates] = useState<Record<string, ProjectTemplateTask[]>>({})
   const [taskSetTemplates, setTaskSetTemplates] = useState<TaskSetTemplate[]>([])
   const [recurringRules, setRecurringRules] = useState<RecurringTaskRule[]>([])
-  // item 17: ポジション要件 — jobType (role level string) -> required skills
-  const [jobRequirements, setJobRequirementsState] = useState<Record<string, string[]>>({})
   // 要求分野: field name pool + field -> constituent skills + acquisition threshold
   const [skillFieldOptions, setSkillFieldOptions] = useState<string[]>(DEFAULT_SKILL_FIELD_OPTIONS)
   const [skillFieldSkills, setSkillFieldSkillsState] =
@@ -897,6 +937,28 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [reportRemoteError],
   )
 
+  // 役職の一覧を保存する(GAS の updateRoles。移行前は今までの設定に、移行後は roles に書かれる)
+  const saveRoles = useCallback(
+    (next: RoleDef[]) => {
+      setStoredRoles(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateRoles(next))
+    },
+    [runRemote],
+  )
+  const updateRoleDef = useCallback(
+    (roleId: string, patch: Partial<RoleDef>) => {
+      saveRoles(
+        roles.map((r) => {
+          if (r.id !== roleId) return r
+          const merged: RoleDef = { ...r, ...patch }
+          if (merged.restricted === undefined) delete merged.restricted
+          return merged
+        }),
+      )
+    },
+    [roles, saveRoles],
+  )
+
   // currentUserIdが変わるたび(ログイン・ログアウト・localStorageからの復元)、
   // 自分自身の登録メールを取得し直す。members配列自体の更新(定期的な公開CSV
   // 再取得)には反応させない — membersにはもうemailが載っていないので、
@@ -947,16 +1009,20 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         if (tags.skills?.length) setSkillOptions(uniq([...DEFAULT_SKILL_OPTIONS, ...tags.skills]))
         if (tags.categories?.length)
           setCategoryOptions(uniq([...DEFAULT_CATEGORY_OPTIONS, ...tags.categories]))
-        if (tags.roleLevels) setRoleLevels(uniq(tags.roleLevels))
         if (tags.skillFieldOptions?.length)
           setSkillFieldOptions(uniq([...DEFAULT_SKILL_FIELD_OPTIONS, ...tags.skillFieldOptions]))
       }
       setProjectTemplates(loadProjectTemplates())
-      setRolePermissionsState(loadRolePermissions())
-      setRestrictedRolesState(loadRestrictedRoles())
+      setStoredRoles(
+        rolesFromLegacy({
+          role_levels: (tags?.roleLevels ?? []).join(','),
+          restricted_roles: loadRestrictedRoles().join(','),
+          role_permissions: JSON.stringify(loadRolePermissions()),
+          job_requirements: JSON.stringify(loadJobRequirements()),
+        }),
+      )
       setTaskSetTemplates(loadTaskSetTemplates())
       setRecurringRules(loadRecurringRules())
-      setJobRequirementsState(loadJobRequirements())
       const savedFieldSkills = loadSkillFieldSkills()
       if (Object.keys(savedFieldSkills).length) setSkillFieldSkillsState(savedFieldSkills)
       const savedThreshold = loadSkillFieldThreshold()
@@ -979,13 +1045,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setCategoryOptions(
       s.categoryOptions.length ? uniq(s.categoryOptions) : DEFAULT_CATEGORY_OPTIONS,
     )
-    setRoleLevels(s.roleLevels.length ? uniq(s.roleLevels) : DEFAULT_ROLE_LEVELS)
+    setStoredRoles(s.roles)
+    setRolesFromSetting(s.rolesFromSetting)
     setProjectTemplates(s.projectTemplates)
-    setRolePermissionsState(s.rolePermissions)
-    setRestrictedRolesState(s.restrictedRoles)
     setTaskSetTemplates(s.taskSetTemplates)
     setRecurringRules(s.recurringRules)
-    setJobRequirementsState(s.jobRequirements)
     setSkillFieldOptions(
       s.skillFieldOptions.length ? uniq(s.skillFieldOptions) : DEFAULT_SKILL_FIELD_OPTIONS,
     )
@@ -1246,13 +1310,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setCategoryOptions((prev) => uniq([...prev, ...seenCategories]))
   }, [tasks])
 
-  // same for role levels actually in use on Members (e.g. from the sheet),
-  // so a custom level set elsewhere still shows up in this browser's picker
-  useEffect(() => {
-    const seenRoles = uniq(members.map((m) => m.role).filter((r) => r !== BASE_ROLE))
-    if (seenRoles.length === 0) return
-    setRoleLevels((prev) => uniq([...prev, ...seenRoles]))
-  }, [members])
 
   // persist (local-only state: current user, input history, UI mode — the
   // task/member/project lists themselves are never the source of truth
@@ -1281,12 +1338,17 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     try {
       window.localStorage.setItem(
         TAGS_STORAGE_KEY,
-        JSON.stringify({ skills: skillOptions, categories: categoryOptions, roleLevels, skillFieldOptions }),
+        JSON.stringify({
+          skills: skillOptions,
+          categories: categoryOptions,
+          roleLevels: splitTagsLocal(rolesToLegacySettings(storedRoles).role_levels),
+          skillFieldOptions,
+        }),
       )
     } catch {
       /* ignore */
     }
-  }, [skillOptions, categoryOptions, roleLevels, skillFieldOptions, hydrated])
+  }, [skillOptions, categoryOptions, storedRoles, skillFieldOptions, hydrated])
 
   // persist project-type templates (device-local, same caveat as tags)
   useEffect(() => {
@@ -1298,25 +1360,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     }
   }, [projectTemplates, hydrated])
 
-  // persist per-role admin-section permissions (device-local, same caveat)
+  // persist roles (device-local, same caveat) — 今までの設定と同じ形で保存する
   useEffect(() => {
     if (!hydrated || isSettingsConfigured) return
     try {
-      window.localStorage.setItem(ROLE_PERMS_STORAGE_KEY, JSON.stringify(rolePermissions))
+      const legacy = rolesToLegacySettings(storedRoles)
+      window.localStorage.setItem(ROLE_PERMS_STORAGE_KEY, legacy.role_permissions)
+      window.localStorage.setItem(RESTRICTED_ROLES_STORAGE_KEY, JSON.stringify(splitTagsLocal(legacy.restricted_roles)))
+      window.localStorage.setItem(JOB_REQUIREMENTS_STORAGE_KEY, legacy.job_requirements)
     } catch {
       /* ignore */
     }
-  }, [rolePermissions, hydrated])
-
-  // persist restricted roles (device-local, same caveat)
-  useEffect(() => {
-    if (!hydrated || isSettingsConfigured) return
-    try {
-      window.localStorage.setItem(RESTRICTED_ROLES_STORAGE_KEY, JSON.stringify(restrictedRoles))
-    } catch {
-      /* ignore */
-    }
-  }, [restrictedRoles, hydrated])
+  }, [storedRoles, hydrated])
 
   // persist task-set templates and recurring-task rules (device-local, same caveat)
   useEffect(() => {
@@ -1337,14 +1392,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     }
   }, [recurringRules, hydrated])
 
-  useEffect(() => {
-    if (!hydrated || isSettingsConfigured) return
-    try {
-      window.localStorage.setItem(JOB_REQUIREMENTS_STORAGE_KEY, JSON.stringify(jobRequirements))
-    } catch {
-      /* ignore */
-    }
-  }, [jobRequirements, hydrated])
 
   useEffect(() => {
     if (!hydrated || isSettingsConfigured) return
@@ -1400,15 +1447,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // item 17: ポジション要件 — synced via the optional Settings sheet
   // (job_requirements key), same pattern as role_permissions/project_templates
   const setJobRequirements = useCallback(
-    (jobType: string, skills: string[]) => {
-      setJobRequirementsState((prev) => {
-        const next = { ...prev, [jobType]: skills }
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('job_requirements', JSON.stringify(next)))
-        return next
-      })
-    },
-    [runRemote],
+    (roleId: string, skills: string[]) => updateRoleDef(roleId, { requiredSkills: skills }),
+    [updateRoleDef],
   )
 
   // 要求分野 — the field name pool (skill_field_options) and its per-field
@@ -2318,80 +2358,65 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const addRoleLevel = useCallback(
     (name: string) => {
       const v = name.trim()
-      if (!v || v === BASE_ROLE || roleLevels.includes(v)) return
-      const next = [...roleLevels, v]
-      setRoleLevels(next)
-      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
+      if (!v || roles.some((r) => r.name === v || r.id === v)) return
+      // 移行前は役職名が ID を兼ねる
+      const role: RoleDef = { id: rolesFromSetting ? newRoleId() : v, name: v, tier: 'admin', restricted: false }
+      saveRoles([...roles, role])
     },
-    [roleLevels, runRemote],
+    [roles, rolesFromSetting, saveRoles],
   )
-  // removing a level demotes anyone currently holding it back to 一般 —
-  // same "reassign, don't orphan" pattern as removeMember's task unassign
+  // 役職を削除する。使っているメンバーは moveToRoleId の役職に移す(GAS の deleteRole)
   const removeRoleLevel = useCallback(
-    (name: string) => {
-      const next = roleLevels.filter((r) => r !== name)
-      setRoleLevels(next)
-      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
-      setMembers((prev) =>
-        prev.map((m) => {
-          if (m.role !== name) return m
-          if (isRemoteConfigured) runRemote(remoteApi.updateRole(m.id, BASE_ROLE))
-          return { ...m, role: BASE_ROLE }
-        }),
-      )
-      setRolePermissionsState((prev) => {
-        if (!(name in prev)) return prev
-        const nextPerms = { ...prev }
-        delete nextPerms[name]
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('role_permissions', JSON.stringify(nextPerms)))
-        return nextPerms
-      })
-      setRestrictedRolesState((prev) => {
-        const next = prev.filter((r) => r !== name)
-        if (next.length !== prev.length && isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('restricted_roles', next.join(',')))
-        return next
-      })
+    (roleId: string, moveToRoleId?: string) => {
+      const next = roles.filter((r) => r.id !== roleId)
+      setStoredRoles(next.filter((r) => storedRoles.some((sr) => sr.id === r.id)))
+      if (moveToRoleId) {
+        setMembers((prev) => prev.map((m) => (sameRole(roles, m.role, roleId) ? { ...m, role: moveToRoleId } : m)))
+      }
+      if (isSettingsConfigured) runRemote(remoteApi.deleteRole(roleId, moveToRoleId))
     },
-    [roleLevels, runRemote],
+    [roles, storedRoles, runRemote],
   )
 
   const reorderRoleLevel = useCallback(
-    (name: string, direction: 'up' | 'down') => {
-      const idx = roleLevels.indexOf(name)
-      if (idx === -1) return
-      const next = [...roleLevels]
+    (roleId: string, direction: 'up' | 'down') => {
+      const idx = roles.findIndex((r) => r.id === roleId)
       const swap = direction === 'up' ? idx - 1 : idx + 1
-      if (swap < 0 || swap >= next.length) return
+      // 一般の役職はいつも先頭
+      if (idx <= 0 || swap <= 0 || swap >= roles.length) return
+      const next = [...roles]
       ;[next[idx], next[swap]] = [next[swap], next[idx]]
-      setRoleLevels(next)
-      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('role_levels', next.join(',')))
+      saveRoles(next)
     },
-    [roleLevels, runRemote],
+    [roles, saveRoles],
+  )
+
+  const renameRole = useCallback(
+    (roleId: string, name: string) => {
+      const v = name.trim()
+      if (!v || roles.some((r) => r.id !== roleId && r.name === v)) return
+      updateRoleDef(roleId, { name: v })
+    },
+    [roles, updateRoleDef],
+  )
+
+  const setRoleTier = useCallback(
+    (roleId: string, tier: 'top' | 'admin') => updateRoleDef(roleId, tier === 'top' ? { tier, restricted: undefined } : { tier, restricted: false }),
+    [updateRoleDef],
   )
 
   const toggleRestrictedRole = useCallback(
-    (role: string) => {
-      setRestrictedRolesState((prev) => {
-        const next = prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
-        if (isSettingsConfigured) runRemote(remoteApi.updateSetting('restricted_roles', next.join(',')))
-        return next
-      })
+    (roleId: string) => {
+      const role = roles.find((r) => r.id === roleId)
+      if (!role || role.tier !== 'admin') return
+      updateRoleDef(roleId, { restricted: !role.restricted })
     },
-    [runRemote],
+    [roles, updateRoleDef],
   )
 
   const setRolePermissions = useCallback(
-    (role: string, sections: AdminSection[]) => {
-      setRolePermissionsState((prev) => {
-        const next = { ...prev, [role]: sections }
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('role_permissions', JSON.stringify(next)))
-        return next
-      })
-    },
-    [runRemote],
+    (roleId: string, sections: AdminSection[]) => updateRoleDef(roleId, { sections }),
+    [updateRoleDef],
   )
 
   const setProjectTemplateTasks = useCallback(
@@ -4475,14 +4500,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const visibleTasks = useMemo(() => {
-    const canSeeExec = currentUser ? canSeeExecTasks(currentUser.role) : false
+    // 幹部限定のタスクは一般以外の役職に見える
+    const canSeeExec = currentUser ? isAdminRoleRef(roles, currentUser.role) : false
     return tasks.filter(
       (t) =>
         !t.pendingApproval &&
         !isArchived(t) &&
         (t.visibility !== 'leaders' || canSeeExec),
     )
-  }, [tasks, currentUser])
+  }, [tasks, currentUser, roles])
   const pendingTasks = useMemo(() => tasks.filter((t) => t.pendingApproval), [tasks])
   const archivedTasks = useMemo(
     () => tasks.filter((t) => !t.pendingApproval && isArchived(t)),
@@ -4503,21 +4529,19 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [projects, visibleTasks, members],
   )
 
-  // Roles in restrictedRoles have limited section visibility and scoped
-  // project/task access. All other configured roles (and any role not in the
-  // list) are full admin with unrestricted access. An empty restrictedRoles
-  // means every role is full admin.
+  // 全権管理者: 最上位の役職、または制限の無い管理者の役職(roles.ts の isFullAdminRoleRef)。
+  // 制限付きの管理者は、見られるセクションと担当のプロジェクト・タスクが限られる
   const isFullAdminMember = useCallback(
-    (member: Member | null | undefined) => isFullAdminRole(member?.role, restrictedRoles),
-    [restrictedRoles],
+    (member: Member | null | undefined) => isFullAdminRole(roles, member?.role),
+    [roles],
   )
   const isFullAdmin = useMemo(() => isFullAdminMember(currentUser), [isFullAdminMember, currentUser])
 
   // which admin-screen sections the current role can see — falls back to
   // DEFAULT_NON_TOP_SECTIONS when no explicit choice was configured
   const visibleAdminSections = useMemo<AdminSection[]>(
-    () => resolveVisibleAdminSections(currentUser?.role, restrictedRoles, rolePermissions),
-    [currentUser, restrictedRoles, rolePermissions],
+    () => resolveVisibleAdminSections(roles, currentUser?.role),
+    [currentUser, roles],
   )
 
   // Admin > Projectsのドラッグ並び替え(projectOrder)を反映した表示順。
@@ -4555,7 +4579,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 記録の更新と通知の要否を決める(通知は1通にまとめる)。健康状態が一度も
   // 記録されていないプロジェクトの初回の計算では、記録だけして通知しない。
   useEffect(() => {
-    if (!hydrated || !isRemoteConfigured || !currentUser || currentUser.role === BASE_ROLE) return
+    if (!hydrated || !isRemoteConfigured || !currentUser || !isAdminRoleRef(roles, currentUser.role)) return
     const tz = currentUser.timezone ?? DEFAULT_TIMEZONE
     const reports = selectProjectHealthReports(
       adminProjects,
@@ -4572,7 +4596,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const notifications = useMemo(() => {
     if (!currentUser) return []
     const items: import('./types').NotificationItem[] = []
-    const isAdmin = currentUser.role !== '一般'
+    const isAdmin = isAdminRoleRef(roles, currentUser.role)
     if (isAdmin) {
       adminPendingTasks.forEach((task) => {
         items.push({
@@ -4721,7 +4745,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         if (!step) return
         const isApprover =
           (step.type === 'member' && step.memberId === currentUser.id) ||
-          (step.type === 'role' && step.role === currentUser.role)
+          (step.type === 'role' && sameRole(roles, step.role, currentUser.role))
         if (!isApprover) return
         items.push({
           id: `expense-approval-${app.id}`,
@@ -4828,14 +4852,21 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     removeSkillOption,
     addCategoryOption,
     removeCategoryOption,
+    roles,
+    rolesFromSetting,
+    baseRoleId,
     roleLevels,
     addRoleLevel,
     removeRoleLevel,
     reorderRoleLevel,
+    renameRole,
+    setRoleTier,
     restrictedRoles,
     toggleRestrictedRole,
     rolePermissions,
     setRolePermissions,
+    isAdminRef,
+    isTopRef,
     visibleAdminSections,
     projectTemplates,
     projectTypes,

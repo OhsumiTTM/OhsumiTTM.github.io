@@ -11,7 +11,8 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play, LogOut } from 'lucide-react'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
-import { BASE_ROLE, isTopRole } from '@/lib/ohsumi/types'
+import { findRole, type RoleDef } from '@/lib/ohsumi/roles'
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import type { Member, Role } from '@/lib/ohsumi/types'
 import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
 import { PermissionOverridesButton } from './admin-permission-overrides'
@@ -21,7 +22,8 @@ import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 // 2次元配列に正規化してから、この共通ロジックでプレビュー配列に変換する
 function parseBulkMemberRows(
   rows2d: string[][],
-  roles: Role[],
+  roles: RoleDef[],
+  baseRoleId: string,
 ): { name: string; email: string; affiliation: string; role: Role }[] {
   if (rows2d.length < 2) return []
   // detect if first row is a header (contains 氏名 or name-like text)
@@ -32,7 +34,8 @@ function parseBulkMemberRows(
       const name = cols[0] ?? ''
       const email = cols[1] ?? ''
       const affiliation = cols[2] ?? ''
-      const role = cols[3] && roles.includes(cols[3] as Role) ? (cols[3] as Role) : BASE_ROLE
+      // 役職は名前・ID のどちらで書かれていてもよい。一覧に無ければ一般
+      const role = findRole(roles, cols[3])?.id ?? baseRoleId
       return { name, email, affiliation, role }
     })
     .filter((r) => r.name)
@@ -57,7 +60,10 @@ export function AdminMembers() {
     updateJudgment,
     skillOptions,
     addSkillOption,
-    roleLevels,
+    roles,
+    baseRoleId,
+    isAdminRef,
+    isTopRef,
     restrictedRoles,
     addMember,
     isFullAdmin,
@@ -67,7 +73,10 @@ export function AdminMembers() {
   } = useOhsumi()
   // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
   // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = isTopRole(currentUser?.role)
+  const isDaihyo = isTopRef(currentUser?.role)
+  const roleName = useRoleLabel()
+  // メンバーの役職の ID(移行の途中で役職名のまま残っていても、一覧の ID にそろえる)
+  const roleIdOf = (ref: string) => findRole(roles, ref)?.id ?? ref
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()
@@ -84,12 +93,12 @@ export function AdminMembers() {
   const [experienceQuery, setExperienceQuery] = useState('')
   // HRD-006: 休止中メンバーはデフォルトで一覧から除外する
   const [showInactive, setShowInactive] = useState(false)
-  const ROLES: Role[] = [BASE_ROLE, ...roleLevels]
+  const ROLES: Role[] = roles.map((r) => r.id)
 
   const [newName, setNewName] = useState('')
   const [newEmail, setNewEmail] = useState('')
   const [newAffiliation, setNewAffiliation] = useState('')
-  const [newRole, setNewRole] = useState<Role>(BASE_ROLE)
+  const [newRole, setNewRole] = useState<Role>(baseRoleId)
 
   const [csvPreview, setCsvPreview] = useState<{ name: string; email: string; affiliation: string; role: Role }[] | null>(null)
 
@@ -109,7 +118,7 @@ export function AdminMembers() {
         const rows2d = XLSX.utils
           .sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' })
           .map((cols) => cols.map((c) => String(c ?? '').trim()))
-        const rows = parseBulkMemberRows(rows2d, ROLES)
+        const rows = parseBulkMemberRows(rows2d, roles, baseRoleId)
         if (rows.length) setCsvPreview(rows)
       }
       reader.readAsArrayBuffer(file)
@@ -122,7 +131,7 @@ export function AdminMembers() {
         .split(/\r?\n/)
         .filter((l) => l.trim())
         .map((line) => line.split(',').map((c) => c.trim().replace(/^"|"$/g, '')))
-      const rows = parseBulkMemberRows(rows2d, ROLES)
+      const rows = parseBulkMemberRows(rows2d, roles, baseRoleId)
       if (rows.length) setCsvPreview(rows)
     }
     reader.readAsText(file)
@@ -151,7 +160,7 @@ export function AdminMembers() {
     setNewName('')
     setNewEmail('')
     setNewAffiliation('')
-    setNewRole(BASE_ROLE)
+    setNewRole(baseRoleId)
     addMember(name, newEmail.trim(), newAffiliation.trim(), newRole)
       .then(() => toast(t('admin.members.addedToast', { name })))
       .catch((err: unknown) => {
@@ -243,7 +252,7 @@ export function AdminMembers() {
           >
             {ROLES.map((r) => (
               <option key={r} value={r}>
-                {r}
+                {roleName(r)}
               </option>
             ))}
           </select>
@@ -287,7 +296,7 @@ export function AdminMembers() {
                       <td className="py-1 pr-3">{r.name}</td>
                       <td className="py-1 pr-3 text-muted-foreground">{r.email || '—'}</td>
                       <td className="py-1 pr-3 text-muted-foreground">{r.affiliation || '—'}</td>
-                      <td className="py-1 text-muted-foreground">{r.role}</td>
+                      <td className="py-1 text-muted-foreground">{roleName(r.role)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -403,7 +412,7 @@ export function AdminMembers() {
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       {isFullAdmin ? (
                         <select
-                          value={m.role}
+                          value={roleIdOf(m.role)}
                           disabled={!isDaihyo}
                           title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
                           onChange={(e) => updateRole(m.id, e.target.value as Role)}
@@ -411,12 +420,12 @@ export function AdminMembers() {
                         >
                           {ROLES.map((r) => (
                             <option key={r} value={r}>
-                              {r}
+                              {roleName(r)}
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <span className="text-xs text-muted-foreground">{m.role}</span>
+                        <span className="text-xs text-muted-foreground">{roleName(m.role)}</span>
                       )}
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -430,7 +439,7 @@ export function AdminMembers() {
                         >
                           <option value="">{t('admin.members.reportsToDefault')}</option>
                           {members
-                            .filter((cand) => cand.id !== m.id && cand.role !== BASE_ROLE)
+                            .filter((cand) => cand.id !== m.id && isAdminRef(cand.role))
                             .map((cand) => (
                               <option key={cand.id} value={cand.id}>
                                 {cand.displayName || cand.name}
@@ -447,7 +456,7 @@ export function AdminMembers() {
                     </td>
                     {isFullAdmin && (
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        {m.role !== BASE_ROLE && restrictedRoles.includes(m.role) ? (
+                        {restrictedRoles.includes(roleIdOf(m.role)) ? (
                           <button
                             onClick={() => setAssigningProjects(m)}
                             disabled={!isDaihyo}
@@ -459,7 +468,7 @@ export function AdminMembers() {
                           </button>
                         ) : (
                           <span className="text-xs text-muted-foreground">
-                            {m.role === BASE_ROLE ? '—' : t('admin.members.projectsAll')}
+                            {!isAdminRef(m.role) ? '—' : t('admin.members.projectsAll')}
                           </span>
                         )}
                       </td>

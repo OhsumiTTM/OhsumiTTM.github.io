@@ -1,5 +1,6 @@
 'use client'
 
+import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useMemo } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
@@ -13,7 +14,8 @@ import { useI18n } from '@/lib/ohsumi/i18n'
 // item 21: 幹部が見れるダッシュボードページ。
 // 組織全体の運用状況（承認待ち・期限超過・停滞タスク・稼働率）を1画面で把握。
 export function AdminLeadership() {
-  const { visibleTasks, pendingTasks, members, projects, archivedTasks, currentUser } = useOhsumi()
+  const { isAdminRef, visibleTasks, pendingTasks, members, projects, archivedTasks, currentUser } = useOhsumi()
+  const roleName = useRoleLabel()
   const { go } = useNav()
   const { t } = useI18n()
   const tz = currentUser?.timezone ?? DEFAULT_TIMEZONE
@@ -72,9 +74,9 @@ export function AdminLeadership() {
   // item 19: 後継者・候補者サジェスト
   // Will/Judgment/skillsのベクトル類似度で現役幹部に近いメンバーをサジェスト
   const successorSuggestions = useMemo(() => {
-    const leaders = members.filter((m) => m.role !== '一般' && !m.inactive)
+    const leaders = members.filter((m) => isAdminRef(m.role) && !m.inactive)
     if (leaders.length === 0) return []
-    const nonLeaders = members.filter((m) => m.role === '一般' && !m.inactive)
+    const nonLeaders = members.filter((m) => !isAdminRef(m.role) && !m.inactive)
 
     return leaders.slice(0, 5).map((leader) => {
       const leaderTags = new Set([...leader.will, ...leader.judgment, ...leader.skills])
@@ -253,7 +255,7 @@ export function AdminLeadership() {
                   <Avatar member={leader} size={20} />
                   <span className="text-sm font-medium">{leader.displayName || leader.name}</span>
                   <span className="rounded-md bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    {leader.role}
+                    {roleName(leader.role)}
                   </span>
                 </div>
                 <div className="space-y-1.5">
