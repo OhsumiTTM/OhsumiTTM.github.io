@@ -39,6 +39,7 @@ function setup(opts: { lockBusy?: boolean } = {}) {
   c.getFormSubmissions = () => { throw (c.userError as (m: string) => Error)('フォームを読めません') }
   c.getCandidates = () => []
   c.getMemberEmailValue = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
   c.updateTaskFields = () => ({ ok: true })
   const lastLogins: string[] = []
   c.updateMemberFields = (id: string, fields: { last_login: string }) => { lastLogins.push(id + ':' + fields.last_login); return {} }
@@ -85,15 +86,7 @@ describe('読み取りの認証', () => {
 })
 
 describe('ログインの中での最終ログイン日時', () => {
-  it('ロックを取れれば記録し、取れなければ記録せずに false(画面が updateLastLogin を送る)', () => {
-    const t = setup()
-    expect(t.gas.recordLastLogin('m1')).toBe(true)
-    expect(t.lastLogins).toHaveLength(1)
-    const busy = setup({ lockBusy: true })
-    expect(busy.gas.recordLastLogin('m1')).toBe(false)
-    expect(busy.lastLogins).toHaveLength(0)
-  })
-
+  // 記録のしかた(1時間以内は書かない・書き込み待ち・まとめて書く)は gas-login-latency.test.ts
   it('exchangeIdToken は結果に lastLoginRecorded を付ける', () => {
     expect(CODE_GS).toMatch(/data\.lastLoginRecorded = .*recordLastLogin\(memberId\)/)
   })

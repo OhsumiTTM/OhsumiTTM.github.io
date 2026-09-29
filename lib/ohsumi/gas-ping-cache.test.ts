@@ -94,6 +94,7 @@ function setup() {
   c.getFormSubmissions = () => []
   c.getCandidates = () => []
   c.getMemberEmailValue = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
   const gas = ctx as unknown as {
     doPost: (e: object) => { text: string }
     doGet: (e: object) => { text: string }

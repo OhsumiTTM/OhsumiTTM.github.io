@@ -1590,27 +1590,101 @@ function exchangeIdToken(body) {
   return attachBackgroundData(data, memberId, body)
 }
 
-// ログインの時に最終ログイン日時を記録する。ほかの書き込みを長く待たせないよう、ロックは2秒だけ待ち、
-// 取れなければ記録せずに false を返す(画面が updateLastLogin を送る)。
-// データの版は変えない(最終ログイン日時だけのために、全員の読み取りキャッシュを捨てない)。
-// ほかのメンバーの画面の最終ログイン日時は、次に版が変わった時に新しくなる
-function recordLastLogin(memberId) {
-  var lock = null
+// ログインの時の最終ログイン日時。ログインの応答を待たせないよう、シートには書かない:
+//   - 前回の記録から1時間以内なら何もしない(最終ログイン日時は、おおよそ正しければ十分)
+//   - それ以外は、スクリプトプロパティの「書き込み待ち」に入れるだけ(ロックもシートも使わない)
+//   - 書き込み待ちは、毎時のトリガー(sendBatchNotifications)と毎日のトリガー(dailyMaintenance)が
+//     まとめてシートに書く(flushPendingLastLogins)。画面の最終ログイン日時は、最大1時間ほど遅れて反映される
+// 返り値 true は「画面は updateLastLogin を送らなくてよい」。記録できなかった時だけ false
+var LAST_LOGIN_THROTTLE_SEC = 3600
+var LAST_LOGIN_PENDING_PREFIX = 'LAST_LOGIN_PENDING_'
+
+function recordLastLogin(memberId, nowMs) {
+  memberId = String(memberId)
+  var now = nowMs || Date.now()
   try {
-    lock = LockService.getScriptLock()
-    if (!lock.tryLock(2000)) {
-      lock = null
-      return false
+    var cache = CacheService.getScriptCache()
+    var cacheKey = 'lastLogin:' + memberId
+    if (cache.get(cacheKey)) {
+      noteTiming('lastLogin', 'recent')
+      return true
     }
-    updateMemberFields(memberId, { last_login: new Date().toISOString() })
+    // このリクエストで読んだスナップショットの last_login が1時間以内なら書かない
+    var fromSnapshot = _requestSnapshot ? lastLoginInTable(_requestSnapshot.data.Members, memberId) : NaN
+    if (fromSnapshot > 0 && now - fromSnapshot < LAST_LOGIN_THROTTLE_SEC * 1000) {
+      cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
+      noteTiming('lastLogin', 'recent')
+      return true
+    }
+    PropertiesService.getScriptProperties().setProperty(LAST_LOGIN_PENDING_PREFIX + memberId, new Date(now).toISOString())
+    cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
+    noteTiming('lastLogin', 'queued')
     return true
   } catch (e) {
     // 記録できなくてもログインは続ける(画面が updateLastLogin を送る)
     Logger.log('recordLastLogin failed: ' + e)
     return false
-  } finally {
-    if (lock) lock.releaseLock()
   }
+}
+
+// Members の表(見出しと行)から、そのメンバーの last_login(ミリ秒)。無ければ NaN
+function lastLoginInTable(table, memberId) {
+  if (!table || !table.headers) return NaN
+  var idCol = table.headers.indexOf('id')
+  var col = table.headers.indexOf('last_login')
+  if (idCol < 0 || col < 0) return NaN
+  for (var i = 0; i < table.rows.length; i++) {
+    if (String(table.rows[i][idCol]) === memberId) {
+      var v = table.rows[i][col]
+      return v instanceof Date ? v.getTime() : Date.parse(String(v || ''))
+    }
+  }
+  return NaN
+}
+
+// 書き込み待ちの最終ログイン日時を、まとめて Members の last_login に書く(トリガーから呼ぶ)。
+// 列を1回読み、1回で書く。書いている間に同じメンバーがまたログインした場合は、その分を残す
+function flushPendingLastLogins() {
+  var props = PropertiesService.getScriptProperties()
+  var all = props.getProperties() || {}
+  var pending = {}
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf(LAST_LOGIN_PENDING_PREFIX) === 0) pending[k.slice(LAST_LOGIN_PENDING_PREFIX.length)] = all[k]
+  })
+  var ids = Object.keys(pending)
+  if (!ids.length) return 0
+  var lock = LockService.getScriptLock()
+  if (!lock.tryLock(30000)) return 0
+  var written = 0
+  try {
+    var sheet = getSheet(SHEET_MEMBERS)
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var col = headers.indexOf('last_login')
+    var lastRow = sheet.getLastRow()
+    if (idCol < 0 || col < 0 || lastRow < 2) return 0
+    var idValues = sheet.getRange(2, idCol + 1, lastRow - 1, 1).getValues()
+    var range = sheet.getRange(2, col + 1, lastRow - 1, 1)
+    var values = range.getValues()
+    idValues.forEach(function (r, i) {
+      var id = String(r[0])
+      if (pending[id]) {
+        values[i][0] = pending[id]
+        written++
+      }
+    })
+    if (written) {
+      range.setValues(values)
+      SpreadsheetApp.flush()
+    }
+    // 書き込み待ちを消す(書いている間に新しい日時が入ったものは残す。行の無いメンバーの分も消す)
+    ids.forEach(function (id) {
+      if (props.getProperty(LAST_LOGIN_PENDING_PREFIX + id) === pending[id]) props.deleteProperty(LAST_LOGIN_PENDING_PREFIX + id)
+    })
+  } finally {
+    lock.releaseLock()
+  }
+  return written
 }
 
 // リクエストの認証(セッショントークン)。返り値 { memberId, renewed(新しいセッショントークン or null) }
@@ -3833,6 +3907,8 @@ function queueNotification(memberId, kind, templates) {
 // Time-triggered: send all queued batch notifications.
 // Set up a time-based trigger calling this function every hour.
 function sendBatchNotifications() {
+  // 毎時のトリガーのついでに、書き込み待ちの最終ログイン日時をシートに書く
+  try { flushPendingLastLogins() } catch (e) { console.error('flushPendingLastLogins failed: ' + e) }
   var props = PropertiesService.getScriptProperties()
   var allProps = props.getProperties()
   var now = new Date()
@@ -4622,6 +4698,37 @@ function getMemberEmailValue(memberId) {
   return ''
 }
 
+// getMemberEmailValue と同じ値を、メールアドレス表の版ごとのキャッシュ(メンバーID → メール)から返す。
+// 版はメールの登録・変更・メンバーの削除・直接の編集で変わる(findMemberIdByEmailCached と同じ)
+function getMemberEmailValueCached(memberId) {
+  var cache = CacheService.getScriptCache()
+  var key = 'memberEmailById:' + getMemberEmailsVersion()
+  var map = null
+  try {
+    var raw = cache.get(key)
+    if (raw) map = JSON.parse(raw)
+  } catch (e) { map = null }
+  if (map) {
+    noteTiming('myEmailCache', 'hit')
+  } else {
+    noteTiming('myEmailCache', 'miss')
+    map = {}
+    var sheet = getMemberEmailsSheet()
+    var headers = headerRow(sheet)
+    var idCol = headers.indexOf('id')
+    var emailCol = headers.indexOf('email')
+    var lastRow = sheet.getLastRow()
+    if (lastRow >= 2 && idCol >= 0 && emailCol >= 0) {
+      sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().forEach(function (row) {
+        var id = String(row[idCol])
+        if (!(id in map)) map[id] = String(row[emailCol] || '')
+      })
+    }
+    try { cache.put(key, JSON.stringify(map), SNAPSHOT_CACHE_TTL) } catch (e) { /* 大きすぎる場合は毎回読む */ }
+  }
+  return map[String(memberId)] || ''
+}
+
 // メンバー1人分のメールを書く(行が無ければ追加、あれば上書き)。
 // ログイン用の対応表のキャッシュ(findMemberIdByEmailCached)を無効にする。
 function setMemberEmail(memberId, email) {
@@ -5218,6 +5325,7 @@ var _timingNested = {}
 function startRequestTiming() {
   _requestTiming = { start: Date.now() }
   _requestSnapshot = null
+  _requestRows = {}
   _timingDepth = 0
   _timingNested = {}
 }
@@ -5232,6 +5340,13 @@ function noteTiming(key, value) {
 function beginTiming() {
   _timingDepth++
   return Date.now()
+}
+
+// 同じ項目の時間を足していく(ファイルごとの処理など、何回も計る時)。区間の中なら外側と重ねて数えない
+function addTiming(key, ms) {
+  if (!_requestTiming) return
+  _requestTiming[key] = (_requestTiming[key] || 0) + ms
+  if (_timingDepth > 0) _timingNested[key] = true
 }
 
 function endTiming(key, started) {
@@ -5279,7 +5394,7 @@ var BACKGROUND_DATA_PARTS = [
   { key: 'expenses', action: 'getExpenses', empty: function () { return [] }, load: function (acting) { return getExpenses(acting) } },
   { key: 'formSubmissions', action: 'getFormSubmissions', empty: function () { return [] }, load: function (acting) { return getFormSubmissions(acting) } },
   { key: 'candidates', action: 'getCandidates', empty: function () { return [] }, load: function (acting) { return getCandidates(acting) } },
-  { key: 'myEmail', action: 'getMyEmails', empty: function () { return '' }, load: function (acting) { return getMemberEmailValue(acting.id) } },
+  { key: 'myEmail', action: 'getMyEmails', empty: function () { return '' }, load: function (acting) { return getMemberEmailValueCached(acting.id) } },
 ]
 
 // withBackground: getInitialData・exchangeIdToken の応答に、裏での読み込み(getBackgroundData と同じもの)も
@@ -5301,6 +5416,16 @@ function attachBackgroundData(data, memberId, body) {
 
 function getBackgroundData(acting, body) {
   var out = { errors: {} }
+  // ログインの直後に表示する画像(団体ロゴ・プロフィール画像)のうち、キャッシュにあるもの。
+  // Drive は開かない(キャッシュに無いものは、画面が getFiles で別に取る)
+  var ft = beginTiming()
+  try {
+    var fileIds = initialImageFileIds(loadSnapshot().data, acting.id)
+    out.files = fileIds.length ? getFiles(acting, fileIds, { cachedOnly: true, maxBytes: INITIAL_FILES_MAX_CHARS }) : []
+  } catch (err) {
+    out.files = []
+  }
+  endTiming('filesMs', ft)
   BACKGROUND_DATA_PARTS.forEach(function (part) {
     var t = Date.now()
     var allowed = true
@@ -5460,6 +5585,8 @@ function dailyMaintenance() {
   }
   notifyOverdueTasksToDiscord()
   notifyOverdueTasksToAssignees()
+  // 活動のないメンバーの判定より前に、書き込み待ちの最終ログイン日時を書く
+  try { flushPendingLastLogins() } catch (err) { }
   try { notifyInactiveMembers() } catch (err) { }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
@@ -6747,7 +6874,11 @@ function readSheetTablesViaSpreadsheetApp(names) {
 }
 
 function snapshotCacheKey(version, suffix) {
-  return 'snap:' + version + ':' + suffix
+  return chunkedCacheKey('snap', version, suffix)
+}
+
+function chunkedCacheKey(prefix, version, suffix) {
+  return prefix + ':' + version + ':' + suffix
 }
 
 // スナップショットを使う最長の時間(ミリ秒)。スプレッドシートの直接の編集は onSpreadsheetChange で
@@ -6766,14 +6897,20 @@ function snapshotMetaUsable(meta, now) {
 }
 
 function readSnapshotCache(version) {
+  return readChunkedCache('snap', version)
+}
+
+// 版ごとのキャッシュ(gzip して base64 にし、90,000文字ずつに分けて CacheService に入れる)を読む。
+// 無い・作ってから5分を過ぎた・壊れている時は null
+function readChunkedCache(prefix, version) {
   try {
     var cache = CacheService.getScriptCache()
-    var meta = cache.get(snapshotCacheKey(version, 'meta'))
+    var meta = cache.get(chunkedCacheKey(prefix, version, 'meta'))
     if (!meta) return null
     var count = snapshotMetaUsable(meta, Date.now())
     if (!count) return null
     var keys = []
-    for (var i = 0; i < count; i++) keys.push(snapshotCacheKey(version, i))
+    for (var i = 0; i < count; i++) keys.push(chunkedCacheKey(prefix, version, i))
     var parts = cache.getAll(keys)
     var encoded = ''
     for (var j = 0; j < count; j++) {
@@ -6789,6 +6926,10 @@ function readSnapshotCache(version) {
 }
 
 function writeSnapshotCache(version, data) {
+  return writeChunkedCache('snap', version, data)
+}
+
+function writeChunkedCache(prefix, version, data) {
   try {
     var gz = Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json'))
     var encoded = Utilities.base64Encode(gz.getBytes())
@@ -6796,12 +6937,12 @@ function writeSnapshotCache(version, data) {
     if (count > SNAPSHOT_MAX_CHUNKS) return false
     var entries = {}
     for (var i = 0; i < count; i++) {
-      entries[snapshotCacheKey(version, i)] = encoded.substr(i * SNAPSHOT_CHUNK_SIZE, SNAPSHOT_CHUNK_SIZE)
+      entries[chunkedCacheKey(prefix, version, i)] = encoded.substr(i * SNAPSHOT_CHUNK_SIZE, SNAPSHOT_CHUNK_SIZE)
     }
     var cache = CacheService.getScriptCache()
     cache.putAll(entries, SNAPSHOT_CACHE_TTL)
     // 目録は最後に書く(途中で失敗したら目録が無く、次回は読み直しになる)
-    cache.put(snapshotCacheKey(version, 'meta'), count + ':' + Date.now(), SNAPSHOT_CACHE_TTL)
+    cache.put(chunkedCacheKey(prefix, version, 'meta'), count + ':' + Date.now(), SNAPSHOT_CACHE_TTL)
     return true
   } catch (e) {
     return false
@@ -6828,6 +6969,47 @@ function loadSnapshot() {
   timed('cacheWriteMs', function () { writeSnapshotCache(version, data) })
   _requestSnapshot = { version: version, data: data, cacheHit: false }
   return _requestSnapshot
+}
+
+// シート1枚分の行(読み取り用に変換したもの。閲覧できるかの絞り込みの前)を、データの版ごとにキャッシュする。
+// 経費・フォームの回答・採用の候補者で使う。書き込み・スプレッドシートの直接の編集で版が変わり、
+// 作ってから5分を過ぎたものも使わない(スナップショットと同じ)。
+// 閲覧できるかの絞り込みは、キャッシュから読んだ後に毎回行う。
+// timing に <prefix>Cache: hit / miss を記録する
+var _requestRows = {}
+
+function loadVersionedRows(prefix, loader) {
+  var version = getDataVersion()
+  var memoKey = prefix + ':' + version
+  if (_requestRows[memoKey]) return _requestRows[memoKey]
+  var rows = readChunkedCache(prefix, version)
+  if (Array.isArray(rows)) {
+    noteTiming(prefix + 'Cache', 'hit')
+  } else {
+    noteTiming(prefix + 'Cache', 'miss')
+    rows = loader()
+    writeChunkedCache(prefix, version, rows)
+  }
+  _requestRows[memoKey] = rows
+  return rows
+}
+
+// スナップショットの Settings から1つの値を読む(無ければシートから)
+function settingValueFromSnapshot(key) {
+  try {
+    var table = loadSnapshot().data.Settings
+    var keyCol = table.headers.indexOf('key')
+    var valueCol = table.headers.indexOf('value')
+    if (keyCol >= 0 && valueCol >= 0) {
+      for (var i = 0; i < table.rows.length; i++) {
+        if (String(table.rows[i][keyCol]) === key) return String(table.rows[i][valueCol] || '')
+      }
+      return ''
+    }
+  } catch (e) {
+    // 読めなければシートから
+  }
+  return getSettingValue(key)
 }
 
 // ---- 読み取りの権限表(閲覧範囲の判定はここに集約する) -----------------------
@@ -7658,13 +7840,8 @@ function expenseRowToApplication(headers, row) {
 
 function getExpenses(acting) {
   var viewer = makeExpenseViewer(acting)
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
   var apps = []
-  rows.forEach(function (row) {
-    var app = expenseRowToApplication(headers, row)
+  loadVersionedRows('expenses', readAllExpenses).forEach(function (app) {
     if (!app.id) return
     if (canViewExpense(viewer, app)) apps.push(app)
   })
@@ -7726,17 +7903,18 @@ function candidateRowToObject(headers, row) {
 
 function getCandidates(acting) {
   if (!canViewRecruiting(acting, getRoles())) return []
+  var out = loadVersionedRows('candidates', readAllCandidates).filter(function (c) { return c.id })
+  out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
+  return out
+}
+
+function readAllCandidates() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CANDIDATES)
   if (!sheet || sheet.getLastRow() < 2) return []
   var headers = headerRow(sheet)
-  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
-  var out = []
-  rows.forEach(function (row) {
-    var c = candidateRowToObject(headers, row)
-    if (c.id) out.push(c)
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
+    return candidateRowToObject(headers, row)
   })
-  out.sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)) })
-  return out
 }
 
 // ---- フォームの回答(FormSubmissions)の読み取り ----------------------------------
@@ -7794,17 +7972,15 @@ function formSubmissionRowToObject(headers, row) {
 
 function getFormSubmissions(acting) {
   var viewer = makeFormViewer(acting)
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FORM_SUBMISSIONS)
-  if (!sheet || sheet.getLastRow() < 2) return []
+  var subs = loadVersionedRows('formSubmissions', readAllFormSubmissions)
+  if (!subs.length) return []
   var stepsByForm = {}
-  parseJsonOr(getSettingValue('custom_form_defs'), []).forEach(function (f) {
+  // フォームの定義は、スナップショットの Settings から読む(Settings シートを読み直さない)
+  parseJsonOr(settingValueFromSnapshot('custom_form_defs'), []).forEach(function (f) {
     if (f && f.id) stepsByForm[String(f.id)] = f.approvalSteps || []
   })
-  var headers = headerRow(sheet)
-  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
   var out = []
-  rows.forEach(function (row) {
-    var sub = formSubmissionRowToObject(headers, row)
+  subs.forEach(function (sub) {
     if (!sub.id) return
     if (canViewFormSubmission(viewer, sub, stepsByForm[sub.formId])) out.push(sub)
   })
@@ -7867,50 +8043,157 @@ function isInAllowedFolder(file, allowedIds) {
   return false
 }
 
-function getFiles(acting, fileIds) {
+// ファイルの種類(アップロード用フォルダの中のファイルだけ)を覚えておく時間。ファイルIDは変わらないので、
+// 2回目からは Drive に問い合わせずに種類が分かる(フォルダの外のファイルは覚えない)
+var FILE_META_TTL = 21600
+
+// 1件のファイルの種類を返す。アップロード用フォルダの外・見つからない時は null。
+// file は Drive から開いた時だけ入る(キャッシュから分かった時は null)。
+// cachedOnly の時は Drive を開かない(キャッシュに無ければ undefined)
+function uploadedFileMeta(id, allowed, cache, cachedOnly) {
+  var metaKey = 'filemeta:' + id
+  var t = Date.now()
+  var cached = null
+  try { cached = cache.get(metaKey) } catch (e) { cached = null }
+  addTiming('fileCacheMs', Date.now() - t)
+  if (cached) return { kind: cached, file: null }
+  if (cachedOnly) return undefined
+  t = Date.now()
+  try {
+    var file = DriveApp.getFileById(id)
+    if (!isInAllowedFolder(file, allowed)) return null
+    var kind = uploadKindFromName(file.getName())
+    try { cache.put(metaKey, kind || 'other', FILE_META_TTL) } catch (e) { /* 覚えられなくても続ける */ }
+    return { kind: kind, file: file }
+  } catch (e) {
+    return null
+  } finally {
+    addTiming('driveMs', Date.now() - t)
+  }
+}
+
+// options.cachedOnly: キャッシュにある画像だけ返す(Drive を開かない。ログインの応答に入れる時)
+function getFiles(acting, fileIds, options) {
+  options = options || {}
   var ids = (Array.isArray(fileIds) ? fileIds : []).map(String)
   if (ids.length > GET_FILES_MAX_IDS) throw userError('一度に取得できるファイルは' + GET_FILES_MAX_IDS + '件までです。')
+  var t = Date.now()
   var allowed = allowedUploadFolderIds()
+  addTiming('folderPropsMs', Date.now() - t)
   var cache = CacheService.getScriptCache()
   var expenseViewer = null
   var expenses = null
   var totalBytes = 0
-  return ids.map(function (id) {
-    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) return { id: id, ok: false, error: 'invalid' }
-    var file
-    try { file = DriveApp.getFileById(id) } catch (e) { return { id: id, ok: false, error: 'notFound' } }
-    if (!isInAllowedFolder(file, allowed)) return { id: id, ok: false, error: 'notFound' }
-    var kind = uploadKindFromName(file.getName())
+  var maxBytes = options.maxBytes || GET_FILES_MAX_BYTES
+  var out = []
+  ids.forEach(function (id) {
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) { out.push({ id: id, ok: false, error: 'invalid' }); return }
+    var meta = uploadedFileMeta(id, allowed, cache, options.cachedOnly)
+    if (meta === undefined) return
+    if (!meta) { out.push({ id: id, ok: false, error: 'notFound' }); return }
+    var kind = meta.kind === 'other' ? '' : meta.kind
     var receiptApps = []
     if (kind === 'receipt') {
+      if (options.cachedOnly) return
+      var pt = Date.now()
       if (!expenseViewer) expenseViewer = makeExpenseViewer(acting)
-      if (!expenses) expenses = readAllExpenses()
+      if (!expenses) expenses = loadVersionedRows('expenses', readAllExpenses)
       receiptApps = expenses.filter(function (app) { return String(app.receiptUrl || '').indexOf(id) >= 0 })
+      addTiming('permissionMs', Date.now() - pt)
     }
     if (!canViewUploadedFile(kind, expenseViewer, receiptApps)) {
-      return { id: id, ok: false, error: 'forbidden' }
+      out.push({ id: id, ok: false, error: 'forbidden' })
+      return
     }
     // 小さい画像(アバター・ロゴなど)はキャッシュする。権限の確認は毎回行う。
     // 領収書はキャッシュしない
     var cacheKey = 'file:' + id
     if (kind !== 'receipt') {
+      var ct = Date.now()
       var hit = null
       try { hit = cache.get(cacheKey) } catch (e) { hit = null }
+      addTiming('fileCacheMs', Date.now() - ct)
       if (hit) {
         var sep = hit.indexOf('|')
-        return { id: id, ok: true, mimeType: hit.slice(0, sep), data: hit.slice(sep + 1) }
+        var cachedData = hit.slice(sep + 1)
+        if (totalBytes + cachedData.length > maxBytes) { out.push({ id: id, ok: false, error: 'batchTooLarge' }); return }
+        totalBytes += cachedData.length
+        addTiming('fileCacheHits', 1)
+        out.push({ id: id, ok: true, mimeType: hit.slice(0, sep), data: cachedData })
+        return
       }
     }
+    if (options.cachedOnly) return
+    var bt = Date.now()
+    var file = meta.file || DriveApp.getFileById(id)
     var size = file.getSize()
-    if (totalBytes + size > GET_FILES_MAX_BYTES) return { id: id, ok: false, error: 'batchTooLarge' }
+    if (totalBytes + size > maxBytes) {
+      addTiming('blobMs', Date.now() - bt)
+      out.push({ id: id, ok: false, error: 'batchTooLarge' })
+      return
+    }
     totalBytes += size
     var blob = file.getBlob()
     var mimeType = blob.getContentType() || 'application/octet-stream'
     var data = Utilities.base64Encode(blob.getBytes())
+    addTiming('blobMs', Date.now() - bt)
     if (kind !== 'receipt' && data.length + mimeType.length < FILE_CACHE_MAX_CHARS) {
       try { cache.put(cacheKey, mimeType + '|' + data, SNAPSHOT_CACHE_TTL) } catch (e) { /* キャッシュできなくても返す */ }
     }
-    return { id: id, ok: true, mimeType: mimeType, data: data }
+    out.push({ id: id, ok: true, mimeType: mimeType, data: data })
+  })
+  return out
+}
+
+// ログインの直後に画面が表示する画像(団体ロゴ・メンバーのプロフィール画像)のファイルID。
+// シートの URL から取り出す(lib/ohsumi/files.ts の extractDriveFileId と同じ形)
+var DRIVE_FILE_ID_PATTERNS = [
+  /^https:\/\/lh3\.googleusercontent\.com\/d\/([A-Za-z0-9_-]{10,})/,
+  /^https:\/\/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]{10,})/,
+  /^https:\/\/drive\.google\.com\/(?:open|uc|thumbnail)\?(?:.*&)?id=([A-Za-z0-9_-]{10,})/,
+]
+
+function driveFileIdFromUrl(url) {
+  var u = String(url || '')
+  for (var i = 0; i < DRIVE_FILE_ID_PATTERNS.length; i++) {
+    var m = u.match(DRIVE_FILE_ID_PATTERNS[i])
+    if (m) return m[1]
+  }
+  return null
+}
+
+// 団体ロゴ → 本人 → ほかのメンバーの順(上限 GET_FILES_MAX_IDS 件)
+function initialImageFileIds(snapshotData, memberId) {
+  var ids = []
+  var add = function (url) {
+    var id = driveFileIdFromUrl(url)
+    if (id && ids.indexOf(id) < 0 && ids.length < GET_FILES_MAX_IDS) ids.push(id)
+  }
+  var settings = (snapshotData && snapshotData.Settings) || { headers: [], rows: [] }
+  var keyCol = settings.headers.indexOf('key')
+  var valueCol = settings.headers.indexOf('value')
+  if (keyCol >= 0 && valueCol >= 0) {
+    settings.rows.forEach(function (r) { if (String(r[keyCol]) === 'org_logo_url') add(r[valueCol]) })
+  }
+  var members = (snapshotData && snapshotData.Members) || { headers: [], rows: [] }
+  var idCol = members.headers.indexOf('id')
+  var avatarCol = members.headers.indexOf('avatar_url')
+  if (idCol >= 0 && avatarCol >= 0) {
+    members.rows.forEach(function (r) { if (String(r[idCol]) === String(memberId)) add(r[avatarCol]) })
+    members.rows.forEach(function (r) { add(r[avatarCol]) })
+  }
+  return ids
+}
+
+// ログインの応答に入れる画像の合計の上限(base64 の文字数)
+var INITIAL_FILES_MAX_CHARS = 1500000
+
+function readAllFormSubmissions() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FORM_SUBMISSIONS)
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var headers = headerRow(sheet)
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
+    return formSubmissionRowToObject(headers, row)
   })
 }
 
