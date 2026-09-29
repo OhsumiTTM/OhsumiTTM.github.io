@@ -1592,7 +1592,9 @@ function exchangeIdToken(body) {
 
 // ログインの時の最終ログイン日時。ログインの応答を待たせないよう、シートには書かない:
 //   - 前回の記録から1時間以内なら何もしない(最終ログイン日時は、おおよそ正しければ十分)
-//   - それ以外は、スクリプトプロパティの「書き込み待ち」に入れるだけ(ロックもシートも使わない)
+//   - それ以外は、スクリプトプロパティの「書き込み待ち」に入れるだけ(ロックもシートも使わない)。
+//     書き込み待ちは、ログイン1回ごとに別のプロパティ(LAST_LOGIN_PENDING_<メンバーID>_<時刻>)にする。
+//     全員分を1つのプロパティにまとめないので、同時にログインしても互いに消し合わない
 //   - 書き込み待ちは、毎時のトリガー(sendBatchNotifications)と毎日のトリガー(dailyMaintenance)が
 //     まとめてシートに書く(flushPendingLastLogins)。画面の最終ログイン日時は、最大1時間ほど遅れて反映される
 // 返り値 true は「画面は updateLastLogin を送らなくてよい」。記録できなかった時だけ false
@@ -1616,7 +1618,7 @@ function recordLastLogin(memberId, nowMs) {
       noteTiming('lastLogin', 'recent')
       return true
     }
-    PropertiesService.getScriptProperties().setProperty(LAST_LOGIN_PENDING_PREFIX + memberId, new Date(now).toISOString())
+    PropertiesService.getScriptProperties().setProperty(lastLoginPendingKey(memberId, now), new Date(now).toISOString())
     cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
     noteTiming('lastLogin', 'queued')
     return true
@@ -1625,6 +1627,18 @@ function recordLastLogin(memberId, nowMs) {
     Logger.log('recordLastLogin failed: ' + e)
     return false
   }
+}
+
+// 書き込み待ちのプロパティの名前。メンバーIDの後ろに時刻(と乱数)を付け、ログイン1回ごとに別のキーにする
+function lastLoginPendingKey(memberId, nowMs) {
+  return LAST_LOGIN_PENDING_PREFIX + String(memberId) + '_' + nowMs + '_' + Math.floor(Math.random() * 1e6)
+}
+
+// 書き込み待ちのキーからメンバーIDを取り出す(後ろの _<時刻>_<乱数> を除く)
+function memberIdFromPendingKey(key) {
+  var rest = key.slice(LAST_LOGIN_PENDING_PREFIX.length)
+  var m = rest.match(/^(.*)_\d+_\d+$/)
+  return m ? m[1] : rest
 }
 
 // Members の表(見出しと行)から、そのメンバーの last_login(ミリ秒)。無ければ NaN
@@ -1643,20 +1657,23 @@ function lastLoginInTable(table, memberId) {
 }
 
 // 書き込み待ちの最終ログイン日時を、まとめて Members の last_login に書く(トリガーから呼ぶ)。
-// 列を1回読み、1回で書く。書いている間に同じメンバーがまたログインした場合は、その分を残す
+// 列を1回読み、1回で書く。消すのは、このとき読んだキーだけ(読んだ後にログインした分は別のキーなので残る)。
+// 毎時と毎日のトリガーが重なっても二重に処理しないよう、ロックを取ってから読む
 function flushPendingLastLogins() {
-  var props = PropertiesService.getScriptProperties()
-  var all = props.getProperties() || {}
-  var pending = {}
-  Object.keys(all).forEach(function (k) {
-    if (k.indexOf(LAST_LOGIN_PENDING_PREFIX) === 0) pending[k.slice(LAST_LOGIN_PENDING_PREFIX.length)] = all[k]
-  })
-  var ids = Object.keys(pending)
-  if (!ids.length) return 0
   var lock = LockService.getScriptLock()
   if (!lock.tryLock(30000)) return 0
   var written = 0
   try {
+    var props = PropertiesService.getScriptProperties()
+    var all = props.getProperties() || {}
+    var keys = Object.keys(all).filter(function (k) { return k.indexOf(LAST_LOGIN_PENDING_PREFIX) === 0 })
+    if (!keys.length) return 0
+    // メンバーごとに、いちばん新しい日時
+    var pending = {}
+    keys.forEach(function (k) {
+      var id = memberIdFromPendingKey(k)
+      if (!pending[id] || String(all[k]) > pending[id]) pending[id] = String(all[k])
+    })
     var sheet = getSheet(SHEET_MEMBERS)
     var headers = headerRow(sheet)
     var idCol = headers.indexOf('id')
@@ -1677,10 +1694,8 @@ function flushPendingLastLogins() {
       range.setValues(values)
       SpreadsheetApp.flush()
     }
-    // 書き込み待ちを消す(書いている間に新しい日時が入ったものは残す。行の無いメンバーの分も消す)
-    ids.forEach(function (id) {
-      if (props.getProperty(LAST_LOGIN_PENDING_PREFIX + id) === pending[id]) props.deleteProperty(LAST_LOGIN_PENDING_PREFIX + id)
-    })
+    // 書いたキー(このとき読んだキー)だけを消す。行の無いメンバーの分も消す
+    keys.forEach(function (k) { props.deleteProperty(k) })
   } finally {
     lock.releaseLock()
   }

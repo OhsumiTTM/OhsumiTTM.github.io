@@ -126,7 +126,8 @@ function setup() {
   })
   const gas = ctx as unknown as Record<string, (...args: unknown[]) => unknown>
   const post = (body: object) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: JSON.stringify(body) } }).text)
-  return { gas, c, post, props, cache, sheets, driveCalls }
+  const pendingOf = (id: string) => Object.keys(props).filter((k) => k.startsWith('LAST_LOGIN_PENDING_' + id + '_'))
+  return { gas, c, post, props, cache, sheets, driveCalls, pendingOf }
 }
 
 describe('最終ログイン日時', () => {
@@ -135,10 +136,9 @@ describe('最終ログイン日時', () => {
     const now = Date.parse('2026-10-01T09:00:00Z')
     expect(t.gas.recordLastLogin('m2', now)).toBe(true)
     expect(t.sheets.Members.writes).toBe(0)
-    expect(t.props.LAST_LOGIN_PENDING_m2).toBe('2026-10-01T09:00:00.000Z')
-    delete t.props.LAST_LOGIN_PENDING_m2
+    expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-01T09:00:00.000Z'])
     expect(t.gas.recordLastLogin('m2', now + 30 * 60 * 1000)).toBe(true)
-    expect(t.props.LAST_LOGIN_PENDING_m2).toBeUndefined()
+    expect(t.pendingOf('m2')).toHaveLength(1)
   })
 
   it('このリクエストで読んだスナップショットの last_login が1時間以内なら、書き込み待ちにも入れない', () => {
@@ -147,7 +147,7 @@ describe('最終ログイン日時', () => {
     t.gas.startRequestTiming()
     t.gas.loadSnapshot()
     expect(t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
-    expect(t.props.LAST_LOGIN_PENDING_m2).toBeUndefined()
+    expect(t.pendingOf('m2')).toEqual([])
   })
 
   it('ログインの応答: 最終ログイン日時の記録はシートを読み書きしない(内訳に queued / recent)', () => {
@@ -163,11 +163,52 @@ describe('最終ログイン日時', () => {
     expect(second.timing.lastLogin).toBe('recent')
   })
 
-  it('書き込み待ちは、トリガーでまとめて1回で書き、書いたものを消す(書いている間の新しい日時は残す)', () => {
+  it('書き込み待ちはログイン1回ごとに別のキー。同時にログインしても(ロックなしでも)互いに消さない', () => {
     const t = setup()
-    t.props.LAST_LOGIN_PENDING_m1 = '2026-10-01T09:00:00.000Z'
-    t.props.LAST_LOGIN_PENDING_m2 = '2026-10-01T09:05:00.000Z'
-    t.props.LAST_LOGIN_PENDING_gone = '2026-10-01T09:06:00.000Z' // 行の無いメンバー
+    const now = Date.parse('2026-10-01T09:00:00Z')
+    // 同じ時刻に2人がログイン(キャッシュの確認とプロパティの保存が重なっても、キーが別なので両方残る)
+    t.gas.recordLastLogin('m1', now)
+    t.gas.recordLastLogin('m2', now)
+    expect(t.pendingOf('m1')).toHaveLength(1)
+    expect(t.pendingOf('m2')).toHaveLength(1)
+    // 同じメンバーが2か所から同時にログイン(1時間の印が付く前)しても、キーは別
+    t.cache.clear()
+    t.gas.recordLastLogin('m1', now)
+    expect(t.pendingOf('m1')).toHaveLength(2)
+    expect(new Set(t.pendingOf('m1')).size).toBe(2)
+  })
+
+  it('シートに書いている間に新しくログインした分は消さない(消すのは、このとき読んだキーだけ)', () => {
+    const t = setup()
+    t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))
+    const sheet = t.sheets.Members
+    const origGetRange = sheet.getRange.bind(sheet)
+    sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
+      const r = origGetRange(row, col, numRows, numCols)
+      const setValues = r.setValues
+      r.setValues = (v) => {
+        setValues(v)
+        // 書いている最中に m2 がまたログインした
+        t.cache.clear()
+        t.gas.recordLastLogin('m2', Date.parse('2026-10-01T10:30:00Z'))
+      }
+      return r
+    }
+    expect(t.gas.flushPendingLastLogins()).toBe(1)
+    expect(sheet.rows[2][4]).toBe('2026-10-01T09:00:00.000Z')
+    expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-01T10:30:00.000Z'])
+    sheet.getRange = origGetRange
+    expect(t.gas.flushPendingLastLogins()).toBe(1)
+    expect(sheet.rows[2][4]).toBe('2026-10-01T10:30:00.000Z')
+    expect(t.pendingOf('m2')).toEqual([])
+  })
+
+  it('書き込み待ちは、トリガーでまとめて1回で書き、書いたものを消す(同じメンバーの複数の日時は新しい方)', () => {
+    const t = setup()
+    t.props.LAST_LOGIN_PENDING_m1_1_1 = '2026-10-01T09:00:00.000Z'
+    t.props.LAST_LOGIN_PENDING_m2_1_1 = '2026-10-01T08:00:00.000Z'
+    t.props.LAST_LOGIN_PENDING_m2_2_2 = '2026-10-01T09:05:00.000Z'
+    t.props.LAST_LOGIN_PENDING_gone_3_3 = '2026-10-01T09:06:00.000Z' // 行の無いメンバー
     expect(t.gas.flushPendingLastLogins()).toBe(2)
     expect(t.sheets.Members.writes).toBe(1)
     expect(t.sheets.Members.rows[1][4]).toBe('2026-10-01T09:00:00.000Z')
