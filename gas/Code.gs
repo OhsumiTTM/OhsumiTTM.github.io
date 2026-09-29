@@ -119,6 +119,222 @@ var SETTINGS_KEY_DEPARTMENT_TREE_CONFIG = 'department_tree_config'
 // instead. See getDiscordWebhookUrl()/updateDiscordWebhookUrl() below.
 var DISCORD_WEBHOOK_PROPERTY_KEY = 'discord_webhook_url'
 
+// ---- 選択肢の値の内部コード ------------------------------------------------------
+//
+// タスクのステータス・難易度・優先度などは、画面の言語によらない内部コードで
+// 扱う。シートには、移行(migrateToInternalCodes)までは今の日本語の値が入って
+// いる。読む時はどちらの形式でもコードにそろえ(normalizeCode)、書く時は
+// スクリプトプロパティ VALUE_FORMAT が codes になるまで日本語で書く(sheetCode)。
+// こうすると、古いタブや古い GAS が残っていても、シートの値は1つの形式のまま。
+//
+// VALUE_CODES は lib/ohsumi/codes.ts と同じ内容(一致することを
+// lib/ohsumi/codes.test.ts で確かめる)。
+var VALUE_CODES = {
+  status: {
+    codes: ['todo', 'hold', 'progress', 'support', 'review', 'fix', 'done'],
+    sheetLabels: { todo: '未着手', hold: '保留', progress: '進行中', support: 'サポート必要', review: '確認待ち', fix: '修正中', done: '完了' },
+    aliases: {},
+    fallback: 'progress',
+  },
+  difficulty: {
+    codes: ['anyone', 'beginner', 'some_exp', 'experienced', 'advanced'],
+    sheetLabels: { anyone: '誰でも可', beginner: '新人歓迎', some_exp: '少し経験必要', experienced: '経験者向け', advanced: '上級者向け' },
+    aliases: {},
+    fallback: 'beginner',
+  },
+  priority: {
+    codes: ['high', 'medium', 'low'],
+    sheetLabels: { high: '高', medium: '中', low: '低' },
+    aliases: {},
+    fallback: 'medium',
+  },
+  importance: {
+    codes: ['normal', 'important', 'external'],
+    sheetLabels: { normal: '一般', important: '重要', external: '対外公開' },
+    aliases: { '': 'normal' },
+    fallback: 'normal',
+  },
+  visibility: {
+    codes: ['all', 'leaders'],
+    sheetLabels: { all: '全員', leaders: '幹部' },
+    aliases: { '': 'all' },
+    fallback: 'all',
+  },
+  approval: {
+    codes: ['pending', 'approved'],
+    sheetLabels: { pending: '承認待ち', approved: '承認済み' },
+    aliases: { '': 'approved' },
+    fallback: 'approved',
+  },
+  department: {
+    codes: ['ops', 'pr', 'dev', 'design', 'relations', 'event', 'research', ''],
+    sheetLabels: { ops: '運営', pr: '広報', dev: '開発', design: 'デザイン', relations: '渉外', event: 'イベント', research: 'リサーチ', '': '未分類' },
+    aliases: {},
+    fallback: null,
+  },
+  scheduleAnswer: {
+    codes: ['yes', 'maybe', 'no'],
+    sheetLabels: { yes: '○', maybe: '△', no: '×' },
+    aliases: { '〇': 'yes', '✕': 'no' },
+    fallback: null,
+  },
+}
+
+// どの形式の値(コード・移行前の日本語・別名)でも、コードにそろえる
+function normalizeCode(kind, value) {
+  var table = VALUE_CODES[kind]
+  var v = value === null || value === undefined ? '' : String(value).trim()
+  if (table.codes.indexOf(v) >= 0) return v
+  for (var i = 0; i < table.codes.length; i++) {
+    if (table.sheetLabels[table.codes[i]] === v) return table.codes[i]
+  }
+  if (Object.prototype.hasOwnProperty.call(table.aliases, v)) return table.aliases[v]
+  return table.fallback === null ? v : table.fallback
+}
+
+// シートがコードの形式になっているか(移行の関数が VALUE_FORMAT=codes にする)
+function isCodesFormat() {
+  return requestProps().VALUE_FORMAT === 'codes'
+}
+
+// コードを、シートに書く形式にする(移行前は日本語。一覧に無い値はそのまま)
+function sheetCode(kind, value) {
+  var code = normalizeCode(kind, value)
+  if (isCodesFormat()) return code
+  var labels = VALUE_CODES[kind].sheetLabels
+  return Object.prototype.hasOwnProperty.call(labels, code) ? labels[code] : code
+}
+
+// 通知の文面に出す表示名。lib/ohsumi/i18n の ja.ts・en.ts と同じ
+// (一致することを lib/ohsumi/codes.test.ts で確かめる)
+var NOTIFY_LABELS = {
+  scheduleAnswer: {
+    ja: { yes: '○', maybe: '△', no: '×' },
+    en: { yes: '○', maybe: '△', no: '×' },
+  },
+}
+
+function notifyLabel(kind, locale, value) {
+  var code = normalizeCode(kind, value)
+  var labels = NOTIFY_LABELS[kind][locale] || NOTIFY_LABELS[kind].ja
+  return Object.prototype.hasOwnProperty.call(labels, code) ? labels[code] : code
+}
+
+// スキルのレベルアップの閾値で、既定値を表すキー(移行前は「デフォルト」)
+var DEFAULT_THRESHOLD_KEY = '_default'
+var LEGACY_DEFAULT_THRESHOLD_KEY = 'デフォルト'
+
+function defaultSkillThreshold(thresholds) {
+  thresholds = thresholds || {}
+  return thresholds[DEFAULT_THRESHOLD_KEY] || thresholds[LEGACY_DEFAULT_THRESHOLD_KEY] || 100
+}
+
+// フロントの版。移行の後は、これより古い(または版の無い)リクエストを拒否する。
+// 移行前のコードを読めない古いタブが、ステータスなどを誤って表示・保存するのを防ぐ
+// (lib/ohsumi/codes.ts の CLIENT_VERSION と合わせる)
+var MIN_CLIENT_VERSION = 1
+
+function checkClientVersion(body) {
+  if (!isCodesFormat()) return null
+  var v = Number(body && body.clientVersion) || 0
+  if (v >= MIN_CLIENT_VERSION) return null
+  return 'Ohsumi が更新されました。ページを再読み込みしてください。'
+}
+
+// 変更の記録(history_json)のうち、値がコードになる項目
+var HISTORY_CODE_FIELDS = {
+  status: 'status', priority: 'priority', difficulty: 'difficulty',
+  visibility: 'visibility', importance: 'importance', department: 'department',
+}
+
+function mapHistoryCodes(entry, convert) {
+  var kind = entry && HISTORY_CODE_FIELDS[entry.field]
+  if (!kind) return entry
+  var out = {}
+  Object.keys(entry).forEach(function (k) { out[k] = entry[k] })
+  out.from = convert(kind, entry.from)
+  out.to = convert(kind, entry.to)
+  return out
+}
+
+function normalizeHistoryEntry(entry) { return mapHistoryCodes(entry, normalizeCode) }
+function sheetHistoryEntry(entry) { return mapHistoryCodes(entry, sheetCode) }
+
+function mapScheduleCodes(schedule, convert) {
+  if (!schedule || typeof schedule !== 'object' || !schedule.responses) return schedule
+  var out = {}
+  Object.keys(schedule).forEach(function (k) { out[k] = schedule[k] })
+  var responses = {}
+  Object.keys(schedule.responses).forEach(function (memberId) {
+    var answers = schedule.responses[memberId] || {}
+    var converted = {}
+    Object.keys(answers).forEach(function (candidateId) {
+      converted[candidateId] = convert('scheduleAnswer', answers[candidateId])
+    })
+    responses[memberId] = converted
+  })
+  out.responses = responses
+  return out
+}
+
+function mapOverrideCodes(overrides, convert) {
+  if (!Array.isArray(overrides)) return overrides
+  return overrides.map(function (ov) {
+    if (!ov || ov.targetType !== 'department') return ov
+    var out = {}
+    Object.keys(ov).forEach(function (k) { out[k] = ov[k] })
+    out.targetId = convert('department', ov.targetId)
+    return out
+  })
+}
+
+// テンプレート・定期タスクの中の department・difficulty・priority(・triggerOnStatus)
+function mapTaskItemCodes(item, convert) {
+  if (!item || typeof item !== 'object') return item
+  var out = {}
+  Object.keys(item).forEach(function (k) { out[k] = item[k] })
+  if ('department' in item) out.department = convert('department', item.department)
+  if ('difficulty' in item) out.difficulty = convert('difficulty', item.difficulty || 'beginner')
+  if ('priority' in item) out.priority = convert('priority', item.priority || 'medium')
+  if (item.triggerOnStatus) out.triggerOnStatus = convert('status', item.triggerOnStatus)
+  return out
+}
+
+// Settings のうち、中に選択肢の値を持つ JSON を、シートに書く形式にする
+// (updateSetting で使う。移行前は日本語、移行後はコード)
+function sheetSettingValue(key, value) {
+  var codeKeys = ['project_templates', 'task_set_templates', 'recurring_rules', 'skill_level_thresholds']
+  if (codeKeys.indexOf(key) < 0 || typeof value !== 'string' || !value) return value
+  var parsed
+  try { parsed = JSON.parse(value) } catch (e) { return value }
+  var convert = sheetCode
+  var out = parsed
+  if (key === 'project_templates' && parsed && typeof parsed === 'object') {
+    out = {}
+    Object.keys(parsed).forEach(function (name) {
+      out[name] = Array.isArray(parsed[name]) ? parsed[name].map(function (it) { return mapTaskItemCodes(it, convert) }) : parsed[name]
+    })
+  } else if (key === 'task_set_templates' && Array.isArray(parsed)) {
+    out = parsed.map(function (tpl) {
+      if (!tpl || !Array.isArray(tpl.items)) return tpl
+      var copy = {}
+      Object.keys(tpl).forEach(function (k) { copy[k] = tpl[k] })
+      copy.items = tpl.items.map(function (it) { return mapTaskItemCodes(it, convert) })
+      return copy
+    })
+  } else if (key === 'recurring_rules' && Array.isArray(parsed)) {
+    out = parsed.map(function (rule) { return mapTaskItemCodes(rule, convert) })
+  } else if (key === 'skill_level_thresholds' && parsed && typeof parsed === 'object') {
+    var fromKey = isCodesFormat() ? LEGACY_DEFAULT_THRESHOLD_KEY : DEFAULT_THRESHOLD_KEY
+    var toKey = isCodesFormat() ? DEFAULT_THRESHOLD_KEY : LEGACY_DEFAULT_THRESHOLD_KEY
+    out = {}
+    Object.keys(parsed).forEach(function (k) {
+      if (k === fromKey) { if (!(toKey in parsed)) out[toKey] = parsed[k] } else out[k] = parsed[k]
+    })
+  }
+  return JSON.stringify(out)
+}
+
 // ---- 初期セットアップ --------------------------------------------------------
 //
 // GASエディタ上部の関数ドロップダウンで "setupOhsumi" を選び、▶ 実行 を押す。
@@ -703,7 +919,9 @@ function overridesGrant(overrides, targets, requiredLevel) {
     var targetId = String(ov.targetId || '')
     if (ov.targetType === 'task' && targets.task && targetId === targets.task) return true
     if (ov.targetType === 'project' && targets.project && targetId === targets.project) return true
-    if (ov.targetType === 'department' && targets.department && targetId === targets.department) return true
+    // 部門は、以前の部門名・部門IDのどちらでも同じ部門として比べる
+    if (ov.targetType === 'department' && targets.department !== undefined &&
+        normalizeCode('department', targetId) === normalizeCode('department', targets.department)) return true
     // recruiting: targetIdでの絞り込みは行わない（'all'固定運用のため、targetType一致とaccess水準のみで判定）
     if (ov.targetType === 'recruiting' && targets.recruiting) return true
   }
@@ -793,7 +1011,7 @@ function getQuizDefinitions() {
  * Lv1→Lv2 at 100pts, Lv2→Lv3 at 200pts, ..., max Lv5.
  */
 function computeAutoLevels(currentLevels, cumulativePoints, thresholds) {
-  var DEFAULT_THRESHOLD = thresholds['デフォルト'] || 100
+  var DEFAULT_THRESHOLD = defaultSkillThreshold(thresholds)
   var levels = {}
   for (var i = 0; i < currentLevels.length; i++) {
     levels[currentLevels[i].skill] = currentLevels[i].level
@@ -945,7 +1163,7 @@ function submitQuizResult(quizId, memberId, answers, acting) {
       // 同じ閾値計算(pts/threshold切り捨て+1=レベル)から逆算すると、
       // レベルLに達する最低ポイントはthreshold*(L-1)
       var thresholds = getSkillLevelThresholds()
-      var defaultThreshold = thresholds['デフォルト'] || 100
+      var defaultThreshold = defaultSkillThreshold(thresholds)
       var threshold = thresholds[targetSkill] || defaultThreshold
       var currentPoints = {}
       try { currentPoints = JSON.parse((memberRow && memberRow.skill_points_json) || '{}') } catch (_) {}
@@ -1148,8 +1366,8 @@ function authorizeAction(acting, action, body) {
       var taskForApprove = null
       try { taskForApprove = findRow(SHEET_TASKS, String(body.taskId || '')) } catch(e) {}
       if (taskForApprove) {
-        var taskImportance = String(taskForApprove.importance || '').trim()
-        if (taskImportance === '重要' || taskImportance === '対外公開') {
+        var taskImportance = normalizeCode('importance', taskForApprove.importance)
+        if (taskImportance === 'important' || taskImportance === 'external') {
           // escalated: 全権管理者（isFullAdmin）のみ承認可能
           if (!isActingFullAdmin(acting)) {
             if (checkPermissionOverride(acting, action, body)) return
@@ -1331,7 +1549,7 @@ function authorizeAction(acting, action, body) {
       if (!isActingFullAdmin(acting)) {
         var taskId = String(body.taskId || '')
         var task = findRow(SHEET_TASKS, taskId)
-        if (body.status === '完了') {
+        if (body.status === 'done') {
           // 「完了」への変更は確認者（reviewer_id / reviewer_ids）のみ許可
           var reviewerAllowed = false
           if (task) {
@@ -1369,13 +1587,13 @@ function authorizeAction(acting, action, body) {
     // なら誰でもコメント追加可」に緩和する(担当者・確認者・作成者に限らな
     // い)。閲覧可否はフロント(lib/ohsumi/types.ts の canSeeExecTasks /
     // store.tsx の visibleTasks)と同じ基準 = 幹部限定タスク
-    // (visibility === '幹部')は role が '一般' のメンバーには見えない、
+    // (visibility が幹部)は role が '一般' のメンバーには見えない、
     // それ以外は誰でも見える、をそのままGAS側で再現する。既存コメントの
     // 編集・削除は投稿者本人・全権管理者のみ(validateCommentsUpdate)のまま。
     if (action === 'updateComments') {
       var ucTask = findRow(SHEET_TASKS, String(body.taskId || ''))
       if (!ucTask) throw userError('対象のタスクが見つかりません。')
-      if (String(ucTask.visibility || '') === '幹部' && acting.role === '一般') {
+      if (normalizeCode('visibility', ucTask.visibility) === 'leaders' && acting.role === '一般') {
         throw userError('この操作は幹部限定タスクを閲覧できるメンバーのみ実行できます。')
       }
       validateCommentsUpdate(ucTask, body.comments, acting)
@@ -1489,6 +1707,9 @@ function validateHistoryUpdate(task, newHistory, acting) {
   var oldHistory = []
   try { oldHistory = JSON.parse(task.history_json || '[]') } catch (e) {}
   if (!Array.isArray(oldHistory)) oldHistory = []
+  // シートの記録は移行前の日本語のことがある。送られてきた記録(入口でコードに
+  // そろえている)と同じくコードにそろえてから比べる
+  oldHistory = oldHistory.map(normalizeHistoryEntry)
 
   var oldIds = {}
   oldHistory.forEach(function (h) { if (h && h.id) oldIds[h.id] = true })
@@ -1563,6 +1784,53 @@ var LOCK_EXEMPT_ACTIONS = [
   'revokeMySessions', 'revokeMemberSessions',
 ]
 
+// リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
+// status などの名前は、ほかのアクション(候補者・研修など)では別の意味なので、
+// アクションごとに対象を決める
+function normalizeRequestCodes(body) {
+  if (!body) return
+  switch (body.action) {
+    case 'updateTaskStatus':
+      body.status = normalizeCode('status', body.status)
+      break
+    case 'updatePriority':
+      body.priority = normalizeCode('priority', body.priority)
+      break
+    case 'updateDifficulty':
+      body.difficulty = normalizeCode('difficulty', body.difficulty)
+      break
+    case 'updateVisibility':
+      body.visibility = normalizeCode('visibility', body.visibility)
+      break
+    case 'updateTaskDetails':
+      body.department = normalizeCode('department', body.department)
+      body.difficulty = normalizeCode('difficulty', body.difficulty)
+      body.priority = normalizeCode('priority', body.priority)
+      body.visibility = normalizeCode('visibility', body.visibility)
+      body.importance = normalizeCode('importance', body.importance)
+      break
+    case 'createTasks':
+      ;(body.tasks || []).forEach(function (t) {
+        if (!t) return
+        t.department = normalizeCode('department', t.department)
+        if (t.difficulty) t.difficulty = normalizeCode('difficulty', t.difficulty)
+        if (t.priority) t.priority = normalizeCode('priority', t.priority)
+        t.visibility = normalizeCode('visibility', t.visibility)
+        if (t.importance) t.importance = normalizeCode('importance', t.importance)
+      })
+      break
+    case 'updateHistory':
+      if (Array.isArray(body.history)) body.history = body.history.map(normalizeHistoryEntry)
+      break
+    case 'updateTaskSchedule':
+      if (body.schedule) body.schedule = mapScheduleCodes(body.schedule, normalizeCode)
+      break
+    case 'updatePermissionOverrides':
+      if (Array.isArray(body.overrides)) body.overrides = mapOverrideCodes(body.overrides, normalizeCode)
+      break
+  }
+}
+
 function doPost(e) {
   var result
   var lock = null
@@ -1579,6 +1847,13 @@ function doPost(e) {
       }
       return jsonOutput({ ok: true, result: { orgId: orgId } })
     }
+
+    // 移行の後は、コードを読めない古いタブからのリクエストを断る(再読み込みを促す)
+    var versionError = checkClientVersion(body)
+    if (versionError) return jsonOutput({ ok: false, error: versionError, reloadRequired: true })
+
+    // 選択肢の値は、以降の処理ではすべてコードで扱う(古いタブは日本語で送ってくる)
+    normalizeRequestCodes(body)
 
     // exchangeIdToken: Google の IDトークンを確かめ、セッショントークンと初期データを返す
     if (body.action === 'exchangeIdToken') {
@@ -1649,14 +1924,15 @@ function doPost(e) {
         result = createTasks(body.tasks, actingMember.id)
         break
       case 'updateTaskStatus':
+        // body.status は入口でコードにそろえている(normalizeRequestCodes)
         result = updateTaskFields(body.taskId, {
-          status: body.status,
+          status: sheetCode('status', body.status),
           last_activity: todayStr(),
-          completed_date: body.status === '完了' ? todayStr() : '',
+          completed_date: body.status === 'done' ? todayStr() : '',
         })
         // the assignee's "I'm done" signal — email the admins so they know
         // to go confirm it (they already see it in their 確認待ち panel)
-        if (body.status === '確認待ち') notifyReview(body.taskId)
+        if (body.status === 'review') notifyReview(body.taskId)
         break
       case 'assignTask':
         result = updateTaskFields(body.taskId, {
@@ -1672,23 +1948,23 @@ function doPost(e) {
         })
         break
       case 'updatePriority':
-        result = updateTaskFields(body.taskId, { priority: body.priority })
+        result = updateTaskFields(body.taskId, { priority: sheetCode('priority', body.priority) })
         break
       case 'updateDifficulty':
-        result = updateTaskFields(body.taskId, { difficulty: body.difficulty })
+        result = updateTaskFields(body.taskId, { difficulty: sheetCode('difficulty', body.difficulty) })
         break
       case 'updateTaskDetails':
         result = updateTaskFields(body.taskId, {
           title: body.name,
           description: body.description || '',
           project_id: body.projectId,
-          department: body.department,
+          department: sheetCode('department', body.department),
           category: body.category,
           skills: (body.skills || []).join(','),
-          difficulty: body.difficulty,
-          priority: body.priority,
-          visibility: body.visibility === '幹部' ? '幹部' : '全員',
-          importance: body.importance || '一般',
+          difficulty: sheetCode('difficulty', body.difficulty),
+          priority: sheetCode('priority', body.priority),
+          visibility: sheetCode('visibility', body.visibility),
+          importance: sheetCode('importance', body.importance),
           required_skill_levels_json: JSON.stringify(body.requiredSkillLevels || {}),
         })
         break
@@ -1733,7 +2009,7 @@ function doPost(e) {
         })
         break
       case 'approveTask':
-        result = updateTaskFields(body.taskId, { approval_status: '承認済み' })
+        result = updateTaskFields(body.taskId, { approval_status: sheetCode('approval', 'approved') })
         break
       case 'notifyTaskRejected':
         // body.taskId は authorizeAction() のスコープチェックで使用済み
@@ -1767,7 +2043,7 @@ function doPost(e) {
         break
       case 'updatePermissionOverrides':
         result = updateMemberFields(body.memberId, {
-          permission_overrides_json: JSON.stringify(body.overrides || []),
+          permission_overrides_json: JSON.stringify(mapOverrideCodes(body.overrides || [], sheetCode)),
         })
         break
       case 'updateReportsTo':
@@ -1806,7 +2082,7 @@ function doPost(e) {
         break
       case 'updateVisibility':
         result = updateTaskFields(body.taskId, {
-          visibility: body.visibility === '幹部' ? '幹部' : '全員',
+          visibility: sheetCode('visibility', body.visibility),
         })
         break
       case 'updateReviewer':
@@ -1847,7 +2123,7 @@ function doPost(e) {
         break
       case 'updateHistory':
         result = updateTaskFields(body.taskId, {
-          history_json: JSON.stringify(body.history || []),
+          history_json: JSON.stringify((body.history || []).map(sheetHistoryEntry)),
         })
         break
       case 'updateComments':
@@ -1876,7 +2152,7 @@ function doPost(e) {
         break
       case 'updateTaskSchedule':
         result = updateTaskFields(body.taskId, {
-          schedule_json: body.schedule ? JSON.stringify(body.schedule) : '',
+          schedule_json: body.schedule ? JSON.stringify(mapScheduleCodes(body.schedule, sheetCode)) : '',
         })
         break
       case 'notifyScheduleResult':
@@ -1996,7 +2272,7 @@ function doPost(e) {
         result = { email: getMemberEmailValue(actingMember.id) }
         break
       case 'updateSetting':
-        result = updateSetting(body.key, body.value)
+        result = updateSetting(body.key, sheetSettingValue(body.key, body.value))
         break
       case 'uploadOrgLogo':
         result = uploadOrgLogo(body.dataUrl, body.filename)
@@ -2234,7 +2510,7 @@ function createTasks(tasks, actingMemberId) {
         case 'description':
           return t.description || ''
         case 'status':
-          return '未着手'
+          return sheetCode('status', 'todo')
         case 'assign_type':
           return 'open_bid'
         case 'assignee_id':
@@ -2252,27 +2528,27 @@ function createTasks(tasks, actingMemberId) {
         case 'due_time':
           return t.dueTime || ''
         case 'visibility':
-          return t.visibility === '幹部' ? '幹部' : '全員'
+          return sheetCode('visibility', t.visibility)
         case 'department':
-          return t.department || ''
+          return sheetCode('department', t.department)
         case 'category':
           return t.category || ''
         case 'skills':
           return (t.skills || []).join(',')
         case 'difficulty':
-          return t.difficulty || ''
+          return t.difficulty ? sheetCode('difficulty', t.difficulty) : ''
         case 'priority':
-          return t.priority || ''
+          return t.priority ? sheetCode('priority', t.priority) : ''
         case 'last_activity':
           return today
         case 'original_input_id':
           return t.originalInputId || ''
         case 'approval_status':
-          return t.pendingApproval === false ? '承認済み' : '承認待ち'
+          return sheetCode('approval', t.pendingApproval === false ? 'approved' : 'pending')
         case 'estimated_hours':
           return t.estimatedHours || ''
         case 'importance':
-          return t.importance || ''
+          return t.importance ? sheetCode('importance', t.importance) : ''
         case 'related_review_task_id':
           return t.relatedReviewTaskId || ''
         default:
@@ -2320,7 +2596,7 @@ function approveTaskReview(taskId, actorId, comment) {
     : (Number(task.required_approvals) || 1)
   var fields = { review_approvals_json: JSON.stringify(approvals), last_activity: todayStr() }
   if (approvals.length >= needed) {
-    fields.status = '完了'
+    fields.status = sheetCode('status', 'done')
     fields.completed_date = todayStr()
   }
   var result = updateRowFields(SHEET_TASKS, taskId, fields)
@@ -2341,9 +2617,9 @@ function completeRelatedReviewTasks(originalTaskId) {
   if (relCol < 0 || sheet.getLastRow() <= 1) return
   var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
   for (var i = 0; i < rows.length; i++) {
-    if (String(rows[i][relCol] || '') === String(originalTaskId) && rows[i][statusCol] !== '完了') {
+    if (String(rows[i][relCol] || '') === String(originalTaskId) && normalizeCode('status', rows[i][statusCol]) !== 'done') {
       updateRowFields(SHEET_TASKS, String(rows[i][idCol]), {
-        status: '完了',
+        status: sheetCode('status', 'done'),
         completed_date: todayStr(),
         last_activity: todayStr(),
       })
@@ -3143,8 +3419,9 @@ function notifyScheduleResult(taskId) {
         bodyEn += '[' + c.label + ']\n'
         ;(schedule.invitedIds || []).forEach(function (mid) {
           var resp = schedule.responses && schedule.responses[mid] && schedule.responses[mid][c.id]
-          bodyJa += '  ' + (nameById[mid] || mid) + ': ' + (resp || '未回答') + '\n'
-          bodyEn += '  ' + (nameById[mid] || mid) + ': ' + (resp || 'No response') + '\n'
+          // 回答は移行前の記号(○△×)・コードのどちらでもよい。表示名は NOTIFY_LABELS
+          bodyJa += '  ' + (nameById[mid] || mid) + ': ' + (resp ? notifyLabel('scheduleAnswer', 'ja', resp) : '未回答') + '\n'
+          bodyEn += '  ' + (nameById[mid] || mid) + ': ' + (resp ? notifyLabel('scheduleAnswer', 'en', resp) : 'No response') + '\n'
         })
       })
     }
@@ -4259,7 +4536,7 @@ function notifyOverdueTasksToAssignees() {
     rows.forEach(function (r) {
       var due = cellDateStr(r[dueCol])
       var status = String(r[statusCol] || '')
-      if (!due || due >= today || status === '完了') return
+      if (!due || due >= today || normalizeCode('status', status) === 'done') return
       var title = String(r[titleCol] || '')
       var assigneeIds = String(r[assigneeCol] || '')
         .split(',')
@@ -4524,7 +4801,7 @@ function notifyOverdueTasksToDiscord() {
         return { title: r[titleCol], due: cellDateStr(r[dueCol]), status: String(r[statusCol] || '') }
       })
       .filter(function (t) {
-        return t.due && t.due < today && t.status !== '完了'
+        return t.due && t.due < today && normalizeCode('status', t.status) !== 'done'
       })
     if (overdue.length === 0) return
     var lines = overdue.map(function (t) {
@@ -5669,8 +5946,9 @@ function checkReadRule(rule, viewer, ownerId) {
 //   幹部限定: 一般以外の役職のみ
 //   承認待ち: 一般以外の役職と、作成者・担当者
 function canViewTaskRow(viewer, task) {
-  if (String(task.visibility || '') === '幹部' && !viewer.isAdminRole) return false
-  if (String(task.approval_status || '') === '承認待ち' && !viewer.isAdminRole) {
+  // 値は移行前の日本語・コードのどちらでもよい
+  if (normalizeCode('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) return false
+  if (normalizeCode('approval', task.approval_status) === 'pending' && !viewer.isAdminRole) {
     if (String(task.creator_id || '') === viewer.id) return true
     return splitCsvList(task.assignee_id).indexOf(viewer.id) >= 0
   }
@@ -7720,6 +7998,23 @@ var SAMPLE_OWNER_COLUMNS = { Tasks: 'creator_id', Expenses: 'applicant_id', Form
 function isSampleId(v) { return String(v || '').indexOf(SAMPLE_ID_PREFIX) === 0 }
 
 // 行を見出しに合わせて末尾に一括で書き込む(書式なしテキストにして、日付の自動変換を避ける)
+// サンプルのタスクの行の選択肢の値を、今のシートの形式にする
+function sheetSampleTaskRow(o) {
+  var out = {}
+  Object.keys(o).forEach(function (k) { out[k] = o[k] })
+  ;['status', 'difficulty', 'priority', 'importance', 'visibility', 'department'].forEach(function (k) {
+    if (o[k] !== undefined && o[k] !== '') out[k] = sheetCode(k, o[k])
+  })
+  if (o.approval_status) out.approval_status = sheetCode('approval', o.approval_status)
+  if (o.history_json) {
+    try { out.history_json = JSON.stringify(JSON.parse(o.history_json).map(sheetHistoryEntry)) } catch (e) {}
+  }
+  if (o.schedule_json) {
+    try { out.schedule_json = JSON.stringify(mapScheduleCodes(JSON.parse(o.schedule_json), sheetCode)) } catch (e) {}
+  }
+  return out
+}
+
 function appendSampleRows(sheetName, objects) {
   if (objects.length === 0) return 0
   var sheet = getSheet(sheetName)
@@ -7880,6 +8175,8 @@ function seedSampleData() {
     var files = createSampleFiles()
     var data = buildSampleData(todayStr(), files)
     var counts = {}
+    // 選択肢の値は、今のシートの形式(移行の前は日本語、後はコード)で書く
+    data.sheets[SHEET_TASKS] = (data.sheets[SHEET_TASKS] || []).map(sheetSampleTaskRow)
     Object.keys(data.sheets).forEach(function (name) { counts[name] = appendSampleRows(name, data.sheets[name]) })
 
     // テスト用のアカウントだけメールアドレスを登録する(他のサンプルのメンバーには登録しない)
@@ -7888,7 +8185,7 @@ function seedSampleData() {
     })
 
     var merged = mergeSampleSettings(readSettingsValues(sampleSettingKeys(data.settings)), data.settings)
-    Object.keys(merged.values).forEach(function (k) { updateSetting(k, merged.values[k]) })
+    Object.keys(merged.values).forEach(function (k) { updateSetting(k, sheetSettingValue(k, merged.values[k])) })
     props.setProperty(SAMPLE_SETTINGS_STATE_KEY, JSON.stringify(merged.state))
 
     bumpDataVersion()

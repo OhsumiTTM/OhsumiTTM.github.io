@@ -127,7 +127,7 @@ Google スプレッドシート（データの保存場所）
 | project_id | 所属プロジェクトID |
 | title | タスク名 |
 | description | 詳細 |
-| status | `未着手` / `進行中` / `サポート必要` / `確認待ち` / `修正中` / `完了` |
+| status | `未着手` / `保留` / `進行中` / `サポート必要` / `確認待ち` / `修正中` / `完了`(移行後: `todo` / `hold` / `progress` / `support` / `review` / `fix` / `done`) |
 | assign_type | `open_bid` / `manager_assign` / `request` / `personal` |
 | assignee_id | 担当者ID（複数可、カンマ区切り。空欄可） |
 | creator_id | 作成者ID |
@@ -135,18 +135,18 @@ Google スプレッドシート（データの保存場所）
 | start_date | 開始日（`YYYY-MM-DD`、任意） |
 | due_date | 期限（`YYYY-MM-DD`） |
 | due_time | 期限の時刻（`HH:MM`、任意）。カレンダー表示とGoogleカレンダー同期に使用 |
-| visibility | `全員` / `幹部`（幹部＝一般以外の全権限レベル） |
-| department | 部門タグ |
+| visibility | `全員` / `幹部`（幹部＝一般以外の全権限レベル。移行後: `all` / `leaders`） |
+| department | 部門(`運営` / `広報` / `開発` / `デザイン` / `渉外` / `イベント` / `リサーチ` / `未分類`。移行後: `ops` / `pr` / `dev` / `design` / `relations` / `event` / `research` / 空欄) |
 | category | カテゴリ |
 | skills | 要求スキル（カンマ区切り） |
-| difficulty | `新人歓迎` / `少し経験必要` / `経験者向け` |
-| priority | `高` / `中` / `低` |
+| difficulty | `誰でも可` / `新人歓迎` / `少し経験必要` / `経験者向け` / `上級者向け`(移行後: `anyone` / `beginner` / `some_exp` / `experienced` / `advanced`) |
+| priority | `高` / `中` / `低`(移行後: `high` / `medium` / `low`) |
 | completed_date | 完了日 |
 | last_activity | 最終更新日（放置検知に使用） |
 | progress_note | 直近の進捗メモ |
 | progress_history_json | 進捗メモの履歴（JSON文字列） |
 | original_input_id | 生成元の自然文入力ID |
-| approval_status | `承認待ち` / `承認済み`（空欄は承認済み扱い） |
+| approval_status | `承認待ち` / `承認済み`（空欄は承認済み扱い。移行後: `pending` / `approved`） |
 | depends_on_ids | 前提タスクID（複数可、カンマ区切り） |
 | reviewer_id | 「確認者」メンバーID（任意、後方互換用） |
 | reviewer_ids | 「確認者」メンバーID（複数可、カンマ区切り） |
@@ -161,13 +161,20 @@ Google スプレッドシート（データの保存場所）
 | retrospective_json | 完了時の振り返り（JSON文字列: `{"good":"...","bad":"...","improve":"..."}` ） |
 | schedule_json | 日程調整の候補日時・招待メンバー・回答（JSON文字列） |
 | form_json | 汎用フォームの質問項目・招待メンバー・回答（JSON文字列） |
-| importance | `一般` / `重要` / `対外公開`（空欄は一般扱い） |
+| importance | `一般` / `重要` / `対外公開`（空欄は一般扱い。移行後: `normal` / `important` / `external`） |
 | awarded_points_json | 完了時に付与するスキルポイント（JSON文字列、例: `{"デザイン":30}`、任意） |
 | required_skill_levels_json | このタスクをこなすのに必要なスキルレベルの目安（JSON、例: `{"デザイン":3}`、任意） |
 | review_approvals_json | 複数確認者の承認記録（JSON配列、`[{"memberId":"...","at":"..."}]`）。`required_approvals`で指定した人数分の承認が揃うと自動的に「完了」になります |
 | hold_reason_note | 保留にした理由のメモ（任意） |
 | hold_reason_since | 保留にした日（`YYYY-MM-DD`） |
 
+> **選択肢の値の形式**: 上の表の選択肢の値は、内部コードへの移行(移行の関数は今後の版で追加します)までは
+> 今の日本語のまま書き込まれ、移行の後はコード(括弧内)で書き込まれます。どちらの形式の値でも読めるので、
+> 移行の途中で2つの形式が混ざっていても表示は変わりません。形式はスクリプトプロパティ `VALUE_FORMAT`
+> で決まります(未設定は日本語、`codes` はコード)。**手で `VALUE_FORMAT` を設定しないでください**(移行の関数が設定します)。
+> 変更の記録(`history_json`)・日程調整の回答(`schedule_json` の `○` / `△` / `×` → `yes` / `maybe` / `no`)・
+> 部門を対象にした権限の例外・テンプレートと定期タスクの設定・スキルの閾値のキー(`デフォルト` → `_default`)も同じ規則です。
+>
 > `accept_at` / `deliverable_url` / `feedback_comment` は現状のUIからは未使用ですが、
 > 列として残しておいて構いません。
 >
@@ -203,6 +210,10 @@ Google スプレッドシート（データの保存場所）
 > Apps Script エディタで内容を貼り直し → 「デプロイ」→「デプロイを管理」→  
 > 対象のウェブアプリの編集（鉛筆アイコン）→「バージョン」で **「新規」** を選んで更新。  
 > 「保存」だけでは既存のURLには反映されません。
+>
+> **反映の順番**: GAS とフロント(GitHub Pages)の両方が変わる版では、**GAS を先に**反映してください。
+> 新しいフロントは選択肢の値を内部コード(`done` など)で送るため、古い GAS では正しく保存できません
+> (新しい GAS は、古いフロントが送る日本語の値も受け付けます)。
 >
 > **さらに、貼り直した Code.gs が Members/Projects/Tasks シートに新しい列を
 > 追加している場合（例: `timezone`、`locale` 列の追加時）は、Apps Script
@@ -447,7 +458,7 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 | `skill_field_options` | 要求分野の選択肢 | カンマ区切り文字列 |
 | `skill_field_skills` | 分野ごとの対応スキル | JSON文字列 |
 | `skill_field_threshold` | 分野認定の閾値（0〜1） | 数値文字列 |
-| `skill_level_thresholds` | スキルレベルアップの累計ポイント閾値 | JSON文字列（例: `{"デフォルト":100,"デザイン":150}`） |
+| `skill_level_thresholds` | スキルレベルアップの累計ポイント閾値 | JSON文字列（例: `{"デフォルト":100,"デザイン":150}`。移行後は `デフォルト` の代わりに `_default`） |
 | `quiz_definitions` | 検定（クイズ）の定義 | JSON文字列 |
 | `radar_axes` | レーダーチャートの軸定義 | JSON文字列 |
 | `expense_categories` | 経費申請カテゴリと承認フロー | JSON文字列 |
