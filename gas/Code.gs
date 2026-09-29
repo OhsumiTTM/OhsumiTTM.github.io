@@ -521,12 +521,12 @@ function readRoleSettings() {
 
 // このリクエストでの役職の一覧(1回だけ読む。役職の設定を変えたら invalidateRoles)
 var _requestRoles = null
+function requestRolesFrom(settings) {
+  var parsed = parseRolesSetting(settings.roles)
+  return { roles: parsed || rolesFromLegacy(settings), fromSetting: !!parsed }
+}
 function getRoles() {
-  if (!_requestRoles) {
-    var settings = readRoleSettings()
-    var parsed = parseRolesSetting(settings.roles)
-    _requestRoles = { roles: parsed || rolesFromLegacy(settings), fromSetting: !!parsed }
-  }
+  if (!_requestRoles) _requestRoles = requestRolesFrom(readRoleSettings())
   return _requestRoles.roles
 }
 function invalidateRoles() { _requestRoles = null }
@@ -1214,10 +1214,29 @@ function appendRowByHeaders(sheet, sheetName, obj) {
 // client-side (lib/ohsumi/store.tsx) since it only needs data already in
 // hand. This file only handles writes coming from the browser.
 
+// doGet が何から呼ばれたかを実行ログに残す。値は個人情報を含み得るので、パラメータの名前と
+// 値の長さだけを残す(値そのものは残さない)
+function logGetRequest(e) {
+  try {
+    var params = (e && e.parameter) || {}
+    var summary = Object.keys(params).map(function (k) { return k + '(' + String(params[k]).length + '文字)' })
+    console.log('doGet に届きました: ' + JSON.stringify({
+      parameters: summary,
+      queryStringLength: e && e.queryString ? String(e.queryString).length : 0,
+      pathInfo: e && e.pathInfo ? String(e.pathInfo).slice(0, 100) : '',
+      contentLength: e && e.contentLength != null ? e.contentLength : -1,
+      postDataType: e && e.postData ? String(e.postData.type || '') : '',
+    }))
+  } catch (err) {
+    // 記録できなくても応答は返す
+  }
+}
+
 // 画面は GAS に POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、
 // 本文が失われた可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。画面が原因を記録して
 // 送り直せるよう、HTML ではなく JSON で返す(何も処理していないので、送り直してよい)
 function doGet(e) {
+  logGetRequest(e)
   return jsonOutput({
     ok: false,
     getReceived: true,
@@ -1256,6 +1275,75 @@ function getActingMemberById(memberId) {
   // MemberEmails側には行があるがMembers側に対応する行が無い(データ不整合) —
   // 通常起こらないはずだが、安全側に倒して「見つからない」として扱う
   throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
+}
+
+// 読み取りだけの操作は、getInitialData と同じ読み取りキャッシュ(スナップショット)から、
+// 操作するメンバーと役職の設定を引く(Members・Settings をシートから読み直さない)。
+// スナップショットはデータの版ごとに持ち、書き込み・手動の編集のたびに版が変わるので、
+// 画面に見えているデータと同じ時点の権限で判定する。書き込みは、これまでどおりシートから読む
+var SNAPSHOT_AUTH_ACTIONS = [
+  'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
+  'getMyEmails', 'getWebhookStatus', 'fetchDailyReports',
+]
+
+// スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
+function actingMemberFromTable(table, memberId) {
+  if (!table || !table.headers) return null
+  var h = table.headers
+  var idCol = h.indexOf('id')
+  if (idCol < 0) return null
+  var roleCol = h.indexOf('role')
+  var projectIdsCol = h.indexOf('project_ids')
+  var overridesCol = h.indexOf('permission_overrides_json')
+  for (var i = 0; i < table.rows.length; i++) {
+    var row = table.rows[i]
+    if (String(row[idCol]) !== String(memberId)) continue
+    var overrides = []
+    if (overridesCol >= 0) {
+      try { overrides = JSON.parse(row[overridesCol] || '[]') } catch (_) {}
+    }
+    return {
+      id: String(row[idCol]),
+      role: roleCol >= 0 ? String(row[roleCol] || '') : '',
+      project_ids: projectIdsCol >= 0 ? String(row[projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) : [],
+      permission_overrides: Array.isArray(overrides) ? overrides : [],
+    }
+  }
+  return null
+}
+
+// スナップショットの Settings から、役職の設定だけを取り出す
+function roleSettingsFromTable(table) {
+  var out = {}
+  if (!table || !table.headers) return out
+  var keyCol = table.headers.indexOf('key')
+  var valueCol = table.headers.indexOf('value')
+  if (keyCol < 0 || valueCol < 0) return out
+  table.rows.forEach(function (r) {
+    var key = String(r[keyCol])
+    if (ROLE_SETTING_KEYS.indexOf(key) >= 0) out[key] = String(r[valueCol] || '')
+  })
+  return out
+}
+
+// 操作するメンバーを引く。読み取りだけの操作はスナップショットから(役職の設定もそこから)、
+// それ以外と、スナップショットに見つからない場合はシートから
+function getActingMember(memberId, action) {
+  if (SNAPSHOT_AUTH_ACTIONS.indexOf(action) >= 0) {
+    try {
+      var snap = loadSnapshot()
+      var member = actingMemberFromTable(snap.data.Members, memberId)
+      if (member) {
+        _requestRoles = requestRolesFrom(roleSettingsFromTable(snap.data.Settings))
+        noteTiming('authFrom', 'snapshot')
+        return member
+      }
+    } catch (e) {
+      // 読めなければシートから
+    }
+  }
+  noteTiming('authFrom', 'sheet')
+  return getActingMemberById(memberId)
 }
 
 // ---- ログイン(IDトークン)とセッショントークン ----------------------------------
@@ -1494,7 +1582,32 @@ function exchangeIdToken(body) {
   var data = getInitialDataForMember(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
   data.session = issueSessionToken(memberId, body.remember !== false, nowSec())
+  // 最終ログイン日時も、ここで記録する(画面が別に updateLastLogin を送らなくてよいように)
+  data.lastLoginRecorded = recordLastLogin(memberId)
   return data
+}
+
+// ログインの時に最終ログイン日時を記録する。ほかの書き込みを長く待たせないよう、ロックは2秒だけ待ち、
+// 取れなければ記録せずに false を返す(画面が updateLastLogin を送る)。
+// データの版は変えない(最終ログイン日時だけのために、全員の読み取りキャッシュを捨てない)。
+// ほかのメンバーの画面の最終ログイン日時は、次に版が変わった時に新しくなる
+function recordLastLogin(memberId) {
+  var lock = null
+  try {
+    lock = LockService.getScriptLock()
+    if (!lock.tryLock(2000)) {
+      lock = null
+      return false
+    }
+    updateMemberFields(memberId, { last_login: new Date().toISOString() })
+    return true
+  } catch (e) {
+    // 記録できなくてもログインは続ける(画面が updateLastLogin を送る)
+    Logger.log('recordLastLogin failed: ' + e)
+    return false
+  } finally {
+    if (lock) lock.releaseLock()
+  }
 }
 
 // リクエストの認証(セッショントークン)。返り値 { memberId, renewed(新しいセッショントークン or null) }
@@ -2442,7 +2555,7 @@ function toErrorMessage(err) {
 // Webhookへの疎通確認(UrlFetchApp、数百ms〜数秒かかりうる)のみなので、
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
-  'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
+  'translateText', 'getMyEmails', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
@@ -2567,7 +2680,7 @@ function doPost(e) {
       var authStart = Date.now()
       var auth = authenticateRequest(body)
       renewedSession = auth.renewed
-      actingMember = getActingMemberById(auth.memberId)
+      actingMember = getActingMember(auth.memberId, body.action)
       authorizeAction(actingMember, body.action, body)
       noteTiming('authMs', Date.now() - authStart)
     } catch (authErr) {
@@ -3135,6 +3248,9 @@ function doPost(e) {
         break
       case 'submitDailyReport':
         result = saveDailyReport(body.report, actingMember)
+        break
+      case 'getBackgroundData':
+        result = getBackgroundData(actingMember, body)
         break
       case 'getExpenses':
         result = getExpenses(actingMember)
@@ -5109,6 +5225,32 @@ function jsonOutput(obj) {
 // Reads a single value from the optional Settings sheet (see gas/README.md
 // §4.6) by key. Returns '' when the sheet or the key doesn't exist yet
 // (nothing configured) — every caller below treats that as "feature off".
+// 画面が初期データの後に裏で読み込むもの(経費・フォームの回答・採用の候補者・自分のメールアドレス)を
+// 1回で返す。往復の回数を減らし、結果の受け渡しで失敗する機会を減らすため。
+// それぞれ、個別の操作(getExpenses など)と同じ権限の確認・絞り込みを通す。1つが失敗しても
+// ほかは返す(失敗したものは errors に理由を入れる)
+var BACKGROUND_DATA_PARTS = [
+  { key: 'expenses', action: 'getExpenses', load: function (acting) { return getExpenses(acting) } },
+  { key: 'formSubmissions', action: 'getFormSubmissions', load: function (acting) { return getFormSubmissions(acting) } },
+  { key: 'candidates', action: 'getCandidates', load: function (acting) { return getCandidates(acting) } },
+  { key: 'myEmail', action: 'getMyEmails', load: function (acting) { return getMemberEmailValue(acting.id) } },
+]
+
+function getBackgroundData(acting, body) {
+  var out = { errors: {} }
+  BACKGROUND_DATA_PARTS.forEach(function (part) {
+    var t = Date.now()
+    try {
+      authorizeAction(acting, part.action, body)
+      out[part.key] = part.load(acting)
+    } catch (err) {
+      out.errors[part.key] = toErrorMessage(err)
+    }
+    noteTiming(part.key + 'Ms', Date.now() - t)
+  })
+  return out
+}
+
 function getSettingValue(key) {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   var sheet = ss.getSheetByName(SHEET_SETTINGS)
