@@ -200,6 +200,12 @@ interface OhsumiContextValue extends OhsumiState {
   // manual re-fetch for the header's 情報更新 button — see refreshAll
   refreshing: boolean
   refreshAll: () => void
+  // 読み込み(初期データ・経費・候補者など)が再試行しても失敗した時のメッセージ。
+  // 画面に「読み込みに失敗しました。もう一度試す」を出す(書き込みの失敗は remoteError)
+  loadError: string | null
+  // 「もう一度試す」: 保存したセッションでの再開に失敗していれば再開をやり直し、
+  // そうでなければ読み込みをやり直す
+  retryLoad: () => void
   skillOptions: string[]
   categoryOptions: string[]
   addSkillOption: (name: string) => void
@@ -848,6 +854,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false)
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>('idle')
   const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   // mirrors remoteStatus but for the separate, optional Settings-sheet
   // fetch (role levels/permissions/pools) — true immediately when that
   // sheet isn't configured, so dataReady below doesn't wait on it forever
@@ -971,6 +978,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line no-console
     console.error('[ohsumi] リモートとの同期に失敗しました', err)
     setRemoteError(err instanceof Error ? err.message : String(err))
+  }, [])
+
+  // 読み込みの失敗(再試行しても失敗したもの)。「もう一度試す」で読み込み直せるよう、
+  // 書き込みの失敗とは分けて持つ
+  const reportLoadError = useCallback((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error('[ohsumi] 読み込みに失敗しました', err)
+    setLoadError(err instanceof Error ? err.message : String(err))
   }, [])
 
   // fire a remote write; clears a stale error banner on success, reports on failure
@@ -1146,21 +1161,22 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 待たせないよう、初期データとは別に後から読み込む
   // シートに直接保存している記録(経費・フォームの回答・採用の候補者)を読み込む。
   // どれも GAS 側で、閲覧できる行だけに絞って返る
+  // (GAS へは1本ずつ順番に、画面の操作より後に送られる — gas-transport.ts)
   const loadRecords = useCallback(() => {
     if (!isRemoteConfigured) return
     remoteApi
       .getExpenses()
       .then((apps) => setExpenseApplications(apps))
-      .catch(reportRemoteError)
+      .catch(reportLoadError)
     remoteApi
       .getFormSubmissions()
       .then((subs) => setCustomFormSubmissions(subs))
-      .catch(reportRemoteError)
+      .catch(reportLoadError)
     remoteApi
       .getCandidates()
       .then((list) => setCandidates(list))
-      .catch(reportRemoteError)
-  }, [reportRemoteError])
+      .catch(reportLoadError)
+  }, [reportLoadError])
 
   // ログインの後、データが反映されてから login() の処理(最終ログイン日時の更新・
   // 初期タスクの付与)を行うメンバー
@@ -1172,6 +1188,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       // 読み込み中の表示はログイン画面側で行う(失敗したらログイン画面にそのまま
       // エラーを出すため、ここでは remoteStatus を loading にしない)
       setRemoteError(null)
+      setLoadError(null)
       try {
         const res = await exchangeIdToken(idToken, nonceSecret, remember)
         if (!res.memberId || !res.session) {
@@ -1194,15 +1211,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 再読み込み後: この端末に保存したセッションがあれば、そのままログインし直す
   const [sessionResuming, setSessionResuming] = useState(false)
   const resumeTriedRef = useRef(false)
-  useEffect(() => {
-    if (!hydrated || !isRemoteConfigured || resumeTriedRef.current) return
-    resumeTriedRef.current = true
+  const resumeSession = useCallback(() => {
     const config = loadCachedLoginConfig()
     const saved = config ? loadSession(config.orgId) : null
-    if (!config || !saved) return
+    if (!config || !saved) return false
     activateSession(config.orgId, saved)
     setSessionResuming(true)
     setRemoteStatus('loading')
+    setLoadError(null)
     fetchInitialData()
       .then((res) => {
         if (!res.memberId) throw new Error('メンバー登録が見つかりません')
@@ -1219,13 +1235,20 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           clearSession(config.orgId)
           setRemoteStatus('idle')
         } else {
-          // 通信エラーなど: 保存したセッションは残し、読み込みエラーの画面を出す
-          reportRemoteError(err)
+          // 通信エラーなど(再試行しても失敗した): 保存したセッションは残し、
+          // 「読み込みに失敗しました。もう一度試す」の画面を出す
+          reportLoadError(err)
           setRemoteStatus('error')
         }
       })
       .finally(() => setSessionResuming(false))
-  }, [hydrated, applyInitialData, loadRecords, reportRemoteError])
+    return true
+  }, [applyInitialData, loadRecords, reportLoadError])
+  useEffect(() => {
+    if (!hydrated || !isRemoteConfigured || resumeTriedRef.current) return
+    resumeTriedRef.current = true
+    resumeSession()
+  }, [hydrated, resumeSession])
 
   // manual refresh for the header's 情報更新 button. Deliberately doesn't
   // touch remoteStatus/settingsReady (those flipping to non-ready is what
@@ -1237,15 +1260,25 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     if (!isRemoteConfigured) return
     setRefreshing(true)
     // 前回読み込んだ版を送り、変わっていなければ中身を受け取らない
+    setLoadError(null)
     fetchInitialData(dataVersionRef.current)
       .then((res) => {
         if (res.memberId && !res.unchanged) applyInitialData(res)
         setRemoteError(null)
       })
-      .catch(reportRemoteError)
+      .catch(reportLoadError)
       .finally(() => setRefreshing(false))
     loadRecords()
-  }, [reportRemoteError, applyInitialData, loadRecords])
+  }, [reportLoadError, applyInitialData, loadRecords])
+
+  // 「もう一度試す」
+  const retryLoad = useCallback(() => {
+    if (remoteStatus === 'error') {
+      if (!resumeSession()) setRemoteStatus('idle')
+      return
+    }
+    refreshAll()
+  }, [remoteStatus, resumeSession, refreshAll])
 
   // 定期タスク generation check (item 2/TSK-051の修正) — 生成の要否判定・
   // 実際の生成はGAS側のLockService付き関数(generateRecurringTasksLocked)
@@ -1269,10 +1302,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // Projects/Tasks自体は連携済みなので、ルール定義はローカルのままでも
   // 生成したタスクはremoteApi.createTasksで実際のTasksシートへ書き込む
   // (isRemoteConfiguredがfalseの完全ローカルデモ環境ではローカルstateのみ)。
+  // GAS の確認は、読み込みのたびではなくページを開いた後の1回だけ行う(日々の生成は
+  // GAS の日次トリガーが行う。情報更新で設定を読み直すたびに送らない)
+  const recurringCheckedRef = useRef(false)
   useEffect(() => {
     if (!hydrated || recurringRules.length === 0) return
 
     if (isSettingsConfigured) {
+      if (recurringCheckedRef.current) return
+      recurringCheckedRef.current = true
       remoteApi
         .checkAndGenerateRecurringTasks()
         .then(({ generated }) => {
@@ -2328,6 +2366,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     setCurrentUserId(null)
     setCalendarToken(null)
+    setLoadError(null)
     // 保存したセッショントークンを消し、Google の自動ログインも止める
     clearSession()
     if (isRemoteConfigured) {
@@ -4980,6 +5019,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     dataReady,
     refreshing,
     refreshAll,
+    loadError,
+    retryLoad,
     skillOptions,
     categoryOptions,
     addSkillOption,

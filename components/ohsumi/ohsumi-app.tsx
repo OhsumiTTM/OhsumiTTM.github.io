@@ -45,24 +45,29 @@ function RemoteLoadingScreen() {
   )
 }
 
-// shown when that same fetch has failed outright, instead of silently
-// falling back to the login screen (which would look like a sign-out)
+// shown when that same fetch has failed outright (even after the automatic
+// retries in gas-transport.ts), instead of silently falling back to the login
+// screen (which would look like a sign-out)
 function RemoteLoadErrorScreen({ message }: { message: string | null }) {
   const { t } = useI18n()
+  const { retryLoad, logout } = useOhsumi()
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
       <OhsumiMark size={30} />
       <div className="flex items-center gap-1.5 text-sm font-medium text-destructive">
         <TriangleAlert className="size-4 shrink-0" />
-        {t('app.syncFailed')}
+        {t('app.loadFailed')}
       </div>
       {message && <p className="max-w-sm text-xs text-muted-foreground">{message}</p>}
       <button
         type="button"
-        onClick={() => window.location.reload()}
+        onClick={retryLoad}
         className="mt-1 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition-colors hover:bg-secondary"
       >
-        {t('common.reload')}
+        {t('app.retryLoad')}
+      </button>
+      <button type="button" onClick={logout} className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+        {t('header.menu.logout')}
       </button>
     </main>
   )
@@ -137,7 +142,7 @@ function LocaleSyncWatcher() {
 }
 
 function Router() {
-  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, dataReady, sessionResuming } =
+  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
     useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
@@ -152,8 +157,10 @@ function Router() {
     // compute permissions against no/stale data (see admin-screen.tsx).
     // この端末に保存したセッションで、自動的にログインし直している途中
     if (remoteEnabled && sessionResuming) return <RemoteLoadingScreen />
+    // 保存したセッションでの再開が、再試行しても失敗した(セッションは残っている)。
+    // ログイン画面に戻すとログアウトしたように見えるので、「もう一度試す」を出す
+    if (remoteEnabled && remoteStatus === 'error') return <RemoteLoadErrorScreen message={loadError} />
     if (remoteEnabled && currentUserId) {
-      if (remoteStatus === 'error') return <RemoteLoadErrorScreen message={remoteError} />
       // 保存したセッションが無い場合はログイン画面に戻る
       if (remoteStatus === 'idle') return <LoginScreen />
       if (!dataReady) return <RemoteLoadingScreen />
@@ -168,6 +175,22 @@ function Router() {
         <div className="flex items-center justify-center gap-1.5 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
           <TriangleAlert className="size-3.5 shrink-0" />
           {t('app.syncFailedBanner')}
+        </div>
+      )}
+      {remoteEnabled && loadError && (
+        <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
+          <span className="flex items-center gap-1.5">
+            <TriangleAlert className="size-3.5 shrink-0" />
+            {t('app.loadFailedBanner')}
+          </span>
+          <button
+            type="button"
+            onClick={retryLoad}
+            disabled={refreshing}
+            className="shrink-0 whitespace-nowrap rounded-md border border-warning/40 bg-card px-2 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-secondary disabled:opacity-60"
+          >
+            {t('app.retryLoad')}
+          </button>
         </div>
       )}
       <Header />
