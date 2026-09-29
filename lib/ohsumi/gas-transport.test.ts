@@ -3,10 +3,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ATTEMPT_TIMEOUT_MS,
   GasTransportError,
   READ_ACTIONS,
+  attemptTimeoutOf,
+  bodySnippet,
+  safeResponseUrl,
   RETRY_DELAYS_MS,
   isWriteAction,
   priorityOf,
@@ -92,9 +96,11 @@ describe('JSON が返らなかった時の再試行', () => {
     expect(h.sent).toHaveLength(2)
     expect(h.sent[0].requestId).toBeUndefined()
     expect(h.sleeps).toEqual([RETRY_DELAYS_MS[0]])
-    expect(h.logs).toEqual([
-      { level: 'warn', text: '[ohsumi] GAS getInitialData: 再試行 1/2(原因: JSON ではない応答(HTTP 404))' },
-      { level: 'info', text: '[ohsumi] GAS getInitialData: 再試行 1回目で成功しました' },
+    expect(h.logs.map((l) => l.level + ' ' + l.text)).toEqual([
+      'warn [ohsumi] GAS getInitialData: JSON ではない応答(HTTP 404)。応答の URL: (不明)、本文の先頭: Sorry, unable to open the file at this time.',
+      'warn [ohsumi] GAS getInitialData: 再試行 1/2(原因: JSON ではない応答(HTTP 404))',
+      'info [ohsumi] GAS getInitialData: 再試行 1回目で成功しました',
+      expect.stringMatching(/^info \[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms・2回目・GAS の内訳なし\)$/),
     ])
   })
 
@@ -115,7 +121,7 @@ describe('JSON が返らなかった時の再試行', () => {
     const res = await sendToGas(URL, { action: 'updateTaskStatus', taskId: 't1' })
     expect(res.result).toEqual({ id: 't1' })
     expect(h.sent.map((b) => b.requestId)).toEqual(['req-1', 'req-1'])
-    expect(h.logs.at(-1)).toEqual({ level: 'info', text: '[ohsumi] GAS updateTaskStatus: 前回の処理の結果を受け取りました(処理はやり直していません)' })
+    expect(h.logs.map((l) => l.text)).toContain('[ohsumi] GAS updateTaskStatus: 前回の処理の結果を受け取りました(処理はやり直していません)')
   })
 
   it('別の書き込みには別の ID を付ける', async () => {
@@ -146,7 +152,7 @@ describe('JSON が返らなかった時の再試行', () => {
     const h = harness(() => json({ ok: false, error: '権限がありません' }))
     expect(await sendToGas(URL, { action: 'createTasks' })).toEqual({ ok: false, error: '権限がありません' })
     expect(h.sent).toHaveLength(1)
-    expect(h.logs).toEqual([])
+    expect(h.logs.filter((l) => l.level !== 'info')).toEqual([])
   })
 
   it('exchangeIdToken は送り直さない(IDトークンの nonce は1回しか使えない)', async () => {
@@ -161,6 +167,81 @@ describe('JSON が返らなかった時の再試行', () => {
     const results = await Promise.allSettled([sendToGas(URL, { action: 'getExpenses' }), sendToGas(URL, { action: 'getCandidates' })])
     expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled'])
     expect(h.sent.at(-1)?.action).toBe('getCandidates')
+  })
+})
+
+describe('原因を調べるための記録', () => {
+  it('Cookie を送らない・キャッシュしない・転送はたどる設定で送る', async () => {
+    const inits: RequestInit[] = []
+    harness(() => json({ ok: true }))
+    const base = { fetch: async (_u: string, init: RequestInit) => { inits.push(init); return { status: 200, text: async () => '{"ok":true}' } } }
+    setGasTransportDepsForTest({ ...base, sleep: async () => {}, log: { info() {}, warn() {}, error() {} } })
+    await sendToGas(URL, { action: 'getInitialData' })
+    expect(inits[0]).toMatchObject({ method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'follow', mode: 'cors' })
+    expect(inits[0].headers).toEqual({ 'Content-Type': 'text/plain;charset=utf-8' })
+  })
+
+  it('GAS の doGet が応答した(GET で届いた)時は、原因と応答の URL を記録して送り直す', async () => {
+    let n = 0
+    const logs: string[] = []
+    setGasTransportDepsForTest({
+      fetch: async () => (++n === 1
+        ? { status: 200, url: 'https://script.googleusercontent.com/macros/echo?user_content_key=SECRETKEY123&lib=x', redirected: true, text: async () => JSON.stringify({ ok: false, getReceived: true, error: 'GET' }) }
+        : { status: 200, text: async () => JSON.stringify({ ok: true, result: 1 }) }),
+      sleep: async () => {},
+      log: { info: (t: string) => logs.push(t), warn: (t: string) => logs.push(t), error: (t: string) => logs.push(t) },
+    })
+    expect((await sendToGas(URL, { action: 'getExpenses' })).result).toBe(1)
+    expect(logs[0]).toBe('[ohsumi] GAS getExpenses: GAS に GET で届きました(POST の本文が転送の途中で失われた)。応答の URL: https://script.googleusercontent.com/macros/echo?…(転送あり)')
+    expect(logs.join('\n')).not.toContain('SECRETKEY123')
+  })
+
+  it('JSON ではない応答の本文は、タグを除いた先頭300文字。トークンのような値と JSON の断片は出さない', () => {
+    const html = '<!DOCTYPE html><html><head><title>Google Drive - Page Not Found</title><style>body{color:red}</style><script>var x=1</script></head>' +
+      '<body><p>Sorry, unable to open the file at this time.</p><p>Please check the address and try again.</p></body></html>'
+    expect(bodySnippet(html)).toBe('[Google Drive - Page Not Found] Google Drive - Page Not Found Sorry, unable to open the file at this time. Please check the address and try again.'.replace('[Google Drive - Page Not Found] ', ''))
+    expect(bodySnippet('token v1.abcDEF.ghiJKL and eyJhbGciOi.eyJzdWIi.sig and ' + 'A'.repeat(40))).toBe('token [伏せた値] and [伏せた値] and [伏せた値]')
+    expect(bodySnippet('{"ok":true,"result":{"members":[{"name":"山田')).toMatch(/^\(JSON の途中で切れた可能性があります。\d+文字。中身は出しません\)$/)
+    expect(bodySnippet('x'.repeat(500)).length).toBeLessThanOrEqual(300)
+    expect(bodySnippet('   ')).toBe('(空)')
+  })
+
+  it('応答が来ないまま止まった1本は、読み取りは20秒・書き込みは45秒で打ち切って送り直す', async () => {
+    expect(attemptTimeoutOf('getInitialData')).toBe(ATTEMPT_TIMEOUT_MS.read)
+    expect(attemptTimeoutOf('updateTaskStatus')).toBe(ATTEMPT_TIMEOUT_MS.write)
+    expect(attemptTimeoutOf('exchangeIdToken')).toBe(ATTEMPT_TIMEOUT_MS.write)
+    vi.useFakeTimers()
+    try {
+      let n = 0
+      const logs: string[] = []
+      setGasTransportDepsForTest({
+        fetch: (_u, init) => (++n === 1
+          ? new Promise((_, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted'))))
+          : Promise.resolve({ status: 200, text: async () => '{"ok":true}' })),
+        sleep: async () => {},
+        log: { info: (t: string) => logs.push(t), warn: (t: string) => logs.push(t), error: (t: string) => logs.push(t) },
+      })
+      const p = sendToGas(URL, { action: 'getInitialData' })
+      await vi.advanceTimersByTimeAsync(ATTEMPT_TIMEOUT_MS.read)
+      expect((await p).ok).toBe(true)
+      expect(logs[0]).toBe('[ohsumi] GAS getInitialData: 再試行 1/2(原因: 通信エラー(20秒待っても応答がありません))')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('応答の URL は、クエリ(echo の user_content_key など)を除いて出す', () => {
+    expect(safeResponseUrl('https://script.googleusercontent.com/macros/echo?user_content_key=abc&lib=M')).toBe('https://script.googleusercontent.com/macros/echo?…')
+    expect(safeResponseUrl('https://script.google.com/macros/u/1/s/ID/exec')).toBe('https://script.google.com/macros/u/1/s/ID/exec')
+    expect(safeResponseUrl(undefined)).toBe('(不明)')
+  })
+
+  it('成功した時は、往復の時間と GAS の中の内訳を1行で出す', async () => {
+    const h = harness(() => json({ ok: true, timing: { totalMs: 812, authMs: 20, cache: 'miss', cacheReadMs: 15, readMs: 640, read: 'spreadsheetApp', readError: 'HTTP 403', filterMs: 90 } }))
+    await sendToGas(URL, { action: 'getInitialData' })
+    expect(h.logs.at(-1)!.text).toMatch(
+      /^\[ohsumi\] GAS getInitialData: \d+ms\(列の待ち \d+ms・往復 \d+ms・GAS 812ms: 認証 20・キャッシュ miss 15・シート読み込み 640\(予備の方式\)・Sheets API で読めなかった理由: HTTP 403・絞り込み 90\)$/,
+    )
   })
 })
 

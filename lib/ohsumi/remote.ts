@@ -64,7 +64,8 @@ import {
   normalizeThresholdKeys,
 } from './code-normalize'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
-import { sendToGas, type GasResponse } from './gas-transport'
+import { GasTransportError, sendToGas, type GasResponse } from './gas-transport'
+import { checkGasUrl } from './gas-url'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
@@ -73,6 +74,14 @@ export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 // NEXT_PUBLIC_ vars are inlined at build time by Next.js. They must be
 // referenced by their literal full name (not a dynamic key) to be inlined.
 const GAS_URL = process.env.NEXT_PUBLIC_GAS_URL
+
+// URL の形が違う(/u/1/ を含む・/dev など)と、Google の転送で POST の本文が失われる。
+// ビルドの前にも確かめている(scripts/check-gas-url.mjs)が、画面でもコンソールに出す
+if (typeof window !== 'undefined' && GAS_URL) {
+  const check = checkGasUrl(GAS_URL)
+  // eslint-disable-next-line no-console
+  if (check.level !== 'ok') (check.level === 'error' ? console.error : console.warn)(`[ohsumi] ${check.message}`)
+}
 
 export const isRemoteConfigured = !!GAS_URL
 
@@ -524,13 +533,9 @@ interface InitialDataResponse {
 // Signs in (resolves the member) and loads Members/Projects/Tasks/Settings
 // in one GAS call. Pass the version from the previous load to skip the
 // payload when nothing changed.
+// 所要時間と GAS の中の内訳は、gas-transport.ts がコンソールに出す
 export async function fetchInitialData(knownVersion?: string): Promise<InitialData> {
-  const started = typeof performance !== 'undefined' ? performance.now() : 0
   const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion } : {})
-  if (started) {
-    // eslint-disable-next-line no-console
-    console.info(`[ohsumi] getInitialData ${Math.round(performance.now() - started)}ms${res.unchanged ? ' (unchanged)' : ''}`)
-  }
   return toInitialData(res)
 }
 
@@ -605,12 +610,22 @@ export interface ExchangeResult extends InitialData {
 
 /** Google の IDトークンをセッショントークンに交換し、初期データもまとめて受け取る */
 export async function exchangeIdToken(idToken: string, nonceSecret: string, remember: boolean): Promise<ExchangeResult> {
-  const json = await callGas<InitialDataResponse & { email?: string; session?: StoredSession }>({
-    action: 'exchangeIdToken',
-    idToken,
-    nonceSecret,
-    remember,
-  })
+  let json: GasResponse<InitialDataResponse & { email?: string; session?: StoredSession }>
+  try {
+    json = await callGas<InitialDataResponse & { email?: string; session?: StoredSession }>({
+      action: 'exchangeIdToken',
+      idToken,
+      nonceSecret,
+      remember,
+    })
+  } catch (err) {
+    // IDトークンは1回しか使えないため、送り直さない。ログイン画面は新しい試行でボタンを出し直すので、
+    // もう一度押せば入れる
+    if (err instanceof GasTransportError) {
+      throw new Error(`ログインの応答を受け取れませんでした(原因: ${err.reason})。もう一度「Google でログイン」を押してください。`)
+    }
+    throw err
+  }
   if (!json.ok || !json.result) throw new Error(json.error || 'ログインに失敗しました')
   const res = json.result
   if (!res.memberId) return { memberId: null, email: res.email }
