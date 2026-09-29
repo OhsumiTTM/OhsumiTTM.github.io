@@ -253,7 +253,7 @@ describe('最終ログイン日時', () => {
 })
 
 describe('裏での読み込みのキャッシュ', () => {
-  it('経費はデータの版ごとにキャッシュし、閲覧の絞り込みは毎回メンバーごとに行う。版が変われば読み直す', () => {
+  it('経費は経費の表の版ごとにキャッシュし、閲覧の絞り込みは毎回メンバーごとに行う。経費の版が変われば読み直す', () => {
     const t = setup()
     const a = t.post({ action: 'getBackgroundData', sessionToken: 'm2' })
     expect(a.result.expenses.map((e: { id: string }) => e.id)).toEqual(['x2']) // 一般は自分の申請だけ
@@ -263,7 +263,10 @@ describe('裏での読み込みのキャッシュ', () => {
     expect(b.result.expenses.map((e: { id: string }) => e.id)).toEqual(['x2', 'x1']) // 代表は全部(新しい順)
     expect(b.timing.expensesCache).toBe('hit')
     expect(t.sheets.Expenses.reads).toBe(reads)
+    // スナップショット(Members など)の版が変わっても、経費のキャッシュは使い続ける(表ごとの版)
     ;(t.c.bumpDataVersion as () => void)()
+    expect(t.post({ action: 'getBackgroundData', sessionToken: 'm1' }).timing.expensesCache).toBe('hit')
+    ;(t.gas.bumpTableVersion as (x: string) => void)('expenses')
     const c = t.post({ action: 'getBackgroundData', sessionToken: 'm1' })
     expect(c.timing.expensesCache).toBe('miss')
   })

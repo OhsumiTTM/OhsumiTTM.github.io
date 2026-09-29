@@ -1096,6 +1096,15 @@ function setupOhsumi() {
     } else {
       console.log('✅ onSpreadsheetChange トリガー既存')
     }
+    // セルの編集は、編集したシートの版だけを新しくする(どの表が変わったか分かるため)
+    var hasEdit = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'onSpreadsheetEdit' })
+    if (!hasEdit) {
+      ScriptApp.newTrigger('onSpreadsheetEdit').forSpreadsheet(ss).onEdit().create()
+      console.log('✅ onSpreadsheetEdit トリガー作成')
+    } else {
+      console.log('✅ onSpreadsheetEdit トリガー既存')
+    }
+    PropertiesService.getScriptProperties().setProperty('EDIT_TRIGGER_INSTALLED', 'true')
   } catch (e) { console.error('❌ 変更検知トリガー設定: ' + e) }
   bumpDataVersion()
 
@@ -3444,7 +3453,7 @@ function doPost(e) {
       // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
       // 次にロックを取った実行が更新前の値を読むことがある)
       try { SpreadsheetApp.flush() } catch (flushErr) { /* 書き込みは実行の終了時にも確定する */ }
-      bumpDataVersion()
+      bumpVersionsAfterWrite(body && body.action)
       lock.releaseLock()
     }
   }
@@ -5536,7 +5545,7 @@ function generateRecurringTasksLocked() {
   try {
     var genResult = generateRecurringTasksInternal()
     // 定期タスクを生成した場合は読み取りキャッシュを無効にする
-    if (genResult && genResult.generated && genResult.generated.length > 0) bumpDataVersion()
+    if (genResult && genResult.generated && genResult.generated.length > 0) bumpSnapshotVersion()
     return genResult
   } finally {
     lock.releaseLock()
@@ -6732,22 +6741,99 @@ function getDataVersion() {
   return PropertiesService.getScriptProperties().getProperty(DATA_VERSION_PROPERTY_KEY) || '0'
 }
 
-function bumpDataVersion() {
+// 版は表(または読み込みの単位)ごとに分ける。関係の無い書き込みで、ほかの表のキャッシュを捨てないため。
+//   snapshot         Members・Projects・Tasks・Settings(DATA_VERSION。初期データと読み取りの認証)
+//   expenses         Expenses(TABLE_VERSION_expenses)
+//   formSubmissions  FormSubmissions(TABLE_VERSION_formSubmissions)
+//   candidates       Candidates(TABLE_VERSION_candidates)
+// メールアドレス表(MemberEmails)は、これまでどおり MEMBER_EMAILS_VERSION で別に持つ。
+var TABLE_VERSION_PREFIX = 'TABLE_VERSION_'
+var VERSIONED_TABLES = ['expenses', 'formSubmissions', 'candidates']
+
+function newVersionValue() {
+  return String(Date.now()) + '-' + Math.floor(Math.random() * 1e6)
+}
+
+function getTableVersion(table) {
+  return PropertiesService.getScriptProperties().getProperty(TABLE_VERSION_PREFIX + table) || '0'
+}
+
+function bumpTableVersion(table) {
   try {
-    PropertiesService.getScriptProperties().setProperty(
-      DATA_VERSION_PROPERTY_KEY,
-      String(Date.now()) + '-' + Math.floor(Math.random() * 1e6),
-    )
+    PropertiesService.getScriptProperties().setProperty(TABLE_VERSION_PREFIX + table, newVersionValue())
   } catch (e) {
-    // 版の更新に失敗しても、キャッシュの有効期限(6時間)で最終的に反映される
-    Logger.log('bumpDataVersion failed: ' + e)
+    Logger.log('bumpTableVersion failed: ' + e)
   }
 }
 
-// スプレッドシートを手で編集したときにキャッシュを無効にする(setupOhsumi で
-// インストール型トリガーとして登録する)。スクリプトからの書き込みでは発火しない。
-// どのシートが編集されたかは分からないため、メールアドレス表の版も新しくする。
+// スナップショット(Members・Projects・Tasks・Settings)の版だけを新しくする
+function bumpSnapshotVersion() {
+  try {
+    PropertiesService.getScriptProperties().setProperty(DATA_VERSION_PROPERTY_KEY, newVersionValue())
+  } catch (e) {
+    // 版の更新に失敗しても、キャッシュの有効期限(最長5分)で反映される
+    Logger.log('bumpSnapshotVersion failed: ' + e)
+  }
+}
+
+// すべての表の版を新しくする(どの表が変わったか分からない時: 設定・毎日の処理・移行・手動の編集の一部など)
+function bumpDataVersion() {
+  bumpSnapshotVersion()
+  VERSIONED_TABLES.forEach(bumpTableVersion)
+}
+
+// アプリからの書き込み(ロックを取った操作)の後に、その操作が書くかもしれない表の版だけを新しくする。
+// 一覧は scripts/gas-write-tables.mjs で Code.gs を調べた結果を含むこと(lib/ohsumi/gas-table-versions.test.ts で確かめる)。
+// 一覧に無い操作はスナップショットの版を新しくする(これまでどおり)
+var TABLE_WRITE_ACTIONS = {
+  expenses: ['notifyTaskRejected', 'submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense'],
+  formSubmissions: ['notifyTaskRejected', 'submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
+  candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'],
+}
+// Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
+
+function bumpVersionsAfterWrite(action) {
+  action = String(action || '')
+  VERSIONED_TABLES.forEach(function (t) {
+    if (TABLE_WRITE_ACTIONS[t].indexOf(action) >= 0) bumpTableVersion(t)
+  })
+  if (SNAPSHOT_UNTOUCHED_ACTIONS.indexOf(action) < 0) bumpSnapshotVersion()
+}
+
+// シートの名前 → 版を新しくする処理(スプレッドシートの直接の編集で使う)
+var SHEET_VERSION_BUMPS = {
+  Members: bumpSnapshotVersion,
+  Projects: bumpSnapshotVersion,
+  Tasks: bumpSnapshotVersion,
+  Settings: bumpSnapshotVersion,
+  Expenses: function () { bumpTableVersion('expenses') },
+  FormSubmissions: function () { bumpTableVersion('formSubmissions') },
+  Candidates: function () { bumpTableVersion('candidates') },
+  MemberEmails: function () { bumpMemberEmailsVersion() },
+}
+
+// スプレッドシートを手で変えたときにキャッシュを無効にする(setupOhsumi でインストール型トリガーとして登録する)。
+// スクリプトからの書き込みでは発火しない。変更検知(onChange)には、どのシートが変わったかが入らないため、
+// セルの編集は onSpreadsheetEdit(編集したシートが分かる)に任せ、それ以外(行の追加・削除・シートの追加など)は
+// すべての版を新しくする。onSpreadsheetEdit のトリガーが無い団体(setupOhsumi を実行し直していない)では、
+// 編集もすべての版を新しくする
 function onSpreadsheetChange(e) {
+  var editHandled = PropertiesService.getScriptProperties().getProperty('EDIT_TRIGGER_INSTALLED') === 'true'
+  if (e && e.changeType === 'EDIT' && editHandled) return
+  bumpDataVersion()
+  bumpMemberEmailsVersion()
+}
+
+// セルの編集(インストール型の onEdit)。編集したシートの版だけを新しくする。知らないシートなら、すべて新しくする
+function onSpreadsheetEdit(e) {
+  var name = ''
+  try { name = e && e.range ? String(e.range.getSheet().getName()) : '' } catch (err) { name = '' }
+  var bump = SHEET_VERSION_BUMPS[name]
+  if (bump) {
+    bump()
+    return
+  }
   bumpDataVersion()
   bumpMemberEmailsVersion()
 }
@@ -7029,7 +7115,7 @@ function loadSnapshot() {
 var _requestRows = {}
 
 function loadVersionedRows(prefix, loader) {
-  var version = getDataVersion()
+  var version = getTableVersion(prefix)
   var memoKey = prefix + ':' + version
   if (_requestRows[memoKey]) return _requestRows[memoKey]
   var rows = readChunkedCache(prefix, version)
