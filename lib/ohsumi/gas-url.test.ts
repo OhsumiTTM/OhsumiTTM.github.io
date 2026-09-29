@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { gasUrlLevel } from '../../scripts/check-gas-url.mjs'
+import { gasUrlLevel, registryUrlLevel } from '../../scripts/check-gas-url.mjs'
 import { checkGasUrl } from './gas-url'
 
 const ROOT = join(__dirname, '..', '..')
@@ -37,5 +37,22 @@ describe('GAS の URL の形', () => {
     expect(r.stderr + r.stdout).not.toContain('SECRET_ID_123')
     const good = spawnSync('node', ['scripts/check-gas-url.mjs'], { cwd: ROOT, env: { ...process.env, NEXT_PUBLIC_GAS_URL: CASES[0][0] }, encoding: 'utf8' })
     expect(good.status).toBe(0)
+  })
+})
+
+describe('レジストリの URL(NEXT_PUBLIC_REGISTRY_URL)', () => {
+  it('/macros/s/…/exec の形だけを受け付け、違えばビルドを止める(未設定はよい)', () => {
+    expect(registryUrlLevel('https://script.google.com/macros/s/AKfycbx-abc_123/exec')).toBe('ok')
+    expect(registryUrlLevel('')).toBe('ok')
+    expect(registryUrlLevel(undefined)).toBe('ok')
+    expect(registryUrlLevel('https://script.google.com/macros/u/1/s/AKfycbx-abc_123/exec')).toBe('error')
+    expect(registryUrlLevel('https://script.google.com/macros/s/AKfycbx-abc_123/dev')).toBe('error')
+    expect(registryUrlLevel('https://script.google.com/a/macros/example.org/s/AKfycbx/exec')).toBe('error')
+    const run = spawnSync('node', [join(ROOT, 'scripts', 'check-gas-url.mjs')], {
+      env: { ...process.env, NEXT_PUBLIC_GAS_URL: '', NEXT_PUBLIC_REGISTRY_URL: 'https://script.google.com/macros/s/X/dev' },
+      encoding: 'utf8',
+    })
+    expect(run.status).toBe(1)
+    expect(run.stderr).toMatch(/NEXT_PUBLIC_REGISTRY_URL/)
   })
 })
