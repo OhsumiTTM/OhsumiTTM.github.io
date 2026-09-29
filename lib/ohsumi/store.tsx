@@ -1031,22 +1031,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setMyEmail(MEMBERS.find((m) => m.id === currentUserId)?.email ?? '')
       return
     }
-    // ログインしてデータを読み込んだ後にだけ呼ぶ
-    if (remoteStatus !== 'ready') return
-    let cancelled = false
-    remoteApi
-      .getMyEmails()
-      .then((res) => {
-        if (!cancelled) setMyEmail(res.email ?? '')
-      })
-      .catch(() => {
-        // サイレントに諦める — 未ログイン状態のGoogleセッション切れ等。
-        // person-detail.tsx側の「自分」セクションを開き直せば再試行される
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [currentUserId, remoteStatus])
+    // GAS を使う時は、裏での読み込み(getBackgroundData)で受け取る(loadRecords)
+  }, [currentUserId])
 
   // hydrate from localStorage once (only meaningful without a remote DB —
   // when the spreadsheet is configured it's fetched fresh below and wins)
@@ -1162,25 +1148,51 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // シートに直接保存している記録(経費・フォームの回答・採用の候補者)を読み込む。
   // どれも GAS 側で、閲覧できる行だけに絞って返る
   // (GAS へは1本ずつ順番に、画面の操作より後に送られる — gas-transport.ts)
+  // 1回のリクエスト(getBackgroundData)で受け取る。往復が減るほど、結果の受け渡し(echo)で
+  // 失敗する機会が減る。GAS が古い(この操作を知らない)場合は、以前のように別々に読む
+  // ログイン・再読み込みを始めた時刻(performance.now())。すべてのデータがそろったらコンソールに出す
+  const loadStartedRef = useRef<{ at: number; label: string } | null>(null)
+  const reportLoadTime = useCallback(() => {
+    const started = loadStartedRef.current
+    if (!started || typeof performance === 'undefined') return
+    loadStartedRef.current = null
+    // eslint-disable-next-line no-console
+    console.info(`[ohsumi] ${started.label}からすべてのデータがそろうまで ${Math.round(performance.now() - started.at)}ms`)
+  }, [])
+  const loadRecordsSeparately = useCallback(
+    () =>
+      Promise.allSettled([
+        remoteApi.getExpenses().then((apps) => setExpenseApplications(apps)).catch(reportLoadError),
+        remoteApi.getFormSubmissions().then((subs) => setCustomFormSubmissions(subs)).catch(reportLoadError),
+        remoteApi.getCandidates().then((list) => setCandidates(list)).catch(reportLoadError),
+        remoteApi.getMyEmails().then((res) => setMyEmail(res.email ?? '')).catch(() => {}),
+      ]).then(() => undefined),
+    [reportLoadError],
+  )
   const loadRecords = useCallback(() => {
     if (!isRemoteConfigured) return
     remoteApi
-      .getExpenses()
-      .then((apps) => setExpenseApplications(apps))
-      .catch(reportLoadError)
-    remoteApi
-      .getFormSubmissions()
-      .then((subs) => setCustomFormSubmissions(subs))
-      .catch(reportLoadError)
-    remoteApi
-      .getCandidates()
-      .then((list) => setCandidates(list))
-      .catch(reportLoadError)
-  }, [reportLoadError])
+      .getBackgroundData()
+      .then((data) => {
+        if (data.expenses) setExpenseApplications(data.expenses)
+        if (data.formSubmissions) setCustomFormSubmissions(data.formSubmissions)
+        if (data.candidates) setCandidates(data.candidates)
+        if (typeof data.myEmail === 'string') setMyEmail(data.myEmail)
+        const failed = Object.entries(data.errors ?? {}).filter(([key]) => key !== 'myEmail')
+        if (failed.length) reportLoadError(new Error(failed.map(([key, msg]) => `${key}: ${msg}`).join(' / ')))
+      })
+      .catch((err: unknown) => {
+        if (err instanceof Error && /Unknown action/.test(err.message)) return loadRecordsSeparately()
+        reportLoadError(err)
+      })
+      .finally(reportLoadTime)
+  }, [reportLoadError, loadRecordsSeparately, reportLoadTime])
 
   // ログインの後、データが反映されてから login() の処理(最終ログイン日時の更新・
   // 初期タスクの付与)を行うメンバー
   const [pendingLoginId, setPendingLoginId] = useState<string | null>(null)
+  // GAS がログイン(exchangeIdToken)の中で最終ログイン日時を記録したか(記録していれば送らない)
+  const lastLoginRecordedRef = useRef(false)
 
   // ログイン: Google の IDトークンを団体の GAS でセッショントークンに交換する
   const signInWithGoogle = useCallback(
@@ -1189,12 +1201,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       // エラーを出すため、ここでは remoteStatus を loading にしない)
       setRemoteError(null)
       setLoadError(null)
+      if (typeof performance !== 'undefined') loadStartedRef.current = { at: performance.now(), label: 'ログイン' }
       try {
         const res = await exchangeIdToken(idToken, nonceSecret, remember)
         if (!res.memberId || !res.session) {
           return { status: 'notRegistered' as const, email: res.email }
         }
         saveSession(orgId, res.session)
+        lastLoginRecordedRef.current = res.lastLoginRecorded === true
         applyInitialData(res)
         setSettingsReady(true)
         setRemoteStatus('ready')
@@ -1219,6 +1233,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setSessionResuming(true)
     setRemoteStatus('loading')
     setLoadError(null)
+    if (typeof performance !== 'undefined') loadStartedRef.current = { at: performance.now(), label: '再読み込み' }
     fetchInitialData()
       .then((res) => {
         if (!res.memberId) throw new Error('メンバー登録が見つかりません')
@@ -1302,26 +1317,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // Projects/Tasks自体は連携済みなので、ルール定義はローカルのままでも
   // 生成したタスクはremoteApi.createTasksで実際のTasksシートへ書き込む
   // (isRemoteConfiguredがfalseの完全ローカルデモ環境ではローカルstateのみ)。
-  // GAS の確認は、読み込みのたびではなくページを開いた後の1回だけ行う(日々の生成は
-  // GAS の日次トリガーが行う。情報更新で設定を読み直すたびに送らない)
-  const recurringCheckedRef = useRef(false)
+  // GAS を使う時は、定期タスクの生成は GAS の時間主導トリガー(dailyMaintenance、毎日6時台)に任せる
+  // (画面からは確認しない。往復を減らすため)。以下は GAS を使わない環境(ローカルのデモ)だけの生成
   useEffect(() => {
     if (!hydrated || recurringRules.length === 0) return
-
-    if (isSettingsConfigured) {
-      if (recurringCheckedRef.current) return
-      recurringCheckedRef.current = true
-      remoteApi
-        .checkAndGenerateRecurringTasks()
-        .then(({ generated }) => {
-          if (!generated || generated.length === 0) return
-          // 生成されたタスクの詳細フィールドはrefreshAll()で丸ごと再取得
-          // すれば十分で、ここで個別に組み立て直す必要は無い
-          refreshAll()
-        })
-        .catch(reportRemoteError)
-      return
-    }
+    if (isSettingsConfigured) return
 
     const toLocalDateStr = (date: Date) =>
       `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -2327,7 +2327,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       // lastLogin を現在時刻で更新
       const nowIso = new Date().toISOString()
       setMembers((prev) => prev.map((m) => m.id === userId ? { ...m, lastLogin: nowIso } : m))
-      if (isRemoteConfigured) runRemote(remoteApi.updateLastLogin(userId))
+      // GAS がログインの中で記録していなければ送る(以前の GAS・ロックを取れなかった時)
+      if (isRemoteConfigured && !lastLoginRecordedRef.current) runRemote(remoteApi.updateLastLogin(userId))
+      lastLoginRecordedRef.current = false
 
       // 既に初期タスクを付与済みか、タスクが存在する場合はスキップ
       try {

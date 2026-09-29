@@ -602,10 +602,20 @@ export async function fetchLoginConfig(): Promise<{ orgId: string } | null> {
   }
 }
 
+export interface BackgroundData {
+  expenses?: import('./types').ExpenseApplication[]
+  formSubmissions?: import('./types').CustomFormSubmission[]
+  candidates?: import('./types').Candidate[]
+  myEmail?: string
+  errors?: Record<string, string>
+}
+
 export interface ExchangeResult extends InitialData {
   // 登録されていないアカウントの場合、本人のメールアドレス(ログイン画面の表示用)
   email?: string
   session?: StoredSession
+  // GAS が最終ログイン日時を記録した(画面は updateLastLogin を送らなくてよい)
+  lastLoginRecorded?: boolean
 }
 
 /** Google の IDトークンをセッショントークンに交換し、初期データもまとめて受け取る */
@@ -629,7 +639,7 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
   if (!json.ok || !json.result) throw new Error(json.error || 'ログインに失敗しました')
   const res = json.result
   if (!res.memberId) return { memberId: null, email: res.email }
-  return { ...toInitialData(res), session: res.session }
+  return { ...toInitialData(res), session: res.session, lastLoginRecorded: (res as { lastLoginRecorded?: boolean }).lastLoginRecorded === true }
 }
 
 async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
@@ -804,6 +814,9 @@ export const remoteApi = {
   addMember: (name: string, email: string, affiliation: string, role: Role) =>
     postToGas<{ id: string }>('addMember', { name, email, affiliation, role }),
   updateEmail: (memberId: string, email: string) => postToGas('updateEmail', { memberId, email }),
+  // 裏での読み込み(経費・フォームの回答・採用の候補者・自分のメールアドレス)を1回で受け取る。
+  // それぞれ個別の操作と同じ絞り込みを通る。失敗したものは errors に理由が入る(gas/Code.gs の getBackgroundData)
+  getBackgroundData: () => postToGas<BackgroundData>('getBackgroundData', {}),
   // 閲覧できる経費申請だけが返る(gas/Code.gs の canViewExpense)
   getExpenses: () => postToGas<import('./types').ExpenseApplication[]>('getExpenses', {}),
   // 採用の候補者(個人情報)。採用の権限が無い人には空の一覧が返る(gas/Code.gs の getCandidates)
