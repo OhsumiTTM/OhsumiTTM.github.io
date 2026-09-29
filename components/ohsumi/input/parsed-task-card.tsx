@@ -4,7 +4,7 @@ import { useState } from 'react'
 import type { ParsedTask } from '@/lib/ohsumi/types'
 import { DIFFICULTY_LABEL, TASK_IMPORTANCE } from '@/lib/ohsumi/types'
 import { useOhsumi } from '@/lib/ohsumi/store'
-import { useI18n, DIFFICULTY_KEY } from '@/lib/ohsumi/i18n'
+import { useI18n, DIFFICULTY_KEY, IMPORTANCE_KEY } from '@/lib/ohsumi/i18n'
 import { Card, DifficultyBadge, Tag, Avatar, SimilarTaskSummary } from '../primitives'
 import { cn } from '@/lib/utils'
 import { findSimilarTasks, rankCandidates, suggestSkillsForCategory, suggestCategoriesForTitle } from '@/lib/ohsumi/utils'
@@ -328,19 +328,19 @@ export function ParsedTaskCard({
             className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
           >
             <option value="all">{t('common.everyone')}</option>
-            <option value="幹部">{t('taskDrawer.execOnly')}</option>
+            <option value="leaders">{t('taskDrawer.execOnly')}</option>
           </select>
         </Field>
 
         <Field label={t('taskDrawer.edit.importanceLabel')}>
           <select
-            value={task.importance ?? '一般'}
+            value={task.importance ?? 'normal'}
             onChange={(e) => set('importance', e.target.value as ParsedTask['importance'])}
             className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
           >
             {TASK_IMPORTANCE.map((i) => (
               <option key={i} value={i}>
-                {i}
+                {t(IMPORTANCE_KEY[i])}
               </option>
             ))}
           </select>

@@ -70,7 +70,7 @@ export function allowedStatusOptions(
 // 重要/対外公開 タスクは登録者の報告先チェーンを経由せず、最上位の管理者
 // （isFullAdmin）のみが承認できる（item 9: 承認ルートの拡張）。
 export function isEscalatedTask(importance: TaskImportance | undefined): boolean {
-  return importance === '重要' || importance === '対外公開'
+  return importance === 'important' || importance === 'external'
 }
 
 // Mirrors admin-approvals.tsx's canApprove: a full admin can always

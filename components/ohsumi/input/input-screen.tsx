@@ -7,7 +7,7 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '../toast'
 import { Modal } from '../modal'
 import { buildDemoParse, DEMO_INPUT } from '@/lib/ohsumi/seed'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
+import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES, UNCATEGORIZED_DEPARTMENT } from '@/lib/ohsumi/types'
 import type {
   ParsedTask,
   Department,
@@ -1444,24 +1444,24 @@ function parseText(text: string, projects: Project[]): ParsedTask[] {
     // left for the user to pick from the おすすめ chips in ParsedTaskCard —
     // auto-guessing a required skill from keywords was more often wrong
     // than right, so this only infers the department, not skills
-    let department: Department = '未分類'
+    let department: Department = UNCATEGORIZED_DEPARTMENT
     if (/デザイン|ポスター|canva/i.test(line)) {
-      department = 'デザイン'
+      department = 'design'
     }
     if (/メール|連絡|案内/.test(line)) {
-      department = '渉外'
+      department = 'relations'
     }
     if (/sns|投稿|告知/i.test(line)) {
-      department = '広報'
+      department = 'pr'
     }
     if (/記事|執筆|ライティング/.test(line)) {
-      department = '広報'
+      department = 'pr'
     }
     const deadlineMatch = line.match(/(\d{1,2})月(\d{1,2})日/)
     const deadline = deadlineMatch
       ? `2026-${deadlineMatch[1].padStart(2, '0')}-${deadlineMatch[2].padStart(2, '0')}`
       : null
-    const priority: Priority = deadline ? '高' : '中'
+    const priority: Priority = deadline ? 'high' : 'medium'
     return {
       id: `parsed-${Math.random().toString(36).slice(2, 9)}`,
       name,
@@ -1472,7 +1472,7 @@ function parseText(text: string, projects: Project[]): ParsedTask[] {
       // ParsedTaskCard — a skill name isn't a meaningful category guess
       category: '未分類',
       skills: [],
-      difficulty: '新人歓迎' as const,
+      difficulty: 'beginner' as const,
       priority,
       assigneeIds: [],
       approved: true,

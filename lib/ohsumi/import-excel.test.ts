@@ -55,7 +55,7 @@ describe('import-excel (xlsx 0.20.3との互換性)', () => {
 
     const first = parsed.find((p) => p.name === '資料作成')
     expect(first?.projectId).toBe('p-a')
-    expect(first?.priority).toBe('高')
+    expect(first?.priority).toBe('high')
     expect(first?.skills).toEqual(['デザイン', '企画'])
     // "2024/4/1" というテキスト日付が正しくISO日付文字列に変換される
     expect(first?.startDate).toBe('2024-04-01')

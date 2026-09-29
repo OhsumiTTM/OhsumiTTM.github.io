@@ -11,7 +11,7 @@ import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure } from '@/lib/ohsumi/utils'
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
-import { DIFFICULTY_LABEL } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, isTopRole } from '@/lib/ohsumi/types'
 import { cn } from '@/lib/utils'
 import { X, Plus, GraduationCap, CheckCircle2, Download, Upload } from 'lucide-react'
 import type {
@@ -996,7 +996,7 @@ function TrainingHistorySection({
   const { t: trHint } = useI18n()
   // notifyTrainingDecisionはGAS側で常にisDaihyo固定（研修承認の記録自体
   // =updateTrainingHistoryはselfOrAdminで成功するが、通知メールだけ失敗する）
-  const notifyDecisionHint = currentUser?.role !== '代表' ? trHint('admin.accessNote.daihyo') : undefined
+  const notifyDecisionHint = !isTopRole(currentUser?.role) ? trHint('admin.accessNote.daihyo') : undefined
   const items = member.trainingHistory ?? []
   const [name, setName] = useState('')
   const [date, setDate] = useState('')

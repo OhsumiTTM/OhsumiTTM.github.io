@@ -113,39 +113,39 @@ describe('allowedStatusOptions', () => {
 
 describe('isEscalatedTask', () => {
   it('重要 and 対外公開 are escalated', () => {
-    expect(isEscalatedTask('重要')).toBe(true)
-    expect(isEscalatedTask('対外公開')).toBe(true)
+    expect(isEscalatedTask('important')).toBe(true)
+    expect(isEscalatedTask('external')).toBe(true)
   })
 
   it('一般 and unset are not escalated', () => {
-    expect(isEscalatedTask('一般')).toBe(false)
+    expect(isEscalatedTask('normal')).toBe(false)
     expect(isEscalatedTask(undefined)).toBe(false)
   })
 })
 
 describe('canApproveTask', () => {
   it('a full admin can approve anything, escalated or not', () => {
-    expect(canApproveTask(true, '対外公開', 'm-someone-else', 'm-me')).toBe(true)
-    expect(canApproveTask(true, '一般', undefined, 'm-me')).toBe(true)
+    expect(canApproveTask(true, 'external', 'm-someone-else', 'm-me')).toBe(true)
+    expect(canApproveTask(true, 'normal', undefined, 'm-me')).toBe(true)
   })
 
   it('a non-admin can never approve an escalated task, even if named as the approver', () => {
-    expect(canApproveTask(false, '重要', 'm-me', 'm-me')).toBe(false)
-    expect(canApproveTask(false, '対外公開', undefined, 'm-me')).toBe(false)
+    expect(canApproveTask(false, 'important', 'm-me', 'm-me')).toBe(false)
+    expect(canApproveTask(false, 'external', undefined, 'm-me')).toBe(false)
   })
 
   it('a non-admin can approve a non-escalated task with no designated approver', () => {
-    expect(canApproveTask(false, '一般', undefined, 'm-me')).toBe(true)
+    expect(canApproveTask(false, 'normal', undefined, 'm-me')).toBe(true)
     expect(canApproveTask(false, undefined, undefined, 'm-me')).toBe(true)
   })
 
   it('a non-admin can approve a non-escalated task only if they are the designated approver', () => {
-    expect(canApproveTask(false, '一般', 'm-me', 'm-me')).toBe(true)
-    expect(canApproveTask(false, '一般', 'm-other', 'm-me')).toBe(false)
+    expect(canApproveTask(false, 'normal', 'm-me', 'm-me')).toBe(true)
+    expect(canApproveTask(false, 'normal', 'm-other', 'm-me')).toBe(false)
   })
 
   it('a non-admin with no current user id cannot match a designated approver', () => {
-    expect(canApproveTask(false, '一般', 'm-other', null)).toBe(false)
-    expect(canApproveTask(false, '一般', 'm-other', undefined)).toBe(false)
+    expect(canApproveTask(false, 'normal', 'm-other', null)).toBe(false)
+    expect(canApproveTask(false, 'normal', 'm-other', undefined)).toBe(false)
   })
 })

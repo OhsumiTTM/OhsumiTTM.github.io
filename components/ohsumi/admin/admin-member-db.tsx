@@ -7,7 +7,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Download, Upload, Eye, Search } from 'lucide-react'
 import type { CustomMemberColumn, Member } from '@/lib/ohsumi/types'
-import { BASE_ROLE } from '@/lib/ohsumi/types'
+import { BASE_ROLE, isTopRole } from '@/lib/ohsumi/types'
 import { exportSkillExcel } from '@/lib/ohsumi/export-excel'
 import { computeYearsOfExperience } from '@/lib/ohsumi/utils'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -194,7 +194,7 @@ export function AdminMemberDb() {
   // updateJoinedAtはGAS側で常にisDaihyo固定。このテーブルはisAnyAdmin
   // （代表以外の管理者ロールも含む）に編集可能な列として見えるため、
   // セルクリックで編集を試みると代表以外は保存時にエラーになる
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
 
   // Columns the current viewer is allowed to see/export — fixed cols +
   // dynamically-defined custom cols (Admin > Tags「カスタム項目」)

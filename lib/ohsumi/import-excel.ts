@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import type { Department, Difficulty, Member, ParsedTask, Priority, Project } from './types'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from './types'
+import { DEPARTMENTS, UNCATEGORIZED_DEPARTMENT } from './types'
+import { normalizeCode } from './codes'
 
 // Excelファイルの列は必ずしもOhsumiが出力した形式とは限らず、並び順や型は
 // 保証されない（日付がテキストだったりExcelの日付型だったり、列自体が
@@ -106,17 +107,19 @@ export function guessProject(raw: string, projects: Project[]): string {
   return found ? found.id : (projects[0]?.id ?? '')
 }
 
+// Excel の値は、日本語の表示名(シートの以前の値と同じ)でもコードでもよい。
+// 当てはまらない値は、以前と同じく未分類・中・新人歓迎にする
 export function guessDepartment(raw: string): Department {
-  const found = DEPARTMENTS.find((d) => d === raw)
-  return (found ?? '未分類') as Department
+  const code = normalizeCode('department', raw)
+  return DEPARTMENTS.includes(code) ? code : UNCATEGORIZED_DEPARTMENT
 }
 
 export function guessPriority(raw: string): Priority {
-  return PRIORITIES.find((p) => p === raw) ?? '中'
+  return normalizeCode('priority', raw)
 }
 
 export function guessDifficulty(raw: string): Difficulty {
-  return DIFFICULTY_LABEL.find((d) => d === raw) ?? '新人歓迎'
+  return normalizeCode('difficulty', raw)
 }
 
 export function guessMember(raw: string, members: Member[]): string {
@@ -202,17 +205,17 @@ export function buildParsedTasks(
     const deptRaw = mapping.department ? String(row[mapping.department] ?? '').trim() : ''
     const department = (deptRaw
       ? (valueMaps.department?.[deptRaw] ?? guessDepartment(deptRaw))
-      : '未分類') as Department
+      : UNCATEGORIZED_DEPARTMENT) as Department
 
     const priorityRaw = mapping.priority ? String(row[mapping.priority] ?? '').trim() : ''
     const priority = (priorityRaw
       ? (valueMaps.priority?.[priorityRaw] ?? guessPriority(priorityRaw))
-      : '中') as Priority
+      : 'medium') as Priority
 
     const difficultyRaw = mapping.difficulty ? String(row[mapping.difficulty] ?? '').trim() : ''
     const difficulty = (difficultyRaw
       ? (valueMaps.difficulty?.[difficultyRaw] ?? guessDifficulty(difficultyRaw))
-      : '新人歓迎') as Difficulty
+      : 'beginner') as Difficulty
 
     const assigneeIds = mapping.assignee
       ? Array.from(

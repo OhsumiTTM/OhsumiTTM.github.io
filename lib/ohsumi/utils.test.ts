@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { computeReviewTurnaroundDays, suggestWorkloadRebalance } from './utils'
 import { STATUS_LABEL, type Member, type Task, type TaskHistoryEntry } from './types'
+import { normalizeHistoryEntry } from './code-normalize'
 
-// ANL-013のバグ回帰テスト: history[].to にはSTATUS_LABEL経由の日本語ラベル
-// ('完了'/'確認待ち')が保存される(store.tsxのupdateTaskStatus参照)。
+// ANL-013のバグ回帰テスト: 移行前の history[].to には日本語ラベル('完了'/
+// '確認待ち')、移行後はコード('done'/'review')が保存される。どちらも読む時に
+// コードにそろえる(normalizeHistoryEntry)。
 // 内部enum値('done'/'review')とうっかり比較すると常にnullを返してしまう
 // (実際に本番で起きた不具合)ため、ラベル値で正しく判定できることを検証する。
 function historyEntry(at: string, to: string): TaskHistoryEntry {
-  return { id: `h-${at}`, at, byId: 'm1', field: 'status', from: '', to }
+  // シートから読む時と同じく、コードにそろえてから使う(remote.ts の mapTaskRow)
+  return normalizeHistoryEntry({ id: `h-${at}`, at, byId: 'm1', field: 'status', from: '', to })
 }
 
 function makeTask(history: TaskHistoryEntry[]): Task {
@@ -27,8 +30,9 @@ describe('computeReviewTurnaroundDays', () => {
     const task = makeTask([
       historyEntry('2024-01-01T00:00:00.000Z', STATUS_LABEL.review),
       historyEntry('2024-01-02T00:00:00.000Z', '修正中'),
-      historyEntry('2024-01-05T00:00:00.000Z', STATUS_LABEL.review),
-      historyEntry('2024-01-06T00:00:00.000Z', STATUS_LABEL.done),
+      // 移行後の記録(コード)が混ざっていても同じ
+      historyEntry('2024-01-05T00:00:00.000Z', 'review'),
+      historyEntry('2024-01-06T00:00:00.000Z', 'done'),
     ])
     expect(computeReviewTurnaroundDays(task)).toBe(1)
   })

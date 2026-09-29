@@ -9,7 +9,7 @@ import {
 } from 'react'
 import { ja } from './ja'
 import { en } from './en'
-import type { TaskStatus, Department, Priority, Difficulty } from '../types'
+import type { TaskStatus, Priority, Difficulty, TaskImportance, ScheduleResponseValue } from '../types'
 
 // 新しい言語を追加するときは: 1) この配列に追記 2) 対応する辞書ファイル
 // （xx.ts）を作り `satisfies Record<keyof typeof ja, string>` で型チェック
@@ -47,29 +47,49 @@ export const STATUS_KEY: Record<TaskStatus, TranslationKey> = {
 // された定数集合なので、TaskStatus と同様に安全に辞書化できる。組織が
 // Admin > Tags で自由に追加できるロール名（BASE_ROLE=一般以外）はここでは
 // 扱わない — lib/ohsumi/translate.ts の機械翻訳（自由入力向け）に任せる。
-export const DEPARTMENT_KEY: Record<Department, TranslationKey> = {
-  運営: 'department.運営',
-  広報: 'department.広報',
-  開発: 'department.開発',
-  デザイン: 'department.デザイン',
-  渉外: 'department.渉外',
-  イベント: 'department.イベント',
-  リサーチ: 'department.リサーチ',
-  未分類: 'department.未分類',
+export const DEPARTMENT_KEY: Record<string, TranslationKey> = {
+  ops: 'department.ops',
+  pr: 'department.pr',
+  dev: 'department.dev',
+  design: 'department.design',
+  relations: 'department.relations',
+  event: 'department.event',
+  research: 'department.research',
+  '': 'department.none',
+}
+
+// 部門の表示名。一覧に無い部門(以前の独自の部門名)は、その値をそのまま表示する
+export function departmentLabel(t: (key: TranslationKey) => string, department: string | null | undefined): string {
+  const key = DEPARTMENT_KEY[department ?? '']
+  return key ? t(key) : String(department)
 }
 
 export const PRIORITY_KEY: Record<Priority, TranslationKey> = {
-  高: 'priority.高',
-  中: 'priority.中',
-  低: 'priority.低',
+  high: 'priority.high',
+  medium: 'priority.medium',
+  low: 'priority.low',
 }
 
 export const DIFFICULTY_KEY: Record<Difficulty, TranslationKey> = {
-  誰でも可: 'difficulty.誰でも可',
-  新人歓迎: 'difficulty.新人歓迎',
-  少し経験必要: 'difficulty.少し経験必要',
-  経験者向け: 'difficulty.経験者向け',
-  上級者向け: 'difficulty.上級者向け',
+  anyone: 'difficulty.anyone',
+  beginner: 'difficulty.beginner',
+  some_exp: 'difficulty.some_exp',
+  experienced: 'difficulty.experienced',
+  advanced: 'difficulty.advanced',
+}
+
+export const IMPORTANCE_KEY: Record<TaskImportance, TranslationKey> = {
+  normal: 'importance.normal',
+  important: 'importance.important',
+  external: 'importance.external',
+}
+
+// 日程調整の回答。gas/Code.gs の通知の文面(NOTIFY_LABELS)も同じ表示名を
+// 使う(一致することを lib/ohsumi/codes.test.ts で確かめる)
+export const SCHEDULE_ANSWER_KEY: Record<ScheduleResponseValue, TranslationKey> = {
+  yes: 'scheduleAnswer.yes',
+  maybe: 'scheduleAnswer.maybe',
+  no: 'scheduleAnswer.no',
 }
 
 // BASE_ROLE（'一般'）のみ辞書化。それ以外の組織定義ロールはこの関数を通さず

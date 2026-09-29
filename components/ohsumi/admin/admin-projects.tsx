@@ -6,7 +6,7 @@ import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
+import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES, isTopRole } from '@/lib/ohsumi/types'
 import type {
   Department,
   Difficulty,
@@ -35,7 +35,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useI18n, PRIORITY_KEY, DIFFICULTY_KEY, DEPARTMENT_KEY } from '@/lib/ohsumi/i18n'
+import { useI18n, PRIORITY_KEY, DIFFICULTY_KEY, DEPARTMENT_KEY, departmentLabel } from '@/lib/ohsumi/i18n'
 
 // 暫定値、要調整: プロジェクトの「人材不足」閾値（未完了タスク数÷担当人数）
 const UNDERSTAFFED_RATIO_THRESHOLD = 3
@@ -97,7 +97,7 @@ export function AdminProjects() {
   const toast = useToast()
   const { t } = useI18n()
   // removeProjectはGAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = currentUser?.role === '代表'
+  const isDaihyo = isTopRole(currentUser?.role)
   const [removing, setRemoving] = useState<Project | null>(null)
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null)
   const [applyingTo, setApplyingTo] = useState<Project | null>(null)
@@ -942,7 +942,7 @@ function TemplateTypeCard({
     category: '',
     skills: '',
     difficulty: DIFFICULTY_LABEL[0] as Difficulty,
-    priority: '中' as Priority,
+    priority: 'medium' as Priority,
     dependsOn: [] as string[],
   })
 
@@ -997,7 +997,7 @@ function TemplateTypeCard({
             <div className="min-w-0 flex-1">
               <span className="font-medium">{t.name}</span>
               <span className="ml-2 text-xs text-muted-foreground">
-                {tr(DEPARTMENT_KEY[t.department])} ・ {t.category} ・ {tr(DIFFICULTY_KEY[t.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[t.priority])}
+                {departmentLabel(tr, t.department)} ・ {t.category} ・ {tr(DIFFICULTY_KEY[t.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[t.priority])}
               </span>
               {t.dependsOn && t.dependsOn.length > 0 && (
                 <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1127,7 +1127,7 @@ const EMPTY_TASK_SET_DRAFT = {
   category: '',
   skills: '',
   difficulty: DIFFICULTY_LABEL[0] as Difficulty,
-  priority: '中' as Priority,
+  priority: 'medium' as Priority,
   dependsOn: [] as string[],
 }
 
@@ -1244,7 +1244,7 @@ function TaskSetTemplateCard({
               <span className="font-mono text-xs text-muted-foreground">{i + 1}.</span>{' '}
               <span className="font-medium">{item.name}</span>
               <span className="ml-2 text-xs text-muted-foreground">
-                {tr(DEPARTMENT_KEY[item.department])} ・ {item.category} ・ {tr(DIFFICULTY_KEY[item.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[item.priority])}
+                {departmentLabel(tr, item.department)} ・ {item.category} ・ {tr(DIFFICULTY_KEY[item.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[item.priority])}
               </span>
               {item.dependsOn && item.dependsOn.length > 0 && (
                 <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1398,7 +1398,7 @@ const EMPTY_RECURRING_DRAFT = {
   department: DEPARTMENTS[0] as Department,
   category: '',
   difficulty: DIFFICULTY_LABEL[0] as Difficulty,
-  priority: '中' as Priority,
+  priority: 'medium' as Priority,
   frequency: 'weekly' as 'weekly' | 'monthly',
   dayOfWeek: 1,
   dayOfMonth: 1,

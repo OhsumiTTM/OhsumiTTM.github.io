@@ -14,7 +14,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
-import { isAdminRole, BASE_ROLE, DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member } from '@/lib/ohsumi/types'
+import { isAdminRole, BASE_ROLE, DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member, isTopRole } from '@/lib/ohsumi/types'
 import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { useI18n, SUPPORTED_LOCALES, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TIMEZONE_OPTIONS, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
@@ -513,7 +513,7 @@ export function PersonDetail({ id }: { id: string }) {
                 className="rounded-md p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
                 aria-label={t('person.avatar.editJoinedAt')}
                 // updateJoinedAtはGAS側で常にisDaihyo固定（本人による編集も含む）
-                title={currentUser?.role !== '代表' ? t('admin.accessNote.daihyo') : undefined}
+                title={!isTopRole(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
               >
                 <Pencil className="size-3" />
               </button>
@@ -688,7 +688,7 @@ export function PersonDetail({ id }: { id: string }) {
                   value={member.mentorId ?? ''}
                   onChange={(e) => updateMentor(member.id, e.target.value || null)}
                   // updateMentorはGAS側で常にisDaihyo固定
-                  title={currentUser?.role !== '代表' ? t('admin.accessNote.daihyo') : undefined}
+                  title={!isTopRole(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
                   className="h-8 cursor-pointer rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
                 >
                   <option value="">{t('person.growth.mentor.unsetOption')}</option>
