@@ -55,6 +55,29 @@ export const ADMIN_STEPS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// ヘッドレスの Chrome を起動し、操作の窓口(remote debugging)が開くまで待つ。
+// CI のランナーでは起動が遅いことがあるので、1回に30秒まで待ち、開かなければ別のポートで起動し直す(3回まで)
+async function launchChrome(chromePath) {
+  let lastError = ''
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const port = 9300 + Math.floor(Math.random() * 500)
+    const chrome = spawn(chromePath, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' })
+    let exited = null
+    chrome.on('exit', (code) => { exited = code })
+    for (let i = 0; i < 150 && exited === null; i++) {
+      await sleep(200)
+      try {
+        const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json()
+        if (Array.isArray(targets) && targets.some((t) => t.type === 'page')) return { chrome, targets }
+      } catch { /* 起動中 */ }
+    }
+    lastError = exited !== null ? `Chrome が終了しました(終了コード ${exited})` : '30秒待っても操作の窓口が開きません'
+    chrome.kill()
+    console.warn(`Chrome の起動に失敗しました(${attempt}回目: ${lastError})`)
+  }
+  throw new Error(`Chrome を起動できませんでした(${lastError})`)
+}
+
 // ---- サンプルのデータ(一般のメンバーが受け取る分) ----
 export function viewerData(memberId = MEMBER) {
   const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
@@ -161,15 +184,9 @@ async function run({ build = true } = {}) {
   let view = viewerData(MEMBER)
   const server = await serve(join(ROOT, 'out'))
   const base = `http://127.0.0.1:${server.address().port}`
-  const port = 9300 + Math.floor(Math.random() * 500)
-  const chrome = spawn(chromePath, ['--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' })
+  const { chrome, targets } = await launchChrome(chromePath)
   const failures = []
   try {
-    let targets = null
-    for (let i = 0; i < 50 && !targets; i++) {
-      await sleep(200)
-      try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json() } catch { /* 起動中 */ }
-    }
     const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl)
     await new Promise((r) => ws.addEventListener('open', r))
     let id = 0
