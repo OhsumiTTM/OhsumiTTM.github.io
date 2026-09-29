@@ -68,6 +68,9 @@ export function LoginScreen() {
     if (cached) {
       setOrgId(cached.orgId)
       setMode('id')
+      // この端末に保存したセッションがあれば、再読み込みの直後は保存したセッションでの再開
+      // (getInitialData)が先に走る。団体ID の確認は同時に送らず、前回の値を使う
+      if (hasSavedSession()) return
     }
     fetchLoginConfig().then((config) => {
       if (!mountedRef.current) return

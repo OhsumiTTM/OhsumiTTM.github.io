@@ -2494,6 +2494,8 @@ function normalizeRequestCodes(body) {
 function doPost(e) {
   var result
   var lock = null
+  // 書き込みの requestId(同じ ID の結果を覚えておき、送り直された時は前回の結果を返す)
+  var replayKey = null
   try {
     var body = JSON.parse(e.postData.contents)
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
@@ -2574,8 +2576,22 @@ function doPost(e) {
         lock.waitLock(10000)
       } catch (lockErr) {
         lock = null
-        return jsonOutput({ ok: false, error: '混み合っています。少し待って再度お試しください。' })
+        // まだ何も処理していないので、フロントは少し待ってから送り直してよい
+        return jsonOutput({ ok: false, error: '混み合っています。少し待って再度お試しください。', retryLater: true })
       }
+    }
+
+    // 送り直された書き込み(同じ requestId)は、処理をやり直さずに前回の結果を返す。
+    // ロックを取った後に確かめるので、同じ ID の2本目は1本目の結果を受け取る
+    replayKey = requestReplayKey(actingMember.id, body)
+    if (replayKey) {
+      var prior = readRequestReplay(replayKey)
+      if (prior) {
+        replayKey = null
+        if (prior.inFlight) return jsonOutput({ ok: false, error: '同じ操作を処理しています。少し待ってください。', retryLater: true })
+        return jsonOutput(prior)
+      }
+      markRequestInFlight(replayKey)
     }
 
     switch (body.action) {
@@ -3152,14 +3168,14 @@ function doPost(e) {
       default:
         throw userError('Unknown action: ' + body.action)
     }
-    return jsonOutput({ ok: true, result: result, session: renewedSession || undefined })
+    return respondAndRemember(replayKey, { ok: true, result: result, session: renewedSession || undefined })
   } catch (err) {
     // F14: userError()で作られた業務上のエラー(目印つき)はそのメッセージを
     // フロントに返す。目印の無い例外(SpreadsheetApp等のApps Scriptサービス
     // が投げるものや、コード内の想定外のバグ)は詳細をLoggerに記録し、
     // フロントには定型メッセージだけを返す(スタックトレース等の内部情報や
     // リクエストの中身・トークンは返さない/ログにも出さない)。
-    return jsonOutput({ ok: false, error: toErrorMessage(err) })
+    return respondAndRemember(replayKey, { ok: false, error: toErrorMessage(err) })
   } finally {
     // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
     // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
@@ -4978,6 +4994,61 @@ function updateRowFields(sheetName, rowId, fields) {
 
 function todayStr() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+}
+
+// ---- 書き込みの送り直し(requestId) --------------------------------------------
+//
+// フロントは、JSON の応答を受け取れなかった時(結果の転送先 script.googleusercontent.com の
+// echo が 404 になった時など)に、少し待ってから同じリクエストを送り直す。GAS の処理は
+// 済んでいることがあるため、書き込みにはリクエストごとの ID(requestId)を付けてもらい、
+// 同じメンバー・同じ ID の結果を10分覚えておく。送り直された時は処理をやり直さず、
+// 前回の結果(replayed: true)を返す。処理中に届いた時は retryLater を返し、もう少し待ってもらう。
+var REQUEST_REPLAY_TTL_SEC = 600
+var REQUEST_IN_FLIGHT_TTL_SEC = 120
+// CacheService の1件の上限(100KB)より小さくする
+var REQUEST_REPLAY_MAX_CHARS = 90000
+
+function requestReplayKey(memberId, body) {
+  var id = body && body.requestId
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) return null
+  return 'rq:' + memberId + ':' + id
+}
+
+function readRequestReplay(key) {
+  try {
+    var raw = CacheService.getScriptCache().get(key)
+    return raw ? JSON.parse(raw) : null
+  } catch (e) {
+    return null
+  }
+}
+
+function markRequestInFlight(key) {
+  try { CacheService.getScriptCache().put(key, JSON.stringify({ inFlight: true }), REQUEST_IN_FLIGHT_TTL_SEC) } catch (e) { /* 覚えられなくても処理は続ける */ }
+}
+
+// 送り直された時に返す応答(新しいセッショントークンは入れない。次のリクエストで改めて受け取る)
+function requestReplayValue(obj) {
+  var stored = { ok: obj.ok, replayed: true }
+  if (obj.ok) stored.result = obj.result
+  else stored.error = obj.error
+  var text = JSON.stringify(stored)
+  if (text.length <= REQUEST_REPLAY_MAX_CHARS) return text
+  // 結果が大きすぎて覚えられない: 処理は済んでいることだけを伝える(やり直さない)
+  return JSON.stringify({
+    ok: false,
+    replayed: true,
+    error: obj.ok
+      ? 'この操作は完了しています。「情報更新」で最新の状態を読み込んでください。'
+      : obj.error,
+  })
+}
+
+function respondAndRemember(key, obj) {
+  if (key) {
+    try { CacheService.getScriptCache().put(key, requestReplayValue(obj), REQUEST_REPLAY_TTL_SEC) } catch (e) { /* 覚えられなくても応答は返す */ }
+  }
+  return jsonOutput(obj)
 }
 
 function jsonOutput(obj) {
