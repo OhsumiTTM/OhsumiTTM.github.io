@@ -114,7 +114,16 @@ import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, 
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setCalendarToken } from './google-sheet-sync'
-import { activateSession, clearSession, getSessionToken, loadCachedLoginConfig, loadSession, saveSession } from './session'
+import {
+  activateSession,
+  clearSession,
+  getSessionToken,
+  googleSignInInitializedThisPage,
+  loadCachedLoginConfig,
+  loadSession,
+  reloadPage,
+  saveSession,
+} from './session'
 import { clearFileCache } from './files'
 import { clearTranslateCache } from './translate'
 
@@ -2408,6 +2417,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     clearFileCache()
     clearTranslateCache()
     clearPerUserBrowserData()
+    // このページで Google のログインを準備済み(initialize を呼んだ)なら、ページを読み込み直して
+    // ログイン画面を出す。同じページで initialize を2回呼ぶと、GIS が警告を出し、表示中の
+    // 自動ログインが中断されるため(新しい nonce は、読み込み直した後の1回目の initialize で渡す)
+    if (isRemoteConfigured && googleSignInInitializedThisPage()) reloadPage()
   }, [])
 
   // セッションが無効になった(期限切れ・全端末でログアウト・鍵の変更など)ら、ログイン画面に戻す
