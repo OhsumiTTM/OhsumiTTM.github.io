@@ -124,7 +124,11 @@ function setup(opts: { props?: Record<string, string>; noExpenses?: boolean; set
   return { gas, props, sheets, logs, copies, snapshot, setting, cell }
 }
 
-type Report = { counts: Record<string, number>; unknown: Record<string, Record<string, number>>; errors: string[]; createdRoles: string[]; roles: { id: string; name: string; tier: string }[] }
+type Report = {
+  counts: Record<string, number>; unknown: Record<string, Record<string, number>>; errors: string[]; createdRoles: string[]
+  rolePlacements: { name: string; reason: string; below: string; above: string }[]
+  roles: { id: string; name: string; tier: string; restricted: boolean }[]
+}
 
 describe('dryRun(既定)', () => {
   it('何も書き込まず、変換される件数・当てはまらない値・作られる役職を報告する', () => {
@@ -175,7 +179,7 @@ describe('apply', () => {
   it('役職を roles(ID 付き)にし、メンバーの役職・権限の例外の部門・承認ステップの役職を ID にする', () => {
     const t = applied()
     const roles = JSON.parse(t.setting('roles')) as { id: string; name: string; tier: string; restricted?: boolean; sections?: string[] }[]
-    expect(roles.map((r) => [r.name, r.tier])).toEqual([['一般', 'base'], ['班長', 'admin'], ['事業責任者', 'admin'], ['代表', 'top'], ['会計係', 'admin']])
+    expect(roles.map((r) => [r.name, r.tier])).toEqual([['一般', 'base'], ['班長', 'admin'], ['事業責任者', 'admin'], ['会計係', 'admin'], ['代表', 'top']])
     const id = (name: string) => roles.find((r) => r.name === name)!.id
     expect(id('一般')).toBe('base')
     expect(id('代表')).toBe('top')
@@ -255,7 +259,57 @@ describe('列や設定が無くても動く', () => {
     const t = setup({ noExpenses: true, settings: {}, props: { MIGRATION_MODE: 'apply' } })
     expect(() => t.gas.migrateToInternalCodes()).not.toThrow()
     expect(t.props.VALUE_FORMAT).toBe('codes')
-    expect(JSON.parse(t.setting('roles')).map((r: { name: string }) => r.name)).toEqual(['一般', '班長', '事業責任者', '代表', '会計係'])
+    expect(JSON.parse(t.setting('roles')).map((r: { name: string }) => r.name)).toEqual(['一般', '班長', '事業責任者', '会計係', '代表'])
+  })
+})
+
+describe('役職の並び順(一般 → 管理者の役職 → 最上位の役職)', () => {
+  // テスト環境の dryRun で見つかった例: 一般17人・班長0人・事業責任者1人・代表2人・サンプル班長2人
+  const members = [
+    ...Array.from({ length: 17 }, (_, i) => T({ id: `g${i}`, name: `一般${i}`, role: '一般' })),
+    T({ id: 'b1', name: '事業責任者さん', role: '事業責任者' }),
+    T({ id: 'p1', name: '代表さん1', role: '代表' }), T({ id: 'p2', name: '代表さん2', role: '代表' }),
+    T({ id: 's1', name: 'サンプル班長さん1', role: 'サンプル班長' }), T({ id: 's2', name: 'サンプル班長さん2', role: 'サンプル班長' }),
+  ]
+  const order = (report: Report) => report.roles.map((r) => [r.name, r.tier, r.restricted])
+  const expected = (restricted: boolean) => [['一般', 'base', false], ['班長', 'admin', false], ['事業責任者', 'admin', false], ['サンプル班長', 'admin', restricted], ['代表', 'top', false]]
+
+  it('role_levels に無い役職は、既存の管理者の役職の後ろ(最上位の役職のすぐ下)に入れ、位置を報告する', () => {
+    const t = setup({ members, settings: { role_levels: '班長,事業責任者,代表' } })
+    const report = t.gas.migrateToInternalCodes() as Report
+    expect(order(report)).toEqual(expected(false))
+    expect(report.rolePlacements).toEqual([{ name: 'サンプル班長', reason: 'created', below: '事業責任者', above: '代表' }])
+    const log = t.logs.join('\n')
+    expect(log).toMatch(/サンプル班長: 「事業責任者」の上、「代表」の下\(役職の一覧に無かった役職\)/)
+    expect(log).toMatch(/サンプル班長\(admin、全権の管理者、ID: [^)]+\)2人/)
+    expect(log).toMatch(/代表\(top、ID: top\)2人/)
+    expect(log).toMatch(/一般\(base、ID: base\)17人/)
+  })
+
+  it('role_levels で最上位の役職より後ろに書いた役職(サンプルのデータを入れた団体など)も、最上位の役職のすぐ下へ移す', () => {
+    const t = setup({ members, settings: { role_levels: '班長,事業責任者,代表,サンプル班長', restricted_roles: 'サンプル班長' }, props: { MIGRATION_MODE: 'apply' } })
+    const report = t.gas.migrateToInternalCodes() as Report
+    expect(order(report)).toEqual(expected(true))
+    expect(report.rolePlacements).toEqual([{ name: 'サンプル班長', reason: 'moved', below: '事業責任者', above: '代表' }])
+    expect(t.logs.join('\n')).toMatch(/サンプル班長: 「事業責任者」の上、「代表」の下\(最上位の役職より後ろに並んでいた役職\)/)
+    // 書き込む roles も同じ順
+    const roles = JSON.parse(t.setting('roles'))
+    expect(roles.map((r: { name: string }) => r.name)).toEqual(['一般', '班長', '事業責任者', 'サンプル班長', '代表'])
+    expect(t.cell('Members', 's1', 'role')).toBe(roles[3].id)
+  })
+
+  it('移行後の役職に、管理者の役職が制限付きかどうかを出す', () => {
+    const t = setup({ members, settings: { role_levels: '班長,事業責任者,代表', restricted_roles: '班長' } })
+    const report = t.gas.migrateToInternalCodes() as Report
+    expect(report.roles.find((r) => r.name === '班長')!.restricted).toBe(true)
+    const log = t.logs.join('\n')
+    expect(log).toMatch(/班長\(admin、制限付きの管理者、ID: [^)]+\)0人/)
+    expect(log).toMatch(/事業責任者\(admin、全権の管理者、ID: [^)]+\)1人/)
+  })
+
+  it('並べ替えの必要が無ければ、位置の報告は出さない', () => {
+    const report = setup({ members: members.filter((m) => m.role !== 'サンプル班長'), settings: { role_levels: '班長,事業責任者,代表' } }).gas.migrateToInternalCodes() as Report
+    expect(report.rolePlacements).toEqual([])
   })
 })
 
