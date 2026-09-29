@@ -521,12 +521,12 @@ function readRoleSettings() {
 
 // このリクエストでの役職の一覧(1回だけ読む。役職の設定を変えたら invalidateRoles)
 var _requestRoles = null
+function requestRolesFrom(settings) {
+  var parsed = parseRolesSetting(settings.roles)
+  return { roles: parsed || rolesFromLegacy(settings), fromSetting: !!parsed }
+}
 function getRoles() {
-  if (!_requestRoles) {
-    var settings = readRoleSettings()
-    var parsed = parseRolesSetting(settings.roles)
-    _requestRoles = { roles: parsed || rolesFromLegacy(settings), fromSetting: !!parsed }
-  }
+  if (!_requestRoles) _requestRoles = requestRolesFrom(readRoleSettings())
   return _requestRoles.roles
 }
 function invalidateRoles() { _requestRoles = null }
@@ -1214,14 +1214,36 @@ function appendRowByHeaders(sheet, sheetName, obj) {
 // client-side (lib/ohsumi/store.tsx) since it only needs data already in
 // hand. This file only handles writes coming from the browser.
 
-// 画面は GAS に POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、
-// 本文が失われた可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。画面が原因を記録して
-// 送り直せるよう、HTML ではなく JSON で返す(何も処理していないので、送り直してよい)
+// doGet が何から呼ばれたかを実行ログに残す。値は個人情報を含み得るので、パラメータの名前と
+// 値の長さだけを残す(値そのものは残さない)
+function logGetRequest(e) {
+  try {
+    var params = (e && e.parameter) || {}
+    var summary = Object.keys(params).map(function (k) { return k + '(' + String(params[k]).length + '文字)' })
+    console.log('doGet に届きました: ' + JSON.stringify({
+      parameters: summary,
+      queryStringLength: e && e.queryString ? String(e.queryString).length : 0,
+      pathInfo: e && e.pathInfo ? String(e.pathInfo).slice(0, 100) : '',
+      contentLength: e && e.contentLength != null ? e.contentLength : -1,
+      postDataType: e && e.postData ? String(e.postData.type || '') : '',
+    }))
+  } catch (err) {
+    // 記録できなくても応答は返す
+  }
+}
+
+// 画面は GAS に POST しか送らない。GET で届くのは、POST の結果の受け渡し(echo)が返事を渡さずに
+// exec への GET に送り返した時か、URL が /exec ではない・/u/1/ を含むなどで POST が GET に変わった時。
+// どちらも本文は失われている。画面がすぐ送り直せるよう、シートもプロパティも読まずに JSON で返す
+// (bounced: true。何も処理していないので送り直してよい。書き込みは requestId で二重に処理されない)
 function doGet(e) {
+  startRequestTiming()
+  logGetRequest(e)
   return jsonOutput({
     ok: false,
     getReceived: true,
-    error: 'GAS に GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
+    bounced: true,
+    error: 'GAS に GET で届きました(結果の受け渡しの途中で送り返された、または POST の本文が転送の途中で失われた)。何も処理していません。',
   })
 }
 
@@ -1256,6 +1278,75 @@ function getActingMemberById(memberId) {
   // MemberEmails側には行があるがMembers側に対応する行が無い(データ不整合) —
   // 通常起こらないはずだが、安全側に倒して「見つからない」として扱う
   throw userError('メンバー登録が見つかりません。管理者にお問い合わせください。')
+}
+
+// 読み取りだけの操作は、getInitialData と同じ読み取りキャッシュ(スナップショット)から、
+// 操作するメンバーと役職の設定を引く(Members・Settings をシートから読み直さない)。
+// スナップショットはデータの版ごとに持ち、書き込み・手動の編集のたびに版が変わるので、
+// 画面に見えているデータと同じ時点の権限で判定する。書き込みは、これまでどおりシートから読む
+var SNAPSHOT_AUTH_ACTIONS = [
+  'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
+  'getMyEmails', 'getWebhookStatus', 'fetchDailyReports',
+]
+
+// スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
+function actingMemberFromTable(table, memberId) {
+  if (!table || !table.headers) return null
+  var h = table.headers
+  var idCol = h.indexOf('id')
+  if (idCol < 0) return null
+  var roleCol = h.indexOf('role')
+  var projectIdsCol = h.indexOf('project_ids')
+  var overridesCol = h.indexOf('permission_overrides_json')
+  for (var i = 0; i < table.rows.length; i++) {
+    var row = table.rows[i]
+    if (String(row[idCol]) !== String(memberId)) continue
+    var overrides = []
+    if (overridesCol >= 0) {
+      try { overrides = JSON.parse(row[overridesCol] || '[]') } catch (_) {}
+    }
+    return {
+      id: String(row[idCol]),
+      role: roleCol >= 0 ? String(row[roleCol] || '') : '',
+      project_ids: projectIdsCol >= 0 ? String(row[projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) : [],
+      permission_overrides: Array.isArray(overrides) ? overrides : [],
+    }
+  }
+  return null
+}
+
+// スナップショットの Settings から、役職の設定だけを取り出す
+function roleSettingsFromTable(table) {
+  var out = {}
+  if (!table || !table.headers) return out
+  var keyCol = table.headers.indexOf('key')
+  var valueCol = table.headers.indexOf('value')
+  if (keyCol < 0 || valueCol < 0) return out
+  table.rows.forEach(function (r) {
+    var key = String(r[keyCol])
+    if (ROLE_SETTING_KEYS.indexOf(key) >= 0) out[key] = String(r[valueCol] || '')
+  })
+  return out
+}
+
+// 操作するメンバーを引く。読み取りだけの操作はスナップショットから(役職の設定もそこから)、
+// それ以外と、スナップショットに見つからない場合はシートから
+function getActingMember(memberId, action) {
+  if (SNAPSHOT_AUTH_ACTIONS.indexOf(action) >= 0) {
+    try {
+      var snap = loadSnapshot()
+      var member = actingMemberFromTable(snap.data.Members, memberId)
+      if (member) {
+        _requestRoles = requestRolesFrom(roleSettingsFromTable(snap.data.Settings))
+        noteTiming('authFrom', 'snapshot')
+        return member
+      }
+    } catch (e) {
+      // 読めなければシートから
+    }
+  }
+  noteTiming('authFrom', 'sheet')
+  return getActingMemberById(memberId)
 }
 
 // ---- ログイン(IDトークン)とセッショントークン ----------------------------------
@@ -1494,7 +1585,32 @@ function exchangeIdToken(body) {
   var data = getInitialDataForMember(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
   data.session = issueSessionToken(memberId, body.remember !== false, nowSec())
-  return data
+  // 最終ログイン日時も、ここで記録する(画面が別に updateLastLogin を送らなくてよいように)
+  data.lastLoginRecorded = recordLastLogin(memberId)
+  return attachBackgroundData(data, memberId, body)
+}
+
+// ログインの時に最終ログイン日時を記録する。ほかの書き込みを長く待たせないよう、ロックは2秒だけ待ち、
+// 取れなければ記録せずに false を返す(画面が updateLastLogin を送る)。
+// データの版は変えない(最終ログイン日時だけのために、全員の読み取りキャッシュを捨てない)。
+// ほかのメンバーの画面の最終ログイン日時は、次に版が変わった時に新しくなる
+function recordLastLogin(memberId) {
+  var lock = null
+  try {
+    lock = LockService.getScriptLock()
+    if (!lock.tryLock(2000)) {
+      lock = null
+      return false
+    }
+    updateMemberFields(memberId, { last_login: new Date().toISOString() })
+    return true
+  } catch (e) {
+    // 記録できなくてもログインは続ける(画面が updateLastLogin を送る)
+    Logger.log('recordLastLogin failed: ' + e)
+    return false
+  } finally {
+    if (lock) lock.releaseLock()
+  }
 }
 
 // リクエストの認証(セッショントークン)。返り値 { memberId, renewed(新しいセッショントークン or null) }
@@ -2442,7 +2558,7 @@ function toErrorMessage(err) {
 // Webhookへの疎通確認(UrlFetchApp、数百ms〜数秒かかりうる)のみなので、
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
-  'translateText', 'getMyEmails', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
+  'translateText', 'getMyEmails', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
@@ -2504,6 +2620,9 @@ function doPost(e) {
   try {
     startRequestTiming()
     var body = JSON.parse(e.postData.contents)
+    // ping: 何もせずにすぐ返す(認証・スクリプトプロパティ・シートを読まない)。
+    // 画面の往復時間と GAS の中の時間(timing.totalMs)を比べて、遅さが Google 側・回線側か切り分ける
+    if (body.action === 'ping') return jsonOutput({ ok: true, result: { pong: true } })
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
     resetRequestProps()
 
@@ -2545,7 +2664,7 @@ function doPost(e) {
       try {
         return jsonOutput({
           ok: true,
-          result: getInitialDataForMember(initAuth.memberId, body.knownVersion),
+          result: attachBackgroundData(getInitialDataForMember(initAuth.memberId, body.knownVersion), initAuth.memberId, body),
           session: initAuth.renewed || undefined,
         })
       } catch (initErr) {
@@ -2567,7 +2686,7 @@ function doPost(e) {
       var authStart = Date.now()
       var auth = authenticateRequest(body)
       renewedSession = auth.renewed
-      actingMember = getActingMemberById(auth.memberId)
+      actingMember = getActingMember(auth.memberId, body.action)
       authorizeAction(actingMember, body.action, body)
       noteTiming('authMs', Date.now() - authStart)
     } catch (authErr) {
@@ -3135,6 +3254,9 @@ function doPost(e) {
         break
       case 'submitDailyReport':
         result = saveDailyReport(body.report, actingMember)
+        break
+      case 'getBackgroundData':
+        result = getBackgroundData(actingMember, body)
         break
       case 'getExpenses':
         result = getExpenses(actingMember)
@@ -5079,6 +5201,7 @@ var _requestTiming = null
 
 function startRequestTiming() {
   _requestTiming = { start: Date.now() }
+  _requestSnapshot = null
 }
 
 function noteTiming(key, value) {
@@ -5109,6 +5232,49 @@ function jsonOutput(obj) {
 // Reads a single value from the optional Settings sheet (see gas/README.md
 // §4.6) by key. Returns '' when the sheet or the key doesn't exist yet
 // (nothing configured) — every caller below treats that as "feature off".
+// 画面が初期データの後に裏で読み込むもの(経費・フォームの回答・採用の候補者・自分のメールアドレス)を
+// 1回で返す。往復の回数を減らし、結果の受け渡しで失敗する機会を減らすため。
+// それぞれ、個別の操作(getExpenses など)と同じ権限の確認・絞り込みを通す。1つが失敗しても
+// ほかは返す(失敗したものは errors に理由を入れる)
+var BACKGROUND_DATA_PARTS = [
+  { key: 'expenses', action: 'getExpenses', load: function (acting) { return getExpenses(acting) } },
+  { key: 'formSubmissions', action: 'getFormSubmissions', load: function (acting) { return getFormSubmissions(acting) } },
+  { key: 'candidates', action: 'getCandidates', load: function (acting) { return getCandidates(acting) } },
+  { key: 'myEmail', action: 'getMyEmails', load: function (acting) { return getMemberEmailValue(acting.id) } },
+]
+
+// withBackground: getInitialData・exchangeIdToken の応答に、裏での読み込み(getBackgroundData と同じもの)も
+// 入れる。画面の通信を1回減らす(ログイン・再読み込みとも1回で全部そろう)。
+// 失敗しても初期データは返す(background の代わりに backgroundError。画面は getBackgroundData を送り直す)
+function attachBackgroundData(data, memberId, body) {
+  if (!body || !body.withBackground || !data || !data.memberId) return data
+  var t = Date.now()
+  try {
+    var acting = getActingMember(memberId, 'getBackgroundData')
+    authorizeAction(acting, 'getBackgroundData', body)
+    data.background = getBackgroundData(acting, body)
+  } catch (err) {
+    data.backgroundError = toErrorMessage(err)
+  }
+  noteTiming('backgroundMs', Date.now() - t)
+  return data
+}
+
+function getBackgroundData(acting, body) {
+  var out = { errors: {} }
+  BACKGROUND_DATA_PARTS.forEach(function (part) {
+    var t = Date.now()
+    try {
+      authorizeAction(acting, part.action, body)
+      out[part.key] = part.load(acting)
+    } catch (err) {
+      out.errors[part.key] = toErrorMessage(err)
+    }
+    noteTiming(part.key + 'Ms', Date.now() - t)
+  })
+  return out
+}
+
 function getSettingValue(key) {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   var sheet = ss.getSheetByName(SHEET_SETTINGS)
@@ -6540,13 +6706,28 @@ function snapshotCacheKey(version, suffix) {
   return 'snap:' + version + ':' + suffix
 }
 
+// スナップショットを使う最長の時間(ミリ秒)。スプレッドシートの直接の編集は onSpreadsheetChange で
+// すぐ版が変わるが、トリガーが無い・失敗した時でも、この時間を過ぎたらシートから読み直す
+var SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000
+
+// 目録は「分割数:作った時刻(ミリ秒)」。作った時刻が無い(前の形式)・古すぎる時は使わない
+function snapshotMetaUsable(meta, now) {
+  var parts = String(meta || '').split(':')
+  var count = Number(parts[0])
+  var savedAt = Number(parts[1])
+  if (!(count > 0) || !(savedAt > 0)) return 0
+  var age = now - savedAt
+  if (age < 0 || age > SNAPSHOT_MAX_AGE_MS) return 0
+  return count
+}
+
 function readSnapshotCache(version) {
   try {
     var cache = CacheService.getScriptCache()
     var meta = cache.get(snapshotCacheKey(version, 'meta'))
     if (!meta) return null
-    var count = Number(meta)
-    if (!(count > 0)) return null
+    var count = snapshotMetaUsable(meta, Date.now())
+    if (!count) return null
     var keys = []
     for (var i = 0; i < count; i++) keys.push(snapshotCacheKey(version, i))
     var parts = cache.getAll(keys)
@@ -6576,7 +6757,7 @@ function writeSnapshotCache(version, data) {
     var cache = CacheService.getScriptCache()
     cache.putAll(entries, SNAPSHOT_CACHE_TTL)
     // 目録は最後に書く(途中で失敗したら目録が無く、次回は読み直しになる)
-    cache.put(snapshotCacheKey(version, 'meta'), String(count), SNAPSHOT_CACHE_TTL)
+    cache.put(snapshotCacheKey(version, 'meta'), count + ':' + Date.now(), SNAPSHOT_CACHE_TTL)
     return true
   } catch (e) {
     return false
@@ -6585,17 +6766,24 @@ function writeSnapshotCache(version, data) {
 
 // 4シート分のスナップショットを返す。版は必ずシートより先に読む(書き込みと
 // 同時に読んでも、古い版のキーに新しいデータが入るだけで逆は起きない)。
+// 1つのリクエストの中では、同じ版のスナップショットを使い回す(初期データと裏での読み込みを
+// 1回で返す時に、キャッシュを2回読まない)
+var _requestSnapshot = null
+
 function loadSnapshot() {
   var version = getDataVersion()
+  if (_requestSnapshot && _requestSnapshot.version === version) return _requestSnapshot
   var cached = timed('cacheReadMs', function () { return readSnapshotCache(version) })
   if (cached) {
     noteTiming('cache', 'hit')
-    return { version: version, data: cached, cacheHit: true }
+    _requestSnapshot = { version: version, data: cached, cacheHit: true }
+    return _requestSnapshot
   }
   noteTiming('cache', 'miss')
   var data = readSheetTables(SNAPSHOT_SHEETS)
   timed('cacheWriteMs', function () { writeSnapshotCache(version, data) })
-  return { version: version, data: data, cacheHit: false }
+  _requestSnapshot = { version: version, data: data, cacheHit: false }
+  return _requestSnapshot
 }
 
 // ---- 読み取りの権限表(閲覧範囲の判定はここに集約する) -----------------------
