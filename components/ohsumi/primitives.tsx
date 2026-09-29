@@ -1,5 +1,6 @@
 'use client'
 
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { cn } from '@/lib/utils'
 import { TriangleAlert } from 'lucide-react'
 import {
@@ -161,9 +162,10 @@ export function ProjectTag({ name }: { name: string }) {
 
 export function DepartmentTag({ name }: { name: Department }) {
   const { t } = useI18n()
+  const deptLabel = useDepartmentLabel()
   return (
     <span className="inline-flex items-center whitespace-nowrap rounded-md border border-info-border bg-info-muted px-1.5 py-0.5 text-[11px] font-medium text-info">
-      {departmentLabel(t, name)}
+      {deptLabel(name)}
     </span>
   )
 }

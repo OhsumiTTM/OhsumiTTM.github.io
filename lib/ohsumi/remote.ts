@@ -51,6 +51,7 @@ import type {
   SurveyQuestion,
 } from './types'
 import { type TaskVisibility } from './types'
+import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
 import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
 import { CLIENT_VERSION, normalizeCode } from './codes'
 import {
@@ -137,7 +138,12 @@ function roleFromSheet(role: string, roles: RoleDef[]): Role {
   return roles.find((r) => r.tier === 'base')?.id ?? DEFAULT_BASE_ROLE_NAME
 }
 
-function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Project>, roles: RoleDef[]): Member {
+function mapMemberRow(
+  r: Record<string, string>,
+  projectsById: Map<string, Project>,
+  roles: RoleDef[],
+  departments: DepartmentDef[],
+): Member {
   const projectIds = splitTags(r.project_ids)
   const will = splitTags(r.will_tags)
   const judgment = splitTags(r.judgment_tags)
@@ -195,7 +201,7 @@ function mapMemberRow(r: Record<string, string>, projectsById: Map<string, Proje
     oneOnOnes: parseJsonArray<OneOnOneRecord>(r.one_on_ones_json),
     // ---- 組織階層・権限・スキルポイント ----------------------------------------
     departmentPaths: splitTags(r.department_path),
-    permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json)?.map(normalizePermissionOverride),
+    permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json)?.map((ov) => normalizePermissionOverride(ov, departments)),
     skillPoints: parseJsonObject<SkillPoints>(r.skill_points_json),
     inactive: r.inactive === 'TRUE' ? true : undefined,
     absentDates: splitTags(r.absent_dates),
@@ -237,13 +243,13 @@ function mapProjectRow(r: Record<string, string>): Project {
 // シートの値は、移行の前は日本語、移行の後はコード。どちらでもコードにそろえる
 // (読めない値は、以前と同じ既定値になる。ステータスは進行中など)
 
-function mapTaskRow(r: Record<string, string>): Task {
+function mapTaskRow(r: Record<string, string>, departments: DepartmentDef[]): Task {
   return {
     id: r.id,
     name: r.title,
     description: r.description ?? '',
     projectId: r.project_id,
-    department: normalizeCode('department', r.department),
+    department: normalizeDepartment(departments, r.department),
     assigneeIds: splitTags(r.assignee_id),
     assignType: r.assign_type || 'open_bid',
     openBidApplicantIds: splitTags(r.open_bid_applicant_ids), // TSK-027
@@ -271,7 +277,7 @@ function mapTaskRow(r: Record<string, string>): Task {
     blocker: r.blocker_note ? { note: r.blocker_note, since: r.blocker_since || '' } : undefined,
     holdReason: r.hold_reason_note ? { note: r.hold_reason_note, since: r.hold_reason_since || '' } : undefined,
     deliverables: parseJsonArray<TaskDeliverable>(r.deliverables_json),
-    history: parseJsonArray<TaskHistoryEntry>(r.history_json)?.map(normalizeHistoryEntry),
+    history: parseJsonArray<TaskHistoryEntry>(r.history_json)?.map((h) => normalizeHistoryEntry(h, departments)),
     comments: parseJsonArray<TaskComment>(r.comments_json),
     estimatedHours: r.estimated_hours ? Number(r.estimated_hours) : undefined,
     actualHours: r.actual_hours ? Number(r.actual_hours) : undefined,
@@ -326,11 +332,13 @@ export function mapRemoteData(
   taskRows: Record<string, string>[],
   // 役職の一覧(Settings から。省略時は今までの設定の既定)
   roles: RoleDef[] = rolesFromLegacy({}),
+  // 部門の一覧(Settings から。省略時は既定の部門)
+  departments: DepartmentDef[] = defaultDepartments(),
 ): RemoteData {
   const projects = projectRows.map(mapProjectRow)
   const projectsById = new Map(projects.map((p) => [p.id, p]))
-  const members = memberRows.map((r) => mapMemberRow(r, projectsById, roles))
-  const tasks = taskRows.map(mapTaskRow)
+  const members = memberRows.map((r) => mapMemberRow(r, projectsById, roles, departments))
+  const tasks = taskRows.map((r) => mapTaskRow(r, departments))
   return { members, projects, tasks }
 }
 
@@ -342,6 +350,8 @@ export interface RemoteSettings {
   // Settings の roles を使っているか(移行の後・新しく導入した団体)。使っていない間は
   // 役職の ID が役職名そのもので、名前の変更と代表以外の最上位の役職は作れない
   rolesFromSetting: boolean
+  // 部門の一覧(Settings の departments。無ければ既定の7部門)。アーカイブした部門も含む
+  departments: DepartmentDef[]
   projectTemplates: Record<string, ProjectTemplateTask[]>
   taskSetTemplates: TaskSetTemplate[]
   recurringRules: RecurringTaskRule[]
@@ -419,6 +429,8 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     // malformed JSON in the sheet — fall back to empty rather than throwing
   }
   const roleSettings = Object.fromEntries(ROLE_SETTING_KEYS.map((k) => [k, byKey.get(k)]))
+  const departmentsSetting = parseDepartmentsSetting(byKey.get('departments'))
+  const departments = departmentsSetting ?? defaultDepartments()
   const rolesSetting = parseRolesSetting(roleSettings.roles)
   let skillFieldSkills: Record<string, string[]> = {}
   try {
@@ -434,9 +446,10 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     categoryOptions: splitTags(byKey.get('category_options')),
     roles: rolesSetting ?? rolesFromLegacy(roleSettings),
     rolesFromSetting: !!rolesSetting,
-    projectTemplates: normalizeProjectTemplates(projectTemplates),
-    taskSetTemplates: normalizeTaskSetTemplates(taskSetTemplates),
-    recurringRules: normalizeRecurringRules(recurringRules),
+    departments,
+    projectTemplates: normalizeProjectTemplates(projectTemplates, departments),
+    taskSetTemplates: normalizeTaskSetTemplates(taskSetTemplates, departments),
+    recurringRules: normalizeRecurringRules(recurringRules, departments),
     skillFieldOptions: splitTags(byKey.get('skill_field_options')),
     skillFieldSkills,
     skillFieldThreshold: Number.isFinite(skillFieldThreshold) ? skillFieldThreshold : null,
@@ -529,7 +542,7 @@ function toInitialData(res: InitialDataResponse): InitialData {
   return {
     memberId: res.memberId,
     version: res.version,
-    data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks), settings.roles),
+    data: mapRemoteData(tableToRecords(Members), tableToRecords(Projects), tableToRecords(Tasks), settings.roles, settings.departments),
     settings,
   }
 }
@@ -752,6 +765,15 @@ export const remoteApi = {
   // 役職を削除する。使っているメンバーは moveToRoleId の役職に移す
   deleteRole: (roleId: string, moveToRoleId?: string) =>
     postToGas<{ roles: RoleDef[]; moved: number }>('deleteRole', { roleId, moveToRoleId }),
+  // 部門の一覧を保存する(追加・名前・並び順・アーカイブの解除)
+  updateDepartments: (departments: DepartmentDef[]) =>
+    postToGas<{ departments: DepartmentDef[] }>('updateDepartments', { departments }),
+  // 部門を削除する。使われていればアーカイブになる
+  deleteDepartment: (departmentId: string) =>
+    postToGas<{ departments: DepartmentDef[]; archived: boolean }>('deleteDepartment', { departmentId }),
+  // ある部門のタスクを別の部門(空は未分類)へ移す
+  moveDepartmentTasks: (fromDepartmentId: string, toDepartmentId: string) =>
+    postToGas<{ moved: number }>('moveDepartmentTasks', { fromDepartmentId, toDepartmentId }),
   updateReportsTo: (memberId: string, reportsToId: string | null) =>
     postToGas('updateReportsTo', { memberId, reportsToId }),
   updateMentor: (memberId: string, mentorId: string | null) =>

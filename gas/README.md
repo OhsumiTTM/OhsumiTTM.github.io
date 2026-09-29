@@ -479,6 +479,7 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 | `skill_options` | 要求スキルの選択肢 | カンマ区切り文字列 |
 | `category_options` | カテゴリの選択肢 | カンマ区切り文字列 |
 | `roles` | 役職の一覧（「4.6.1. 役職」を参照。移行の後・新しく導入した団体で使う） | JSON配列 |
+| `departments` | タスクの部門の一覧（「4.6.2. 部門」を参照。未設定なら既定の7部門） | JSON配列 |
 | `role_levels` | 権限レベルの一覧（下位〜上位。`roles` が無い間だけ使う） | カンマ区切り文字列 |
 | `role_permissions` | 権限レベルごとの管理画面表示範囲（`roles` が無い間だけ使う） | JSON文字列 |
 | `project_templates` | プロジェクト種類ごとのテンプレートタスク | JSON文字列 |
@@ -537,6 +538,21 @@ Ohsumi のログインには Google アカウントでのサインインを使�
   Admin → Tags で移す先の役職を選び、メンバーを移してから削除します。
 - **締め出しの防止**: 最上位の役職を持つ有効な（休止中でない）メンバーが0人になる操作（役職の変更・メンバーの
   削除・休止・役職の種類の変更・役職の削除）は、GAS が拒否します。
+
+### 4.6.2. 部門
+
+タスクの部門は、Settings の `departments`（`[{ "id": "ops", "name": "運営" }, …]`）に並んだ一覧です。未設定なら
+既定の7部門（`ops` 運営・`pr` 広報・`dev` 開発・`design` デザイン・`relations` 渉外・`event` イベント・`research` リサーチ）を
+使います。**未分類は部門ではなく空**で表します。Admin → Tags の「部門」で編集します（`departments` を手で書き換えないでください）。
+
+- **タスクの部門の値**: 内部コードへの移行の前は部門名、後は部門 ID です。部門は ID でも名前でも引けるので、
+  移行の途中で両方が混ざっていても同じ部門として扱います。移行前は部門名で引くため、**部門の名前の変更は移行の後に**できるようになります。
+- **表示名**: 既定の部門の名前が既定のまま（運営など）なら、画面の言語に合わせて翻訳します。名前を変えた部門・
+  足した部門は、その名前をそのまま表示します。
+- **削除とアーカイブ**: タスク・テンプレート・定期タスク・権限の例外のどこかで使われている部門を削除すると、
+  **アーカイブ**（`"archived": true`）になります。新しいタスクでは選べなくなりますが、今のタスクではそのまま表示され、
+  絞り込みにも使えます（「アーカイブを解除」で戻せます）。どこでも使われていなければ一覧から消します。
+- **タスクを別の部門へ移す**: 部門ごとに「タスクを移す」で、その部門のタスクをまとめて別の部門（または未分類）に移せます。
 
 ## 4.7. Discord Webhook 連携（任意）
 
@@ -644,7 +660,7 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 | アクション | 必要な権限 |
 |---|---|
 | updateRole, removeMember, removeProject, uploadOrgLogo, addMember, updateEmail, updateJoinedAt, updateReportsTo, updateMentor, notifyTrainingDecision, updatePermissionOverrides, updateMemberProjects | 最上位の役職（既定は代表）のみ |
-| updateSetting, updateRoles, deleteRole, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 最上位の役職 または 全権管理者（制限の無い管理者の役職。団体ごとにAdmin → Tagsで調整可能）。ただし updateRoles で最上位の役職を増やす・減らす変更と、deleteRole でメンバーを別の役職に移す削除は、最上位の役職のみ |
+| updateSetting, updateRoles, deleteRole, updateDepartments, deleteDepartment, moveDepartmentTasks, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 最上位の役職 または 全権管理者（制限の無い管理者の役職。団体ごとにAdmin → Tagsで調整可能）。ただし updateRoles で最上位の役職を増やす・減らす変更と、deleteRole でメンバーを別の役職に移す削除は、最上位の役職のみ |
 | approveTask, assignTask, updateTaskDetails, setBlocker, createProject, updateProject, updatePriority, updateReviewer(s), removeTask, bulkUpdateSkills, updateExpenseStatus, addExpenseApplication, manageCustomForm, updateEvaluationHistory, updateTransferHistory, updateOneOnOnes, updateCompetencies, notifyProjectHealth, updateProjectHealthRecord, approveTaskReview 等 | 任意の管理者ロール（代表 または 班長以上） |
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |

@@ -1,8 +1,10 @@
 'use client'
 
+import { useOhsumi } from '@/lib/ohsumi/store'
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useMemo } from 'react'
 import type { Member, Project } from '@/lib/ohsumi/types'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import {
   VALUE_MAPPED_FIELDS,
   distinctColumnValues,
@@ -164,6 +166,8 @@ function ValueMappingSection({
   members: Member[]
 }) {
   const { t } = useI18n()
+  const { departmentOptions } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const splitTokens = field === 'assignee'
   const values = useMemo(
     () => distinctColumnValues(rows, header, splitTokens),
@@ -190,7 +194,7 @@ function ValueMappingSection({
       case 'project':
         return projects.map((p) => ({ value: p.id, label: p.name }))
       case 'department':
-        return DEPARTMENTS.map((d) => ({ value: d, label: departmentLabel(t, d) }))
+        return departmentOptions().map((d) => ({ value: d, label: deptLabel(d) }))
       case 'priority':
         return PRIORITIES.map((p) => ({ value: p, label: t(PRIORITY_KEY[p]) }))
       case 'difficulty':

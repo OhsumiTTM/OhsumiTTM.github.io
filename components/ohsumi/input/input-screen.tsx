@@ -1,5 +1,6 @@
 'use client'
 
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -7,7 +8,7 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '../toast'
 import { Modal } from '../modal'
 import { buildDemoParse, DEMO_INPUT } from '@/lib/ohsumi/seed'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES, UNCATEGORIZED_DEPARTMENT } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, PRIORITIES, UNCATEGORIZED_DEPARTMENT } from '@/lib/ohsumi/types'
 import type {
   ParsedTask,
   Department,
@@ -75,7 +76,7 @@ function loadDraft(userId: string | null | undefined): string {
 }
 
 export function InputScreen() {
-  const {
+  const { departmentOptions,
     addTasksFromInput,
     setMode,
     currentUser,
@@ -89,7 +90,9 @@ export function InputScreen() {
     createScheduleTask,
     createFormTask,
     isFullAdmin,
+    departments,
   } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const { go } = useNav()
   const toast = useToast()
   const { t } = useI18n()
@@ -214,6 +217,7 @@ export function InputScreen() {
       valueMaps,
       projects,
       members,
+      departments,
     )
     if (result.length === 0) {
       setImportError(t('input.excelImport.noRowsError'))
@@ -624,9 +628,9 @@ export function InputScreen() {
                     className="h-7 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none"
                   >
                     <option value="">{t('input.result.bulkDepartmentPlaceholder')}</option>
-                    {DEPARTMENTS.map((d) => (
+                    {departmentOptions().map((d) => (
                       <option key={d} value={d}>
-                        {t(DEPARTMENT_KEY[d])}
+                        {deptLabel(d)}
                       </option>
                     ))}
                   </select>

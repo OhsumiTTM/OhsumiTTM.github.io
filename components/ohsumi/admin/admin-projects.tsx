@@ -1,12 +1,14 @@
 'use client'
 
+import { defaultDepartments } from '@/lib/ohsumi/departments'
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { DEPARTMENTS, DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import type {
   Department,
   Difficulty,
@@ -936,9 +938,11 @@ function TemplateTypeCard({
   onRemoveType: () => void
 }) {
   const { t: tr } = useI18n()
+  const { departmentOptions, activeDepartmentIds } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const [draft, setDraft] = useState({
     name: '',
-    department: DEPARTMENTS[0] as Department,
+    department: (activeDepartmentIds[0] ?? '') as Department,
     category: '',
     skills: '',
     difficulty: DIFFICULTY_LABEL[0] as Difficulty,
@@ -997,7 +1001,7 @@ function TemplateTypeCard({
             <div className="min-w-0 flex-1">
               <span className="font-medium">{t.name}</span>
               <span className="ml-2 text-xs text-muted-foreground">
-                {departmentLabel(tr, t.department)} ・ {t.category} ・ {tr(DIFFICULTY_KEY[t.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[t.priority])}
+                {deptLabel(t.department)} ・ {t.category} ・ {tr(DIFFICULTY_KEY[t.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[t.priority])}
               </span>
               {t.dependsOn && t.dependsOn.length > 0 && (
                 <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1031,9 +1035,9 @@ function TemplateTypeCard({
           onChange={(e) => setDraft({ ...draft, department: e.target.value as Department })}
           className="h-8 cursor-pointer rounded-md border border-border bg-background px-1 text-xs outline-none"
         >
-          {DEPARTMENTS.map((d) => (
+          {departmentOptions(draft.department).map((d) => (
             <option key={d} value={d}>
-              {tr(DEPARTMENT_KEY[d])}
+              {deptLabel(d)}
             </option>
           ))}
         </select>
@@ -1123,7 +1127,7 @@ function TemplateTypeCard({
 
 const EMPTY_TASK_SET_DRAFT = {
   name: '',
-  department: DEPARTMENTS[0] as Department,
+  department: (defaultDepartments()[0]?.id ?? '') as Department,
   category: '',
   skills: '',
   difficulty: DIFFICULTY_LABEL[0] as Difficulty,
@@ -1141,6 +1145,8 @@ function TaskSetTemplateCard({
   onRemove: () => void
 }) {
   const { t: tr } = useI18n()
+  const { departmentOptions, activeDepartmentIds } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const [draft, setDraft] = useState(EMPTY_TASK_SET_DRAFT)
   const [editingId, setEditingId] = useState<string | null>(null)
 
@@ -1244,7 +1250,7 @@ function TaskSetTemplateCard({
               <span className="font-mono text-xs text-muted-foreground">{i + 1}.</span>{' '}
               <span className="font-medium">{item.name}</span>
               <span className="ml-2 text-xs text-muted-foreground">
-                {departmentLabel(tr, item.department)} ・ {item.category} ・ {tr(DIFFICULTY_KEY[item.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[item.priority])}
+                {deptLabel(item.department)} ・ {item.category} ・ {tr(DIFFICULTY_KEY[item.difficulty])} ・ {tr('priority.prefix')}{tr(PRIORITY_KEY[item.priority])}
               </span>
               {item.dependsOn && item.dependsOn.length > 0 && (
                 <div className="mt-0.5 text-xs text-muted-foreground">
@@ -1287,9 +1293,9 @@ function TaskSetTemplateCard({
           onChange={(e) => setDraft({ ...draft, department: e.target.value as Department })}
           className="h-8 cursor-pointer rounded-md border border-border bg-background px-1 text-xs outline-none"
         >
-          {DEPARTMENTS.map((d) => (
+          {departmentOptions(draft.department).map((d) => (
             <option key={d} value={d}>
-              {tr(DEPARTMENT_KEY[d])}
+              {deptLabel(d)}
             </option>
           ))}
         </select>
@@ -1395,7 +1401,7 @@ function TaskSetTemplateCard({
 
 const EMPTY_RECURRING_DRAFT = {
   name: '',
-  department: DEPARTMENTS[0] as Department,
+  department: (defaultDepartments()[0]?.id ?? '') as Department,
   category: '',
   difficulty: DIFFICULTY_LABEL[0] as Difficulty,
   priority: 'medium' as Priority,
@@ -1423,6 +1429,8 @@ function RecurringRuleForm({
   onCancelEdit: () => void
 }) {
   const { t: tr } = useI18n()
+  const { departmentOptions } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const [draft, setDraft] = useState({ ...EMPTY_RECURRING_DRAFT, projectId: projects[0]?.id ?? '' })
 
   useEffect(() => {
@@ -1498,9 +1506,9 @@ function RecurringRuleForm({
           onChange={(e) => setDraft({ ...draft, department: e.target.value as Department })}
           className="h-8 cursor-pointer rounded-md border border-border bg-background px-1 text-xs outline-none"
         >
-          {DEPARTMENTS.map((d) => (
+          {departmentOptions(draft.department).map((d) => (
             <option key={d} value={d}>
-              {tr(DEPARTMENT_KEY[d])}
+              {deptLabel(d)}
             </option>
           ))}
         </select>

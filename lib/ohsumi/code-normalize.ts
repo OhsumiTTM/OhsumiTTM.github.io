@@ -2,6 +2,7 @@
 // 使う内部コードにそろえる。表は codes.ts。GAS 側の同じ処理は
 // gas/Code.gs の normalizeCode / normalizeHistoryEntry など
 import { normalizeCode, normalizeThresholdKeys, type CodeKind } from './codes'
+import { defaultDepartments, normalizeDepartment, type DepartmentDef } from './departments'
 import type {
   ProjectTemplateTask,
   RecurringTaskRule,
@@ -21,10 +22,15 @@ export const HISTORY_CODE_FIELDS: Partial<Record<TaskHistoryEntry['field'], Code
   department: 'department',
 }
 
-export function normalizeHistoryEntry(h: TaskHistoryEntry): TaskHistoryEntry {
+// 部門は部門の一覧で引く(部門名・部門 ID のどちらでも)。ほかは codes.ts の表
+function normalizeValue(kind: CodeKind, value: unknown, departments: DepartmentDef[]): string {
+  return kind === 'department' ? normalizeDepartment(departments, value as string) : normalizeCode(kind, value)
+}
+
+export function normalizeHistoryEntry(h: TaskHistoryEntry, departments: DepartmentDef[] = defaultDepartments()): TaskHistoryEntry {
   const kind = h?.field ? HISTORY_CODE_FIELDS[h.field] : undefined
   if (!kind) return h
-  return { ...h, from: normalizeCode(kind, h.from), to: normalizeCode(kind, h.to) }
+  return { ...h, from: normalizeValue(kind, h.from, departments), to: normalizeValue(kind, h.to, departments) }
 }
 
 export function normalizeSchedule(schedule: TaskSchedule | undefined): TaskSchedule | undefined {
@@ -42,10 +48,10 @@ export function normalizeSchedule(schedule: TaskSchedule | undefined): TaskSched
 
 type WithTaskCodes = { department: string; difficulty: string; priority: string }
 
-function normalizeTaskCodes<T extends WithTaskCodes>(item: T): T {
+function normalizeTaskCodes<T extends WithTaskCodes>(item: T, departments: DepartmentDef[]): T {
   return {
     ...item,
-    department: normalizeCode('department', item.department),
+    department: normalizeDepartment(departments, item.department),
     difficulty: normalizeCode('difficulty', item.difficulty || 'beginner'),
     priority: normalizeCode('priority', item.priority || 'medium'),
   }
@@ -53,32 +59,42 @@ function normalizeTaskCodes<T extends WithTaskCodes>(item: T): T {
 
 export function normalizeProjectTemplates(
   templates: Record<string, ProjectTemplateTask[]>,
+  departments: DepartmentDef[] = defaultDepartments(),
 ): Record<string, ProjectTemplateTask[]> {
   const out: Record<string, ProjectTemplateTask[]> = {}
   for (const [name, items] of Object.entries(templates ?? {})) {
-    out[name] = Array.isArray(items) ? items.map(normalizeTaskCodes) : items
+    out[name] = Array.isArray(items) ? items.map((it) => normalizeTaskCodes(it, departments)) : items
   }
   return out
 }
 
-export function normalizeTaskSetTemplates(templates: TaskSetTemplate[]): TaskSetTemplate[] {
+export function normalizeTaskSetTemplates(
+  templates: TaskSetTemplate[],
+  departments: DepartmentDef[] = defaultDepartments(),
+): TaskSetTemplate[] {
   return (Array.isArray(templates) ? templates : []).map((tpl) => ({
     ...tpl,
-    items: Array.isArray(tpl?.items) ? tpl.items.map(normalizeTaskCodes) : tpl?.items,
+    items: Array.isArray(tpl?.items) ? tpl.items.map((it) => normalizeTaskCodes(it, departments)) : tpl?.items,
   }))
 }
 
-export function normalizeRecurringRules(rules: RecurringTaskRule[]): RecurringTaskRule[] {
+export function normalizeRecurringRules(
+  rules: RecurringTaskRule[],
+  departments: DepartmentDef[] = defaultDepartments(),
+): RecurringTaskRule[] {
   return (Array.isArray(rules) ? rules : []).map((rule) => ({
-    ...normalizeTaskCodes(rule),
+    ...normalizeTaskCodes(rule, departments),
     triggerOnStatus: rule.triggerOnStatus ? normalizeCode('status', rule.triggerOnStatus) : undefined,
   }))
 }
 
 // 権限の例外のうち、部門を対象にしたものの対象(以前は部門名)を部門IDにそろえる
-export function normalizePermissionOverride(ov: PermissionOverride): PermissionOverride {
+export function normalizePermissionOverride(
+  ov: PermissionOverride,
+  departments: DepartmentDef[] = defaultDepartments(),
+): PermissionOverride {
   if (ov?.targetType !== 'department') return ov
-  return { ...ov, targetId: normalizeCode('department', ov.targetId) }
+  return { ...ov, targetId: normalizeDepartment(departments, ov.targetId) }
 }
 
 export { normalizeThresholdKeys }

@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
+import { defaultDepartments, findDepartment, type DepartmentDef } from './departments'
 import type { Department, Difficulty, Member, ParsedTask, Priority, Project } from './types'
-import { DEPARTMENTS, UNCATEGORIZED_DEPARTMENT } from './types'
+import { UNCATEGORIZED_DEPARTMENT } from './types'
 import { normalizeCode } from './codes'
 
 // Excelファイルの列は必ずしもOhsumiが出力した形式とは限らず、並び順や型は
@@ -109,9 +110,8 @@ export function guessProject(raw: string, projects: Project[]): string {
 
 // Excel の値は、日本語の表示名(シートの以前の値と同じ)でもコードでもよい。
 // 当てはまらない値は、以前と同じく未分類・中・新人歓迎にする
-export function guessDepartment(raw: string): Department {
-  const code = normalizeCode('department', raw)
-  return DEPARTMENTS.includes(code) ? code : UNCATEGORIZED_DEPARTMENT
+export function guessDepartment(raw: string, departments: DepartmentDef[] = defaultDepartments()): Department {
+  return findDepartment(departments, raw)?.id ?? UNCATEGORIZED_DEPARTMENT
 }
 
 export function guessPriority(raw: string): Priority {
@@ -186,6 +186,8 @@ export function buildParsedTasks(
   valueMaps: ValueMaps,
   projects: Project[],
   members: Member[],
+  // 部門の一覧(Excel の部門名・部門 ID を引く。省略時は既定の部門)
+  departments: DepartmentDef[] = defaultDepartments(),
 ): { parsed: ParsedTask[]; skippedRows: number } {
   let skippedRows = 0
   const parsed: ParsedTask[] = []
@@ -204,7 +206,7 @@ export function buildParsedTasks(
 
     const deptRaw = mapping.department ? String(row[mapping.department] ?? '').trim() : ''
     const department = (deptRaw
-      ? (valueMaps.department?.[deptRaw] ?? guessDepartment(deptRaw))
+      ? (valueMaps.department?.[deptRaw] ?? guessDepartment(deptRaw, departments))
       : UNCATEGORIZED_DEPARTMENT) as Department
 
     const priorityRaw = mapping.priority ? String(row[mapping.priority] ?? '').trim() : ''

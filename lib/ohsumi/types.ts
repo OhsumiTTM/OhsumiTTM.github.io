@@ -82,10 +82,9 @@ export type TaskImportance = CodeOf<'importance'>
 export const TASK_IMPORTANCE: TaskImportance[] = [...VALUE_CODES.importance.codes]
 
 // 部門は部門ID('ops' など)。未分類は空。一覧に無い値(以前の独自の部門名)
-// もそのまま持てるよう string にしている(部門の設定は PR-B)
+// もそのまま持てるよう string にしている(部門の一覧は departments.ts・Settings の departments)
 export type Department = string
 
-export const DEPARTMENTS: Department[] = [...VALUE_CODES.department.codes]
 
 export const UNCATEGORIZED_DEPARTMENT: Department = ''
 

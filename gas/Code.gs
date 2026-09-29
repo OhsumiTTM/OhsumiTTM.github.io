@@ -257,8 +257,8 @@ function mapHistoryCodes(entry, convert) {
   return out
 }
 
-function normalizeHistoryEntry(entry) { return mapHistoryCodes(entry, normalizeCode) }
-function sheetHistoryEntry(entry) { return mapHistoryCodes(entry, sheetCode) }
+function normalizeHistoryEntry(entry) { return mapHistoryCodes(entry, normalizeValue) }
+function sheetHistoryEntry(entry) { return mapHistoryCodes(entry, sheetValue) }
 
 function mapScheduleCodes(schedule, convert) {
   if (!schedule || typeof schedule !== 'object' || !schedule.responses) return schedule
@@ -306,7 +306,7 @@ function sheetSettingValue(key, value) {
   if (CODE_SETTING_KEYS.indexOf(key) < 0 || typeof value !== 'string' || !value) return value
   var parsed
   try { parsed = JSON.parse(value) } catch (e) { return value }
-  var convert = sheetCode
+  var convert = sheetValue
   var out = parsed
   if (key === 'project_templates' && parsed && typeof parsed === 'object') {
     out = {}
@@ -559,6 +559,239 @@ function rolesWithCodeIds(roles) {
 
 function newRoleId() {
   return 'r_' + Math.random().toString(36).slice(2, 8)
+}
+
+// ---- 部門 ----------------------------------------------------------------------
+//
+// Settings の departments(JSON)に [{ id, name, archived? }]。未設定なら既定の7部門。未分類は空。
+// タスクなどの部門の値は、移行(VALUE_FORMAT=codes)の前は部門名、後は部門 ID。ID でも名前でも引ける。
+// lib/ohsumi/departments.ts と同じ内容(一致することを lib/ohsumi/departments.test.ts で確かめる)。
+
+var UNCATEGORIZED_NAME = '未分類'
+
+function defaultDepartments() {
+  return VALUE_CODES.department.codes.filter(function (c) { return c !== '' }).map(function (id) {
+    return { id: id, name: VALUE_CODES.department.sheetLabels[id] }
+  })
+}
+
+function validateDepartments(list) {
+  var errors = []
+  var ids = {}
+  var names = {}
+  list.forEach(function (d) {
+    if (!d.id || !d.name) errors.push('部門の ID と名前は空にできません')
+    if (d.name === UNCATEGORIZED_NAME) errors.push('「未分類」は部門の名前に使えません')
+    if (ids[d.id]) errors.push('部門の ID が重複しています: ' + d.id)
+    if (names[d.name]) errors.push('部門の名前が重複しています: ' + d.name)
+    ids[d.id] = true
+    names[d.name] = true
+  })
+  return errors
+}
+
+function parseDepartmentsSetting(value) {
+  if (!value) return null
+  var parsed
+  try { parsed = JSON.parse(value) } catch (e) { return null }
+  if (!Array.isArray(parsed)) return null
+  var list = []
+  for (var i = 0; i < parsed.length; i++) {
+    var o = parsed[i]
+    if (!o || typeof o !== 'object') return null
+    if (typeof o.id !== 'string' || typeof o.name !== 'string') return null
+    var dept = { id: o.id, name: o.name }
+    if (o.archived === true) dept.archived = true
+    list.push(dept)
+  }
+  return validateDepartments(list).length === 0 ? list : null
+}
+
+function departmentsFromSettings(settings) {
+  return parseDepartmentsSetting(settings.departments) || defaultDepartments()
+}
+
+function findDepartment(list, ref) {
+  var v = String(ref === null || ref === undefined ? '' : ref).trim()
+  if (!v || v === UNCATEGORIZED_NAME) return undefined
+  var i
+  for (i = 0; i < list.length; i++) if (list[i].id === v) return list[i]
+  for (i = 0; i < list.length; i++) if (list[i].name === v) return list[i]
+  var labels = VALUE_CODES.department.sheetLabels
+  var ids = Object.keys(labels)
+  for (i = 0; i < ids.length; i++) {
+    if (ids[i] && labels[ids[i]] === v) {
+      for (var j = 0; j < list.length; j++) if (list[j].id === ids[i]) return list[j]
+      return undefined
+    }
+  }
+  return undefined
+}
+
+function normalizeDepartment(list, ref) {
+  var v = String(ref === null || ref === undefined ? '' : ref).trim()
+  if (!v || v === UNCATEGORIZED_NAME) return ''
+  var dept = findDepartment(list, v)
+  return dept ? dept.id : v
+}
+
+function sheetDepartmentRef(list, ref, codes) {
+  var id = normalizeDepartment(list, ref)
+  if (!id) return codes ? '' : UNCATEGORIZED_NAME
+  var dept = findDepartment(list, id)
+  if (!dept) return id
+  return codes ? dept.id : dept.name
+}
+
+function departmentNameOf(list, ref) {
+  var id = normalizeDepartment(list, ref)
+  if (!id) return UNCATEGORIZED_NAME
+  var dept = findDepartment(list, id)
+  return dept ? dept.name : id
+}
+
+// このリクエストでの部門の一覧(1回だけ読む。シートが無い時は既定)
+var _requestDepartments = null
+function getDepartments() {
+  if (!_requestDepartments) {
+    var raw = ''
+    var fromSetting = false
+    try {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SETTINGS)
+      if (sheet && sheet.getLastRow() > 1) {
+        var headers = headerRow(sheet)
+        var keyCol = headers.indexOf('key')
+        var valueCol = headers.indexOf('value')
+        sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().forEach(function (r) {
+          if (String(r[keyCol]) === 'departments') raw = String(r[valueCol] || '')
+        })
+      }
+    } catch (e) {
+      // シートを読めない(テストなど)時は既定の部門
+    }
+    var parsed = parseDepartmentsSetting(raw)
+    fromSetting = !!parsed
+    _requestDepartments = { list: parsed || defaultDepartments(), fromSetting: fromSetting }
+  }
+  return _requestDepartments.list
+}
+function invalidateDepartments() { _requestDepartments = null }
+
+// 選択肢の値を読む時・書く時の変換(部門だけは部門の一覧を使う)
+function normalizeValue(kind, value) {
+  return kind === 'department' ? normalizeDepartment(getDepartments(), value) : normalizeCode(kind, value)
+}
+function sheetValue(kind, value) {
+  return kind === 'department' ? sheetDepartmentRef(getDepartments(), value, isCodesFormat()) : sheetCode(kind, value)
+}
+
+function newDepartmentId() {
+  return 'd_' + Math.random().toString(36).slice(2, 8)
+}
+
+// ---- 部門の編集(updateDepartments・deleteDepartment・moveDepartmentTasks) ---------
+
+function writeDepartments(list) {
+  updateSetting('departments', JSON.stringify(list))
+  invalidateDepartments()
+}
+
+// 部門の一覧を保存する(追加・名前・並び順・アーカイブの解除)。削除は deleteDepartment
+function updateDepartments(newList) {
+  if (!Array.isArray(newList)) throw userError('部門の一覧の形式が正しくありません。')
+  var parsed = parseDepartmentsSetting(JSON.stringify(newList))
+  if (!parsed) throw userError('部門の一覧が正しくありません: ' + validateDepartments(newList.filter(Boolean)).join(' / '))
+  var current = getDepartments()
+  var byId = {}
+  current.forEach(function (d) { byId[d.id] = d })
+  var newIds = {}
+  parsed.forEach(function (d) { newIds[d.id] = true })
+  current.forEach(function (d) {
+    if (!newIds[d.id]) throw userError('部門「' + d.name + '」を消すには、部門の削除を使ってください。')
+  })
+  if (!isCodesFormat()) {
+    parsed.forEach(function (d) {
+      // 移行前はタスクの部門を部門名で持つため、名前を変えると引けなくなる
+      if (byId[d.id] && byId[d.id].name !== d.name) throw userError('部門の名前の変更は、内部コードへの移行の後にできるようになります。')
+    })
+  }
+  writeDepartments(parsed)
+  return { departments: parsed }
+}
+
+// 部門が使われている数(タスク・テンプレート・定期タスク・権限の例外)
+function departmentUsage(deptId) {
+  var list = getDepartments()
+  var usage = { tasks: 0, settings: 0, overrides: 0 }
+  var tasks = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_TASKS)
+  if (tasks && tasks.getLastRow() > 1) {
+    var h = headerRow(tasks)
+    var col = h.indexOf('department')
+    if (col >= 0) {
+      tasks.getRange(2, col + 1, tasks.getLastRow() - 1, 1).getValues().forEach(function (r) {
+        if (normalizeDepartment(list, r[0]) === deptId) usage.tasks++
+      })
+    }
+  }
+  ;['project_templates', 'task_set_templates', 'recurring_rules'].forEach(function (key) {
+    var raw = getSettingValue(key)
+    if (!raw) return
+    var found = 0
+    JSON.stringify(parseJsonOr(raw, null), function (k, v) {
+      if (k === 'department' && normalizeDepartment(list, v) === deptId) found++
+      return v
+    })
+    usage.settings += found
+  })
+  var members = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_MEMBERS)
+  if (members && members.getLastRow() > 1) {
+    var mh = headerRow(members)
+    var ocol = mh.indexOf('permission_overrides_json')
+    if (ocol >= 0) {
+      members.getRange(2, ocol + 1, members.getLastRow() - 1, 1).getValues().forEach(function (r) {
+        parseJsonOr(r[0], []).forEach(function (ov) {
+          if (ov && ov.targetType === 'department' && normalizeDepartment(list, ov.targetId) === deptId) usage.overrides++
+        })
+      })
+    }
+  }
+  return usage
+}
+
+// 部門を削除する。使われていればアーカイブ(archived)にし、どこでも使われていなければ一覧から消す
+function deleteDepartment(deptId) {
+  var list = getDepartments()
+  var dept = findDepartment(list, deptId)
+  if (!dept) throw userError('部門が見つかりません: ' + deptId)
+  var usage = departmentUsage(dept.id)
+  var used = usage.tasks + usage.settings + usage.overrides > 0
+  var next = used
+    ? list.map(function (d) { return d.id === dept.id ? { id: d.id, name: d.name, archived: true } : d })
+    : list.filter(function (d) { return d.id !== dept.id })
+  writeDepartments(next)
+  return { departments: next, archived: used, usage: usage }
+}
+
+// ある部門のタスクを、別の部門(空は未分類)へ移す。返り値は移したタスクの数
+function moveDepartmentTasks(fromId, toId) {
+  var list = getDepartments()
+  var from = findDepartment(list, fromId)
+  if (!from) throw userError('部門が見つかりません: ' + fromId)
+  if (toId && !findDepartment(list, toId)) throw userError('移す先の部門が見つかりません: ' + toId)
+  var sheet = getSheet(SHEET_TASKS)
+  var headers = headerRow(sheet)
+  var idCol = headers.indexOf('id')
+  var col = headers.indexOf('department')
+  if (col < 0 || sheet.getLastRow() < 2) return { moved: 0 }
+  var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  var value = sheetDepartmentRef(list, toId || '', isCodesFormat())
+  var moved = 0
+  rows.forEach(function (r) {
+    if (normalizeDepartment(list, r[col]) !== from.id) return
+    updateTaskFields(String(r[idCol]), { department: value })
+    moved++
+  })
+  return { moved: moved }
 }
 
 // ---- 役職の編集(updateRoles・deleteRole)と、最上位の締め出しの防止 ----------------
@@ -1060,6 +1293,7 @@ var _requestProps = null
 function resetRequestProps() {
   _requestProps = null
   _requestRoles = null
+  _requestDepartments = null
 }
 
 function requestProps() {
@@ -1349,7 +1583,7 @@ function overridesGrant(overrides, targets, requiredLevel) {
     if (ov.targetType === 'project' && targets.project && targetId === targets.project) return true
     // 部門は、以前の部門名・部門IDのどちらでも同じ部門として比べる
     if (ov.targetType === 'department' && targets.department !== undefined &&
-        normalizeCode('department', targetId) === normalizeCode('department', targets.department)) return true
+        normalizeValue('department', targetId) === normalizeValue('department', targets.department)) return true
     // recruiting: targetIdでの絞り込みは行わない（'all'固定運用のため、targetType一致とaccess水準のみで判定）
     if (ov.targetType === 'recruiting' && targets.recruiting) return true
   }
@@ -1675,7 +1909,8 @@ function authorizeAction(acting, action, body) {
   // restricted_roles に含まれないロール) であれば許可。「事業責任者を代表と
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
-  if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+  if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin(acting)) return
     if (checkPermissionOverride(acting, action, body)) return
     throw userError('この操作は代表または全権管理者のみ実行できます。')
@@ -2228,7 +2463,7 @@ function normalizeRequestCodes(body) {
       body.visibility = normalizeCode('visibility', body.visibility)
       break
     case 'updateTaskDetails':
-      body.department = normalizeCode('department', body.department)
+      body.department = normalizeValue('department', body.department)
       body.difficulty = normalizeCode('difficulty', body.difficulty)
       body.priority = normalizeCode('priority', body.priority)
       body.visibility = normalizeCode('visibility', body.visibility)
@@ -2237,7 +2472,7 @@ function normalizeRequestCodes(body) {
     case 'createTasks':
       ;(body.tasks || []).forEach(function (t) {
         if (!t) return
-        t.department = normalizeCode('department', t.department)
+        t.department = normalizeValue('department', t.department)
         if (t.difficulty) t.difficulty = normalizeCode('difficulty', t.difficulty)
         if (t.priority) t.priority = normalizeCode('priority', t.priority)
         t.visibility = normalizeCode('visibility', t.visibility)
@@ -2251,7 +2486,7 @@ function normalizeRequestCodes(body) {
       if (body.schedule) body.schedule = mapScheduleCodes(body.schedule, normalizeCode)
       break
     case 'updatePermissionOverrides':
-      if (Array.isArray(body.overrides)) body.overrides = mapOverrideCodes(body.overrides, normalizeCode)
+      if (Array.isArray(body.overrides)) body.overrides = mapOverrideCodes(body.overrides, normalizeValue)
       break
   }
 }
@@ -2383,7 +2618,7 @@ function doPost(e) {
           title: body.name,
           description: body.description || '',
           project_id: body.projectId,
-          department: sheetCode('department', body.department),
+          department: sheetValue('department', body.department),
           category: body.category,
           skills: (body.skills || []).join(','),
           difficulty: sheetCode('difficulty', body.difficulty),
@@ -2475,9 +2710,18 @@ function doPost(e) {
       case 'deleteRole':
         result = deleteRole(actingMember, body.roleId, body.moveToRoleId)
         break
+      case 'updateDepartments':
+        result = updateDepartments(body.departments)
+        break
+      case 'deleteDepartment':
+        result = deleteDepartment(body.departmentId)
+        break
+      case 'moveDepartmentTasks':
+        result = moveDepartmentTasks(body.fromDepartmentId, body.toDepartmentId || '')
+        break
       case 'updatePermissionOverrides':
         result = updateMemberFields(body.memberId, {
-          permission_overrides_json: JSON.stringify(mapOverrideCodes(body.overrides || [], sheetCode)),
+          permission_overrides_json: JSON.stringify(mapOverrideCodes(body.overrides || [], sheetValue)),
         })
         break
       case 'updateReportsTo':
@@ -2713,6 +2957,7 @@ function doPost(e) {
         if (body.key === 'roles' || (hasRolesSetting() && ROLE_SETTING_KEYS.indexOf(body.key) >= 0)) {
           throw userError('役職の設定は、管理画面の役職の編集から変更してください。')
         }
+        if (body.key === 'departments') throw userError('部門の設定は、管理画面の部門の編集から変更してください。')
         result = updateSetting(body.key, sheetSettingValue(body.key, body.value))
         if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles()
         break
@@ -2973,7 +3218,7 @@ function createTasks(tasks, actingMemberId) {
         case 'visibility':
           return sheetCode('visibility', t.visibility)
         case 'department':
-          return sheetCode('department', t.department)
+          return sheetValue('department', t.department)
         case 'category':
           return t.category || ''
         case 'skills':
@@ -6323,6 +6568,7 @@ var READ_POLICY = {
       skill_options: 'all',
       category_options: 'all',
       roles: 'all',
+      departments: 'all',
       role_levels: 'all',
       project_templates: 'all',
       role_permissions: 'all',
@@ -8461,7 +8707,7 @@ function sheetSampleTaskRow(o) {
   var out = {}
   Object.keys(o).forEach(function (k) { out[k] = o[k] })
   ;['status', 'difficulty', 'priority', 'importance', 'visibility', 'department'].forEach(function (k) {
-    if (o[k] !== undefined && o[k] !== '') out[k] = sheetCode(k, o[k])
+    if (o[k] !== undefined && o[k] !== '') out[k] = sheetValue(k, o[k])
   })
   if (o.approval_status) out.approval_status = sheetCode('approval', o.approval_status)
   if (o.history_json) {

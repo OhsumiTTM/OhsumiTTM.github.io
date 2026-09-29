@@ -1,10 +1,11 @@
 'use client'
 
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, FileSpreadsheet, SlidersHorizontal, Check } from 'lucide-react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
-import { STATUS_ORDER, DEPARTMENTS } from '@/lib/ohsumi/types'
+import { STATUS_ORDER } from '@/lib/ohsumi/types'
 import type { Task } from '@/lib/ohsumi/types'
 import { formatDeadline, isOverdue } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel } from '@/lib/ohsumi/export-excel'
@@ -69,7 +70,8 @@ export function ListView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { projects, members, updateTaskStatus, currentUser, isFullAdmin } = useOhsumi()
+  const { departmentOptions, projects, members, updateTaskStatus, currentUser, isFullAdmin } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const { go } = useNav()
   const { t: tr } = useI18n()
   const [query, setQuery] = useState('')
@@ -177,9 +179,9 @@ export function ListView({
           onChange={(e) => setDepartmentFilter(e.target.value)}
         >
           <option value="all">{tr('output.list.departmentAll')}</option>
-          {DEPARTMENTS.map((d) => (
+          {departmentOptions(undefined, true).map((d) => (
             <option key={d} value={d}>
-              {tr(DEPARTMENT_KEY[d])}
+              {deptLabel(d)}
             </option>
           ))}
         </select>

@@ -120,12 +120,6 @@ export function normalizeThresholdKeys(thresholds: Record<string, number>): Reco
 // コードの扱いを変えた時に上げる(gas/Code.gs の MIN_CLIENT_VERSION と合わせる)
 export const CLIENT_VERSION = 1
 
-// 部門の団体での名前(部署ツリーの名前との照合に使う)。部門の設定(PR-B)
-// ができるまでは、以前のシートの値(日本語の部門名)と同じ
-export function departmentName(code: string): string {
-  return sheetLabel('department', code)
-}
-
 // 移行前のシートの値(日本語の表示名)。Excel の書き出しなど、以前と同じく
 // 日本語で出したい所で使う。一覧に無い値はそのまま返す
 export function sheetLabel(kind: CodeKind, code: string): string {
