@@ -1600,6 +1600,9 @@ function exchangeIdToken(body) {
 // 返り値 true は「画面は updateLastLogin を送らなくてよい」。記録できなかった時だけ false
 var LAST_LOGIN_THROTTLE_SEC = 3600
 var LAST_LOGIN_PENDING_PREFIX = 'LAST_LOGIN_PENDING_'
+// 書き込み待ちの上限。トリガーが止まっていても、これ以上は増やさない(あふれた分は捨てる。
+// 最終ログイン日時は、おおよそ正しければ十分)
+var LAST_LOGIN_PENDING_MAX = 200
 
 function recordLastLogin(memberId, nowMs) {
   memberId = String(memberId)
@@ -1611,14 +1614,39 @@ function recordLastLogin(memberId, nowMs) {
       noteTiming('lastLogin', 'recent')
       return true
     }
-    // このリクエストで読んだスナップショットの last_login が1時間以内なら書かない
+    // 書き込み待ち(このリクエストの最初に読んだスクリプトプロパティ)のうち、このメンバーの分と全体の件数。
+    // CacheService の印は途中で消えることがあるので、書き込み待ちそのものも見る
+    var all = requestProps()
+    var ownKeys = []
+    var newestOwn = NaN
+    var total = 0
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(LAST_LOGIN_PENDING_PREFIX) !== 0) return
+      total++
+      if (memberIdFromPendingKey(k) !== memberId) return
+      ownKeys.push(k)
+      var at = Date.parse(String(all[k]))
+      if (!(newestOwn >= at)) newestOwn = at
+    })
+    // スナップショット(シートの値)か書き込み待ちの日時が1時間以内なら書かない
     var fromSnapshot = _requestSnapshot ? lastLoginInTable(_requestSnapshot.data.Members, memberId) : NaN
-    if (fromSnapshot > 0 && now - fromSnapshot < LAST_LOGIN_THROTTLE_SEC * 1000) {
+    var latest = Math.max(fromSnapshot > 0 ? fromSnapshot : 0, newestOwn > 0 ? newestOwn : 0)
+    if (latest > 0 && now - latest < LAST_LOGIN_THROTTLE_SEC * 1000) {
       cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
       noteTiming('lastLogin', 'recent')
       return true
     }
-    PropertiesService.getScriptProperties().setProperty(lastLoginPendingKey(memberId, now), new Date(now).toISOString())
+    // 上限に達していて、このメンバーの分がまだ無ければ入れない(捨てる)
+    if (!ownKeys.length && total >= LAST_LOGIN_PENDING_MAX) {
+      cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
+      noteTiming('lastLogin', 'dropped')
+      return true
+    }
+    var props = PropertiesService.getScriptProperties()
+    props.setProperty(lastLoginPendingKey(memberId, now), new Date(now).toISOString())
+    // このメンバーの古い書き込み待ちは、新しい1件に置き換える(トリガーが止まっていても、1人につき増え続けない)。
+    // 消すのは、このリクエストの最初に見えていた自分の分だけ(ほかのメンバーの分・この後に入った分は消さない)
+    ownKeys.forEach(function (k) { props.deleteProperty(k) })
     cache.put(cacheKey, '1', LAST_LOGIN_THROTTLE_SEC)
     noteTiming('lastLogin', 'queued')
     return true

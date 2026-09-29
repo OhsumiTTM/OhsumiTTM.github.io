@@ -128,8 +128,9 @@ export interface GasTiming {
   versionMs?: number
   // 内訳に無い時間(合計から、重ならない内訳を引いたもの)
   otherMs?: number
-  // 最終ログイン日時: recent(1時間以内に記録済みで書かない)・queued(書き込み待ちに入れた)
-  lastLogin?: 'recent' | 'queued'
+  // 最終ログイン日時: recent(1時間以内に記録済みで書かない)・queued(書き込み待ちに入れた)・
+  // dropped(書き込み待ちが上限に達していて入れなかった)
+  lastLogin?: 'recent' | 'queued' | 'dropped'
   // 裏での読み込みの内訳(backgroundMs の中)と、それぞれのキャッシュ
   expensesMs?: number
   formSubmissionsMs?: number
@@ -228,7 +229,11 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.blobMs != null) parts.push(`ファイルの読み込み ${timing.blobMs}`)
   if (timing.sessionMs != null) parts.push(`セッションの発行 ${timing.sessionMs}`)
   if (timing.lastLoginMs != null) {
-    const how = timing.lastLogin === 'recent' ? '(1時間以内に記録済み)' : timing.lastLogin === 'queued' ? '(書き込み待ちに追加)' : ''
+    const how =
+      timing.lastLogin === 'recent' ? '(1時間以内に記録済み)'
+        : timing.lastLogin === 'queued' ? '(書き込み待ちに追加)'
+          : timing.lastLogin === 'dropped' ? '(書き込み待ちが上限のため記録せず)'
+            : ''
     parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}${how}`)
   }
   if (timing.otherMs != null) parts.push(`その他 ${timing.otherMs}`)

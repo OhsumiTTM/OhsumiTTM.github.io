@@ -178,6 +178,37 @@ describe('最終ログイン日時', () => {
     expect(new Set(t.pendingOf('m1')).size).toBe(2)
   })
 
+  it('トリガーが止まっていても増え続けない: 書き込み待ちの日時も1時間の判定に使い、古い分は新しい1件に置き換える', () => {
+    const t = setup()
+    const now = Date.parse('2026-10-01T09:00:00Z')
+    const login = (ms: number) => {
+      // 別のリクエスト(CacheService の印は消えている場合も)
+      t.cache.clear()
+      t.gas.resetRequestProps()
+      t.gas.recordLastLogin('m2', ms)
+    }
+    login(now)
+    login(now + 30 * 60 * 1000) // 印が消えていても、書き込み待ちの日時が1時間以内なので入れない
+    expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-01T09:00:00.000Z'])
+    for (let h = 2; h <= 48; h++) login(now + h * 3600 * 1000) // 2日間、1時間ごとにログイン(トリガーは止まっている)
+    expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-03T09:00:00.000Z'])
+  })
+
+  it('書き込み待ちが200件に達したら、まだ書き込み待ちの無いメンバーの分は入れずに捨てる(ある人は置き換えられる)', () => {
+    const t = setup()
+    for (let i = 0; i < 200; i++) t.props[`LAST_LOGIN_PENDING_other${i}_1_1`] = '2026-10-01T00:00:00.000Z'
+    t.props.LAST_LOGIN_PENDING_m1_1_1 = '2026-09-30T00:00:00.000Z'
+    t.gas.resetRequestProps()
+    t.gas.startRequestTiming()
+    expect(t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
+    expect(t.pendingOf('m2')).toEqual([])
+    expect((t.gas as unknown as { _requestTiming: { lastLogin: string } })._requestTiming.lastLogin).toBe('dropped')
+    expect(t.gas.recordLastLogin('m1', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
+    expect(t.pendingOf('m1').map((k) => t.props[k])).toEqual(['2026-10-01T09:00:00.000Z'])
+    expect(Object.keys(t.props).filter((k) => k.startsWith('LAST_LOGIN_PENDING_'))).toHaveLength(201)
+    expect(t.gas.LAST_LOGIN_PENDING_MAX).toBe(200)
+  })
+
   it('シートに書いている間に新しくログインした分は消さない(消すのは、このとき読んだキーだけ)', () => {
     const t = setup()
     t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))
