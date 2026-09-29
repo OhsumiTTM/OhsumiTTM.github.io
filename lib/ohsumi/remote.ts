@@ -627,6 +627,8 @@ export interface BackgroundData {
   formSubmissions?: import('./types').CustomFormSubmission[]
   candidates?: import('./types').Candidate[]
   myEmail?: string
+  // ログインの直後に表示する画像(団体ロゴ・プロフィール画像)のうち、GAS のキャッシュにあったもの
+  files?: FetchedFile[]
   errors?: Record<string, string>
 }
 

@@ -124,7 +124,7 @@ import {
   reloadPage,
   saveSession,
 } from './session'
-import { clearFileCache } from './files'
+import { clearFileCache, primeFiles } from './files'
 import { clearTranslateCache } from './translate'
 
 type Mode = 'input' | 'output'
@@ -1185,6 +1185,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (data.formSubmissions) setCustomFormSubmissions(data.formSubmissions)
       if (data.candidates) setCandidates(data.candidates)
       if (typeof data.myEmail === 'string') setMyEmail(data.myEmail)
+      primeFiles(data.files)
       const failed = Object.entries(data.errors ?? {}).filter(([key]) => key !== 'myEmail')
       if (failed.length) reportLoadError(new Error(failed.map(([key, msg]) => `${key}: ${msg}`).join(' / ')))
     },

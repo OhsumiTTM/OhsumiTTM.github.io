@@ -377,3 +377,24 @@ describe('切り分け用の ping', () => {
     expect(isWriteAction('ping')).toBe(false)
   })
 })
+
+describe('内訳の記録(ログインの遅さの切り分け)', () => {
+  it('裏での読み込みの内訳(経費・フォームの回答・候補者・メール・画像とキャッシュ)、最終ログイン日時の扱い、getFiles の内訳を1行に出す', async () => {
+    const h = harness((body) =>
+      json({
+        ok: true,
+        result: 1,
+        timing: body.action === 'getFiles'
+          ? { totalMs: 750, authMs: 122, folderPropsMs: 20, driveMs: 400, fileCacheMs: 30, fileCacheHits: 2, blobMs: 90, otherMs: 10 }
+          : { totalMs: 3000, backgroundMs: 1725, expensesMs: 400, expensesCache: 'miss', formSubmissionsMs: 600, formSubmissionsCache: 'hit', candidatesMs: 20, myEmailMs: 300, myEmailCache: 'miss', filesMs: 40, lastLoginMs: 12, lastLogin: 'queued', otherMs: 50 },
+      }),
+    )
+    await sendToGas(URL, { action: 'getInitialData' })
+    await sendToGas(URL, { action: 'getFiles', fileIds: [] })
+    const lines = h.logs.map((l) => l.text).join('\n')
+    expect(lines).toContain('裏での読み込み 1725(経費 400 miss・フォームの回答 600 hit・候補者 20・メール 300 miss・画像 40)')
+    expect(lines).toContain('最終ログイン日時の記録 12(書き込み待ちに追加)')
+    expect(lines).toContain('その他 50')
+    expect(lines).toContain('フォルダの設定 20・Drive 400・画像のキャッシュ 30(2件 hit)・ファイルの読み込み 90')
+  })
+})

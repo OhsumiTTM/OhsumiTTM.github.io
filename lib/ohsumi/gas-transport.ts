@@ -128,6 +128,29 @@ export interface GasTiming {
   versionMs?: number
   // 内訳に無い時間(合計から、重ならない内訳を引いたもの)
   otherMs?: number
+  // 最終ログイン日時: recent(1時間以内に記録済みで書かない)・queued(書き込み待ちに入れた)
+  lastLogin?: 'recent' | 'queued'
+  // 裏での読み込みの内訳(backgroundMs の中)と、それぞれのキャッシュ
+  expensesMs?: number
+  formSubmissionsMs?: number
+  candidatesMs?: number
+  myEmailMs?: number
+  filesMs?: number
+  expensesCache?: 'hit' | 'miss'
+  formSubmissionsCache?: 'hit' | 'miss'
+  candidatesCache?: 'hit' | 'miss'
+  myEmailCache?: 'hit' | 'miss'
+  // getFiles の内訳
+  folderPropsMs?: number
+  driveMs?: number
+  fileCacheMs?: number
+  fileCacheHits?: number
+  permissionMs?: number
+  blobMs?: number
+}
+
+function withCache(ms: number | undefined, cache: string | undefined): string {
+  return `${ms}${cache ? ` ${cache}` : ''}`
 }
 
 // ---- コンソールに出す文字の整え方 ----
@@ -185,9 +208,26 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.readError) parts.push(`Sheets API で読めなかった理由: ${timing.readError}`)
   if (timing.cacheWriteMs != null) parts.push(`キャッシュ書き込み ${timing.cacheWriteMs}`)
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
-  if (timing.backgroundMs != null) parts.push(`裏での読み込み ${timing.backgroundMs}`)
+  if (timing.backgroundMs != null || timing.expensesMs != null) {
+    const inner: string[] = []
+    if (timing.expensesMs != null) inner.push(`経費 ${withCache(timing.expensesMs, timing.expensesCache)}`)
+    if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache)}`)
+    if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache)}`)
+    if (timing.myEmailMs != null) inner.push(`メール ${withCache(timing.myEmailMs, timing.myEmailCache)}`)
+    if (timing.filesMs != null) inner.push(`画像 ${timing.filesMs}`)
+    const label = timing.backgroundMs != null ? `裏での読み込み ${timing.backgroundMs}` : '裏での読み込み'
+    parts.push(inner.length ? `${label}(${inner.join('・')})` : label)
+  }
+  if (timing.folderPropsMs != null) parts.push(`フォルダの設定 ${timing.folderPropsMs}`)
+  if (timing.driveMs != null) parts.push(`Drive ${timing.driveMs}`)
+  if (timing.fileCacheMs != null) parts.push(`画像のキャッシュ ${timing.fileCacheMs}${timing.fileCacheHits ? `(${timing.fileCacheHits}件 hit)` : ''}`)
+  if (timing.permissionMs != null) parts.push(`領収書の権限 ${timing.permissionMs}`)
+  if (timing.blobMs != null) parts.push(`ファイルの読み込み ${timing.blobMs}`)
   if (timing.sessionMs != null) parts.push(`セッションの発行 ${timing.sessionMs}`)
-  if (timing.lastLoginMs != null) parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}`)
+  if (timing.lastLoginMs != null) {
+    const how = timing.lastLogin === 'recent' ? '(1時間以内に記録済み)' : timing.lastLogin === 'queued' ? '(書き込み待ちに追加)' : ''
+    parts.push(`最終ログイン日時の記録 ${timing.lastLoginMs}${how}`)
+  }
   if (timing.otherMs != null) parts.push(`その他 ${timing.otherMs}`)
   return `GAS ${timing.totalMs}ms${parts.length ? `: ${parts.join('・')}` : ''}`
 }

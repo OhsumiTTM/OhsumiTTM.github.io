@@ -95,6 +95,20 @@ function loadFile(id: string): Promise<string | null> {
   return promise
 }
 
+/**
+ * 先に受け取ったファイル(ログインの応答に入っていた団体ロゴ・プロフィール画像)を、取得済みにする。
+ * これらの画像は getFiles を送らずに表示できる
+ */
+export function primeFiles(files: { id: string; ok: boolean; mimeType?: string; data?: string }[] | undefined): void {
+  if (!files || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return
+  for (const f of files) {
+    if (!f?.ok || !f.data || cache.has(f.id)) continue
+    const url = URL.createObjectURL(base64ToBlob(f.data, f.mimeType || 'application/octet-stream'))
+    resolved.set(f.id, url)
+    cache.set(f.id, Promise.resolve(url))
+  }
+}
+
 // 表示用のURLを返す。GAS 経由で取得するファイルは、取得できるまで undefined
 // (呼び出し側は色とイニシャルなどの代わりの表示を出す)。取得できなかった
 // 場合も undefined。
