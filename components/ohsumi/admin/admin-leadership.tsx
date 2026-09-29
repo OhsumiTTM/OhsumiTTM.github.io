@@ -266,8 +266,8 @@ export function AdminLeadership() {
                       className="flex w-full items-center gap-3 rounded-lg border border-border/60 bg-secondary/30 px-3 py-2 text-left text-xs transition-colors hover:bg-secondary/60"
                     >
                       <Avatar member={m} size={18} />
-                      <span className="font-medium">{m.displayName || m.name}</span>
-                      <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+                      <span className="min-w-0 truncate font-medium">{m.displayName || m.name}</span>
+                      <span className="ml-auto shrink-0 whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
                         {t('admin.leadership.successor.matchScore', { score: Math.round(score * 100) })}
                       </span>
                       <span className="truncate max-w-40 text-[10px] text-muted-foreground">

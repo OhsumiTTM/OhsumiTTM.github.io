@@ -151,11 +151,11 @@ export function Tag({
   )
 }
 
-export function ProjectTag({ name }: { name: string }) {
+export function ProjectTag({ name, className }: { name: string; className?: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span className="inline-block size-1.5 rounded-full bg-primary/60" aria-hidden />
-      {name}
+    <span className={cn('inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground', className)}>
+      <span className="inline-block size-1.5 shrink-0 rounded-full bg-primary/60" aria-hidden />
+      <span className="truncate" title={name}>{name}</span>
     </span>
   )
 }

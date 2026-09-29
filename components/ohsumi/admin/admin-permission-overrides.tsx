@@ -191,7 +191,7 @@ export function PermissionOverridesButton({ member }: Props) {
       <button
         onClick={() => setOpen(true)}
         title={t('admin.permissionOverrides.buttonTitle')}
-        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+        className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs whitespace-nowrap text-muted-foreground hover:bg-secondary hover:text-foreground"
       >
         <ShieldCheck className="size-3.5" />
         {(member.permissionOverrides?.length ?? 0) > 0

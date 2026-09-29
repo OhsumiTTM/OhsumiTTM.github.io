@@ -31,7 +31,7 @@ export function AdminAssignments() {
           <p className="mt-1 text-xs text-muted-foreground">{tr('admin.assignments.empty.desc')}</p>
         </div>
       ) : (
-        <div className="mt-6 grid gap-6 lg:grid-cols-[320px_1fr]">
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[320px_1fr]">
           {/* Task list */}
           <div className="rounded-lg border border-border bg-card lg:sticky lg:top-[4.5rem] lg:self-start">
             <div className="border-b border-border px-4 py-3 text-xs font-medium text-muted-foreground">

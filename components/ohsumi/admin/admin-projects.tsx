@@ -389,7 +389,7 @@ export function AdminProjects() {
                         {taskSetTemplates.length > 0 && (
                           <button
                             onClick={() => setApplyingTo(p)}
-                            className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
+                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
                           >
                             <LayoutTemplate className="size-3.5" />
                             {t('admin.projects.applyTemplateButton')}
@@ -401,7 +401,7 @@ export function AdminProjects() {
                             setImportSourceId('')
                             setImportSelectedIds(new Set())
                           }}
-                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
                         >
                           <FolderInput className="size-3.5" />
                           {t('admin.projects.importTasksButton')}
@@ -411,14 +411,14 @@ export function AdminProjects() {
                             setProjectArchived(p.id, true)
                             toast(t('admin.projects.archiveToast', { name: p.name }))
                           }}
-                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
                         >
                           <Archive className="size-3.5" />
                           {t('admin.projects.archiveButton')}
                         </button>
                         <button
                           onClick={() => setRemoving(p)}
-                          className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
                         >
                           <Trash2 className="size-3.5" />
                           {t('common.delete')}
@@ -448,14 +448,14 @@ export function AdminProjects() {
                       setProjectArchived(p.id, false)
                       toast(t('admin.projects.unarchiveToast', { name: p.name }))
                     }}
-                    className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary"
+                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
                   >
                     <ArchiveRestore className="size-3.5" />
                     {t('admin.projects.unarchiveButton')}
                   </button>
                   <button
                     onClick={() => setRemoving(p)}
-                    className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
                   >
                     <Trash2 className="size-3.5" />
                     {t('common.delete')}

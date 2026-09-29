@@ -788,7 +788,7 @@ function SurveyQuestionsEditor() {
                   <ChevronDown className="size-3.5" />
                 </button>
               </div>
-              <div className="flex-1 space-y-2">
+              <div className="min-w-0 flex-1 space-y-2">
                 <input
                   value={q.text}
                   onChange={(e) => updateQuestion(q.id, { text: e.target.value })}
@@ -897,7 +897,7 @@ function SurveyQuestionImageInput({
           value={imageUrl ?? ''}
           onChange={(e) => onChange(e.target.value)}
           placeholder={t('admin.tags.surveyQuestions.imageUrlPlaceholder')}
-          className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
         />
         {driveEnabled && (
           <>

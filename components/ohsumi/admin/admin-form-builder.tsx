@@ -327,14 +327,14 @@ export function AdminFormBuilder() {
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold">{t('admin.formBuilder.title')}</h2>
         <div className="flex rounded-md border border-border bg-card">
           {(['submissions', 'forms'] as const).map((tabKey) => (
             <button
               key={tabKey}
               onClick={() => setTab(tabKey)}
-              className={`px-3 py-1.5 text-sm transition-colors ${tab === tabKey ? 'bg-accent font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`shrink-0 px-3 py-1.5 text-sm whitespace-nowrap transition-colors ${tab === tabKey ? 'bg-accent font-medium' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {tabKey === 'submissions' ? t('admin.expenses.tab.applications') : t('admin.formBuilder.tab.forms')}
             </button>
