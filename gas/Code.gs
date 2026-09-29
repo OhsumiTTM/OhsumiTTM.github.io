@@ -1579,14 +1579,14 @@ function verifyGoogleIdToken(idToken, nonceSecret) {
 // exchangeIdToken: IDトークンをセッショントークンに交換し、初期データもまとめて返す
 function exchangeIdToken(body) {
   var google = timed('verifyMs', function () { return verifyGoogleIdToken(body.idToken, body.nonceSecret) })
-  var memberId = findMemberIdByEmailCached(google.email)
+  var memberId = timed('emailLookupMs', function () { return findMemberIdByEmailCached(google.email) })
   // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
   if (!memberId) return { memberId: null, email: google.email }
   var data = getInitialDataForMember(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
-  data.session = issueSessionToken(memberId, body.remember !== false, nowSec())
+  data.session = timed('sessionMs', function () { return issueSessionToken(memberId, body.remember !== false, nowSec()) })
   // 最終ログイン日時も、ここで記録する(画面が別に updateLastLogin を送らなくてよいように)
-  data.lastLoginRecorded = recordLastLogin(memberId)
+  data.lastLoginRecorded = timed('lastLoginMs', function () { return recordLastLogin(memberId) })
   return attachBackgroundData(data, memberId, body)
 }
 
@@ -2322,6 +2322,7 @@ function authorizeAction(acting, action, body) {
     'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)
     'getFormSubmissions',      // フォームの回答の読み取り。閲覧できる回答だけを返す(canViewFormSubmission で絞り込む)
     'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
+    'getBackgroundData',       // 裏での読み込み(経費・フォームの回答・候補者・自分のメール)。中身はそれぞれ上の読み取りと同じ確認を通す
     'revokeMySessions',        // 全端末でログアウト(常に acting.id が対象、body の memberId は見ない)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
@@ -2624,6 +2625,7 @@ function doPost(e) {
     // 画面の往復時間と GAS の中の時間(timing.totalMs)を比べて、遅さが Google 側・回線側か切り分ける
     if (body.action === 'ping') return jsonOutput({ ok: true, result: { pong: true } })
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
+    var propsStart = Date.now()
     resetRequestProps()
 
     // getLoginConfig: ログイン前に団体ID(IDトークンの nonce に含める)を返す。認証不要
@@ -2637,6 +2639,7 @@ function doPost(e) {
 
     // 移行の後は、コードを読めない古いタブからのリクエストを断る(再読み込みを促す)
     var versionError = checkClientVersion(body)
+    noteTiming('propsMs', Date.now() - propsStart)
     if (versionError) return jsonOutput({ ok: false, error: versionError, reloadRequired: true })
 
     // 選択肢の値は、以降の処理ではすべてコードで扱う(古いタブは日本語で送ってくる)
@@ -2680,18 +2683,26 @@ function doPost(e) {
     //
     // Auth errors are returned with authError:true so the frontend can
     // distinguish them from business logic errors (session expired → login).
+    // authError はセッションが無効・期限切れ・メンバーが見つからない時だけ(画面はログイン画面に戻す)。
+    // 権限が足りない時は forbidden を返す(セッションは有効なので、ログイン画面には戻さない)
     var actingMember
     var renewedSession = null
+    var authStart = beginTiming()
     try {
-      var authStart = Date.now()
       var auth = authenticateRequest(body)
       renewedSession = auth.renewed
       actingMember = getActingMember(auth.memberId, body.action)
-      authorizeAction(actingMember, body.action, body)
-      noteTiming('authMs', Date.now() - authStart)
     } catch (authErr) {
+      endTiming('authMs', authStart)
       return jsonOutput({ ok: false, error: toErrorMessage(authErr), authError: true })
     }
+    try {
+      authorizeAction(actingMember, body.action, body)
+    } catch (forbiddenErr) {
+      endTiming('authMs', authStart)
+      return jsonOutput({ ok: false, error: toErrorMessage(forbiddenErr), forbidden: true, session: renewedSession || undefined })
+    }
+    endTiming('authMs', authStart)
     // ------------------------------------------------------------------------
 
     // F7: 書き込みを伴うアクションはLockService.getScriptLock()で排他制御する。
@@ -5199,29 +5210,56 @@ function respondAndRemember(key, obj) {
 //   verifyMs  IDトークンの確認(exchangeIdToken)
 var _requestTiming = null
 
+// 計っている区間の深さ。区間の中で記録した時間(例: 認証の中のキャッシュの読み込み)は
+// 外側の区間に含まれるので、otherMs の計算では数えない
+var _timingDepth = 0
+var _timingNested = {}
+
 function startRequestTiming() {
   _requestTiming = { start: Date.now() }
   _requestSnapshot = null
+  _timingDepth = 0
+  _timingNested = {}
 }
 
 function noteTiming(key, value) {
-  if (_requestTiming) _requestTiming[key] = value
+  if (!_requestTiming) return
+  _requestTiming[key] = value
+  if (_timingDepth > 0) _timingNested[key] = true
+}
+
+// 区間を手で計る時(開始と終わりが別の場所にある時)に使う
+function beginTiming() {
+  _timingDepth++
+  return Date.now()
+}
+
+function endTiming(key, started) {
+  _timingDepth = Math.max(0, _timingDepth - 1)
+  noteTiming(key, Date.now() - started)
 }
 
 // 処理にかかった時間を記録しながら fn を実行する
 function timed(key, fn) {
-  var t = Date.now()
+  var t = beginTiming()
   try {
     return fn()
   } finally {
-    noteTiming(key, Date.now() - t)
+    endTiming(key, t)
   }
 }
 
 function jsonOutput(obj) {
   if (_requestTiming) {
     var timing = { totalMs: Date.now() - _requestTiming.start }
-    Object.keys(_requestTiming).forEach(function (k) { if (k !== 'start') timing[k] = _requestTiming[k] })
+    var known = 0
+    Object.keys(_requestTiming).forEach(function (k) {
+      if (k === 'start') return
+      timing[k] = _requestTiming[k]
+      if (/Ms$/.test(k) && typeof _requestTiming[k] === 'number' && !_timingNested[k]) known += _requestTiming[k]
+    })
+    // 内訳に無い時間(本文の解析・ここで計っていない処理)。区間の中の内訳は外側と重ねて数えない
+    timing.otherMs = Math.max(0, timing.totalMs - known)
     obj.timing = timing
   }
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
@@ -5236,11 +5274,12 @@ function jsonOutput(obj) {
 // 1回で返す。往復の回数を減らし、結果の受け渡しで失敗する機会を減らすため。
 // それぞれ、個別の操作(getExpenses など)と同じ権限の確認・絞り込みを通す。1つが失敗しても
 // ほかは返す(失敗したものは errors に理由を入れる)
+// 権限が無い部分は、失敗ではなく空(empty)を返す(一般のメンバーに候補者が無いのは正常)
 var BACKGROUND_DATA_PARTS = [
-  { key: 'expenses', action: 'getExpenses', load: function (acting) { return getExpenses(acting) } },
-  { key: 'formSubmissions', action: 'getFormSubmissions', load: function (acting) { return getFormSubmissions(acting) } },
-  { key: 'candidates', action: 'getCandidates', load: function (acting) { return getCandidates(acting) } },
-  { key: 'myEmail', action: 'getMyEmails', load: function (acting) { return getMemberEmailValue(acting.id) } },
+  { key: 'expenses', action: 'getExpenses', empty: function () { return [] }, load: function (acting) { return getExpenses(acting) } },
+  { key: 'formSubmissions', action: 'getFormSubmissions', empty: function () { return [] }, load: function (acting) { return getFormSubmissions(acting) } },
+  { key: 'candidates', action: 'getCandidates', empty: function () { return [] }, load: function (acting) { return getCandidates(acting) } },
+  { key: 'myEmail', action: 'getMyEmails', empty: function () { return '' }, load: function (acting) { return getMemberEmailValue(acting.id) } },
 ]
 
 // withBackground: getInitialData・exchangeIdToken の応答に、裏での読み込み(getBackgroundData と同じもの)も
@@ -5248,7 +5287,7 @@ var BACKGROUND_DATA_PARTS = [
 // 失敗しても初期データは返す(background の代わりに backgroundError。画面は getBackgroundData を送り直す)
 function attachBackgroundData(data, memberId, body) {
   if (!body || !body.withBackground || !data || !data.memberId) return data
-  var t = Date.now()
+  var t = beginTiming()
   try {
     var acting = getActingMember(memberId, 'getBackgroundData')
     authorizeAction(acting, 'getBackgroundData', body)
@@ -5256,7 +5295,7 @@ function attachBackgroundData(data, memberId, body) {
   } catch (err) {
     data.backgroundError = toErrorMessage(err)
   }
-  noteTiming('backgroundMs', Date.now() - t)
+  endTiming('backgroundMs', t)
   return data
 }
 
@@ -5264,9 +5303,14 @@ function getBackgroundData(acting, body) {
   var out = { errors: {} }
   BACKGROUND_DATA_PARTS.forEach(function (part) {
     var t = Date.now()
+    var allowed = true
     try {
       authorizeAction(acting, part.action, body)
-      out[part.key] = part.load(acting)
+    } catch (denied) {
+      allowed = false
+    }
+    try {
+      out[part.key] = allowed ? part.load(acting) : part.empty()
     } catch (err) {
       out.errors[part.key] = toErrorMessage(err)
     }
@@ -7121,7 +7165,7 @@ function findMemberIdByEmailCached(email) {
 // ログインと初期データの取得を1回で行う。
 // knownVersion が現在の版と同じなら中身を返さず unchanged だけ返す。
 function getInitialDataForMember(memberId, knownVersion) {
-  var version = getDataVersion()
+  var version = timed('versionMs', function () { return getDataVersion() })
   if (knownVersion && String(knownVersion) === version) {
     noteTiming('cache', 'unchanged')
     return { memberId: memberId, version: version, unchanged: true }
