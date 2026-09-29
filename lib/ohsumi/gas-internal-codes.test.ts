@@ -208,3 +208,117 @@ describe('サンプルのデータ(seedSampleData)', () => {
     expect(plain(legacy.sheetSampleTaskRow(row))).toEqual(row)
   })
 })
+
+// ---- setupOhsumi での形式の決め方 ----------------------------------------------
+
+class FakeSheet {
+  constructor(public rows: unknown[][]) {}
+  getLastRow() { return this.rows.length }
+  getLastColumn() { return this.rows[0]?.length ?? 0 }
+  getRange(row: number, col: number, numRows = 1, numCols = 1) {
+    return { getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? '')) }
+  }
+}
+
+// 見出しだけのシート(setupOhsumi が作った直後と同じ)に、必要な行を足したスプレッドシート
+function spreadsheet(gas: Gas, extra: Record<string, unknown[][]> = {}) {
+  const headers = (gas as unknown as { SHEET_HEADERS: Record<string, string[]> }).SHEET_HEADERS
+  const sheets: Record<string, FakeSheet> = {}
+  for (const [name, cols] of Object.entries(headers)) sheets[name] = new FakeSheet([cols, ...(extra[name] ?? [])])
+  return { getSheetByName: (n: string) => sheets[n] ?? null }
+}
+
+// setProperty を受け付ける GAS(スクリプトプロパティの変化を見る)
+function loadGasWithProps(initial: Record<string, string> = {}) {
+  const props: Record<string, string> = { ...initial }
+  const ctx = vm.createContext({
+    console: { log() {}, warn() {}, error() {} },
+    PropertiesService: { getScriptProperties: () => ({
+      getProperties: () => ({ ...props }),
+      getProperty: (k: string) => props[k] ?? null,
+      setProperty: (k: string, v: string) => { props[k] = v },
+    }) },
+  })
+  vm.runInContext(CODE_GS, ctx)
+  return { gas: ctx as unknown as Gas, props }
+}
+
+describe('setupOhsumi での値の形式(setupValueFormat)', () => {
+  it('データ行が1行も無い新しい団体では VALUE_FORMAT を codes にし、最初からコードで書く', () => {
+    const { gas, props } = loadGasWithProps()
+    // setupOhsumi が作る Settings の初期キー(団体名など)はデータに数えない
+    const ss = spreadsheet(gas, { Settings: [['org_name', ''], ['org_logo_url', '']] })
+    expect(gas.setupValueFormat(ss)).toBe('set')
+    expect(props.VALUE_FORMAT).toBe('codes')
+    expect(gas.sheetCode('status', '完了')).toBe('done')
+    // もう一度実行しても変わらない
+    expect(gas.setupValueFormat(ss)).toBe('already')
+  })
+
+  it('データ行が既にある場合は VALUE_FORMAT を変えない(日本語のまま書く)', () => {
+    for (const extra of <Record<string, unknown[][]>[]>[
+      { Tasks: [['1']] },
+      { Members: [['m1', '代表さん']] },
+      { Expenses: [['e1']] },
+      { Settings: [['project_templates', '{"T":[]}']] },
+    ]) {
+      const { gas, props } = loadGasWithProps()
+      expect(gas.setupValueFormat(spreadsheet(gas, extra)), JSON.stringify(extra)).toBe('hasData')
+      expect(props.VALUE_FORMAT, JSON.stringify(extra)).toBeUndefined()
+      expect(gas.sheetCode('status', 'done')).toBe('完了')
+    }
+  })
+
+  it('既に codes の団体は、データがあってもそのまま', () => {
+    const { gas, props } = loadGasWithProps({ VALUE_FORMAT: 'codes' })
+    expect(gas.setupValueFormat(spreadsheet(gas, { Tasks: [['1']] }))).toBe('already')
+    expect(props.VALUE_FORMAT).toBe('codes')
+  })
+
+  it('setupOhsumi から呼ぶ', () => {
+    const body = CODE_GS.slice(CODE_GS.indexOf('function setupOhsumi()'))
+    expect(body.slice(0, body.indexOf('\nfunction '))).toMatch(/setupValueFormat\(ss\)/)
+  })
+})
+
+describe('VALUE_FORMAT とシートの実際の値が食い違っていても壊れない', () => {
+  // バックアップから戻した場合など: VALUE_FORMAT=codes なのにシートは日本語、
+  // または VALUE_FORMAT が無いのにシートはコード
+  const OLD_ROWS = { leaders: { visibility: '幹部' }, pending: { approval_status: '承認待ち', creator_id: 'x' }, open: { visibility: '全員', approval_status: '承認済み' } }
+  const NEW_ROWS = { leaders: { visibility: 'leaders' }, pending: { approval_status: 'pending', creator_id: 'x' }, open: { visibility: 'all', approval_status: 'approved' } }
+  const viewer = { id: 'm-general', isAdminRole: false }
+
+  for (const [label, gas] of [['VALUE_FORMAT=codes', coded], ['VALUE_FORMAT 未設定', legacy]] as const) {
+    it(`${label}: どちらの形式の行も同じように読む`, () => {
+      for (const rows of [OLD_ROWS, NEW_ROWS]) {
+        expect(gas.canViewTaskRow(viewer, rows.leaders)).toBe(false)
+        expect(gas.canViewTaskRow(viewer, rows.pending)).toBe(false)
+        expect(gas.canViewTaskRow(viewer, rows.open)).toBe(true)
+      }
+      expect(gas.overridesGrant([{ targetType: 'department', targetId: '広報', access: 'edit' }], { department: 'pr' }, 1)).toBe(true)
+      expect(gas.overridesGrant([{ targetType: 'department', targetId: 'pr', access: 'edit' }], { department: '広報' }, 1)).toBe(true)
+      expect(gas.defaultSkillThreshold({ デフォルト: 150 })).toBe(150)
+      expect(gas.defaultSkillThreshold({ _default: 150 })).toBe(150)
+    })
+
+    it(`${label}: 変更の記録は、シートがどちらの形式でも本人の追記を受け付ける`, () => {
+      const acting = { id: 'm1', role: '一般', permission_overrides: [] }
+      for (const old of [{ from: '未着手', to: '進行中' }, { from: 'todo', to: 'progress' }]) {
+        const task = { history_json: JSON.stringify([{ id: 'h1', at: '2026-09-01', byId: 'm2', field: 'status', ...old }]) }
+        const body = { action: 'updateHistory', history: [
+          { id: 'h2', at: '2026-09-02', byId: 'm1', field: 'status', from: 'progress', to: 'review' },
+          { id: 'h1', at: '2026-09-01', byId: 'm2', field: 'status', from: 'todo', to: 'progress' },
+        ] }
+        gas.normalizeRequestCodes(body)
+        expect(() => gas.validateHistoryUpdate(task, body.history, acting)).not.toThrow()
+      }
+    })
+  }
+
+  it('画面(フロント)は VALUE_FORMAT を見ずに、行の値だけでコードにそろえる', () => {
+    // フロントの読み込み(remote.ts)は VALUE_FORMAT を参照しない。移行前・移行後・混在の行が
+    // 同じ画面のデータになることは code-view.test.ts で確かめている
+    const remote = readFileSync(join(__dirname, 'remote.ts'), 'utf8')
+    expect(remote).not.toMatch(/VALUE_FORMAT/)
+  })
+})

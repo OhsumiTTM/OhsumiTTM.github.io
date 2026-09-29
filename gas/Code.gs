@@ -303,8 +303,7 @@ function mapTaskItemCodes(item, convert) {
 // Settings のうち、中に選択肢の値を持つ JSON を、シートに書く形式にする
 // (updateSetting で使う。移行前は日本語、移行後はコード)
 function sheetSettingValue(key, value) {
-  var codeKeys = ['project_templates', 'task_set_templates', 'recurring_rules', 'skill_level_thresholds']
-  if (codeKeys.indexOf(key) < 0 || typeof value !== 'string' || !value) return value
+  if (CODE_SETTING_KEYS.indexOf(key) < 0 || typeof value !== 'string' || !value) return value
   var parsed
   try { parsed = JSON.parse(value) } catch (e) { return value }
   var convert = sheetCode
@@ -348,6 +347,54 @@ function sheetSettingValue(key, value) {
 //
 // デプロイ後に一度だけ実行すればOK。再実行しても重複は起きない。
 
+// Settings のうち、中に選択肢の値を持つキー(sheetSettingValue で形式を変えるもの)
+var CODE_SETTING_KEYS = ['project_templates', 'task_set_templates', 'recurring_rules', 'skill_level_thresholds']
+
+// 選択肢の値を持ちうるデータがあるシートの名前の一覧。Settings は、setupOhsumi が
+// 作る初期キー(団体名など)を除き、CODE_SETTING_KEYS に値がある場合だけ数える
+function sheetsWithData(ss) {
+  var found = []
+  Object.keys(SHEET_HEADERS).forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (!sheet || sheet.getLastRow() < 2) return
+    if (name !== SHEET_SETTINGS) { found.push(name); return }
+    var headers = headerRow(sheet)
+    var keyCol = headers.indexOf('key')
+    var valueCol = headers.indexOf('value')
+    if (keyCol === -1 || valueCol === -1) return
+    var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+    var hasCodeSetting = rows.some(function (r) {
+      return CODE_SETTING_KEYS.indexOf(String(r[keyCol])) >= 0 && String(r[valueCol] || '').trim() !== ''
+    })
+    if (hasCodeSetting) found.push(name)
+  })
+  return found
+}
+
+// 新しく導入する団体(データ行が1行も無い)では VALUE_FORMAT を codes にして、
+// 最初からコードで書く。データが既にある場合は変えない(日本語のまま書き、
+// 移行の関数で移行する)。既に codes の場合もそのまま。
+// 返り値: 'already'(既に codes)/ 'set'(codes にした)/ 'hasData'(変えなかった)
+function setupValueFormat(ss) {
+  var props = PropertiesService.getScriptProperties()
+  if (props.getProperty('VALUE_FORMAT') === 'codes') {
+    console.log('✅ 選択肢の値の形式: コード(VALUE_FORMAT=codes)')
+    return 'already'
+  }
+  var withData = sheetsWithData(ss)
+  if (withData.length === 0) {
+    setRequestProp('VALUE_FORMAT', 'codes')
+    console.log('🆕 データが無いため、選択肢の値を最初からコードで書き込みます(VALUE_FORMAT=codes に設定しました)')
+    return 'set'
+  }
+  console.log(
+    'ℹ️ 選択肢の値の形式: 日本語のまま書き込みます(既にデータがあるシート: ' + withData.join('・') + ')。' +
+      'VALUE_FORMAT は変えていません。内部コードへの移行は、移行の関数 migrateToInternalCodes()(今後の版で追加します)で行ってください。' +
+      'VALUE_FORMAT を手で設定しないでください',
+  )
+  return 'hasData'
+}
+
 function setupOhsumi() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   console.log('📋 スプレッドシート: ' + ss.getName())
@@ -382,6 +429,9 @@ function setupOhsumi() {
     ensureSheetHeaders(ss, name, SHEET_HEADERS[name])
   })
   bumpMemberEmailsVersion()
+
+  // --- 選択肢の値の形式(新しく導入する団体は最初からコードで書く)---
+  setupValueFormat(ss)
 
   // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
   var createdSecrets = ensureSessionSecrets()
