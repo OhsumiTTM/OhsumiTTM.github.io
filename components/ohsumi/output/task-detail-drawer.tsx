@@ -1,5 +1,6 @@
 'use client'
 
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useRef, useState } from 'react'
 import { getCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
 import { isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
@@ -18,7 +19,6 @@ import {
   DepartmentTag,
 } from '../primitives'
 import {
-  DEPARTMENTS,
   DIFFICULTY_LABEL,
   PRIORITIES,
   TASK_IMPORTANCE,
@@ -41,7 +41,6 @@ import {
   type TaskStatus,
   type TaskVisibility,
 } from '@/lib/ohsumi/types'
-import { departmentName } from '@/lib/ohsumi/codes'
 import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, type WorkloadCapacity } from '@/lib/ohsumi/utils'
 import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -108,9 +107,10 @@ function historyValueLabel(
   members: Member[],
   projects: Project[],
   t: (key: TranslationKey) => string,
+  deptLabel: (ref: string) => string,
 ): string {
   // 部門の空は未分類
-  if (field === 'department') return departmentLabel(t, raw)
+  if (field === 'department') return deptLabel(raw)
   if (!raw) return t('common.notSet')
   if (field === 'assignee') {
     return raw
@@ -147,7 +147,7 @@ export function TaskDetailDrawer({
   taskId: string | null
   onClose: () => void
 }) {
-  const { isAdminRef,
+  const { departmentNameOf, isAdminRef,
     tasks,
     projects,
     currentUser,
@@ -401,7 +401,7 @@ export function TaskDetailDrawer({
         <p className="mb-2 text-xs text-muted-foreground">{tr('taskDrawer.assign.hint')}</p>
         {(() => {
           const deptTops = task?.department
-            ? getDepartmentTopsBySegment(departmentName(task.department), members)
+            ? getDepartmentTopsBySegment(departmentNameOf(task.department), members)
             : []
           const topIds = new Set(deptTops.map((m) => m.id))
           return (
@@ -630,7 +630,7 @@ export function TaskDetailDrawer({
         {(() => {
           const currentIds = task?.reviewerIds ?? (task?.reviewerId ? [task.reviewerId] : [])
           const deptTops = task?.department
-            ? getDepartmentTopsBySegment(departmentName(task.department), members)
+            ? getDepartmentTopsBySegment(departmentNameOf(task.department), members)
             : []
           const topIds = new Set(deptTops.map((m) => m.id))
           const roleTreeManagers = task?.assigneeIds
@@ -1237,13 +1237,15 @@ function DrawerBody({
   onRespondForm: (responses: Record<string, FormAnswerValue>) => void
 }) {
   const { t } = useI18n()
+  const { departmentOptions, departmentNameOf } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const { openTask } = useTaskDrawer()
   const toast = useToast()
   const currentUserTz = members.find((m) => m.id === currentUserId)?.timezone ?? DEFAULT_TIMEZONE
   const overdue = isOverdue(task, currentUserTz)
   const calendarUrl = googleCalendarUrl(task, {
     projectName,
-    department: departmentName(task.department),
+    department: departmentNameOf(task.department),
     category: task.category,
   })
   const isAssignee = !!currentUserId && task.assigneeIds.includes(currentUserId)
@@ -1600,8 +1602,8 @@ function DrawerBody({
                   onChange={(e) => onUpdateDepartment(e.target.value as Department)}
                   className="h-7 cursor-pointer rounded-md border border-transparent bg-transparent text-sm outline-none hover:border-border focus:border-primary"
                 >
-                  {DEPARTMENTS.map((d) => (
-                    <option key={d} value={d}>{departmentLabel(t, d)}</option>
+                  {departmentOptions(task.department).map((d) => (
+                    <option key={d} value={d}>{deptLabel(d)}</option>
                   ))}
                 </select>
               ) : (
@@ -2274,8 +2276,8 @@ function DrawerBody({
                           members.find((m) => m.id === h.byId)?.name ||
                           t('taskDrawer.unknown'),
                         field: t(HISTORY_FIELD_KEY[h.field]),
-                        from: historyValueLabel(h.field, h.from, members, projects, t),
-                        to: historyValueLabel(h.field, h.to, members, projects, t),
+                        from: historyValueLabel(h.field, h.from, members, projects, t, deptLabel),
+                        to: historyValueLabel(h.field, h.to, members, projects, t, deptLabel),
                       })}
                     </p>
                   </li>

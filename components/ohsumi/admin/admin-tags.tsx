@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS } from '@/lib/ohsumi/types'
 import { sameRole, TOP_ROLE_ID, DEFAULT_TOP_ROLE_NAME } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import type { AdminSection, CustomMemberColumn, SkillLevelValue, SurveyQuestion } from '@/lib/ohsumi/types'
 import { SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from '@/lib/ohsumi/utils'
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
@@ -91,6 +92,12 @@ export function AdminTags() {
           <RoleEditor />
           <RoleLevelAdd onAdd={addRoleLevel} />
         </div>
+      </div>
+
+      <div className="mt-6 rounded-lg border border-border bg-card p-4">
+        <SectionLabel>{t('admin.tags.departments.title')}</SectionLabel>
+        <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.departments.desc')}</p>
+        <DepartmentEditor />
       </div>
 
       <div className="mt-6 rounded-lg border border-border bg-card p-4">
@@ -442,6 +449,141 @@ function RoleEditor() {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// 部門の一覧の編集(追加・並び順・名前の変更・削除・アーカイブの解除・タスクの移動)。
+// 使われている部門を削除するとアーカイブになる(新しいタスクでは選べない)。名前の変更は移行の後だけ
+function DepartmentEditor() {
+  const {
+    departments,
+    afterMigration,
+    tasks,
+    addDepartment,
+    renameDepartment,
+    reorderDepartment,
+    removeDepartment,
+    restoreDepartment,
+    moveDepartmentTasks,
+    departmentOptions,
+  } = useOhsumi()
+  const { t } = useI18n()
+  const deptLabel = useDepartmentLabel()
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null)
+  const [moving, setMoving] = useState<string | null>(null)
+  const [moveTo, setMoveTo] = useState('')
+  const countOf = (id: string) => tasks.filter((task) => task.department === id).length
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      {!afterMigration && <p className="text-xs text-muted-foreground">{t('admin.tags.departments.beforeMigration')}</p>}
+      {departments.map((d, i) => {
+        const count = countOf(d.id)
+        return (
+          <div key={d.id} className="rounded-md border border-border/60 px-2 py-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-col">
+                <button
+                  onClick={() => reorderDepartment(d.id, 'up')}
+                  disabled={i === 0}
+                  aria-label={t('admin.tags.roles.moveUp')}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-20"
+                >
+                  <ChevronUp className="size-3.5" />
+                </button>
+                <button
+                  onClick={() => reorderDepartment(d.id, 'down')}
+                  disabled={i === departments.length - 1}
+                  aria-label={t('admin.tags.roles.moveDown')}
+                  className="text-muted-foreground hover:text-foreground disabled:opacity-20"
+                >
+                  <ChevronDown className="size-3.5" />
+                </button>
+              </div>
+              {editing?.id === d.id ? (
+                <input
+                  autoFocus
+                  value={editing.name}
+                  onChange={(e) => setEditing({ id: d.id, name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                    if (e.key === 'Enter') { renameDepartment(d.id, editing.name); setEditing(null) }
+                    if (e.key === 'Escape') setEditing(null)
+                  }}
+                  onBlur={() => { renameDepartment(d.id, editing.name); setEditing(null) }}
+                  className="h-7 w-32 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+                />
+              ) : (
+                <span className={`text-sm font-medium ${d.archived ? 'text-muted-foreground line-through' : ''}`}>{deptLabel(d.id)}</span>
+              )}
+              {d.archived && <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{t('admin.tags.departments.archived')}</span>}
+              <span className="text-[11px] text-muted-foreground">{t('admin.tags.departments.taskCount', { count })}</span>
+              <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                {afterMigration && (
+                  <button
+                    onClick={() => setEditing({ id: d.id, name: d.name })}
+                    className="rounded px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
+                  >
+                    {t('admin.tags.roles.rename')}
+                  </button>
+                )}
+                {count > 0 && (
+                  <button
+                    onClick={() => { setMoving(d.id); setMoveTo('__choose') }}
+                    className="rounded px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
+                  >
+                    {t('admin.tags.departments.moveTasks')}
+                  </button>
+                )}
+                {d.archived ? (
+                  <button
+                    onClick={() => restoreDepartment(d.id)}
+                    className="rounded px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
+                  >
+                    {t('admin.tags.departments.restore')}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => removeDepartment(d.id)}
+                    aria-label={t('admin.tags.departments.delete')}
+                    title={t('admin.tags.departments.deleteHint')}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </span>
+            </div>
+            {moving === d.id && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-secondary/60 p-2 text-xs">
+                <span>{t('admin.tags.departments.moveTasksTo', { count })}</span>
+                <select
+                  value={moveTo}
+                  onChange={(e) => setMoveTo(e.target.value)}
+                  className="h-7 rounded-md border border-border bg-background px-1 text-xs"
+                >
+                  <option value="__choose">{t('admin.tags.roles.chooseMoveTo')}</option>
+                  {departmentOptions().filter((x) => x !== d.id).map((x) => (
+                    <option key={x || 'none'} value={x}>{deptLabel(x)}</option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  className="h-7"
+                  disabled={moveTo === '__choose'}
+                  onClick={() => { moveDepartmentTasks(d.id, moveTo); setMoving(null) }}
+                >
+                  {t('admin.tags.departments.moveButton')}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7" onClick={() => setMoving(null)}>
+                  {t('common.cancel')}
+                </Button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <RoleLevelAdd onAdd={addDepartment} />
     </div>
   )
 }

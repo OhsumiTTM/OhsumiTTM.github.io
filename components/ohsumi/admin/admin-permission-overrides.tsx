@@ -1,5 +1,6 @@
 'use client'
 
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
@@ -8,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Trash2, Plus, ShieldCheck } from 'lucide-react'
 import type { Member, PermissionOverride } from '@/lib/ohsumi/types'
-import { DEPARTMENTS } from '@/lib/ohsumi/types'
 import { useI18n, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 const ACCESS_LABEL_KEY: Record<string, TranslationKey> = {
@@ -30,7 +30,8 @@ interface OverrideEditorProps {
 }
 
 function OverrideEditor({ member, onClose }: OverrideEditorProps) {
-  const { isTopRef, updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOhsumi()
+  const { departmentOptions, isTopRef, updatePermissionOverrides, visibleTasks: tasks, projects, currentUser } = useOhsumi()
+  const deptLabel = useDepartmentLabel()
   const toast = useToast()
   const { t: tr } = useI18n()
   // updatePermissionOverridesはGAS側で常にisDaihyo固定（人事機密のため）。
@@ -75,14 +76,14 @@ function OverrideEditor({ member, onClose }: OverrideEditorProps) {
       : targetType === 'project'
         ? projects.map((p) => ({ id: p.id, label: p.name }))
         : targetType === 'department'
-          ? DEPARTMENTS.map((d) => ({ id: d, label: departmentLabel(tr, d) }))
+          ? departmentOptions(undefined, true).map((d) => ({ id: d, label: deptLabel(d) }))
           : []
 
   const labelFor = (ov: PermissionOverride) => {
     if (ov.targetType === 'task') return tasks.find((t) => t.id === ov.targetId)?.name ?? ov.targetId
     if (ov.targetType === 'project') return projects.find((p) => p.id === ov.targetId)?.name ?? ov.targetId
     if (ov.targetType === 'recruiting') return tr('admin.permissionOverrides.targetType.recruiting')
-    if (ov.targetType === 'department') return departmentLabel(tr, ov.targetId)
+    if (ov.targetType === 'department') return deptLabel(ov.targetId)
     return ov.targetId
   }
 

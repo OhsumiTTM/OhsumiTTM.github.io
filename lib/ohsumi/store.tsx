@@ -72,6 +72,14 @@ import type {
 } from './types'
 import { UNCATEGORIZED_DEPARTMENT, type TaskVisibility } from './types'
 import {
+  UNCATEGORIZED_NAME,
+  defaultDepartments,
+  departmentNameOf as departmentNameOfList,
+  newDepartmentId,
+  parseDepartmentsSetting,
+  type DepartmentDef,
+} from './departments'
+import {
   DEFAULT_BASE_ROLE_NAME,
   isAdminRoleRef,
   isTopRoleRef,
@@ -222,6 +230,28 @@ interface OhsumiContextValue extends OhsumiState {
   // 役職の判定(ID・名前のどちらでも)
   isAdminRef: (ref: string | null | undefined) => boolean
   isTopRef: (ref: string | null | undefined) => boolean
+  // 部門の一覧(アーカイブした部門も含む。並び順は表示順)
+  departments: DepartmentDef[]
+  // 新しいタスクで選べる部門の ID(アーカイブしていないもの)。未分類は含まない
+  activeDepartmentIds: string[]
+  // 絞り込みなどで使う部門の ID(アーカイブした部門も含む)。未分類は含まない
+  allDepartmentIds: string[]
+  // 部門の選択肢(ID。最後が未分類の空)。current を渡すと、それがアーカイブした部門でも含める。
+  // all を true にすると、アーカイブした部門もすべて含める(絞り込み用)
+  departmentOptions: (current?: string, all?: boolean) => string[]
+  // 団体での部門名(翻訳しない。部署ツリーとの照合・カレンダーの説明文など)
+  departmentNameOf: (ref: string | null | undefined) => string
+  addDepartment: (name: string) => void
+  // 名前の変更は内部コードへの移行の後だけ(移行前はタスクの部門を部門名で持つため)
+  renameDepartment: (id: string, name: string) => void
+  reorderDepartment: (id: string, direction: 'up' | 'down') => void
+  // 削除する。使われていればアーカイブになる(GAS の deleteDepartment)
+  removeDepartment: (id: string) => void
+  restoreDepartment: (id: string) => void
+  // ある部門のタスクを別の部門(空は未分類)へ移す
+  moveDepartmentTasks: (fromId: string, toId: string) => void
+  // 内部コードへの移行の後か(役職の設定 roles がある。部門の名前の変更などに使う)
+  afterMigration: boolean
   // admin-screen sections currentUser's role is allowed to see
   visibleAdminSections: AdminSection[]
   projectTemplates: Record<string, ProjectTemplateTask[]>
@@ -541,6 +571,8 @@ const OhsumiContext = createContext<OhsumiContextValue | null>(null)
 
 const STORAGE_KEY = 'ohsumi-state-v2'
 const TAGS_STORAGE_KEY = 'ohsumi-tag-options'
+// 部門の一覧 — Settings の departments のローカルフォールバック
+const DEPARTMENTS_STORAGE_KEY = 'ohsumi-departments'
 const ONBOARDED_STORAGE_KEY = 'ohsumi-onboarded-ids'
 const TEMPLATES_STORAGE_KEY = 'ohsumi-project-templates'
 const ROLE_PERMS_STORAGE_KEY = 'ohsumi-role-permissions'
@@ -843,6 +875,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [roles],
   )
   const isAdminRef = useCallback((ref: string | null | undefined) => isAdminRoleRef(roles, ref), [roles])
+  const [departments, setDepartments] = useState<DepartmentDef[]>(defaultDepartments)
+  const activeDepartmentIds = useMemo(() => departments.filter((d) => !d.archived).map((d) => d.id), [departments])
+  const allDepartmentIds = useMemo(() => departments.map((d) => d.id), [departments])
+  const departmentNameOf = useCallback((ref: string | null | undefined) => departmentNameOfList(departments, ref), [departments])
+  const departmentOptions = useCallback(
+    (current?: string, all?: boolean) => {
+      const ids = departments.filter((d) => all || !d.archived || d.id === current).map((d) => d.id)
+      if (current && !ids.includes(current)) ids.push(current)
+      return [...ids, UNCATEGORIZED_DEPARTMENT]
+    },
+    [departments],
+  )
   const isTopRef = useCallback((ref: string | null | undefined) => isTopRoleRef(roles, ref), [roles])
   const [projectTemplates, setProjectTemplates] = useState<Record<string, ProjectTemplateTask[]>>({})
   const [taskSetTemplates, setTaskSetTemplates] = useState<TaskSetTemplate[]>([])
@@ -1013,6 +1057,12 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           setSkillFieldOptions(uniq([...DEFAULT_SKILL_FIELD_OPTIONS, ...tags.skillFieldOptions]))
       }
       setProjectTemplates(loadProjectTemplates())
+      try {
+        const savedDepts = parseDepartmentsSetting(window.localStorage.getItem(DEPARTMENTS_STORAGE_KEY) ?? '')
+        if (savedDepts) setDepartments(savedDepts)
+      } catch {
+        /* ignore */
+      }
       setStoredRoles(
         rolesFromLegacy({
           role_levels: (tags?.roleLevels ?? []).join(','),
@@ -1047,6 +1097,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     )
     setStoredRoles(s.roles)
     setRolesFromSetting(s.rolesFromSetting)
+    setDepartments(s.departments)
     setProjectTemplates(s.projectTemplates)
     setTaskSetTemplates(s.taskSetTemplates)
     setRecurringRules(s.recurringRules)
@@ -1359,6 +1410,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       /* ignore */
     }
   }, [projectTemplates, hydrated])
+
+  // persist departments (device-local, same caveat)
+  useEffect(() => {
+    if (!hydrated || isSettingsConfigured) return
+    try {
+      window.localStorage.setItem(DEPARTMENTS_STORAGE_KEY, JSON.stringify(departments))
+    } catch {
+      /* ignore */
+    }
+  }, [departments, hydrated])
 
   // persist roles (device-local, same caveat) — 今までの設定と同じ形で保存する
   useEffect(() => {
@@ -2417,6 +2478,79 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const setRolePermissions = useCallback(
     (roleId: string, sections: AdminSection[]) => updateRoleDef(roleId, { sections }),
     [updateRoleDef],
+  )
+
+  // ---- 部門 ----
+  const saveDepartments = useCallback(
+    (next: DepartmentDef[]) => {
+      setDepartments(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateDepartments(next))
+    },
+    [runRemote],
+  )
+  const addDepartment = useCallback(
+    (name: string) => {
+      const v = name.trim()
+      if (!v || v === UNCATEGORIZED_NAME || departments.some((d) => d.name === v)) return
+      saveDepartments([...departments, { id: newDepartmentId(), name: v }])
+    },
+    [departments, saveDepartments],
+  )
+  const renameDepartment = useCallback(
+    (id: string, name: string) => {
+      const v = name.trim()
+      if (!v || v === UNCATEGORIZED_NAME || departments.some((d) => d.id !== id && d.name === v)) return
+      saveDepartments(departments.map((d) => (d.id === id ? { ...d, name: v } : d)))
+    },
+    [departments, saveDepartments],
+  )
+  const reorderDepartment = useCallback(
+    (id: string, direction: 'up' | 'down') => {
+      const idx = departments.findIndex((d) => d.id === id)
+      const swap = direction === 'up' ? idx - 1 : idx + 1
+      if (idx < 0 || swap < 0 || swap >= departments.length) return
+      const next = [...departments]
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      saveDepartments(next)
+    },
+    [departments, saveDepartments],
+  )
+  const restoreDepartment = useCallback(
+    (id: string) => {
+      saveDepartments(departments.map((d) => (d.id === id ? { id: d.id, name: d.name } : d)))
+    },
+    [departments, saveDepartments],
+  )
+  const removeDepartment = useCallback(
+    (id: string) => {
+      // 画面の上での判断(GAS も同じ基準で、シート全体を見て決める)
+      const used =
+        tasks.some((t) => t.department === id) ||
+        Object.values(projectTemplates).some((items) => items.some((it) => it.department === id)) ||
+        taskSetTemplates.some((tpl) => tpl.items.some((it) => it.department === id)) ||
+        recurringRules.some((r) => r.department === id) ||
+        members.some((m) => (m.permissionOverrides ?? []).some((ov) => ov.targetType === 'department' && ov.targetId === id))
+      setDepartments((prev) =>
+        used ? prev.map((d) => (d.id === id ? { ...d, archived: true } : d)) : prev.filter((d) => d.id !== id),
+      )
+      if (isSettingsConfigured) {
+        remoteApi
+          .deleteDepartment(id)
+          .then((res) => {
+            setDepartments(res.departments)
+            setRemoteError(null)
+          })
+          .catch(reportRemoteError)
+      }
+    },
+    [tasks, projectTemplates, taskSetTemplates, recurringRules, members, reportRemoteError],
+  )
+  const moveDepartmentTasks = useCallback(
+    (fromId: string, toId: string) => {
+      setTasks((prev) => prev.map((t) => (t.department === fromId ? { ...t, department: toId } : t)))
+      if (isRemoteConfigured) runRemote(remoteApi.moveDepartmentTasks(fromId, toId))
+    },
+    [runRemote],
   )
 
   const setProjectTemplateTasks = useCallback(
@@ -4867,6 +5001,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setRolePermissions,
     isAdminRef,
     isTopRef,
+    departments,
+    activeDepartmentIds,
+    allDepartmentIds,
+    departmentOptions,
+    departmentNameOf,
+    addDepartment,
+    renameDepartment,
+    reorderDepartment,
+    removeDepartment,
+    restoreDepartment,
+    moveDepartmentTasks,
+    afterMigration: rolesFromSetting,
     visibleAdminSections,
     projectTemplates,
     projectTypes,

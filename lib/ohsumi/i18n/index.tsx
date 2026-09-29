@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { ja } from './ja'
 import { en } from './en'
+import { findDepartment, hasDefaultName, normalizeDepartment, type DepartmentDef } from '../departments'
 import { DEFAULT_BASE_ROLE_NAME, DEFAULT_TOP_ROLE_NAME, findRole, type RoleDef } from '../roles'
 import type { TaskStatus, Priority, Difficulty, TaskImportance, ScheduleResponseValue } from '../types'
 
@@ -59,10 +60,20 @@ export const DEPARTMENT_KEY: Record<string, TranslationKey> = {
   '': 'department.none',
 }
 
-// 部門の表示名。一覧に無い部門(以前の独自の部門名)は、その値をそのまま表示する
-export function departmentLabel(t: (key: TranslationKey) => string, department: string | null | undefined): string {
-  const key = DEPARTMENT_KEY[department ?? '']
-  return key ? t(key) : String(department)
+// 部門の表示名。部門名は団体が付ける名前なのでそのまま表示する。ただし既定の部門の名前が
+// 既定のまま(運営など)なら翻訳する(役職の一般・代表と同じ決まり)。未分類は翻訳する。
+// 一覧に無い部門(以前の独自の部門名など)は、その値をそのまま表示する
+export function departmentLabel(
+  t: (key: TranslationKey) => string,
+  departments: DepartmentDef[],
+  department: string | null | undefined,
+): string {
+  const id = normalizeDepartment(departments, department)
+  if (!id) return t('department.none')
+  const dept = findDepartment(departments, id)
+  if (!dept) return id
+  if (hasDefaultName(dept) && DEPARTMENT_KEY[dept.id]) return t(DEPARTMENT_KEY[dept.id])
+  return dept.name
 }
 
 export const PRIORITY_KEY: Record<Priority, TranslationKey> = {
