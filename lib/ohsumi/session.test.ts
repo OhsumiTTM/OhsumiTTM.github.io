@@ -73,11 +73,13 @@ describe('セッショントークンの保存場所', () => {
   })
 
   it('再読み込み後に使えるセッションがあるか(団体の設定とセッションの両方が必要)', async () => {
+    const ORG = 'org_AAAAAAAAAAAAAAAAAAAA'
+    vi.stubEnv('NEXT_PUBLIC_GAS_URL', 'https://script.google.com/macros/s/DEFAULT/exec')
     const s = await import('./session')
     expect(s.hasSavedSession()).toBe(false)
-    s.saveLoginConfig({ orgId: 'org_a' })
+    s.saveLoginConfig({ orgId: ORG })
     expect(s.hasSavedSession()).toBe(false)
-    s.saveSession('org_a', { token: 'A', exp: nowSec() + 100, remember: true })
+    s.saveSession(ORG, { token: 'A', exp: nowSec() + 100, remember: true })
     expect(s.hasSavedSession()).toBe(true)
   })
 

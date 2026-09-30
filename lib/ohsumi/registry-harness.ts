@@ -44,6 +44,8 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   const props: Record<string, string> = { ...(opts.props ?? {}) }
   const sheets = new Map<string, FakeSheet>()
   const cache = new Map<string, string>()
+  // 覚えた秒数(CacheService.put の3つ目)
+  const cacheTtl = new Map<string, number>()
   const triggers: { handler: string; hour?: number }[] = []
   const files: DriveFile[] = []
   const logs: string[] = []
@@ -76,7 +78,7 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
       getProperty: (k: string) => props[k] ?? null,
       setProperty: (k: string, v: string) => { props[k] = v },
     }) },
-    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => { cache.set(k, v) } }) },
+    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string, ttl?: number) => { cache.set(k, v); cacheTtl.set(k, ttl ?? 600) }, remove: (k: string) => { cache.delete(k) } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: (text: string) => ({ text, setMimeType() { return this } }) },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
@@ -126,6 +128,6 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   vm.runInContext(CODE, ctx)
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
   const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
-  return { gas, props, sheets, cache, triggers, files, logs, post, newFile }
+  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, post, newFile }
 }
 

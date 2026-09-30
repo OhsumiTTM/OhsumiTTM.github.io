@@ -207,6 +207,8 @@ describe('レジストリへの登録(団体の GAS)', () => {
     o.menu(reg.issue().code)
     expect(o.dialogs[0].text).toContain(ORG_URL)
     expect(o.dialogs[1].title).toBe('登録しました')
+    // 招待リンクの作り方(団体ID)も出す
+    expect(o.dialogs[1].text).toContain('/?org=' + o.props.ORG_ID)
     const bad = org(reg, { props: { OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/ORGGAS/dev' } })
     bad.menu(reg.issue().code)
     expect(bad.dialogs).toHaveLength(1)

@@ -22,11 +22,14 @@
 //     通信が途中で失われて送り直された時は、同じ結果(同じ共有鍵)を返す(二重に登録しない)
 //   - 再登録コード(kind: reissue。共有鍵が漏れた時の作り直し・接続先の変更。管理画面で発行する)
 //   - 登録の失敗(登録コードの総当たり)の回数の上限
-// 接続先の解決・提供停止は、R1-d 以降で足す(データの形は用意してある)。
+// R1-d で足したもの:
+//   - 接続先の解決(resolveOrg。認証なし)。団体ID が完全に一致した時だけ、その団体の GAS の URL と状態を返す。
+//     答えは団体ごとに10分覚え(CacheService)、登録・再登録の時に消す
+// 提供停止は、R1-e 以降で足す(データの形は用意してある)。
 //
 // 設定と手順は registry/README.md を参照。
 
-var REGISTRY_VERSION = 'r1c-1'
+var REGISTRY_VERSION = 'r1d-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -58,7 +61,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120 }
 
 // ---- 入口 ----
 
@@ -117,6 +120,7 @@ var REGISTRY_ACTIONS = {
   issueRegistrationCode: function (body) { return issueRegistrationCode(body, Date.now()) },
   revokeRegistrationCode: function (body) { return revokeRegistrationCode(body, Date.now()) },
   registerOrg: function (body) { return registerOrg(body, Date.now()) },
+  resolveOrg: function (body) { return resolveOrg(body, Date.now()) },
 }
 
 function registryJson(obj) {
@@ -825,6 +829,8 @@ function registerOrg(body, nowMs) {
     if (secret) setRowFields('Secrets', secret.row, secretValues)
     else appendRowByHeaders('Secrets', secretValues)
     rememberOrgFingerprint(orgId, orgValues)
+    // 接続先の解決で覚えた答えを消す(新しい接続先をすぐに返す)
+    forgetResolvedOrg(orgId)
     // 記録には共有鍵もコードも残さない
     appendAudit({
       actor: 'org:' + orgId,
@@ -846,6 +852,56 @@ function registerResult(orgId, secretValues, orgValues, kind) {
     registeredAt: isoOf(secretValues.updated_at),
     kind: kind,
   }
+}
+
+// ---- 接続先の解決(resolveOrg) ----
+//
+// Ohsumi の画面が、団体ID から団体の GAS の URL を調べる(認証なし。1回の通信)。
+//   要求: { action: 'resolveOrg', orgId }
+//   返事: { ok: true, result: { orgId, gasUrl, status: 'active' | 'suspended', channel, checkedAt, maxAgeSec } }
+//         無い団体ID(形が違う ID も同じ): { ok: false, notFound: true, error }
+// - 団体ID が完全に一致した時だけ答える。一覧・検索は作らない。団体名・担当者・属性・利用状況は返さない
+// - 停止中(status が suspended か、停止の予定日時を過ぎた)の団体は、status: 'suspended' だけを返す(gasUrl は返さない)
+// - 答えは団体ごとに RESOLVE_CACHE_SEC 秒覚え、シートを読まない。登録・再登録(接続先の変更)の時は消す
+// - 画面は答えを端末に保存し、maxAgeSec を過ぎるまでは問い合わせない(過ぎたら、ログインと並べて裏で問い合わせる)
+var RESOLVE_CACHE_SEC = 600
+var RESOLVE_MAX_AGE_SEC = 24 * 3600
+var RESOLVE_NOT_FOUND = '団体が見つかりません。招待リンクが正しいか、団体の担当者に確かめてください。'
+
+function resolvedOrgCacheKey(orgId) { return 'ro:' + orgId }
+
+function forgetResolvedOrg(orgId) {
+  try { CacheService.getScriptCache().remove(resolvedOrgCacheKey(orgId)) } catch (e) { /* 覚えていなければ何もしない */ }
+}
+
+function resolveOrg(body, nowMs) {
+  var orgId = String(body.orgId || '')
+  if (!ORG_ID_PATTERN.test(orgId)) return { ok: false, notFound: true, error: RESOLVE_NOT_FOUND }
+  var cache = CacheService.getScriptCache()
+  var key = resolvedOrgCacheKey(orgId)
+  var cached = cache.get(key)
+  if (cached) {
+    var hit = JSON.parse(cached)
+    return hit.notFound ? { ok: false, notFound: true, error: RESOLVE_NOT_FOUND } : { ok: true, result: hit }
+  }
+  var row = findOrgRow(orgId)
+  var answer
+  if (!row || !GAS_EXEC_URL_PATTERN.test(String(row.values.gas_url || ''))) {
+    // 無い団体も短く覚える(同じ ID の問い合わせが続いても、シートを読まない)
+    answer = { notFound: true }
+  } else {
+    var suspended = orgDisplayState(row.values, nowMs).state === 'suspended'
+    answer = {
+      orgId: orgId,
+      gasUrl: suspended ? '' : String(row.values.gas_url),
+      status: suspended ? 'suspended' : 'active',
+      channel: String(row.values.channel || 'standard'),
+      checkedAt: new Date(nowMs).toISOString(),
+      maxAgeSec: RESOLVE_MAX_AGE_SEC,
+    }
+  }
+  cache.put(key, JSON.stringify(answer), answer.notFound ? 60 : RESOLVE_CACHE_SEC)
+  return answer.notFound ? { ok: false, notFound: true, error: RESOLVE_NOT_FOUND } : { ok: true, result: answer }
 }
 
 // ---- 管理画面のセッションの鍵 ----

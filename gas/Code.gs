@@ -1928,6 +1928,10 @@ function registerWithRegistryFromMenu() {
     return
   }
   var msg = '団体「' + out.displayName + '」をレジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました。'
+  // 招待リンク(R1-d): メンバーは、初めての端末で Ohsumi のサイトの URL の後ろに /?org=団体ID を付けたリンクから開く
+  var orgId = PropertiesService.getScriptProperties().getProperty('ORG_ID')
+  msg += '\n\n団体ID: ' + orgId + '\n招待リンク: Ohsumi のサイトの URL の後ろに /?org=' + orgId +
+    ' を付けたもの(代表は、ログインした後に管理画面の「Members」でも確かめられます)'
   if (out.setupCode) msg += '\n\n' + setupCodeMessage(out.setupCode, out.setupExpiresAt)
   ui.alert('登録しました', msg, ui.ButtonSet.OK)
 }

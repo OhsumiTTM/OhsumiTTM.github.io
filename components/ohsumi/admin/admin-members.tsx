@@ -11,6 +11,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play, LogOut } from 'lucide-react'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
+import { getActiveOrg, inviteLink } from '@/lib/ohsumi/org-directory'
 import { findRole, type RoleDef } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import type { Member, Role } from '@/lib/ohsumi/types'
@@ -220,6 +221,8 @@ export function AdminMembers() {
           isFullAdmin配下に表示されるため、代表以外の全権管理者にも見えて
           しまう — 実行時エラーになる前にまとめて示す */}
       <AdminAccessNote level="daihyo" className="mt-2" />
+
+      <InviteLinkCard />
 
       <div className="mt-6 rounded-lg border border-border bg-card p-4">
         <div className="text-sm font-medium">{t('admin.members.register.title')}</div>
@@ -635,6 +638,40 @@ export function AdminMembers() {
           </Button>
         </div>
       </Modal>
+    </div>
+  )
+}
+
+// 招待リンク(<サイトの URL>/?org=<団体ID>)。メンバーは初めての端末でこのリンクから開く(R1-d)。
+// 団体ID は秘密ではないが、リンクはメンバーにだけ伝える(ログインはメンバーとして登録した Google アカウントだけができる)
+function InviteLinkCard() {
+  const { t } = useI18n()
+  const toast = useToast()
+  const orgId = getActiveOrg().orgId
+  if (!isRemoteConfigured || !orgId || typeof window === 'undefined') return null
+  const link = inviteLink(window.location.origin, '', orgId)
+  const copy = () => {
+    navigator.clipboard?.writeText(link).then(
+      () => toast(t('admin.members.invite.copied')),
+      () => toast(t('admin.members.invite.copyFailed')),
+    )
+  }
+  return (
+    <div className="mt-6 rounded-lg border border-border bg-card p-4">
+      <div className="text-sm font-medium">{t('admin.members.invite.title')}</div>
+      <p className="mt-0.5 text-xs text-muted-foreground">{t('admin.members.invite.hint')}</p>
+      <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+        <input
+          readOnly
+          value={link}
+          onFocus={(e) => e.currentTarget.select()}
+          className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 font-mono text-xs"
+          aria-label={t('admin.members.invite.title')}
+        />
+        <Button type="button" size="sm" variant="outline" onClick={copy} className="shrink-0">
+          {t('admin.members.invite.copy')}
+        </Button>
+      </div>
     </div>
   )
 }

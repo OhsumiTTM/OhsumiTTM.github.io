@@ -115,6 +115,7 @@ import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, 
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setCalendarToken } from './google-sheet-sync'
+import { ORG_CHANGED_EVENT, getActiveOrg, rememberOrgName, setLoginNotice, type LoginNotice } from './org-directory'
 import {
   activateSession,
   clearSession,
@@ -1160,7 +1161,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setSkillFieldThresholdState(s.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
     setOrgNotificationEmails(s.orgNotificationEmails)
     setSurveyInvitedIds(s.surveyInvitedIds)
-    if (s.orgName) { setOrgNameState(s.orgName); try { localStorage.setItem(ORG_NAME_STORAGE_KEY, s.orgName) } catch {} }
+    if (s.orgName) {
+      setOrgNameState(s.orgName)
+      try { localStorage.setItem(ORG_NAME_STORAGE_KEY, s.orgName) } catch {}
+      // ログイン画面の団体の一覧に出す名前
+      const active = getActiveOrg().orgId
+      if (active) rememberOrgName(active, s.orgName)
+    }
     if (s.orgLogoUrl) { setOrgLogoUrlState(s.orgLogoUrl); try { localStorage.setItem(ORG_LOGO_URL_STORAGE_KEY, s.orgLogoUrl) } catch {} }
     if (s.themeColor) { setThemeColorState(s.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, s.themeColor) } catch {} }
     setProjectOrderState(s.projectOrder)
@@ -2471,6 +2478,20 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener(SESSION_ENDED_EVENT, onEnded)
     return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded)
   }, [logout])
+
+  // 今の団体の接続先が変わった・停止した・見つからなくなった(レジストリに裏で確かめ直した結果。
+  // org-directory.ts): その団体のログインを終え、知らせを出すログイン画面に読み込み直す
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const { orgId, notice } = (e as CustomEvent<{ orgId: string; notice: LoginNotice }>).detail
+      if (orgId !== getActiveOrg().orgId) return
+      setLoginNotice(notice)
+      clearSession(orgId)
+      reloadPage()
+    }
+    window.addEventListener(ORG_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(ORG_CHANGED_EVENT, onChanged)
+  }, [])
 
   const revokeAllMySessions = useCallback(async () => {
     await remoteApi.revokeMySessions()
