@@ -14,6 +14,9 @@
 //   revokeSessionsIssuedBeforeInput スクリプトプロパティ REVOKE_BEFORE_INPUT の日時より前のログインを無効にする
 //   setupDailyTrigger               毎朝の定期処理(dailyMaintenance)のトリガーを作り直す
 //   migrateToInternalCodes          選択肢の値・役職・部門を内部コードに移す(MIGRATION_MODE で dryRun → apply)
+//   migrationReport                 (Orbit からの移行)移行の前と後の数を実行ログに出し、前回と違う数を並べる(読み取りだけ)
+//   renameOrbitCalendarEvents       (Orbit からの移行)カレンダーの「[Orbit] 」の予定を「[Ohsumi] 」に変える(CALENDAR_RENAME_MODE で dryRun → apply)
+//   listChangesFromOrbit            (Orbit からの移行)元の Orbit と比べて、Ohsumi で変わった行を一覧にする(戻す時。読み取りだけ)
 //   makeUploadsPrivate              アップロードしたファイル(画像・領収書)を非公開にする
 //   auditUploadSharing              アップロードしたファイルの公開・非公開の件数を実行ログに出す
 //   protectAllExistingRows          既存の行の、数式として読まれうる列を書式なしテキストにする(値は変えない)
@@ -246,6 +249,81 @@ function migrateToInternalCodes() {
   } finally {
     lock.releaseLock()
   }
+}
+
+// Orbit からの移行(N1): 移行の前と後で数を比べるための点検(読み取りだけ。何も書き換えない)。
+// 行数・ステータスや部門や役職ごとの件数・見つからない参照・ファイルの URL を数えて実行ログに出す。
+// 値は日本語でも内部コードでも同じ数になるように、コードにそろえて数える(移行の前と後で比べられる)。
+// 結果はスクリプトプロパティ MIGRATION_REPORT_LAST に覚え、次に実行した時に、前回と違う数だけを出す。
+// 手順は docs/orbit-migration-plan.md の 8.
+function migrationReport() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var tables = readReportTables_(ss)
+  var allowed = allowedUploadFolderIds_()
+  var deadline = Date.now() + 4 * 60 * 1000
+  var fileOk = function (url) {
+    if (Date.now() > deadline) return null
+    var id = driveFileIdFromUrl_(url)
+    if (!id) return false
+    try { return isInAllowedFolder_(DriveApp.getFileById(id), allowed) } catch (e) { return false }
+  }
+  var report = buildMigrationReport_(tables, { roles: getRoles_(), departments: getDepartments_(), fileOk: fileOk })
+  var props = PropertiesService.getScriptProperties()
+  var previous = null
+  try { previous = JSON.parse(props.getProperty(MIGRATION_REPORT_PROPERTY) || 'null') } catch (e) { previous = null }
+  formatMigrationCounts_(report, previous).forEach(function (line) { console.log(line) })
+  var saved = JSON.stringify({ at: new Date().toISOString(), spreadsheet: ss.getName(), counts: report.counts })
+  if (saved.length < 9000) props.setProperty(MIGRATION_REPORT_PROPERTY, saved)
+  else console.log('⚠️ 結果が大きいため、前回の結果として覚えませんでした(実行ログを保存して比べてください)')
+  return report
+}
+
+// Orbit からの移行(N2): カレンダーの予定の名前を「[Orbit] タスク名」から「[Ohsumi] タスク名」に変える。
+// Ohsumi は「[Ohsumi] タスク名」の予定を探して入れ替えるので、名前を変えないと Orbit が作った予定が残り、二重になる。
+// 対象は、この GAS を実行するアカウントのカレンダーの、今日から2年先までの予定。
+//   スクリプトプロパティ CALENDAR_RENAME_MODE: 無い(または dryRun)なら件数と例を出すだけ。apply で名前を変え、dryRun に戻す
+//   スクリプトプロパティ CALENDAR_RENAME_DIRECTION: toOrbit にすると逆向き(戻す時。docs/orbit-migration-plan.md の 7.1)
+function renameOrbitCalendarEvents() {
+  var props = PropertiesService.getScriptProperties()
+  var apply = props.getProperty('CALENDAR_RENAME_MODE') === 'apply'
+  var toOrbit = props.getProperty('CALENDAR_RENAME_DIRECTION') === 'toOrbit'
+  var from = toOrbit ? CALENDAR_PREFIX_OHSUMI : CALENDAR_PREFIX_ORBIT
+  var to = toOrbit ? CALENDAR_PREFIX_ORBIT : CALENDAR_PREFIX_OHSUMI
+  var start = new Date()
+  start.setHours(0, 0, 0, 0)
+  var end = new Date(start.getTime() + CALENDAR_RENAME_DAYS * 24 * 3600 * 1000)
+  var events = CalendarApp.getDefaultCalendar().getEvents(start, end, { search: from.trim() })
+  var targets = events.filter(function (ev) { return String(ev.getTitle()).indexOf(from) === 0 })
+  console.log('「' + from.trim() + '」で始まる予定(今日から' + CALENDAR_RENAME_DAYS + '日): ' + targets.length + '件' + (apply ? '' : '(dryRun のため、名前は変えていません)'))
+  targets.slice(0, 20).forEach(function (ev) {
+    console.log('  ' + Utilities.formatDate(ev.getStartTime(), Session.getScriptTimeZone(), 'yyyy-MM-dd') + ' ' + ev.getTitle() + ' → ' + to + String(ev.getTitle()).slice(from.length))
+  })
+  if (targets.length > 20) console.log('  …ほか ' + (targets.length - 20) + '件')
+  if (!apply) {
+    console.log('名前を変えるには、スクリプトプロパティ CALENDAR_RENAME_MODE を apply にして、もう一度実行してください。')
+    return { count: targets.length, renamed: 0 }
+  }
+  targets.forEach(function (ev) { ev.setTitle(to + String(ev.getTitle()).slice(from.length)) })
+  props.setProperty('CALENDAR_RENAME_MODE', 'dryRun')
+  console.log('✅ ' + targets.length + '件の名前を変えました。CALENDAR_RENAME_MODE を dryRun に戻しました。')
+  return { count: targets.length, renamed: targets.length }
+}
+
+// Orbit からの移行(N3): 戻す時のために、切り替えの後に Ohsumi で作られた・変わった・消えた行を一覧にする(読み取りだけ)。
+// 元の Orbit のスプレッドシート(スクリプトプロパティ ORBIT_SPREADSHEET_ID)を読み、移行と同じ変換をしてから、今のシートと比べる。
+// 値は日本語(Orbit に入れ直す形)で出す。メールアドレスは実行ログに出さない(変わったことだけを出す)。
+// 手順は docs/orbit-migration-plan.md の 7.1
+function listChangesFromOrbit() {
+  var props = PropertiesService.getScriptProperties()
+  var orbitId = String(props.getProperty('ORBIT_SPREADSHEET_ID') || '').trim()
+  if (!orbitId) throw new Error('スクリプトプロパティ ORBIT_SPREADSHEET_ID に、元の Orbit のスプレッドシートの ID(URL の /d/ と /edit の間)を入れてから実行してください。')
+  var orbit = readReportTables_(SpreadsheetApp.openById(orbitId))
+  var current = readReportTables_(SpreadsheetApp.getActiveSpreadsheet())
+  var roles = getRoles_()
+  var converted = convertOrbitTables_(orbit, roles, props.getProperty('MIGRATION_TOP_ROLE_NAME'))
+  var diff = diffMigrationTables_(converted, current)
+  formatMigrationDiff_(diff, { roles: roles, departments: getDepartments_() }).forEach(function (line) { console.log(line) })
+  return diff
 }
 
 // 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
@@ -10828,7 +10906,7 @@ function knownCode_(kind, value) {
 }
 
 // 移行後の役職の一覧を作る(roles が既にあればそれを使う)
-function migrationRoles_(settings, memberRoleRefs, topRoleName, report) {
+function migrationRoles_(settings, memberRoleRefs, topRoleName, report, roleIdsByName) {
   var existing = parseRolesSetting_(settings.roles)
   if (existing) return { roles: existing, created: false }
   var roles = rolesFromLegacy_(settings)
@@ -10861,7 +10939,8 @@ function migrationRoles_(settings, memberRoleRefs, topRoleName, report) {
     Object.keys(r).forEach(function (k) { copy[k] = r[k] })
     if (r.tier === 'base') copy.id = BASE_ROLE_ID
     else if (r === top) copy.id = TOP_ROLE_ID
-    else copy.id = newRoleId_()
+    // roleIdsByName: 移行した後の役職の ID(Orbit との差分を出す時に、同じ ID で変換し直すため)
+    else copy.id = (roleIdsByName && roleIdsByName[r.name]) || newRoleId_()
     return copy
   })
   return { roles: roles, created: true }
@@ -10893,7 +10972,7 @@ function orderMigrationRoles_(roles, report) {
 }
 
 // 移行の計画を作る(Google のサービスを使わない純粋な関数)。
-// snapshot: { Tasks, Members, Settings, Expenses } の { headers, rows }。opts: { topRoleName }
+// snapshot: { Tasks, Members, Settings, Expenses } の { headers, rows }。opts: { topRoleName, roleIdsByName }
 // 返り値: { cells: { シート名: [[行, 列, 新しい値], ...] }, settings: { キー: 値 }, report }
 function planMigration_(snapshot, opts) {
   opts = opts || {}
@@ -10944,7 +11023,7 @@ function planMigration_(snapshot, opts) {
   var mRole = mt.headers.indexOf('role')
   var mInactive = mt.headers.indexOf('inactive')
   var memberRoleRefs = mRole >= 0 ? mt.rows.map(function (r) { return r[mRole] }) : []
-  var built = migrationRoles_(settings, memberRoleRefs, opts.topRoleName, report)
+  var built = migrationRoles_(settings, memberRoleRefs, opts.topRoleName, report, opts.roleIdsByName)
   var roles = built.roles
   if (built.created) settingsOut.roles = JSON.stringify(roles)
   report.roles = roles.map(function (r) { return { id: r.id, name: r.name, tier: r.tier, restricted: r.tier === 'admin' && r.restricted === true } })
@@ -11198,5 +11277,289 @@ function applyMigrationPlan_(plan) {
     })
   })
   Object.keys(plan.settings).forEach(function (key) { updateSetting_(key, plan.settings[key]) })
+}
+
+// ---- Orbit からの移行の点検(N1〜N3。エディタから実行する migrationReport・renameOrbitCalendarEvents・listChangesFromOrbit の中身) ----
+
+var MIGRATION_REPORT_PROPERTY = 'MIGRATION_REPORT_LAST'
+var MIGRATION_REPORT_SHEETS = ['Members', 'MemberEmails', 'Projects', 'Tasks', 'Settings', 'Expenses', 'FormSubmissions', 'DailyReports', 'Candidates']
+var CALENDAR_PREFIX_ORBIT = '[Orbit] '
+var CALENDAR_PREFIX_OHSUMI = '[Ohsumi] '
+var CALENDAR_RENAME_DAYS = 730
+// 参照している ID(カンマ区切りを含む)と、その ID を探すシート
+var MIGRATION_REFERENCE_COLUMNS = [
+  ['Tasks', 'assignee_id', 'Members'], ['Tasks', 'creator_id', 'Members'], ['Tasks', 'reviewer_id', 'Members'],
+  ['Tasks', 'reviewer_ids', 'Members'], ['Tasks', 'depends_on_ids', 'Tasks'], ['Tasks', 'related_review_task_id', 'Tasks'],
+  ['Tasks', 'project_id', 'Projects'], ['Projects', 'owner_id', 'Members'], ['Projects', 'member_ids', 'Members'],
+  ['Projects', 'parent_id', 'Projects'], ['Members', 'reports_to_id', 'Members'], ['Members', 'mentor_id', 'Members'],
+  ['Expenses', 'applicant_id', 'Members'],
+]
+// 差分に出さない列(ログイン・通知で自動で変わる列)
+var MIGRATION_DIFF_IGNORED = { Members: ['last_login', 'last_inactive_notified'], Projects: ['last_notified_health'], Settings: ['migrated_at'] }
+
+// 点検・差分に使うシートを読む(無いシートは空)
+function readReportTables_(ss) {
+  var out = {}
+  MIGRATION_REPORT_SHEETS.forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) { out[name] = { headers: [], rows: [] }; return }
+    var width = sheet.getLastColumn()
+    var headers = sheet.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h).trim() })
+    var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, width).getValues() : []
+    out[name] = { headers: headers, rows: rows }
+  })
+  return out
+}
+
+function tableColumn_(table, name) {
+  var c = table.headers.indexOf(name)
+  return function (row) { return c >= 0 ? row[c] : '' }
+}
+
+function splitIds_(value) {
+  return String(value === null || value === undefined ? '' : value).split(',').map(function (s) { return s.trim() }).filter(Boolean)
+}
+
+// N1 の数(Google のサービスを使わない純粋な関数)。ctx: { roles, departments, fileOk(url) → true/false/null(時間切れ) }
+function buildMigrationReport_(tables, ctx) {
+  var counts = {}
+  var add = function (key, n) { counts[key] = (counts[key] || 0) + (n === undefined ? 1 : n) }
+  var t = function (name) { return tables[name] || { headers: [], rows: [] } }
+  var withId = function (name) {
+    var id = tableColumn_(t(name), 'id')
+    return t(name).rows.filter(function (r) { return String(id(r)).trim() !== '' })
+  }
+  var ids = {}
+  ;['Members', 'Projects', 'Tasks'].forEach(function (name) {
+    var id = tableColumn_(t(name), 'id')
+    ids[name] = {}
+    withId(name).forEach(function (r) { ids[name][String(id(r)).trim()] = true })
+  })
+
+  // メンバー
+  var members = withId('Members')
+  var mCol = function (name) { return tableColumn_(t('Members'), name) }
+  var isInactive = function (r) { var v = mCol('inactive')(r); return v === true || String(v).toUpperCase() === 'TRUE' }
+  add('Members.行', members.length)
+  add('Members.有効', 0)
+  add('Members.休止中', 0)
+  var emailOf = {}
+  var eId = tableColumn_(t('MemberEmails'), 'id')
+  var eMail = tableColumn_(t('MemberEmails'), 'email')
+  var emails = t('MemberEmails').rows.filter(function (r) { return String(eId(r)).trim() !== '' })
+  add('MemberEmails.行', emails.length)
+  emails.forEach(function (r) { if (String(eMail(r)).trim()) emailOf[String(eId(r)).trim()] = true })
+  add('Members.メールアドレスが無い', 0)
+  add('Members.権限の例外がある人', 0)
+  add('Members.権限の例外の件数', 0)
+  add('Members.最上位の役職の有効なメンバー', 0)
+  members.forEach(function (r) {
+    var id = String(mCol('id')(r)).trim()
+    add(isInactive(r) ? 'Members.休止中' : 'Members.有効')
+    if (!emailOf[id]) add('Members.メールアドレスが無い')
+    var roleRef = String(mCol('role')(r)).trim()
+    var role = findRole_(ctx.roles, roleRef)
+    add('Members.役職.' + (role ? role.name : roleRef || '(空)'))
+    if (role && role.tier === 'top' && !isInactive(r)) add('Members.最上位の役職の有効なメンバー')
+    var overrides = []
+    try { overrides = JSON.parse(String(mCol('permission_overrides_json')(r) || '[]')) || [] } catch (e) { overrides = [] }
+    if (Array.isArray(overrides) && overrides.length) { add('Members.権限の例外がある人'); add('Members.権限の例外の件数', overrides.length) }
+  })
+
+  // プロジェクト
+  var projects = withId('Projects')
+  var pArchived = tableColumn_(t('Projects'), 'archived')
+  add('Projects.行', projects.length)
+  add('Projects.アーカイブ済み', projects.filter(function (r) { var v = pArchived(r); return v === true || String(v).toUpperCase() === 'TRUE' }).length)
+
+  // タスク(コードにそろえて数える)
+  var tasks = withId('Tasks')
+  add('Tasks.行', tasks.length)
+  ;[['status', 'status'], ['priority', 'priority'], ['visibility', 'visibility']].forEach(function (pair) {
+    var col = tableColumn_(t('Tasks'), pair[0])
+    tasks.forEach(function (r) { add('Tasks.' + pair[0] + '.' + normalizeCode_(pair[1], col(r))) })
+  })
+  var dCol = tableColumn_(t('Tasks'), 'department')
+  tasks.forEach(function (r) { add('Tasks.department.' + (normalizeDepartment_(ctx.departments, dCol(r)) || '(未分類)')) })
+
+  // 経費・フォームの回答・日報・候補者
+  ;['Expenses', 'FormSubmissions', 'Candidates'].forEach(function (name) {
+    var rows = withId(name)
+    var status = tableColumn_(t(name), 'status')
+    add(name + '.行', rows.length)
+    rows.forEach(function (r) { add(name + '.status.' + (String(status(r)).trim() || '(空)')) })
+  })
+  add('DailyReports.行', withId('DailyReports').length)
+
+  // 見つからない参照(行の数)
+  MIGRATION_REFERENCE_COLUMNS.forEach(function (ref) {
+    if (t(ref[0]).headers.indexOf(ref[1]) < 0) return
+    var col = tableColumn_(t(ref[0]), ref[1])
+    var n = withId(ref[0]).filter(function (r) { return splitIds_(col(r)).some(function (id) { return !ids[ref[2]][id] }) }).length
+    add('見つからない参照.' + ref[0] + '.' + ref[1], n)
+  })
+
+  // ファイルの URL(開けるか: この GAS のアップロード先・以前のフォルダにあるか)
+  var urls = []
+  members.forEach(function (r) { var u = String(mCol('avatar_url')(r)).trim(); if (u) urls.push(['プロフィール画像', u]) })
+  var receipt = tableColumn_(t('Expenses'), 'receipt_url')
+  withId('Expenses').forEach(function (r) { var u = String(receipt(r)).trim(); if (u) urls.push(['領収書', u]) })
+  var sKey = tableColumn_(t('Settings'), 'key')
+  var sValue = tableColumn_(t('Settings'), 'value')
+  t('Settings').rows.forEach(function (r) { if (String(sKey(r)) === 'org_logo_url' && String(sValue(r)).trim()) urls.push(['団体ロゴ', String(sValue(r)).trim()]) })
+  add('ファイル.開けない', 0)
+  add('ファイル.確かめていない', 0)
+  urls.forEach(function (u) {
+    add('ファイル.' + u[0])
+    var ok = ctx.fileOk ? ctx.fileOk(u[1]) : null
+    if (ok === null) add('ファイル.確かめていない')
+    else if (!ok) add('ファイル.開けない')
+  })
+
+  // Settings のキー
+  var keys = t('Settings').rows.map(function (r) { return String(sKey(r)).trim() }).filter(Boolean).sort()
+  add('Settings.キー', keys.length)
+  return { counts: counts, settingsKeys: keys }
+}
+
+// N1 の実行ログの行。previous(前回の結果)があれば、違う数だけを最後に並べる
+function formatMigrationCounts_(report, previous) {
+  var lines = ['■ 移行の点検(数)']
+  Object.keys(report.counts).sort().forEach(function (k) { lines.push('  ' + k + ': ' + report.counts[k]) })
+  lines.push('■ Settings のキー: ' + report.settingsKeys.join('、'))
+  if (!previous || !previous.counts) {
+    lines.push('■ 前回の結果はありません(この結果を覚えました。次に実行した時に、違う数を出します)')
+    return lines
+  }
+  var keys = {}
+  Object.keys(report.counts).concat(Object.keys(previous.counts)).forEach(function (k) { keys[k] = true })
+  var diffs = Object.keys(keys).sort().filter(function (k) { return (report.counts[k] || 0) !== (previous.counts[k] || 0) })
+  lines.push(diffs.length
+    ? '■ 前回(' + previous.at + (previous.spreadsheet ? '・' + previous.spreadsheet : '') + ')と違う数: ' + diffs.length + '件'
+    : '■ 前回(' + previous.at + (previous.spreadsheet ? '・' + previous.spreadsheet : '') + ')と同じです')
+  diffs.forEach(function (k) { lines.push('  ' + k + ': ' + (previous.counts[k] || 0) + ' → ' + (report.counts[k] || 0)) })
+  return lines
+}
+
+// N3: Orbit のシートを、移行(migrateToInternalCodes)と同じ変換で、移行した後の形にする。
+// 役職の ID は、今の役職の一覧と同じ ID にする(新しい ID を作らない)
+function convertOrbitTables_(orbit, currentRoles, topRoleName) {
+  var roleIdsByName = {}
+  ;(currentRoles || []).forEach(function (r) { roleIdsByName[r.name] = r.id })
+  var copy = {}
+  Object.keys(orbit).forEach(function (name) {
+    copy[name] = { headers: orbit[name].headers.slice(), rows: orbit[name].rows.map(function (r) { return r.slice() }) }
+  })
+  var plan = planMigration_(copy, { topRoleName: topRoleName, roleIdsByName: roleIdsByName })
+  Object.keys(plan.cells).forEach(function (name) {
+    plan.cells[name].forEach(function (cell) { copy[name].rows[cell[0]][cell[1]] = cell[2] })
+  })
+  var st = copy.Settings
+  if (st && st.headers.indexOf('key') >= 0) {
+    var k = st.headers.indexOf('key')
+    var v = st.headers.indexOf('value')
+    Object.keys(plan.settings).forEach(function (key) {
+      var row = null
+      st.rows.forEach(function (r) { if (String(r[k]) === key) row = r })
+      if (!row) { row = st.headers.map(function () { return '' }); row[k] = key; st.rows.push(row) }
+      row[v] = plan.settings[key]
+    })
+  }
+  return copy
+}
+
+function cellText_(v) {
+  if (v instanceof Date) return v.toISOString()
+  return v === null || v === undefined ? '' : String(v)
+}
+
+// N3 の差分(Google のサービスを使わない純粋な関数)。行は id(Settings は key)で対応させる。
+// 返り値: { シート名: { added: [行の値], deleted: [行の値], changed: [{ id, row, columns: [{ name, before, after }] }] } }
+function diffMigrationTables_(before, after) {
+  var out = {}
+  MIGRATION_REPORT_SHEETS.forEach(function (name) {
+    var b = before[name] || { headers: [], rows: [] }
+    var a = after[name] || { headers: [], rows: [] }
+    var keyName = name === 'Settings' ? 'key' : 'id'
+    var ignored = MIGRATION_DIFF_IGNORED[name] || []
+    var toMap = function (table) {
+      var c = table.headers.indexOf(keyName)
+      var map = {}
+      if (c < 0) return map
+      table.rows.forEach(function (r) {
+        var id = cellText_(r[c]).trim()
+        if (!id) return
+        var obj = {}
+        table.headers.forEach(function (h, i) { if (h) obj[h] = cellText_(r[i]) })
+        map[id] = obj
+      })
+      return map
+    }
+    var bm = toMap(b)
+    var am = toMap(a)
+    var result = { added: [], deleted: [], changed: [] }
+    Object.keys(am).forEach(function (id) {
+      if (name === 'Settings' && ignored.indexOf(id) >= 0) return
+      if (!bm[id]) { result.added.push(am[id]); return }
+      var cols = []
+      Object.keys(am[id]).forEach(function (h) {
+        if (ignored.indexOf(h) >= 0) return
+        var was = Object.prototype.hasOwnProperty.call(bm[id], h) ? bm[id][h] : ''
+        if (was !== am[id][h]) cols.push({ name: h, before: was, after: am[id][h] })
+      })
+      if (cols.length) result.changed.push({ id: id, row: am[id], columns: cols })
+    })
+    Object.keys(bm).forEach(function (id) {
+      if (name === 'Settings' && ignored.indexOf(id) >= 0) return
+      if (!am[id]) result.deleted.push(bm[id])
+    })
+    out[name] = result
+  })
+  return out
+}
+
+// N3 の実行ログの行(値は日本語で。メールアドレスは出さない)
+function formatMigrationDiff_(diff, ctx) {
+  var lines = ['■ 元の Orbit と比べて、切り替えの後に Ohsumi で変わった行(値は Orbit に入れ直す形の日本語)']
+  var total = 0
+  var label = function (sheet, col, value) {
+    if (sheet === 'MemberEmails' && col === 'email') return value ? '(メールアドレス。実行ログには出しません)' : ''
+    var v = String(value)
+    if (sheet === 'Tasks' && MIGRATION_TASK_CODE_COLUMNS[col]) {
+      var labels = VALUE_CODES[MIGRATION_TASK_CODE_COLUMNS[col]].sheetLabels
+      if (Object.prototype.hasOwnProperty.call(labels, v)) v = labels[v]
+    } else if (sheet === 'Tasks' && col === 'department') {
+      var d = findDepartment_(ctx.departments, v)
+      v = d ? d.name : v || UNCATEGORIZED_NAME
+    } else if (sheet === 'Members' && col === 'role') {
+      var r = findRole_(ctx.roles, v)
+      if (r) v = r.name
+    }
+    return v.length > 120 ? v.slice(0, 120) + '…' : v
+  }
+  var nameOf = function (sheet, row) {
+    var title = row.title || row.name || row.key || ''
+    return (row.id ? 'id ' + row.id : '') + (title ? '「' + String(title).slice(0, 40) + '」' : '')
+  }
+  Object.keys(diff).forEach(function (sheet) {
+    var d = diff[sheet]
+    var n = d.added.length + d.changed.length + d.deleted.length
+    if (!n) return
+    total += n
+    lines.push('■ ' + sheet + ': 追加 ' + d.added.length + '件・変更 ' + d.changed.length + '件・削除 ' + d.deleted.length + '件')
+    d.added.forEach(function (row) {
+      var shown = Object.keys(row).filter(function (h) { return row[h] !== '' && h !== 'id' }).slice(0, 8)
+        .map(function (h) { return h + '=' + label(sheet, h, row[h]) })
+      lines.push('  追加 ' + nameOf(sheet, row) + (shown.length ? ': ' + shown.join('、') : ''))
+    })
+    d.changed.forEach(function (c) {
+      lines.push('  変更 ' + nameOf(sheet, c.row) + ': ' + c.columns.map(function (col) {
+        return col.name + ' 「' + label(sheet, col.name, col.before) + '」→「' + label(sheet, col.name, col.after) + '」'
+      }).join('、'))
+    })
+    d.deleted.forEach(function (row) { lines.push('  削除 ' + nameOf(sheet, row)) })
+  })
+  if (!total) lines.push('  変わった行はありません')
+  return lines
 }
 
