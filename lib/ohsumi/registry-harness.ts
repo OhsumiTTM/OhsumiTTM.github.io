@@ -14,7 +14,11 @@ export class FakeSheet {
   getLastColumn() { return Math.max(0, ...this.rows.map((r) => r.length)) }
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return {
-      getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? '')),
+      // 本物のシートと同じく、先頭の ' (文字として入れる印。safeCell が付ける)は読み取りの値に含めない
+      getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => {
+        const v = this.rows[row - 1 + r]?.[col - 1 + c] ?? ''
+        return typeof v === 'string' && v.startsWith("'") ? v.slice(1) : v
+      })),
       setValues: (vals: unknown[][]) => vals.forEach((vs, r) => {
         const target = (this.rows[row - 1 + r] ??= [])
         vs.forEach((v, c) => { target[col - 1 + c] = v })

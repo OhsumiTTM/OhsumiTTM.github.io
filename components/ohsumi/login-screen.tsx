@@ -51,6 +51,11 @@ export function LoginScreen() {
   const [orgId, setOrgId] = useState<string | null>(null)
   const [remember, setRemember] = useState(loadRememberPreference)
   const rememberRef = useRef(remember)
+  // 初期設定コード(団体を始める最初の代表だけ)。入れてから Google でログインすると、同じ通信で送る
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [setupCode, setSetupCode] = useState('')
+  const setupCodeRef = useRef('')
+  setupCodeRef.current = setupOpen ? setupCode.trim() : ''
   const buttonRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
   const autoPromptedRef = useRef(false)
@@ -125,12 +130,16 @@ export function LoginScreen() {
         setLoginError(null)
         let ok = false
         try {
-          const result = await signInRef.current(idToken, secret, rememberRef.current, orgId)
+          const result = await signInRef.current(idToken, secret, rememberRef.current, orgId, setupCodeRef.current || undefined)
           ok = result.status === 'ok'
           if (result.status === 'notRegistered') {
             // 同じアカウントで自動ログインを繰り返さないようにする
             window.google?.accounts?.id?.disableAutoSelect()
-            if (mountedRef.current) setLoginError(tRef.current('login.notRegistered', { email: result.email ?? '' }))
+            if (mountedRef.current) {
+              setLoginError(tRef.current('login.notRegistered', { email: result.email ?? '' }))
+              // 最初の代表の場合に備えて、初期設定コードの欄を開く
+              setSetupOpen(true)
+            }
           }
         } catch (e) {
           if (mountedRef.current) setLoginError(e instanceof Error ? e.message : tRef.current('login.failed'))
@@ -199,6 +208,28 @@ export function LoginScreen() {
                     <Loader2 className="size-4 animate-spin" />
                     {loading ? t('login.signingIn') : t('login.preparing')}
                   </div>
+                )}
+              </div>
+
+              <div className="mt-4 text-left">
+                {setupOpen ? (
+                  <label className="block text-xs">
+                    <span className="font-medium">{t('login.setupCodeLabel')}</span>
+                    <input
+                      value={setupCode}
+                      onChange={(e) => setSetupCode(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={40}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      className="mt-1 w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-sm tracking-wider"
+                    />
+                    <span className="mt-1 block text-muted-foreground">{t('login.setupCodeHint')}</span>
+                  </label>
+                ) : (
+                  <button type="button" onClick={() => setSetupOpen(true)} className="text-xs text-muted-foreground underline underline-offset-2">
+                    {t('login.setupCodeToggle')}
+                  </button>
                 )}
               </div>
 

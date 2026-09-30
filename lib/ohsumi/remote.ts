@@ -670,8 +670,11 @@ export interface ExchangeResult extends InitialData {
   lastLoginRecorded?: boolean
 }
 
-/** Google の IDトークンをセッショントークンに交換し、初期データもまとめて受け取る */
-export async function exchangeIdToken(idToken: string, nonceSecret: string, remember: boolean): Promise<ExchangeResult> {
+/**
+ * Google の IDトークンをセッショントークンに交換し、初期データもまとめて受け取る。
+ * setupCode(初期設定コード)を付けると、未登録のアカウントを最初の代表として団体に入れる(同じ1回の通信で)
+ */
+export async function exchangeIdToken(idToken: string, nonceSecret: string, remember: boolean, setupCode?: string): Promise<ExchangeResult> {
   let json: GasResponse<InitialDataResponse & { email?: string; session?: StoredSession }>
   try {
     json = await callGas<InitialDataResponse & { email?: string; session?: StoredSession }>({
@@ -679,6 +682,7 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
       idToken,
       nonceSecret,
       remember,
+      ...(setupCode ? { setupCode } : {}),
       ...backgroundOptions(),
     })
   } catch (err) {

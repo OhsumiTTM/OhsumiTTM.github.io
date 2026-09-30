@@ -17,11 +17,16 @@
 //   - 管理画面の一覧(団体・登録コード・操作の記録)
 //   - 登録コードの発行・取り消し(コードは発行した画面で1回だけ表示し、SHA-256 だけを保存する)
 //   - 登録コードを使う処理(consumeRegistrationCode。R1-c の登録から呼ぶ)
-// 団体の登録・接続先の解決・提供停止は、R1-c 以降で足す(データの形は用意してある)。
+// R1-c で足したもの:
+//   - 団体の登録(registerOrg。団体の GAS が登録コードを使って団体を登録し、共有鍵を受け取る)。
+//     通信が途中で失われて送り直された時は、同じ結果(同じ共有鍵)を返す(二重に登録しない)
+//   - 再登録コード(kind: reissue。共有鍵が漏れた時の作り直し・接続先の変更。管理画面で発行する)
+//   - 登録の失敗(登録コードの総当たり)の回数の上限
+// 接続先の解決・提供停止は、R1-d 以降で足す(データの形は用意してある)。
 //
 // 設定と手順は registry/README.md を参照。
 
-var REGISTRY_VERSION = 'r1b-2'
+var REGISTRY_VERSION = 'r1c-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -37,7 +42,10 @@ var REGISTRY_SHEETS = {
   Usage: ['org_id', 'date', 'metrics_json'],
   RegistrationCodes: ['code_hash', 'kind', 'target_org_id', 'org_name', 'contact_name', 'contact_email', 'expires_at', 'issued_by', 'issued_at', 'used_at', 'used_org_id', 'revoked_at',
     'code_id', 'revoked_by', 'note'],
-  Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at'],
+  // registry_key は共有鍵そのもの(団体の GAS との確認に使うため、元の値を持つ。保護したシート・誰とも共有しない)。
+  // register_nonce_hash は、最後の登録の送り直しを見分けるための値(団体の GAS が作ってスクリプトプロパティに
+  // 保存した乱数 registerNonce)の SHA-256
+  Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_nonce_hash'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
 }
 // 管理者は、スクリプトプロパティ ADMIN_EMAILS(カンマ区切り)の許可リストで決める。
@@ -50,7 +58,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10 }
 
 // ---- 入口 ----
 
@@ -108,6 +116,7 @@ var REGISTRY_ACTIONS = {
   adminOverview: function (body) { return adminOverview(body, Date.now()) },
   issueRegistrationCode: function (body) { return issueRegistrationCode(body, Date.now()) },
   revokeRegistrationCode: function (body) { return revokeRegistrationCode(body, Date.now()) },
+  registerOrg: function (body) { return registerOrg(body, Date.now()) },
 }
 
 function registryJson(obj) {
@@ -488,6 +497,7 @@ function codeSummary(values, nowMs) {
   return {
     codeId: String(values.code_id || ''),
     kind: String(values.kind || 'new'),
+    targetOrgId: String(values.target_org_id || ''),
     orgName: String(values.org_name || ''),
     contactName: String(values.contact_name || ''),
     contactEmail: String(values.contact_email || ''),
@@ -595,7 +605,15 @@ function issueRegistrationCode(body, nowMs) {
   if (!(nowSecOf(nowMs) - Number(session.auth) <= ADMIN_REAUTH_SEC)) {
     throw registryError('登録コードを発行する前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。', { reauth: true })
   }
+  var kind = String(body.kind || 'new') === 'reissue' ? 'reissue' : 'new'
+  var targetOrgId = kind === 'reissue' ? cleanText(body.targetOrgId, 80) : ''
   var orgName = cleanText(body.orgName, 100)
+  if (kind === 'reissue') {
+    // 再登録コード: 登録済みの団体向け(共有鍵の作り直し・接続先の変更)。団体名は Orgs から
+    var target = findOrgRow(targetOrgId)
+    if (!target) throw registryError('再登録する団体が見つかりません。')
+    orgName = cleanText(target.values.display_name, 100) || targetOrgId
+  }
   if (!orgName) throw registryError('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
   var contactName = cleanText(body.contactName, 100)
   var contactEmail = cleanText(body.contactEmail, 200)
@@ -609,7 +627,8 @@ function issueRegistrationCode(body, nowMs) {
     appendRowByHeaders('RegistrationCodes', {
       code_id: codeId,
       code_hash: registrationCodeHash(code),
-      kind: 'new',
+      kind: kind,
+      target_org_id: targetOrgId,
       org_name: orgName,
       contact_name: contactName,
       contact_email: contactEmail,
@@ -619,8 +638,8 @@ function issueRegistrationCode(body, nowMs) {
       issued_at: issuedAt,
     })
     // 記録にはコードもハッシュも残さない
-    appendAudit({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { orgName: orgName, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
-    return { ok: true, result: { code: formatRegistrationCode(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName } }
+    appendAudit({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { kind: kind, targetOrgId: targetOrgId, orgName: orgName, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
+    return { ok: true, result: { code: formatRegistrationCode(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName, kind: kind, targetOrgId: targetOrgId } }
   })
 }
 
@@ -669,6 +688,164 @@ function consumeRegistrationCode(input, orgId, nowMs) {
     return rows[i].values
   }
   throw registryError(REGISTRATION_CODE_INVALID)
+}
+
+// ---- 団体の登録(registerOrg) ----
+//
+// 団体の GAS が、スプレッドシートの「Ohsumi」メニューの「レジストリに登録」から呼ぶ(1回の通信)。
+//   要求: { action: 'registerOrg', code, orgId, gasUrl, gasVersion, registerNonce }
+//   返事: { ok: true, result: { orgId, registryKey, keyGen, displayName, registeredAt, kind } }
+// - 登録コード(kind: new)は新しい団体だけ、再登録コード(kind: reissue)は発行した時に選んだ団体だけに使える
+// - 共有鍵(registryKey)はレジストリが作り、Secrets(保護したシート)に保存する。操作の記録・一覧には出さない
+// - **送り直し:** registerNonce は、団体の GAS が登録の前に作り、スクリプトプロパティ(REGISTRY_PENDING)にだけ
+//   保存する乱数(32バイト・base64url の43文字)。通信が途中で失われると、団体の GAS は同じ registerNonce・同じコードで
+//   送り直す。レジストリは registerNonce の SHA-256 だけを Secrets に保存し、次の**すべて**が合う時だけ、同じ結果
+//   (同じ共有鍵)を返す(登録し直さない):
+//     団体ID が同じ / registerNonce がその団体の最後の登録と同じ / 登録コードがその団体の登録に使われたもの /
+//     その登録から REGISTER_REPLAY_HOURS 時間以内
+//   使用済みの登録コードを手に入れただけ(registerNonce を知らない)では、共有鍵は返さない。ほかの失敗と同じ
+//   エラー(REGISTRATION_CODE_INVALID)で断り、総当たりの失敗として数える
+// - **総当たりの対策:** 登録は1分に10回まで(レジストリ全体)。コードが違う・使えない登録が1時間に
+//   REGISTER_FAIL_LIMIT 回を超えたら、その1時間は登録を受け付けない(監視の「断ったリクエスト」にも数える)。
+//   コードは16文字(約79ビット)で、使えない理由(無い・使用済み・期限切れ・取り消し済み)は区別せず同じエラーを返す
+var REGISTER_REPLAY_HOURS = 24
+var REGISTER_FAIL_LIMIT = 30
+var ORG_ID_PATTERN = /^org_[A-Za-z0-9_-]{16,64}$/
+var GAS_EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
+var REGISTER_NONCE_PATTERN = /^[A-Za-z0-9_-]{43,64}$/
+
+function findOrgRow(orgId) {
+  if (!orgId) return null
+  var rows = readRows('Orgs')
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].values.org_id) === String(orgId)) return rows[i]
+  return null
+}
+
+function findSecretRow(orgId) {
+  var rows = readRows('Secrets')
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].values.org_id) === String(orgId)) return rows[i]
+  return null
+}
+
+function registerFailKey(nowMs) { return 'regfail:' + hourBucket(nowMs) }
+
+function registerFailuresExceeded(nowMs) {
+  return Number(CacheService.getScriptCache().get(registerFailKey(nowMs)) || 0) >= REGISTER_FAIL_LIMIT
+}
+
+function countRegisterFailure(nowMs) {
+  var cache = CacheService.getScriptCache()
+  var key = registerFailKey(nowMs)
+  cache.put(key, String(Number(cache.get(key) || 0) + 1), 7200)
+}
+
+// 断った登録を、監視の「断ったリクエスト」にも数える
+function countRejected(nowMs) {
+  var cache = CacheService.getScriptCache()
+  var rk = 'rj:' + hourBucket(nowMs)
+  cache.put(rk, String(Number(cache.get(rk) || 0) + 1), 7200)
+}
+
+function newRegistryKey() {
+  return generateSecret() + generateSecret()
+}
+
+function registerOrg(body, nowMs) {
+  if (registerFailuresExceeded(nowMs)) {
+    countRejected(nowMs)
+    throw registryError('登録の失敗が続いたため、しばらく登録を受け付けていません。1時間ほど待ってから、登録コードを確かめてもう一度お試しください。')
+  }
+  var orgId = String(body.orgId || '')
+  var gasUrl = String(body.gasUrl || '')
+  var registerNonce = String(body.registerNonce || '')
+  var gasVersion = cleanText(body.gasVersion, 40)
+  if (!ORG_ID_PATTERN.test(orgId)) throw registryError('団体ID の形が正しくありません。団体の GAS で setupOhsumi を実行してから、もう一度お試しください。')
+  if (!GAS_EXEC_URL_PATTERN.test(gasUrl)) throw registryError('団体の GAS のウェブアプリの URL の形が正しくありません(…/macros/s/…/exec)。')
+  if (!REGISTER_NONCE_PATTERN.test(registerNonce)) throw registryError('リクエストの形が正しくありません。団体の GAS を最新の版にしてから、もう一度お試しください。')
+  if (!normalizeRegistrationCode(body.code)) throw registryError(REGISTRATION_CODE_INVALID)
+  var codeHash = registrationCodeHash(body.code)
+  var nonceHash = 'sha256:' + sha256Hex(registerNonce)
+  return withRegistryLock(function () {
+    // 送り直し: この団体の最後の登録と registerNonce・コードが同じで、24時間以内なら、同じ結果を返す。
+    // 合わない時は下の通常の登録に進み、使用済みのコードとして(ほかの失敗と同じエラーで)断る
+    var secret = findSecretRow(orgId)
+    if (secret && safeEquals(String(secret.values.register_nonce_hash || ''), nonceHash)) {
+      var usedRow = null
+      readRows('RegistrationCodes').forEach(function (r) {
+        if (safeEquals(String(r.values.code_hash || ''), codeHash) && String(r.values.used_org_id || '') === orgId) usedRow = r
+      })
+      var registeredAtMs = timeOf(secret.values.updated_at)
+      if (usedRow && registeredAtMs > 0 && nowMs - registeredAtMs <= REGISTER_REPLAY_HOURS * 3600 * 1000) {
+        var org = findOrgRow(orgId)
+        return { ok: true, replayed: true, result: registerResult(orgId, secret.values, org ? org.values : {}, String(usedRow.values.kind || 'new')) }
+      }
+    }
+
+    // 登録コードを探す(使えない理由は区別しない)
+    var codeRow = null
+    var rows = readRows('RegistrationCodes')
+    for (var i = 0; i < rows.length; i++) {
+      if (safeEquals(String(rows[i].values.code_hash || ''), codeHash)) { codeRow = rows[i]; break }
+    }
+    var kind = codeRow ? (String(codeRow.values.kind || 'new') === 'reissue' ? 'reissue' : 'new') : ''
+    var existing = findOrgRow(orgId)
+    var usable = codeRow && registrationCodeState(codeRow.values, nowMs) === 'unused' &&
+      (kind === 'new' ? !existing : !!existing && String(codeRow.values.target_org_id || '') === orgId)
+    if (!usable) {
+      countRegisterFailure(nowMs)
+      // 新しい団体の登録コードで、登録済みの団体を登録し直そうとした時だけは、分かるように知らせる(コードは使わない)
+      if (codeRow && kind === 'new' && existing && registrationCodeState(codeRow.values, nowMs) === 'unused') {
+        throw registryError('この団体は登録済みです。共有鍵の作り直し・接続先の変更には、FSIF が発行する再登録コードを使ってください。')
+      }
+      throw registryError(REGISTRATION_CODE_INVALID)
+    }
+
+    var at = new Date(nowMs).toISOString()
+    setRowFields('RegistrationCodes', codeRow.row, { used_at: at, used_org_id: orgId })
+    var key = newRegistryKey()
+    var orgValues
+    if (kind === 'new') {
+      orgValues = {
+        org_id: orgId, gas_url: gasUrl, status: 'active', channel: 'standard',
+        display_name: String(codeRow.values.org_name || ''), created_at: at, gas_version: gasVersion, updated_at: at,
+      }
+      appendRowByHeaders('Orgs', orgValues)
+      if (String(codeRow.values.contact_name || '') || String(codeRow.values.contact_email || '')) {
+        appendRowByHeaders('Contacts', { org_id: orgId, name: String(codeRow.values.contact_name || ''), email: String(codeRow.values.contact_email || '') })
+      }
+    } else {
+      setRowFields('Orgs', existing.row, { gas_url: gasUrl, gas_version: gasVersion, updated_at: at })
+      orgValues = {}
+      Object.keys(existing.values).forEach(function (k) { orgValues[k] = existing.values[k] })
+      orgValues.gas_url = gasUrl
+      orgValues.gas_version = gasVersion
+    }
+    var keyGen = secret ? Number(secret.values.key_gen || 0) + 1 : 1
+    var secretValues = { org_id: orgId, registry_key: key, key_gen: keyGen, updated_at: at, register_nonce_hash: nonceHash }
+    if (secret) setRowFields('Secrets', secret.row, secretValues)
+    else appendRowByHeaders('Secrets', secretValues)
+    rememberOrgFingerprint(orgId, orgValues)
+    // 記録には共有鍵もコードも残さない
+    appendAudit({
+      actor: 'org:' + orgId,
+      action: kind === 'new' ? 'registerOrg' : 'reregisterOrg',
+      target: orgId,
+      before: kind === 'reissue' ? { gasUrl: String(existing.values.gas_url || ''), keyGen: keyGen - 1 } : undefined,
+      after: { codeId: String(codeRow.values.code_id || ''), displayName: String(orgValues.display_name || ''), gasUrl: gasUrl, gasVersion: gasVersion, keyGen: keyGen },
+    })
+    return { ok: true, result: registerResult(orgId, secretValues, orgValues, kind) }
+  })
+}
+
+function registerResult(orgId, secretValues, orgValues, kind) {
+  return {
+    orgId: orgId,
+    registryKey: String(secretValues.registry_key || ''),
+    keyGen: Number(secretValues.key_gen || 0),
+    displayName: String(orgValues.display_name || ''),
+    registeredAt: isoOf(secretValues.updated_at),
+    kind: kind,
+  }
 }
 
 // ---- 管理画面のセッションの鍵 ----

@@ -47,7 +47,10 @@ export interface OrgSummary {
 
 export interface CodeSummary {
   codeId: string
+  // new: 新しい団体の登録コード / reissue: 登録済みの団体の再登録コード(共有鍵の作り直し・接続先の変更)
   kind: string
+  // 再登録コードの対象の団体ID
+  targetOrgId?: string
   orgName: string
   contactName: string
   contactEmail: string
@@ -85,9 +88,14 @@ export interface IssuedCode {
   codeId: string
   expiresAt: string
   orgName: string
+  kind?: 'new' | 'reissue'
+  targetOrgId?: string
 }
 
 export interface IssueInput {
+  // new: 新しい団体(団体名が必須) / reissue: 登録済みの団体の再登録(targetOrgId が必須。団体名はレジストリが入れる)
+  kind?: 'new' | 'reissue'
+  targetOrgId?: string
   orgName: string
   contactName: string
   contactEmail: string
