@@ -464,6 +464,7 @@ export const ja = {
   'app.loading': 'データを読み込んでいます…',
   'app.syncFailed': 'スプレッドシートとの同期に失敗しました',
   'app.syncFailedBanner': 'スプレッドシートとの同期に失敗しました。表示中のデータが最新でない可能性があります。',
+  'app.saveRevertedBanner': '保存できなかったため、変更を元に戻しました。もう一度お試しください。',
   'app.loadFailed': '読み込みに失敗しました',
   'app.loadFailedBanner': '読み込みに失敗しました。表示中のデータが最新でない可能性があります。',
   'app.retryLoad': 'もう一度試す',

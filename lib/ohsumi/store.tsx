@@ -1,5 +1,6 @@
 'use client'
 
+import { revertTaskChange } from './optimistic'
 import {
   createContext,
   useContext,
@@ -204,6 +205,8 @@ interface OhsumiContextValue extends OhsumiState {
   driveEnabled: boolean
   remoteStatus: RemoteStatus
   remoteError: string | null
+  // 保存に失敗したため、画面の変更を元に戻した
+  remoteReverted: boolean
   // true once every configured remote source (spreadsheet + optional
   // Settings sheet) has resolved or given up — see store.tsx's dataReady
   dataReady: boolean
@@ -864,6 +867,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false)
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus>('idle')
   const [remoteError, setRemoteError] = useState<string | null>(null)
+  // 保存に失敗したため、画面の変更を元に戻した(次の保存が成功したら消す)
+  const [remoteReverted, setRemoteReverted] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   // mirrors remoteStatus but for the separate, optional Settings-sheet
   // fetch (role levels/permissions/pools) — true immediately when that
@@ -998,12 +1003,46 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setLoadError(err instanceof Error ? err.message : String(err))
   }, [])
 
-  // fire a remote write; clears a stale error banner on success, reports on failure
+  // fire a remote write; clears a stale error banner on success, reports on failure.
+  // onFailure を渡した時は、失敗した時に画面の変更を元に戻し(楽観的な更新の取り消し)、戻したことも知らせる
   const runRemote = useCallback(
-    (promise: Promise<unknown>) => {
-      promise.then(() => setRemoteError(null)).catch(reportRemoteError)
+    (promise: Promise<unknown>, onFailure?: () => void) => {
+      promise
+        .then(() => {
+          setRemoteError(null)
+          setRemoteReverted(false)
+        })
+        .catch((err) => {
+          if (onFailure) {
+            onFailure()
+            setRemoteReverted(true)
+          }
+          reportRemoteError(err)
+        })
     },
     [reportRemoteError],
+  )
+
+  // タスクの項目を楽観的に変え(すぐに表示し)、保存に失敗したら、その項目と足した変更の記録を元に戻す。
+  // change は、変える前のタスクから変えた後のタスクを作る(setTasks の中で呼ぶ)。
+  // 保存を待っている間に同じ項目をさらに変えていたら戻さない(lib/ohsumi/optimistic.ts)
+  const changeTaskOptimistically = useCallback(
+    <K extends keyof Task>(id: string, fields: readonly K[], change: (t: Task) => Task, save: () => Promise<unknown>) => {
+      let before: Task | undefined
+      let after: Task | undefined
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t
+          before = t
+          after = change(t)
+          return after
+        }),
+      )
+      if (isRemoteConfigured) {
+        runRemote(save(), () => setTasks((prev) => revertTaskChange(prev, id, before, after, fields)))
+      }
+    },
+    [runRemote],
   )
 
   // 役職の一覧を保存する(GAS の updateRoles。移行前は今までの設定に、移行後は roles に書かれる)
@@ -2997,20 +3036,21 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   const updatePriority = useCallback(
     (id: string, priority: Priority) => {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === id ? appendHistory({ ...t, priority }, 'priority', t.priority, priority) : t)),
+      changeTaskOptimistically(
+        id,
+        ['priority'],
+        (t) => appendHistory({ ...t, priority }, 'priority', t.priority, priority),
+        () => remoteApi.updatePriority(id, priority),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.updatePriority(id, priority))
     },
-    [appendHistory, runRemote],
+    [appendHistory, changeTaskOptimistically],
   )
 
   const updateDifficulty = useCallback(
     (id: string, difficulty: Difficulty) => {
-      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, difficulty } : t)))
-      if (isRemoteConfigured) runRemote(remoteApi.updateDifficulty(id, difficulty))
+      changeTaskOptimistically(id, ['difficulty'], (t) => ({ ...t, difficulty }), () => remoteApi.updateDifficulty(id, difficulty))
     },
-    [runRemote],
+    [changeTaskOptimistically],
   )
 
   // 管理者向けの一括編集（タイトル・詳細・プロジェクト・部門・カテゴリ・
@@ -3034,9 +3074,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         requiredSkillLevels?: Partial<Record<string, SkillLevelValue>>
       },
     ) => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
+      changeTaskOptimistically(
+        id,
+        ['name', 'description', 'projectId', 'department', 'category', 'skills', 'difficulty', 'priority', 'visibility', 'importance', 'requiredSkillLevels'],
+        (t) => {
           let next: Task = {
             ...t,
             name: details.name,
@@ -3061,11 +3102,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           next = appendHistory(next, 'visibility', t.visibility ?? 'all', details.visibility)
           next = appendHistory(next, 'importance', t.importance ?? 'normal', details.importance)
           return next
-        }),
+        },
+        () => remoteApi.updateTaskDetails(id, details),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.updateTaskDetails(id, details))
     },
-    [appendHistory, runRemote],
+    [appendHistory, changeTaskOptimistically],
   )
 
   const updateProgress = useCallback(
@@ -3978,63 +4019,62 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
 
+  // 保存の画面は GAS の応答を待たずに閉じ、日程はすぐに表示する。保存に失敗した時だけ、日程と
+  // 変更の記録を元に戻して知らせる(changeTaskOptimistically)
   const updateSchedule = useCallback(
     (id: string, startDate: string | null, deadline: string | null) => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
+      changeTaskOptimistically(
+        id,
+        ['startDate', 'deadline'],
+        (t) => {
           let next: Task = { ...t, startDate, deadline }
           next = appendHistory(next, 'deadline', t.deadline ?? '', deadline ?? '')
           next = appendHistory(next, 'startDate', t.startDate ?? '', startDate ?? '')
           return next
-        }),
+        },
+        () => remoteApi.updateSchedule(id, startDate, deadline),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.updateSchedule(id, startDate, deadline))
     },
-    [appendHistory, runRemote],
+    [appendHistory, changeTaskOptimistically],
   )
 
   const updateDependsOn = useCallback(
     (id: string, dependsOnIds: string[]) => {
-      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, dependsOnIds } : t)))
-      if (isRemoteConfigured) runRemote(remoteApi.updateDependsOn(id, dependsOnIds))
+      changeTaskOptimistically(id, ['dependsOnIds'], (t) => ({ ...t, dependsOnIds }), () => remoteApi.updateDependsOn(id, dependsOnIds))
     },
-    [runRemote],
+    [changeTaskOptimistically],
   )
 
   // "確認者" — distinct from assigneeIds, pairs with the 確認待ち status so
   // it's clear who's expected to sign off (item 8: 確認者・レビュワー設定)
   const updateReviewer = useCallback(
     (id: string, reviewerId: string | null) => {
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === id
-            ? appendHistory({ ...t, reviewerId: reviewerId ?? undefined }, 'reviewer', t.reviewerId ?? '', reviewerId ?? '')
-            : t,
-        ),
+      changeTaskOptimistically(
+        id,
+        ['reviewerId'],
+        (t) => appendHistory({ ...t, reviewerId: reviewerId ?? undefined }, 'reviewer', t.reviewerId ?? '', reviewerId ?? ''),
+        () => remoteApi.updateReviewer(id, reviewerId),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.updateReviewer(id, reviewerId))
     },
-    [appendHistory, runRemote],
+    [appendHistory, changeTaskOptimistically],
   )
 
   const updateReviewers = useCallback(
     (id: string, reviewerIds: string[], requiredApprovals?: number | 'all') => {
-      setTasks((prev) =>
-        prev.map((t) =>
-          t.id === id
-            ? appendHistory(
-                { ...t, reviewerIds, reviewerId: reviewerIds[0], requiredApprovals },
-                'reviewer',
-                (t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])).join('、'),
-                reviewerIds.join('、'),
-              )
-            : t,
-        ),
+      changeTaskOptimistically(
+        id,
+        ['reviewerIds', 'reviewerId', 'requiredApprovals'],
+        (t) =>
+          appendHistory(
+            { ...t, reviewerIds, reviewerId: reviewerIds[0], requiredApprovals },
+            'reviewer',
+            (t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])).join('、'),
+            reviewerIds.join('、'),
+          ),
+        () => remoteApi.updateReviewers(id, reviewerIds, requiredApprovals),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.updateReviewers(id, reviewerIds, requiredApprovals))
     },
-    [appendHistory, runRemote],
+    [appendHistory, changeTaskOptimistically],
   )
 
   // 複数確認者の承認トラッキング — 経費申請のApprovalStep/ApprovalRecordと
@@ -5052,6 +5092,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     driveEnabled: isDriveConfigured,
     remoteStatus,
     remoteError,
+    remoteReverted,
     dataReady,
     refreshing,
     refreshAll,

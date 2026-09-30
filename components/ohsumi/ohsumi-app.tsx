@@ -142,7 +142,7 @@ function LocaleSyncWatcher() {
 }
 
 function Router() {
-  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
+  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
     useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
@@ -174,7 +174,7 @@ function Router() {
       {remoteEnabled && remoteError && (
         <div className="flex items-center justify-center gap-1.5 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
           <TriangleAlert className="size-3.5 shrink-0" />
-          {t('app.syncFailedBanner')}
+          {t(remoteReverted ? 'app.saveRevertedBanner' : 'app.syncFailedBanner')}
         </div>
       )}
       {remoteEnabled && loadError && (

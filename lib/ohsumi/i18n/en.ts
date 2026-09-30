@@ -464,6 +464,7 @@ export const en = {
   'app.loading': 'Loading data…',
   'app.syncFailed': 'Failed to sync with the spreadsheet',
   'app.syncFailedBanner': 'Failed to sync with the spreadsheet. The data shown may not be up to date.',
+  'app.saveRevertedBanner': 'Your change could not be saved, so it was undone. Please try again.',
   'app.loadFailed': 'Failed to load data',
   'app.loadFailedBanner': 'Failed to load data. The data shown may not be up to date.',
   'app.retryLoad': 'Try again',

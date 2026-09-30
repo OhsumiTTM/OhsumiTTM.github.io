@@ -17,6 +17,9 @@ class FakeSheet {
   getLastColumn() {
     return this.rows[0]?.length ?? 0
   }
+  getDataRange() {
+    return this.getRange(1, 1, this.getLastRow(), this.getLastColumn())
+  }
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return {
       getValues: () =>
@@ -25,6 +28,9 @@ class FakeSheet {
         ),
       setValue: (v: string) => {
         this.rows[row - 1][col - 1] = v
+      },
+      setValues: (vs: string[][]) => {
+        vs.forEach((line, r) => line.forEach((v, c) => { this.rows[row - 1 + r][col - 1 + c] = v }))
       },
     }
   }
