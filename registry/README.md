@@ -13,7 +13,7 @@ FSIF が1つだけ運用する、団体の一覧と状態を管理する仕組�
 | `app/registry-admin/`・`components/registry/`・`lib/registry/` | 管理画面(`<サイトの URL>/registry-admin/`。Ohsumi の画面からはリンクせず、検索エンジンにも載せない) |
 
 **サイトの URL:** 以下では Ohsumi のサイトの URL を `<サイトの URL>` と書きます。
-今は `https://ohsumittm.github.io`、独自ドメインに移った後は `https://ohsumi.fsif.com` です。
+今は `https://ohsumittm.github.io`、独自ドメインに移った後は `https://ohsumi.fsif.jp` です。
 コード・CSP にはサイトの URL を書いていません(CSP は `'self'`、ログインの確認は OAuth クライアント ID で行うため)。
 ドメインを移る時に変えるのは、Google Auth Platform の「承認済みの JavaScript 生成元」(1.5 の (1))だけです。
 
@@ -151,7 +151,7 @@ Ohsumi 本体とは別の、レジストリ用の OAuth クライアントを作
    - アプリケーションの種類: **ウェブ アプリケーション**
    - 名前: `registry-admin`
    - 承認済みの JavaScript 生成元: `https://ohsumittm.github.io`
-     - **独自ドメイン(`https://ohsumi.fsif.com`)に移る時に、ここへ `https://ohsumi.fsif.com` を追加します。**
+     - **独自ドメイン(`https://ohsumi.fsif.jp`)に移る時に、ここへ `https://ohsumi.fsif.jp` を追加します。**
        移る前に追加しておけば、切り替えた直後からログインできます。古い `https://ohsumittm.github.io` は、新しいドメインでログインできることを確かめてから消します
        (生成元は末尾の `/` やパスを付けずに入れます。反映に数分かかることがあります)
    - 承認済みのリダイレクト URI: 入れません
