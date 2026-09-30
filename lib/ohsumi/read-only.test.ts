@@ -7,6 +7,7 @@ import {
   READ_SAFE_STORE_FUNCTIONS,
   ReadOnlyBlockedError,
   applyReadOnlyInputs,
+  blockedJustNow,
   extractUnsavedTexts,
   guardStoreWrites,
   isReadOnlyContract,
@@ -58,13 +59,12 @@ describe('止める欄', () => {
     expect(text.getAttribute('title')).toBeNull()
   })
 
-  it('機能停止中(予定の日時を過ぎた時も)だけ読み取り専用。提供停止・予定の前は違う', () => {
-    const now = Date.parse('2026-10-01T00:00:00Z')
-    expect(isReadOnlyContract({ phase: 'inEffect', kind: 'restrict', suspendAt: '' }, now)).toBe(true)
-    expect(isReadOnlyContract({ phase: 'scheduled', kind: 'restrict', suspendAt: '2026-09-30T00:00:00Z' }, now)).toBe(true)
-    expect(isReadOnlyContract({ phase: 'scheduled', kind: 'restrict', suspendAt: '2026-10-02T00:00:00Z' }, now)).toBe(false)
-    expect(isReadOnlyContract({ phase: 'inEffect', kind: 'suspend', suspendAt: '' }, now)).toBe(false)
-    expect(isReadOnlyContract({ phase: 'none', kind: '', suspendAt: '' }, now)).toBe(false)
+  it('GAS が機能停止中と伝えた時だけ読み取り専用。予定(日時を過ぎていても)・提供停止は違う', () => {
+    expect(isReadOnlyContract({ phase: 'inEffect', kind: 'restrict', suspendAt: '' })).toBe(true)
+    expect(isReadOnlyContract({ phase: 'scheduled', kind: 'restrict', suspendAt: '2020-01-01T00:00:00Z' })).toBe(false)
+    expect(isReadOnlyContract({ phase: 'scheduled', kind: 'restrict', suspendAt: '2099-01-01T00:00:00Z' })).toBe(false)
+    expect(isReadOnlyContract({ phase: 'inEffect', kind: 'suspend', suspendAt: '' })).toBe(false)
+    expect(isReadOnlyContract({ phase: 'none', kind: '', suspendAt: '' })).toBe(false)
   })
 
   it('閲覧のための欄(検索・期間・絞り込み)には data-read-only-ok を付けている', () => {
@@ -94,8 +94,12 @@ describe('作成・編集の操作を止める', () => {
     const g = guardStoreWrites({ addComment, getMember, tasks: [1] }, (name, args) => blocked.push([name, args]))
     expect(g.getMember()).toBe('m')
     expect(g.tasks).toEqual([1])
+    expect(blockedJustNow()).toBe(false)
     await expect(g.addComment('t1', '長いコメント')).rejects.toBeInstanceOf(ReadOnlyBlockedError)
     expect(addComment).not.toHaveBeenCalled()
+    // 止めた直後は「保存しました」などの知らせを出さない(1秒)
+    expect(blockedJustNow()).toBe(true)
+    expect(blockedJustNow(Date.now() + 1500)).toBe(false)
     expect(blocked).toEqual([['addComment', ['t1', '長いコメント']]])
   })
 

@@ -35,8 +35,8 @@ describe('画面の上部の知らせ', () => {
     expect(contractBanner({ phase: 'scheduled', kind: 'restrict', suspendAt: at(14) }, NOW)).toEqual({ type: 'scheduled', kind: 'restrict', suspendAt: at(14), daysLeft: 14 })
     expect(contractBanner({ phase: 'scheduled', kind: 'suspend', suspendAt: at(6.2) }, NOW)).toMatchObject({ kind: 'suspend', daysLeft: 7 })
     expect(contractBanner({ phase: 'scheduled', kind: 'suspend', suspendAt: at(0.1) }, NOW)).toMatchObject({ daysLeft: 1 })
-    // 予定の日時を過ぎた(次の応答で停止中になる)
-    expect(contractBanner({ phase: 'scheduled', kind: 'restrict', suspendAt: at(-0.1) }, NOW)).toEqual({ type: 'restricted' })
+    // 予定の日時を過ぎても、GAS が停止中と伝えるまで、画面は停止にしない(予告も出さない)
+    expect(contractBanner({ phase: 'scheduled', kind: 'restrict', suspendAt: at(-0.1) }, NOW)).toBeNull()
   })
 })
 
