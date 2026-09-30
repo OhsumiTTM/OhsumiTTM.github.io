@@ -336,16 +336,22 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 
 ### 1.9.1. テスト環境で、14日待たずに確かめる
 
-テスト環境のレジストリでだけ、エディタから実行する関数で、停止・予定・解除をすぐ入れられます。
-本番のレジストリには `REGISTRY_TEST_MODE` を入れないでください(入れていないレジストリでは、この関数は何も変えずに止まります。
-管理画面からはできません)。
+エディタから実行する関数で、テスト環境の団体に、停止・予定・解除をすぐ入れられます(管理画面からはできません)。
+
+レジストリは1つだけで、本番の団体(Orbit から移行した FSIF など)も同じレジストリに登録されています。そのため:
+
+- `test` から始まる関数は、`REGISTRY_TEST_MODE` が `true` の時だけ動きます。
+- 対象にできるのは、`REGISTRY_TEST_ORG_IDS` に書いた団体(テスト環境の団体)だけです。それ以外の団体(本番の団体)を
+  `TEST_ORG_ID` に入れた時は、何も変えずに止まります。**`REGISTRY_TEST_ORG_IDS` には、本番の団体ID を書かないでください。**
+- **試し終わったら、`REGISTRY_TEST_MODE` を消してください**(下の「終わったら」)。
 
 **準備(レジストリのスクリプトプロパティ)**
 
 | プロパティ | 値 |
 |---|---|
-| `REGISTRY_TEST_MODE` | `true`(テスト環境のレジストリだけ) |
-| `TEST_ORG_ID` | 確かめる団体の団体ID(管理画面の「団体」に出ます) |
+| `REGISTRY_TEST_MODE` | `true`(試す間だけ。終わったら消す) |
+| `REGISTRY_TEST_ORG_IDS` | テスト環境の団体ID(複数ある時はカンマ区切り)。本番の団体ID は書かない |
+| `TEST_ORG_ID` | 確かめる団体の団体ID(`REGISTRY_TEST_ORG_IDS` にあるもの。管理画面の「団体」に出ます) |
 | `TEST_SUSPEND_KIND` | `restrict`(② 機能停止)か `suspend`(① 提供停止) |
 | `TEST_SUSPEND_DAYS` | 予定を入れる時の、停止までの日数(例: `13.9`・`6.9`・`0.9`) |
 
@@ -372,6 +378,12 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 4. 終わったら `testLiftSuspension` を実行します。
 
 どの操作も、操作の記録に「(テスト)」として残ります。
+
+**終わったら**
+
+1. `testLiftSuspension` を実行し、テスト環境の団体の停止・予定を解除します(管理画面の「団体」で「有効」に戻ったことを確かめます)。
+2. レジストリのスクリプトプロパティから **`REGISTRY_TEST_MODE` を消します**(`test` から始まる関数は、どれも動かなくなります)。
+   `REGISTRY_TEST_ORG_IDS`・`TEST_ORG_ID`・`TEST_SUSPEND_KIND`・`TEST_SUSPEND_DAYS` は、次に試す時のために残しても構いません。
 
 ## 2. 安全のための決まり
 

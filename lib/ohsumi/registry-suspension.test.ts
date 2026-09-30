@@ -233,9 +233,27 @@ describe('テスト環境で、14日待たずに確かめる(エディタから�
     expect(t.org().state).toBe('active')
   })
 
+  it('REGISTRY_TEST_ORG_IDS に無い団体(本番の団体)は、何も変えずに止まる', () => {
+    const t = ready()
+    for (const ids of [undefined, '', 'org_TESTTESTTESTTEST01', 'org_AAAAAAAAAAAAAAAAAAA']) {
+      Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'suspend', TEST_SUSPEND_DAYS: '6.9' })
+      if (ids === undefined) delete t.props.REGISTRY_TEST_ORG_IDS
+      else t.props.REGISTRY_TEST_ORG_IDS = ids
+      for (const name of ['testSuspendNow', 'testScheduleSuspension', 'testLiftSuspension']) {
+        expect(() => call(t, name), `${name} ${ids}`).toThrow(/本番の団体は止められません。何も変えていません/)
+      }
+    }
+    // TEST_ORG_ID が無い時も
+    Object.assign(t.props, { REGISTRY_TEST_ORG_IDS: ORG_A, TEST_ORG_ID: '' })
+    expect(() => call(t, 'testSuspendNow')).toThrow(/未設定/)
+    expect(t.org()).toMatchObject({ state: 'active', suspendAt: '' })
+    expect(t.mails).toHaveLength(0)
+    expect(t.audit().map((a) => a.action)).not.toContain('testSuspendNow')
+  })
+
   it('今すぐ停止する(種類を選べる)。団体の GAS の checkIn にもすぐ出る。解除で元に戻る。操作の記録に残る', () => {
     const t = ready()
-    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'restrict' })
+    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', REGISTRY_TEST_ORG_IDS: 'org_TESTTESTTESTTEST01, ' + ORG_A, TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'restrict' })
     call(t, 'testSuspendNow')
     expect(t.org()).toMatchObject({ state: 'restricted', suspendKind: 'restrict' })
     expect(t.checkIn().result).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
@@ -255,7 +273,7 @@ describe('テスト環境で、14日待たずに確かめる(エディタから�
 
   it('TEST_SUSPEND_DAYS 日後に予定を入れ(14日より前でもよい)、その時期の予告を担当者にすぐ送る', () => {
     const t = ready()
-    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'suspend' })
+    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', REGISTRY_TEST_ORG_IDS: 'org_TESTTESTTESTTEST01, ' + ORG_A, TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'suspend' })
     for (const [days, notice] of [['13.9', 14], ['6.9', 7], ['0.9', 1]] as const) {
       t.props.TEST_SUSPEND_DAYS = days
       call(t, 'testScheduleSuspension')

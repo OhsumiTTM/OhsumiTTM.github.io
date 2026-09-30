@@ -5,6 +5,7 @@
 //   testSuspendNow          (テスト環境だけ)TEST_ORG_ID の団体を、今すぐ停止する(種類は TEST_SUSPEND_KIND)
 //   testScheduleSuspension  (テスト環境だけ)TEST_SUSPEND_DAYS 日後に停止の予定を入れ、その時期の予告をすぐ送る
 //   testLiftSuspension      (テスト環境だけ)TEST_ORG_ID の団体の停止の予定・停止を解除する
+//                           test から始まる関数は、REGISTRY_TEST_MODE が true の時、REGISTRY_TEST_ORG_IDS の団体にだけ効く
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost           ウェブアプリの入口
 //   dailyRegistryBackup     毎日のバックアップ(トリガーから呼ばれる)
@@ -110,8 +111,9 @@ function rotateAdminSessionKey() {
   console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
 }
 
-// (テスト環境だけ)停止の動きを、14日待たずに確かめる。スクリプトプロパティ REGISTRY_TEST_MODE が true の
-// レジストリでだけ動く(本番のレジストリには入れない。管理画面からはできない)。
+// (テスト環境だけ)停止の動きを、14日待たずに確かめる。スクリプトプロパティ REGISTRY_TEST_MODE が true の時だけ動く
+// (管理画面からはできない)。レジストリは本番の団体と共通なので、対象にできるのはスクリプトプロパティ
+// REGISTRY_TEST_ORG_IDS(テスト環境の団体ID をカンマ区切り)に書いた団体だけ。それ以外の団体は、何も変えずに止まる。
 // 対象はスクリプトプロパティ TEST_ORG_ID の団体、種類は TEST_SUSPEND_KIND(suspend・restrict。無ければ restrict)。
 // 手順は registry/README.md の「1.9.1」
 
@@ -1124,6 +1126,11 @@ function testSetSuspension_(mode, nowMs) {
     throw new Error('テスト環境のレジストリだけで使えます(スクリプトプロパティ REGISTRY_TEST_MODE を true にしたレジストリ)。本番では、管理画面で停止の予定を入れてください。')
   }
   var orgId = String(props.TEST_ORG_ID || '').trim()
+  var testOrgIds = String(props.REGISTRY_TEST_ORG_IDS || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
+  if (!orgId || testOrgIds.indexOf(orgId) < 0) {
+    throw new Error('TEST_ORG_ID の団体(' + (orgId || '未設定') + ')は、テスト環境の団体の一覧(スクリプトプロパティ REGISTRY_TEST_ORG_IDS)にありません。' +
+      '本番の団体は止められません。何も変えていません。')
+  }
   var kind = String(props.TEST_SUSPEND_KIND || 'restrict').trim()
   if (SUSPEND_KINDS.indexOf(kind) < 0) throw new Error('TEST_SUSPEND_KIND は suspend(提供停止)か restrict(機能停止)にしてください。')
   var days = Number(props.TEST_SUSPEND_DAYS)
