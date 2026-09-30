@@ -1,4 +1,4 @@
-// サイトの URL(https://ohsumittm.github.io・独自ドメインの https://ohsumi.fsif.com)を
+// サイトの URL(https://ohsumittm.github.io・独自ドメインの https://ohsumi.fsif.jp)を
 // コード・CSP・ビルドの設定に直接書いていないことを確かめる。
 // 独自ドメインへ移る時に、コードを変えずに済むようにするため(CSP は 'self'、ログインの確認は OAuth クライアント ID で行う)。
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -10,7 +10,7 @@ const ROOT = join(__dirname, '..', '..')
 const CODE_DIRS = ['app', 'components', 'lib', 'scripts', 'gas', 'registry', '.github']
 const CODE_FILES = ['next.config.mjs', 'package.json']
 const CODE_EXT = /\.(ts|tsx|js|mjs|cjs|gs|json|ya?ml)$/
-const SITE_URL = /ohsumittm\.github\.io|ohsumi\.fsif\.com/i
+const SITE_URL = /ohsumittm\.github\.io|ohsumi\.fsif\.(com|jp)/i
 
 function codeFiles(dir: string): string[] {
   const out: string[] = []
