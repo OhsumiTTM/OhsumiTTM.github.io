@@ -81,6 +81,8 @@ export interface InviteMailStatus {
 }
 
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
+// 通知の回数の上限を超えて、GAS が一部の通知を送らなかった時に window に送るイベント(ohsumi-app.tsx が知らせる)
+export const NOTIFY_LIMITED_EVENT = 'ohsumi:notify-limited'
 
 /** 機能停止中(読み取り専用)のため、GAS が書き込みを断った(R1-e。lib/ohsumi/contract.ts) */
 // texts: 送ろうとした文章(画面は読み込み直さずに、コピーできるように出す)
@@ -743,6 +745,7 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
 
   if (json.session) applyRenewedSession(json.session)
   noteContractResponse(json)
+  if (json.notifyLimited && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(NOTIFY_LIMITED_EVENT))
 
   // 提供停止中(R1-e): GAS はすべての操作を断る。ログインを終え、「利用を停止しています」を出すログイン画面に戻す
   if (!json.ok && json.orgSuspended) {
@@ -839,8 +842,8 @@ export const remoteApi = {
     postToGas('updateJudgment', { memberId, judgment }),
   approveTask: (taskId: string) => postToGas('approveTask', { taskId }),
   removeTask: (taskId: string) => postToGas('removeTask', { taskId }),
-  notifyTaskRejected: (taskId: string, creatorId: string | undefined, taskName: string, reason: string | undefined) =>
-    postToGas('notifyTaskRejected', { taskId, creatorId, taskName, reason }),
+  // 却下: タスクを消し、GAS がシートのタスクの作成者・名前で知らせる
+  rejectTask: (taskId: string, reason: string | undefined) => postToGas('rejectTask', { taskId, reason }),
   createProject: (name: string, description: string, type?: string, parentId?: string) =>
     postToGas<{ id: string }>('createProject', { name, description, type, parentId }),
   removeProject: (projectId: string) => postToGas('removeProject', { projectId }),
@@ -1033,8 +1036,6 @@ export const remoteApi = {
     postToGas('reportProjectHealth', { items }),
   updateComments: (taskId: string, comments: TaskComment[]) =>
     postToGas('updateComments', { taskId, comments }),
-  notifyMention: (taskId: string, commentText: string, memberIds: string[]) =>
-    postToGas('notifyMention', { taskId, commentText, memberIds }),
   updateEstimatedHours: (taskId: string, hours: number | null) =>
     postToGas('updateEstimatedHours', { taskId, hours }),
   updateActualHours: (taskId: string, hours: number | null) =>
@@ -1074,10 +1075,11 @@ export const remoteApi = {
   ) => postToGas('updateCareerGoals', { memberId, ...goals }),
   updateTrainingHistory: (memberId: string, entries: TrainingRecord[]) =>
     postToGas('updateTrainingHistory', { memberId, entries }),
-  notifyTrainingRequest: (memberId: string, trainingName: string) =>
-    postToGas('notifyTrainingRequest', { memberId, trainingName }),
-  notifyTrainingDecision: (memberId: string, trainingName: string, approved: boolean) =>
-    postToGas('notifyTrainingDecision', { memberId, trainingName, approved }),
+  // 研修の名前・状態は、GAS が保存した記録(trainingId)から読む
+  notifyTrainingRequest: (memberId: string, trainingId: string) =>
+    postToGas('notifyTrainingRequest', { memberId, trainingId }),
+  notifyTrainingDecision: (memberId: string, trainingId: string) =>
+    postToGas('notifyTrainingDecision', { memberId, trainingId }),
   updateDevelopmentPlan: (memberId: string, entries: DevelopmentPlanEntry[]) =>
     postToGas('updateDevelopmentPlan', { memberId, entries }),
   updateOneOnOnes: (memberId: string, entries: OneOnOneRecord[]) =>

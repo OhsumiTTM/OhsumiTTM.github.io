@@ -1252,7 +1252,9 @@ function DrawerBody({
   const canChangeStatus = canChangeTaskStatus(isFullAdmin, isAssignee)
   // 前提タスクが残っていると「完了」にはできない
   const incompleteDeps = dependsOnTasks.filter((d) => d.status !== 'done')
-  const canUpdateProgress = isAdmin || isAssignee
+  // 進捗を書けるのは、GAS と同じく担当者・確認者・作成者・全権管理者(TASK_OWNER_SCOPED_ACTIONS)
+  const canUpdateProgress =
+    isFullAdmin || isAssignee || (!!currentUserId && ((task.reviewerIds ?? []).includes(currentUserId) || task.createdById === currentUserId))
   const canManageBlocker = isAdmin || isAssignee
   const canManageDeliverables = isAdmin || isAssignee
   const [progressDraft, setProgressDraft] = useState('')

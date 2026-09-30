@@ -8,6 +8,7 @@ import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { ContractBanner } from './contract-banner'
 import { ReadOnlyInputs, ReadOnlyNotice } from './read-only-guard'
+import { NOTIFY_LIMITED_EVENT } from '@/lib/ohsumi/remote'
 import { ToastProvider, useToast } from './toast'
 import { LoginScreen } from './login-screen'
 import { OnboardingScreen } from './onboarding-screen'
@@ -73,6 +74,18 @@ function RemoteLoadErrorScreen({ message }: { message: string | null }) {
       </button>
     </main>
   )
+}
+
+// 通知の回数の上限を超えて、GAS が一部の通知を送らなかった時に知らせる(操作そのものは済んでいる)
+function NotifyLimitedWatcher() {
+  const toast = useToast()
+  const { t } = useI18n()
+  useEffect(() => {
+    const on = () => toast(t('app.notifyLimited'))
+    window.addEventListener(NOTIFY_LIMITED_EVENT, on)
+    return () => window.removeEventListener(NOTIFY_LIMITED_EVENT, on)
+  }, [toast, t])
+  return null
 }
 
 // lives inside ToastProvider so it can surface store-level events that
@@ -228,6 +241,7 @@ export function OhsumiApp() {
         <OhsumiProvider>
           <ToastProvider>
             <SkillCertifiedWatcher />
+            <NotifyLimitedWatcher />
             <LocaleSyncWatcher />
             <ThemeColorWatcher />
             <NavProvider>

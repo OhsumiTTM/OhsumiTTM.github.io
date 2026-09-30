@@ -41,6 +41,8 @@ export interface GasResponse<T = unknown> {
   restricted?: boolean
   // 停止の予定・停止中の時だけ付く({ phase, kind, suspendAt }。lib/ohsumi/contract.ts)
   contract?: unknown
+  // 通知の回数の上限(1人1時間)を超えて、一部の通知を送らなかった(操作そのものは済んでいる)
+  notifyLimited?: boolean
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)
   retryLater?: boolean
   // 同じ requestId の前回の結果を返した(処理はやり直していない)
