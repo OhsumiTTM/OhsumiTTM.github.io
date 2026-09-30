@@ -1309,7 +1309,8 @@ function merged_(values, fields) {
 // 団体の GAS が契約の状態を確かめる(1時間ごと・停止の予定や停止中は使われるたびに1分に1回まで)。
 //   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, sig }
 //          sig = base64url(HMAC-SHA256(共有鍵, 'checkIn.' + orgId + '.' + ts))。時刻は前後5分まで
-//   返事: { ok: true, result: { phase: none | scheduled | inEffect, kind, suspendAt, reason, checkedAt } }
+//   返事: { ok: true, result: { phase: none | scheduled | inEffect, kind, suspendAt, reason, checkedAt, siteOrigins } }
+//   siteOrigins: サイトの origin の一覧(スクリプトプロパティ SITE_ORIGINS。団体の GAS が、本人あての招待リンクのメールに使う)
 // 最後に確認に来た時刻・GAS の版を Orgs に書く(10分に1回まで)
 function checkIn_(body, nowMs) {
   var orgId = String(body.orgId || '')
@@ -1333,7 +1334,27 @@ function checkIn_(body, nowMs) {
     setRowFields_('Orgs', row.row, { last_check_at: new Date(nowMs).toISOString(), gas_version: gasVersion })
   }
   var c = contractState_(row.values, nowMs)
-  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString() } }
+  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_() } }
+}
+
+// サイトの origin の一覧。スクリプトプロパティ SITE_ORIGINS に、カンマ・空白・改行で区切って書く
+// (例: 独自ドメインへ切り替える間は、今のサイトと新しいドメインの2つ)。最初のものを正式なサイトとして扱う。
+// 「https://ホスト名[:ポート]」の形だけを使い、パス・クエリ・ユーザー名の付いたものは捨てる。
+// サイトの URL はコードに書かない(lib/ohsumi/site-url.test.ts)
+var SITE_ORIGIN_PATTERN = /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/
+var SITE_ORIGINS_MAX = 5
+
+function parseSiteOrigins_(raw) {
+  var out = []
+  String(raw || '').split(/[\s,]+/).forEach(function (v) {
+    var o = v.trim().toLowerCase().replace(/\/+$/, '')
+    if (o && SITE_ORIGIN_PATTERN.test(o) && out.indexOf(o) < 0 && out.length < SITE_ORIGINS_MAX) out.push(o)
+  })
+  return out
+}
+
+function siteOrigins_() {
+  return parseSiteOrigins_(PropertiesService.getScriptProperties().getProperty('SITE_ORIGINS'))
 }
 
 // ---- 管理画面のセッションの鍵 ----

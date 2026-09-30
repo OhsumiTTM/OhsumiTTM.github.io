@@ -339,7 +339,8 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
   送った予告の取り消しは、担当者に別に連絡してください。
 - **団体の GAS の確認(`checkIn`):**
   - 要求は `{ action: 'checkIn', orgId, ts, gasVersion, sig }` です。`sig` は、共有鍵で `'checkIn.' + orgId + '.' + ts` に付けた HMAC-SHA256 の署名(base64url)です。時刻 `ts`(Unix 秒)は前後5分までです。共有鍵そのものは送りません。
-  - 返事は `{ ok: true, result: { phase: 'none' | 'scheduled' | 'inEffect', kind, suspendAt, reason, checkedAt } }` です。
+  - 返事は `{ ok: true, result: { phase: 'none' | 'scheduled' | 'inEffect', kind, suspendAt, reason, checkedAt, siteOrigins } }` です。
+  - `siteOrigins` は、サイトの origin の一覧です(下の「1.9.3」)。団体の GAS は、本人あての招待リンクのメールに使います。
   - 最後に確認に来た時刻と GAS の版を、Orgs の `last_check_at`・`gas_version` に書きます(10分に1回まで)。回数は1分に300回までです。
   - 団体の GAS は、1時間ごとに確かめます。リクエストの時にも確かめ直します。
     - 停止中(予定の日時を過ぎた時も): 解除がすぐ効くように、どの操作でも1分に1回まで。
@@ -354,6 +355,23 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 - **団体の GAS の版:** R1-e より前の団体の GAS は、確認に来ません(一覧に「まだ確認がありません」が出ます)。停止の予定を入れる前に、団体の GAS を
   R1-e の版に貼り替え、`setupOhsumi` を実行してもらってください(gas/README.md の「4.2.1」)。確認に来ない団体では、画面での停止はレジストリの
   接続先の解決(`resolveOrg`)だけで行われ、保存した接続先を使う端末では最大24時間遅れます。
+
+### 1.9.3. サイトの origin(スクリプトプロパティ `SITE_ORIGINS`)
+
+画面の「ほかの端末で開く」→「自分のメールに送る」では、団体の GAS が、本人の登録済みのアドレスに招待リンク
+(`<サイトの origin>/?org=<団体ID>`)を送ります。団体の GAS はサイトの URL を知らないので、レジストリが `checkIn` の返事で配ります
+(サイトの URL はコードに書きません。`lib/ohsumi/site-url.test.ts`)。
+
+- レジストリのスクリプトプロパティ **`SITE_ORIGINS`** に、サイトの origin(`https://ホスト名`。パス・末尾の `/` は付けない)を書きます。
+  **複数書けます**(カンマ・空白・改行で区切る。5つまで)。**最初のものを正式なサイト**として扱います。
+  - 例(独自ドメインへ切り替える間): `https://<独自ドメイン>, https://<今のサイト>`
+  - `https` でないもの・パスやユーザー名の付いたものは使いません。
+- 団体の GAS は、画面が今開いている origin が一覧にあればそれを、無ければ一覧の最初を使ってリンクを作ります
+  (画面が送った値を、そのままリンクにはしません)。
+- 一覧が届くのは、団体の GAS が次に `checkIn` した時です(1時間ごと。書き込みの前にも、10分に1回まで)。
+  切り替えの後に古いサイトを一覧から消すと、古いサイトで開いている画面からのメールには、正式なサイトのリンクが入ります。
+- **レジストリに一度も確かめられていない団体・`SITE_ORIGINS` が空の時は、「自分のメールに送る」は使えません**
+  (画面のボタンが押せなくなり、理由が出ます)。QR コードと共有・コピーは、そのまま使えます。
 
 ### 1.9.1. テスト環境で、14日待たずに確かめる
 
