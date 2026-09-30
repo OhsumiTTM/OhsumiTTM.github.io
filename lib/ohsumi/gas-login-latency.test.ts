@@ -19,10 +19,11 @@ class FakeSheet {
   constructor(public rows: Cell[][]) {}
   getLastRow() { return this.rows.length }
   getLastColumn() { return this.rows[0]?.length ?? 0 }
+  getDataRange() { return this.getRange(1, 1, this.getLastRow(), this.getLastColumn()) }
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return {
       getValues: () => {
-        if (row > 1) this.reads++
+        if (row > 1 || numRows > 1) this.reads++
         return Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? ''))
       },
       setValues: (values: Cell[][]) => {
@@ -253,7 +254,7 @@ describe('最終ログイン日時', () => {
 })
 
 describe('裏での読み込みのキャッシュ', () => {
-  it('経費はデータの版ごとにキャッシュし、閲覧の絞り込みは毎回メンバーごとに行う。版が変われば読み直す', () => {
+  it('経費は経費の表の版ごとにキャッシュし、閲覧の絞り込みは毎回メンバーごとに行う。経費の版が変われば読み直す', () => {
     const t = setup()
     const a = t.post({ action: 'getBackgroundData', sessionToken: 'm2' })
     expect(a.result.expenses.map((e: { id: string }) => e.id)).toEqual(['x2']) // 一般は自分の申請だけ
@@ -263,7 +264,10 @@ describe('裏での読み込みのキャッシュ', () => {
     expect(b.result.expenses.map((e: { id: string }) => e.id)).toEqual(['x2', 'x1']) // 代表は全部(新しい順)
     expect(b.timing.expensesCache).toBe('hit')
     expect(t.sheets.Expenses.reads).toBe(reads)
+    // スナップショット(Members など)の版が変わっても、経費のキャッシュは使い続ける(表ごとの版)
     ;(t.c.bumpDataVersion as () => void)()
+    expect(t.post({ action: 'getBackgroundData', sessionToken: 'm1' }).timing.expensesCache).toBe('hit')
+    ;(t.gas.bumpTableVersion as (x: string) => void)('expenses')
     const c = t.post({ action: 'getBackgroundData', sessionToken: 'm1' })
     expect(c.timing.expensesCache).toBe('miss')
   })
@@ -310,6 +314,32 @@ describe('getFiles', () => {
     expect(t.post({ action: 'getFiles', sessionToken: 'm2', fileIds: ['RECEIPT_X2_xxxxx'] }).result[0]).toMatchObject({ ok: true })
     expect(t.post({ action: 'getFiles', sessionToken: 'm3', fileIds: ['RECEIPT_X2_xxxxx'] }).result[0]).toMatchObject({ ok: false, error: 'forbidden' })
     expect([...t.cache.keys()].some((k) => k === 'file:RECEIPT_X2_xxxxx')).toBe(false)
+  })
+})
+
+describe('キャッシュとシートの読み方(待ち時間を減らす)', () => {
+  it('getFiles は、ファイルの種類と画像のキャッシュを1回の getAll でまとめて読む(1件ずつ get しない)', () => {
+    const t = setup()
+    t.post({ action: 'getFiles', sessionToken: 'm2', fileIds: ['AVATAR_M1_xxxxx', 'AVATAR_M2_xxxxx'] })
+    const real = (t.c.CacheService as { getScriptCache: () => Record<string, (...a: unknown[]) => unknown> }).getScriptCache
+    const calls = { get: [] as string[], getAll: 0 }
+    t.c.CacheService = { getScriptCache: () => {
+      const c = real()
+      return { ...c, get: (k: string) => { calls.get.push(k); return c.get(k) }, getAll: (keys: string[]) => { calls.getAll++; return c.getAll(keys) } }
+    } }
+    const res = t.post({ action: 'getFiles', sessionToken: 'm2', fileIds: ['AVATAR_M1_xxxxx', 'AVATAR_M2_xxxxx'] })
+    expect(res.result.map((f: { ok: boolean }) => f.ok)).toEqual([true, true])
+    expect(calls.getAll).toBeGreaterThanOrEqual(1)
+    expect(calls.get.filter((k) => k.startsWith('file'))).toEqual([])
+    expect(res.timing.fileCacheHits).toBe(2)
+  })
+
+  it('経費などのシートは1回の呼び出し(getDataRange)で読み、行数・列数・時間を内訳に出す。内訳の合計を重ねて数えない', () => {
+    const t = setup()
+    const res = t.post({ action: 'getBackgroundData', sessionToken: 'm1' })
+    expect(res.timing).toMatchObject({ expensesRows: 2, expensesCols: 6, myEmailRows: 2, myEmailCols: 2 })
+    expect(typeof res.timing.expensesSheetMs).toBe('number')
+    expect(res.timing.otherMs).toBeGreaterThanOrEqual(0)
   })
 })
 

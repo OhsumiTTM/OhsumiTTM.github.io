@@ -103,7 +103,7 @@ export const FETCH_INIT: RequestInit = {
   headers: { 'Content-Type': 'text/plain;charset=utf-8' },
 }
 
-export interface GasTiming {
+export interface GasTiming extends SheetReadTiming {
   totalMs?: number
   authMs?: number
   lockMs?: number
@@ -153,8 +153,14 @@ export interface GasTiming {
   blobMs?: number
 }
 
-function withCache(ms: number | undefined, cache: string | undefined): string {
-  return `${ms}${cache ? ` ${cache}` : ''}`
+// シートを読んだ時の内訳(<prefix>SheetMs・<prefix>Rows・<prefix>Cols)
+type SheetReadTiming = { [K in `${'expenses' | 'formSubmissions' | 'candidates' | 'myEmail'}${'SheetMs' | 'Rows' | 'Cols'}`]?: number }
+
+function withCache(ms: number | undefined, cache: string | undefined, timing?: GasTiming, prefix?: string): string {
+  const t = timing as (GasTiming & Record<string, unknown>) | undefined
+  const sheetMs = prefix && t ? t[`${prefix}SheetMs`] : undefined
+  const sheet = typeof sheetMs === 'number' ? `(シート ${sheetMs}ms・${t![`${prefix}Rows`] ?? '?'}行×${t![`${prefix}Cols`] ?? '?'}列)` : ''
+  return `${ms}${cache ? ` ${cache}` : ''}${sheet}`
 }
 
 // ---- コンソールに出す文字の整え方 ----
@@ -214,10 +220,10 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
   if (timing.backgroundMs != null || timing.expensesMs != null) {
     const inner: string[] = []
-    if (timing.expensesMs != null) inner.push(`経費 ${withCache(timing.expensesMs, timing.expensesCache)}`)
-    if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache)}`)
-    if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache)}`)
-    if (timing.myEmailMs != null) inner.push(`メール ${withCache(timing.myEmailMs, timing.myEmailCache)}`)
+    if (timing.expensesMs != null) inner.push(`経費 ${withCache(timing.expensesMs, timing.expensesCache, timing, 'expenses')}`)
+    if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache, timing, 'formSubmissions')}`)
+    if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache, timing, 'candidates')}`)
+    if (timing.myEmailMs != null) inner.push(`メール ${withCache(timing.myEmailMs, timing.myEmailCache, timing, 'myEmail')}`)
     if (timing.filesMs != null) inner.push(`画像 ${timing.filesMs}${timing.filesCount != null ? `(${timing.filesCount}件 ${timing.filesKB ?? 0}KB)` : ''}`)
     const label = timing.backgroundMs != null ? `裏での読み込み ${timing.backgroundMs}` : '裏での読み込み'
     parts.push(inner.length ? `${label}(${inner.join('・')})` : label)
