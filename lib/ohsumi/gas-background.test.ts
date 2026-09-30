@@ -76,12 +76,16 @@ describe('読み取りの認証', () => {
     expect(t.calls).toContain('getExpenses:r-lead:p1|p2')
   })
 
-  it('書き込みは、これまでどおりシートから読む', () => {
+  it('普通の書き込みもスナップショットから判定する。権限そのものを変える操作は、これまでどおりシートから読む', () => {
     const t = setup()
-    const res = t.post({ action: 'updateTaskStatus', sessionToken: 's', taskId: 't1', status: 'doing' })
+    const res = t.post({ action: 'updateProgress', sessionToken: 's', taskId: 't1', progressPercent: 50 })
     expect(res.ok).toBe(true)
-    expect(res.timing.authFrom).toBe('sheet')
-    expect(t.calls).toContain('sheet:Members')
+    expect(res.timing.authFrom).toBe('snapshot')
+    expect(t.calls.filter((c) => c.startsWith('sheet:'))).toEqual([])
+
+    const u = setup()
+    u.post({ action: 'updateRole', sessionToken: 's', memberId: 'm2', role: 'base' })
+    expect(u.calls).toContain('sheet:Members')
   })
 })
 

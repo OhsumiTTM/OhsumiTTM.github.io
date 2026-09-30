@@ -4,7 +4,7 @@
 //   1. 関数ごとに、表を指す名前(SHEET_EXPENSES・ensureExpensesSheet() など)と、書き込みの呼び出し
 //      (setValue・appendRow・deleteRow・updateRowFields など)を持つかを見る
 //   2. 表を指す名前を持ち、自分で書き込むか、書き込みの関数を呼ぶ関数を「その表に書く関数」とする
-//   3. doPost の case の中から呼ばれる関数を、呼び出しをたどって集め、書く表を合わせる
+//   3. runWriteAction(doPost が呼ぶ)の case の中から呼ばれる関数を、呼び出しをたどって集め、書く表を合わせる
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -62,9 +62,9 @@ export function analyze(code) {
     memo[n] = out
     return out
   }
-  // doPost の case ごと
-  const doPost = fns.doPost
-  const sw = doPost.slice(doPost.indexOf('switch (body.action)'))
+  // doPost が呼ぶ runWriteAction の case ごと
+  const runner = fns.runWriteAction
+  const sw = runner.slice(runner.indexOf('switch (body.action)'))
   const caseRe = /case '(\w+)':/g
   const cases = [...sw.matchAll(caseRe)]
   const result = {}
