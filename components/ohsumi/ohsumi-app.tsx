@@ -7,7 +7,7 @@ import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { ContractBanner } from './contract-banner'
-import { ReadOnlyInputs, ReadOnlyNotice } from './read-only-guard'
+import { ReadOnlyInputs, ReadOnlyNotice, SessionExpiryBanner } from './read-only-guard'
 import { NOTIFY_LIMITED_EVENT } from '@/lib/ohsumi/remote'
 import { ToastProvider, useToast } from './toast'
 import { LoginScreen } from './login-screen'
@@ -86,6 +86,16 @@ function NotifyLimitedWatcher() {
     return () => window.removeEventListener(NOTIFY_LIMITED_EVENT, on)
   }, [toast, t])
   return null
+}
+
+// ログイン画面にも、保存できなかった文章の知らせ(ログインが切れた・提供停止で読み込み直した時)を出す
+function LoginWithNotice() {
+  return (
+    <>
+      <LoginScreen />
+      <ReadOnlyNotice />
+    </>
+  )
 }
 
 // lives inside ToastProvider so it can surface store-level events that
@@ -177,10 +187,10 @@ function Router() {
     if (remoteEnabled && remoteStatus === 'error') return <RemoteLoadErrorScreen message={loadError} />
     if (remoteEnabled && currentUserId) {
       // 保存したセッションが無い場合はログイン画面に戻る
-      if (remoteStatus === 'idle') return <LoginScreen />
+      if (remoteStatus === 'idle') return <LoginWithNotice />
       if (!dataReady) return <RemoteLoadingScreen />
     }
-    return <LoginScreen />
+    return <LoginWithNotice />
   }
   if (needsOnboarding) return <OnboardingScreen />
 
@@ -193,6 +203,7 @@ function Router() {
         </div>
       )}
       {remoteEnabled && <ContractBanner />}
+      {remoteEnabled && <SessionExpiryBanner />}
       <ReadOnlyInputs />
       <ReadOnlyNotice />
       {remoteEnabled && loadError && (
