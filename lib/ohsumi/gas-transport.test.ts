@@ -74,11 +74,19 @@ function gate<T>() {
 const tick = () => new Promise((r) => setTimeout(r, 5))
 
 describe('送る順番', () => {
-  it('書き込みは呼ばれた順に1本ずつ送る', async () => {
+  it('書き込みは呼ばれた順に1本ずつ送る(前の書き込みが終わってから次を送る)', async () => {
     const h = harness(() => json({ ok: true }))
-    await Promise.all(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'].map((a) => sendToGas(URL, { action: a })))
+    for (const a of ['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments']) await sendToGas(URL, { action: a })
     expect(h.maxInFlight().write).toBe(1)
     expect(h.sent.map((b) => b.action)).toEqual(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'])
+  })
+
+  it('同じ操作から続けて呼ばれた書き込みは、呼ばれた順のまま1回(batch)にまとめて送る', async () => {
+    const h = harness(() => json({ ok: true }))
+    await Promise.all(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'].map((a) => sendToGas(URL, { action: a })))
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].action).toBe('batch')
+    expect((h.sent[0].ops as { action: string }[]).map((o) => o.action)).toEqual(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'])
   })
 
   it('読み取りは3本まで同時に送る', async () => {
@@ -171,7 +179,8 @@ describe('JSON が返らなかった時の再試行', () => {
 
   it('別の書き込みには別の ID を付ける', async () => {
     const h = harness(() => json({ ok: true }))
-    await Promise.all([sendToGas(URL, { action: 'createTasks' }), sendToGas(URL, { action: 'createTasks' })])
+    await sendToGas(URL, { action: 'createTasks' })
+    await sendToGas(URL, { action: 'createTasks' })
     expect(h.sent.map((b) => b.requestId)).toEqual(['req-1', 'req-2'])
   })
 

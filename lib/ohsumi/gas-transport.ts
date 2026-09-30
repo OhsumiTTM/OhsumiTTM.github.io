@@ -116,6 +116,29 @@ export interface GasTiming extends SheetReadTiming {
   filterMs?: number
   verifyMs?: number
   authFrom?: 'snapshot' | 'sheet'
+  // ロックを取った後に版が変わっていて、シートから判定し直した(書き込み)
+  authRecheck?: 'sheet'
+  authRecheckMs?: number
+  // 書き込みの内訳: 送り直しの確認と記録・処理の全体とその内訳・書き込みの確定・版の更新
+  replayMs?: number
+  actionMs?: number
+  sheetReadMs?: number
+  sheetWriteMs?: number
+  notifyMs?: number
+  mailMs?: number
+  mailCount?: number
+  chatMs?: number
+  calendarMs?: number
+  actionOtherMs?: number
+  flushMs?: number
+  versionBumpMs?: number
+  // まとめて送った書き込みの件数
+  batchOps?: number
+  // 裏での読み込みで、キャッシュに無い表をまとめて読んだ(Sheets API を1回)
+  batchReadMs?: number
+  batchReadSheets?: number
+  batchRead?: 'api' | 'spreadsheetApp'
+  batchReadError?: string
   // 初期データと同じ応答に入れた裏での読み込み(withBackground)
   backgroundMs?: number
   // スクリプトプロパティの読み込みと画面の版の確認
@@ -159,7 +182,10 @@ type SheetReadTiming = { [K in `${'expenses' | 'formSubmissions' | 'candidates' 
 function withCache(ms: number | undefined, cache: string | undefined, timing?: GasTiming, prefix?: string): string {
   const t = timing as (GasTiming & Record<string, unknown>) | undefined
   const sheetMs = prefix && t ? t[`${prefix}SheetMs`] : undefined
-  const sheet = typeof sheetMs === 'number' ? `(シート ${sheetMs}ms・${t![`${prefix}Rows`] ?? '?'}行×${t![`${prefix}Cols`] ?? '?'}列)` : ''
+  const rows = prefix && t ? t[`${prefix}Rows`] : undefined
+  const size = `${rows ?? '?'}行×${(prefix && t ? t[`${prefix}Cols`] : undefined) ?? '?'}列`
+  // シートを1枚で読んだ時は時間も出す。まとめて読んだ時(時間は「シートをまとめて読み込み」)は行数・列数だけ
+  const sheet = typeof sheetMs === 'number' ? `(シート ${sheetMs}ms・${size})` : typeof rows === 'number' ? `(まとめて読み込み・${size})` : ''
   return `${ms}${cache ? ` ${cache}` : ''}${sheet}`
 }
 
@@ -208,8 +234,24 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (!timing || typeof timing.totalMs !== 'number') return 'GAS の内訳なし'
   const parts: string[] = []
   if (timing.propsMs != null) parts.push(`設定の読み込み ${timing.propsMs}`)
-  if (timing.authMs != null) parts.push(`認証 ${timing.authMs}`)
+  if (timing.authMs != null) parts.push(`認証 ${timing.authMs}${timing.authFrom ? `(${timing.authFrom === 'snapshot' ? 'キャッシュ' : 'シート'})` : ''}`)
   if (timing.lockMs != null) parts.push(`ロック待ち ${timing.lockMs}`)
+  if (timing.authRecheckMs != null) parts.push(`権限の判定し直し ${timing.authRecheckMs}(版が変わったためシートから)`)
+  if (timing.replayMs != null) parts.push(`送り直しの確認と記録 ${timing.replayMs}`)
+  if (timing.actionMs != null) {
+    const inner: string[] = []
+    if (timing.batchOps != null) inner.push(`${timing.batchOps}件をまとめて`)
+    if (timing.sheetReadMs != null) inner.push(`行の読み込み ${timing.sheetReadMs}`)
+    if (timing.sheetWriteMs != null) inner.push(`シートへの書き込み ${timing.sheetWriteMs}`)
+    if (timing.notifyMs != null) inner.push(`通知の準備 ${timing.notifyMs}`)
+    if (timing.mailMs != null) inner.push(`メール ${timing.mailMs}(${timing.mailCount ?? 0}件)`)
+    if (timing.chatMs != null) inner.push(`チャット ${timing.chatMs}`)
+    if (timing.calendarMs != null) inner.push(`カレンダー ${timing.calendarMs}`)
+    if (timing.actionOtherMs != null) inner.push(`そのほか ${timing.actionOtherMs}`)
+    parts.push(`処理 ${timing.actionMs}${inner.length ? `(${inner.join('・')})` : ''}`)
+  }
+  if (timing.flushMs != null) parts.push(`書き込みの確定 ${timing.flushMs}`)
+  if (timing.versionBumpMs != null) parts.push(`版の更新 ${timing.versionBumpMs}`)
   if (timing.verifyMs != null) parts.push(`IDトークン確認 ${timing.verifyMs}`)
   if (timing.emailLookupMs != null) parts.push(`メンバーの照合 ${timing.emailLookupMs}`)
   if (timing.versionMs != null) parts.push(`版の読み込み ${timing.versionMs}`)
@@ -220,6 +262,12 @@ function describeTiming(timing: GasTiming | undefined): string {
   if (timing.filterMs != null) parts.push(`絞り込み ${timing.filterMs}`)
   if (timing.backgroundMs != null || timing.expensesMs != null) {
     const inner: string[] = []
+    if (timing.batchReadMs != null) {
+      inner.push(
+        `シートをまとめて読み込み ${timing.batchReadMs}(${timing.batchReadSheets ?? '?'}枚・` +
+          `${timing.batchRead === 'api' ? 'Sheets API' : `Sheets API で読めず1枚ずつ${timing.batchReadError ? `: ${timing.batchReadError}` : ''}`})`,
+      )
+    }
     if (timing.expensesMs != null) inner.push(`経費 ${withCache(timing.expensesMs, timing.expensesCache, timing, 'expenses')}`)
     if (timing.formSubmissionsMs != null) inner.push(`フォームの回答 ${withCache(timing.formSubmissionsMs, timing.formSubmissionsCache, timing, 'formSubmissions')}`)
     if (timing.candidatesMs != null) inner.push(`候補者 ${withCache(timing.candidatesMs, timing.candidatesCache, timing, 'candidates')}`)
@@ -318,6 +366,8 @@ interface Deps {
   perfNow: () => number
   resourceTimings: (url: string) => ResourceTimingLike[]
   sleep: (ms: number) => Promise<void>
+  // 次のタスクまで待つ(同じ操作から続けて呼ばれた書き込みを、まとめて送るため)
+  defer: () => Promise<void>
   log: Pick<Console, 'info' | 'warn' | 'error'>
   newId: () => string
 }
@@ -346,6 +396,7 @@ const defaultDeps: Deps = {
   perfNow: () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
   resourceTimings: browserResourceTimings,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  defer: () => new Promise((resolve) => setTimeout(resolve, 0)),
   log: console,
   newId: randomId,
 }
@@ -353,10 +404,12 @@ let deps: Deps = defaultDeps
 
 export function setGasTransportDepsForTest(partial: Partial<Deps> | null): void {
   deps = partial ? { ...defaultDeps, ...partial } : defaultDeps
+  batchUnsupported = false
   readQueues.foreground.length = 0
   readQueues.background.length = 0
   readsRunning = 0
   writeChain = Promise.resolve()
+  pendingWrites.length = 0
 }
 
 // ---- 送る列 ----
@@ -397,6 +450,165 @@ function startReads(): void {
       startReads()
     })
   }
+}
+
+// ---- 書き込みをまとめて送る(batch) ----
+//
+// 画面の1回の操作から続けて呼ばれた書き込み(例: 日程の変更と変更の記録)は、1回の通信にまとめて送る
+// (GAS の batch。中の操作は、1本ずつ送った時と同じ権限の確認をして順番に実行する)。
+// 書き込みの列が空いた時に、それまでに呼ばれた書き込みをまとめる。列が空いていても、同じ操作から
+// 続けて呼ばれたものを待つため、次のタスク(setTimeout 0)まで待ってから送る。
+// 結果は操作ごとに分けて、1本ずつ送った時と同じ形で返す。送り直しは、まとめた1本ごとに行う
+
+// まとめて送れる件数の上限(GAS の BATCH_MAX_OPS と同じ)
+export const BATCH_MAX_OPS = 20
+
+// まとめて送らない書き込み: ファイルのアップロード(本文が大きい)と、GAS がロックを取らない操作
+// (gas/Code.gs の LOCK_EXEMPT_ACTIONS のうち書き込み。lib/ohsumi/gas-write-batch.test.ts で確かめる)
+export const UNBATCHED_WRITE_ACTIONS = new Set([
+  'revokeMySessions',
+  'revokeMemberSessions',
+  'checkAndGenerateRecurringTasks',
+  'testDiscordWebhook',
+  'testSlackWebhook',
+])
+
+export function isBatchableWrite(action: string): boolean {
+  return !batchUnsupported && isWriteAction(action) && !UNBATCHED_WRITE_ACTIONS.has(action) && !/^upload/.test(action)
+}
+
+// 同じ送り先・同じセッションで、間にまとめない書き込みを挟んでいない間だけ、まとめてよい
+function sameBatch(a: PendingWrite, b: PendingWrite): boolean {
+  return a.url === b.url && a.epoch === b.epoch && a.body.sessionToken === b.body.sessionToken && a.body.clientVersion === b.body.clientVersion
+}
+
+// まとめない書き込み(アップロードなど)を呼んだ回数。それより前と後の書き込みは、同じ束にしない
+// (まとめると、後から呼ばれた書き込みが、まとめない書き込みより先に送られてしまう)
+let writeEpoch = 0
+
+type PendingWrite = {
+  url: string
+  epoch: number
+  body: Record<string, unknown> & { action: string }
+  queuedAt: number
+  resolve: (r: GasResponse) => void
+  reject: (e: unknown) => void
+}
+
+const pendingWrites: PendingWrite[] = []
+
+// GAS が batch を知らない(GAS を更新する前に画面だけ新しくなった)時は、このページではまとめない
+let batchUnsupported = false
+
+// 古い GAS が batch を断った時の応答(「Unknown action: batch」「未分類のaction: batch」)
+export function isBatchUnknownResponse(r: GasResponse): boolean {
+  return !r.ok && typeof r.error === 'string' && /action: batch\b/.test(r.error)
+}
+
+function enqueueBatchableWrite<T>(url: string, body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
+  return new Promise<GasResponse<T>>((resolve, reject) => {
+    const entry: PendingWrite = { url, epoch: writeEpoch, body, queuedAt: Date.now(), resolve: resolve as (r: GasResponse) => void, reject }
+    pendingWrites.push(entry)
+    const run = writeChain.then(async () => {
+      // 前の束と一緒に送った
+      if (!pendingWrites.includes(entry)) return
+      // 同じ操作から続けて呼ばれる書き込みを待つ
+      await deps.defer()
+      const group = takeGroup()
+      await sendGroup(group)
+    })
+    writeChain = run.catch(() => undefined)
+  })
+}
+
+// 列の先頭から、まとめてよいものを取り出す
+function takeGroup(): PendingWrite[] {
+  const first = pendingWrites.shift()
+  if (!first) return []
+  const group = [first]
+  while (group.length < BATCH_MAX_OPS && pendingWrites.length > 0 && sameBatch(first, pendingWrites[0])) {
+    group.push(pendingWrites.shift()!)
+  }
+  return group
+}
+
+// 変更の記録(updateHistory)は配列を丸ごと置き換える。同じタスクの記録が同じ束に2つ以上あれば、
+// 最後のもの(それまでの記録を含む)だけを送り、前のものにも同じ結果を返す
+function coalesce(group: PendingWrite[]): { sent: PendingWrite[]; sameAs: Map<PendingWrite, PendingWrite> } {
+  const sameAs = new Map<PendingWrite, PendingWrite>()
+  const lastHistory = new Map<string, PendingWrite>()
+  for (const p of group) if (p.body.action === 'updateHistory') lastHistory.set(String(p.body.taskId), p)
+  const sent = group.filter((p) => {
+    if (p.body.action !== 'updateHistory') return true
+    const last = lastHistory.get(String(p.body.taskId))!
+    if (last === p) return true
+    sameAs.set(p, last)
+    return false
+  })
+  return { sent, sameAs }
+}
+
+// まとめずに1本ずつ順番に送る(1件だけの時・GAS が batch を知らない時)
+async function sendOneByOne(group: PendingWrite[], sent: PendingWrite[], sameAs: Map<PendingWrite, PendingWrite>, queuedMs: number): Promise<void> {
+  const results = new Map<PendingWrite, { r?: GasResponse; err?: unknown }>()
+  for (const p of sent) {
+    try {
+      results.set(p, { r: await sendWithRetry(p.url, p.body.action, JSON.stringify(p.body), maxAttemptsOf(p.body.action), queuedMs) })
+    } catch (err) {
+      results.set(p, { err })
+    }
+  }
+  for (const p of group) {
+    const out = results.get(sameAs.get(p) ?? p)!
+    if (out.r) p.resolve(out.r)
+    else p.reject(out.err)
+  }
+}
+
+async function sendGroup(group: PendingWrite[]): Promise<void> {
+  if (group.length === 0) return
+  const queuedMs = Date.now() - group[0].queuedAt
+  const { sent, sameAs } = coalesce(group)
+  if (sent.length === 1 || batchUnsupported) {
+    await sendOneByOne(group, sent, sameAs, queuedMs)
+    return
+  }
+  const first = sent[0]
+  const ops = sent.map((p) => {
+    // セッション・画面の版は、まとめた本体に1回だけ入れる
+    const { sessionToken: _s, clientVersion: _v, ...op } = p.body
+    return op
+  })
+  const batch = {
+    action: 'batch',
+    sessionToken: first.body.sessionToken,
+    clientVersion: first.body.clientVersion,
+    ops,
+    requestId: deps.newId(),
+  }
+  const label = `batch(${sent.map((p) => p.body.action).join('+')})`
+  let r: GasResponse<{ results?: GasResponse[] }>
+  try {
+    r = await sendWithRetry<{ results?: GasResponse[] }>(first.url, 'batch', JSON.stringify(batch), maxAttemptsOf('batch'), queuedMs, label)
+  } catch (err) {
+    for (const p of group) p.reject(err)
+    return
+  }
+  if (isBatchUnknownResponse(r)) {
+    // 古い GAS(何も処理していない)。1本ずつ送り直し、このページではもうまとめない
+    batchUnsupported = true
+    deps.log.warn('[ohsumi] GAS が書き込みのまとめ送り(batch)に対応していないため、1本ずつ送ります。GAS を更新してください')
+    await sendOneByOne(group, sent, sameAs, 0)
+    return
+  }
+  const results = r.ok && Array.isArray(r.result?.results) && r.result!.results.length === sent.length ? r.result!.results : null
+  const responseOf = (p: PendingWrite): GasResponse => {
+    // まとめた本体が断られた(セッションが無効・画面の版が古いなど)時は、どの操作にも同じ応答を返す
+    if (!results) return r.ok ? { ok: false, error: 'まとめて送った書き込みの結果を読めませんでした。' } : r
+    const one = results[sent.indexOf(p)] ?? { ok: false, error: '結果がありません' }
+    return { ...one, session: r.session, replayed: r.replayed }
+  }
+  for (const p of group) p.resolve(responseOf(sameAs.get(p) ?? p))
 }
 
 // ---- 1回送る ----
@@ -469,7 +681,14 @@ async function attemptOnce(url: string, body: string, timeoutMs: number): Promis
   return { kind: 'ok', json: r, ms: Date.now() - started, split: split(), kb: responseKB(text) }
 }
 
-async function sendWithRetry<T>(url: string, action: string, body: string, maxAttempts: number, queuedMs: number): Promise<GasResponse<T>> {
+async function sendWithRetry<T>(
+  url: string,
+  action: string,
+  body: string,
+  maxAttempts: number,
+  queuedMs: number,
+  label: string = action,
+): Promise<GasResponse<T>> {
   const started = Date.now()
   let reason = ''
   let bounced = false
@@ -477,24 +696,24 @@ async function sendWithRetry<T>(url: string, action: string, body: string, maxAt
     if (attempt > 1) {
       // 送り返された読み取りは、GAS が何も処理していないので待たずに送り直す
       const immediate = bounced && !isWriteAction(action)
-      deps.log.warn(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}/${maxAttempts - 1}${immediate ? '(すぐ送り直します)' : ''}(原因: ${reason})`)
+      deps.log.warn(`[ohsumi] GAS ${label}: 再試行 ${attempt - 1}/${maxAttempts - 1}${immediate ? '(すぐ送り直します)' : ''}(原因: ${reason})`)
       if (!immediate) await deps.sleep(RETRY_DELAYS_MS[attempt - 2] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1])
     }
     const r = await attemptOnce(url, body, attemptTimeoutOf(action))
     if (r.kind === 'ok') {
-      if (attempt > 1) deps.log.info(`[ohsumi] GAS ${action}: 再試行 ${attempt - 1}回目で成功しました`)
-      if (r.json.replayed) deps.log.info(`[ohsumi] GAS ${action}: 前回の処理の結果を受け取りました(処理はやり直していません)`)
+      if (attempt > 1) deps.log.info(`[ohsumi] GAS ${label}: 再試行 ${attempt - 1}回目で成功しました`)
+      if (r.json.replayed) deps.log.info(`[ohsumi] GAS ${label}: 前回の処理の結果を受け取りました(処理はやり直していません)`)
       deps.log.info(
-        `[ohsumi] GAS ${action}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})・応答 ${r.kb}KB` +
+        `[ohsumi] GAS ${label}: ${queuedMs + (Date.now() - started)}ms(列の待ち ${queuedMs}ms・往復 ${r.ms}ms(${describeRoundTrip(r.split)})・応答 ${r.kb}KB` +
           `${attempt > 1 ? `・${attempt}回目` : ''}・${describeTiming(r.json.timing)})`,
       )
       return r.json as GasResponse<T>
     }
     reason = r.reason
     bounced = r.bounced === true
-    if (r.detail) deps.log.warn(`[ohsumi] GAS ${action}: ${r.reason}。${r.detail}`)
+    if (r.detail) deps.log.warn(`[ohsumi] GAS ${label}: ${r.reason}。${r.detail}`)
   }
-  deps.log.error(`[ohsumi] GAS ${action}: ${maxAttempts}回送りましたが、応答を受け取れませんでした(原因: ${reason})`)
+  deps.log.error(`[ohsumi] GAS ${label}: ${maxAttempts}回送りましたが、応答を受け取れませんでした(原因: ${reason})`)
   throw new GasTransportError(action, reason, maxAttempts)
 }
 
@@ -506,9 +725,13 @@ async function sendWithRetry<T>(url: string, action: string, body: string, maxAt
 export function sendToGas<T = unknown>(url: string, body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
   const action = body.action
   const payload = isWriteAction(action) ? { ...body, requestId: deps.newId() } : body
+  if (isBatchableWrite(action)) return enqueueBatchableWrite<T>(url, payload)
   const text = JSON.stringify(payload)
   const task = (queuedMs: number) => sendWithRetry<T>(url, action, text, maxAttemptsOf(action), queuedMs)
-  if (!READ_ACTIONS.has(action)) return enqueueWrite(task)
+  if (!READ_ACTIONS.has(action)) {
+    writeEpoch++
+    return enqueueWrite(task)
+  }
   if (action === 'getInitialData') {
     // それより前に呼ばれた書き込みが終わってから(書いた内容を読むため)
     const queuedAt = Date.now()
