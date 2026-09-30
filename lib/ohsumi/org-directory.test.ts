@@ -211,6 +211,12 @@ describe('レジストリへの問い合わせ(resolveOrg)', () => {
     expect(calls.every((c) => c.action === 'resolveOrg')).toBe(true)
   })
 
+  it('機能停止中(restricted)は読み取り専用で使えるので、ふつうに見つかった答えにする', async () => {
+    const d = await load()
+    registry(d, { [ORG_A]: { ok: true, result: { orgId: ORG_A, gasUrl: URL_A, status: 'restricted' } } })
+    expect(await d.resolveOrg(ORG_A)).toMatchObject({ kind: 'found', gasUrl: URL_A })
+  })
+
   it('初めての団体は、その GAS の団体ID が同じ時だけ使う', async () => {
     const d = await load()
     registry(d, { [ORG_A]: found(ORG_A, URL_A) })

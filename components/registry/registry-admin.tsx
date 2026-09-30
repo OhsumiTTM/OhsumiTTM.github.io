@@ -1,7 +1,8 @@
 'use client'
 
 // レジストリの管理画面(/registry-admin/)。Ohsumi 本体の画面からはリンクしない。
-// ログイン(許可リストの管理者だけ)・団体の一覧・登録コードの発行と取り消し・操作の記録を表示する。
+// ログイン(許可リストの管理者だけ)・団体の一覧・停止の予定(提供停止・機能停止)の入力と取り消し・
+// 登録コードの発行と取り消し・操作の記録を表示する。
 // 判定はすべてレジストリの GAS が行い、この画面は表示と入力だけを受け持つ。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -13,14 +14,19 @@ import {
   adminLogin,
   adminOverview,
   clearAdminSession,
+  clearSuspension,
   createAdminNonce,
   isRegistryAdminConfigured,
   issueRegistrationCode,
   loadAdminSession,
   needsReauth,
+  earliestSuspendLocal,
   revokeRegistrationCode,
   saveIssueDraft,
+  saveSuspensionDraft,
+  scheduleSuspension,
   takeIssueDraft,
+  takeSuspensionDraft,
   type AdminSession,
   type AuditEntry,
   type CheckState,
@@ -31,9 +37,22 @@ import {
   type OrgState,
   type OrgSummary,
   type Overview,
+  type SuspendKind,
+  type SuspensionInput,
 } from '@/lib/registry/admin-api'
 
-export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', suspended: '停止' }
+export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
+// 停止の2つの種類(R1-e)。予告(14日前・7日前・1日前)はどちらも同じ
+export const SUSPEND_KIND_LABELS: Record<SuspendKind, { title: string; description: string }> = {
+  suspend: {
+    title: '① 提供停止',
+    description: '契約の終了・規約違反など。全員が使えなくなり(「利用を停止しています」を表示)、書き込み・通知・定期の処理も止まります。',
+  },
+  restrict: {
+    title: '② 機能停止',
+    description: 'アンケートの未回答など。全員が読み取り専用になります(閲覧と書き出しはできます)。画面の上部にアンケートへの回答のお願いを出します。通知・定期の処理は止めません。解除すると、すぐ元に戻ります。',
+  },
+}
 export const CHECK_STATE_LABELS: Record<CheckState, string> = { ok: '', stale: '確認が7日以上ありません', never: 'まだ確認がありません' }
 export const CONTRACT_LABELS: Record<string, string> = { active: '契約中', ending: '終了予定', ended: '終了', '': '未設定' }
 export const CODE_STATE_LABELS: Record<CodeState, string> = { unused: '未使用', used: '使用済み', expired: '期限切れ', revoked: '取り消し済み' }
@@ -45,6 +64,13 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   registerOrg: '団体の登録',
   reregisterOrg: '団体の再登録(共有鍵の作り直し・接続先の変更)',
   rotateAdminSessionKey: 'セッションの鍵の作り直し',
+  scheduleSuspension: '停止の予定を入れた',
+  cancelSuspension: '停止の予定の取り消し',
+  liftSuspension: '停止の解除',
+  sendSuspensionNotice: '停止の予告を担当者に送った',
+  testSuspendNow: '(テスト)今すぐ停止',
+  testScheduleSuspension: '(テスト)停止の予定',
+  testLiftSuspension: '(テスト)停止の解除',
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },
@@ -79,6 +105,7 @@ export function RegistryAdmin() {
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<TabId>('orgs')
   const [draft, setDraft] = useState<IssueInput | null>(null)
+  const [suspendDraft, setSuspendDraft] = useState<SuspensionInput | null>(null)
 
   const endSession = useCallback((message?: string) => {
     clearAdminSession()
@@ -112,6 +139,7 @@ export function RegistryAdmin() {
       setDraft(d)
       setTab('codes')
     }
+    setSuspendDraft(takeSuspensionDraft())
     setSession(s)
     setChecked(true)
     if (s) void load(s)
@@ -177,7 +205,7 @@ export function RegistryAdmin() {
       {!overview ? (
         <p className="text-sm text-muted-foreground">{loading ? '読み込み中…' : '一覧を読み込めませんでした。「読み直す」を押してください。'}</p>
       ) : tab === 'orgs' ? (
-        <OrgList orgs={overview.orgs} />
+        <OrgList orgs={overview.orgs} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
       ) : tab === 'codes' ? (
         <CodesPanel
           session={session}
@@ -288,7 +316,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function OrgList({ orgs }: { orgs: OrgSummary[] }) {
+function OrgList({
+  orgs,
+  session,
+  draft,
+  onChanged,
+  onAuthError,
+}: {
+  orgs: OrgSummary[]
+  session: AdminSession
+  draft: SuspensionInput | null
+  onChanged: () => void
+  onAuthError: (message?: string) => void
+}) {
   if (!orgs.length) return <p className="text-sm text-muted-foreground">登録された団体はまだありません。</p>
   return (
     <ul className="space-y-3">
@@ -296,23 +336,175 @@ function OrgList({ orgs }: { orgs: OrgSummary[] }) {
         <li key={o.orgId} className="rounded-lg border border-border p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="min-w-0 font-medium break-words">{o.displayName || o.orgId}</span>
-            <Badge tone={o.state === 'active' ? 'ok' : o.state === 'scheduled' ? 'warn' : 'bad'}>{ORG_STATE_LABELS[o.state]}</Badge>
+            <Badge tone={o.state === 'active' ? 'ok' : o.state === 'suspended' ? 'bad' : 'warn'}>{ORG_STATE_LABELS[o.state]}</Badge>
+            {o.state === 'scheduled' && <Badge tone="warn">{SUSPEND_KIND_LABELS[o.suspendKind].title}</Badge>}
             {o.checkState !== 'ok' && <Badge tone="warn">{CHECK_STATE_LABELS[o.checkState]}</Badge>}
           </div>
           <dl className="space-y-1">
             <Field label="契約の状態">{CONTRACT_LABELS[o.contractStatus] ?? o.contractStatus}{o.contractUntil ? `(${fmt(o.contractUntil)} まで)` : ''}</Field>
-            <Field label="最後の確認">{fmt(o.lastCheckAt)}</Field>
+            <Field label="最後の確認">{fmt(o.lastCheckAt)}{o.gasVersion ? `(GAS の版: ${o.gasVersion})` : ''}</Field>
             <Field label="登録日">{fmt(o.createdAt)}</Field>
-            {o.suspendAt && <Field label="停止の予定">{fmt(o.suspendAt)}{o.suspendReason ? `(${o.suspendReason})` : ''}</Field>}
+            {o.suspendAt && (
+              <>
+                <Field label="停止">{SUSPEND_KIND_LABELS[o.suspendKind].title}・{fmt(o.suspendAt)} から{o.suspendScheduledBy ? `(入れた人: ${o.suspendScheduledBy})` : ''}</Field>
+                {o.suspendReason && <Field label="停止の理由">{o.suspendReason}</Field>}
+                <Field label="送った予告">{o.noticesSent.length ? o.noticesSent.map((d) => `${d}日前`).join('・') : 'まだありません'}</Field>
+              </>
+            )}
             <Field label="団体ID">{o.orgId}</Field>
             <Field label="接続先">{o.gasUrl || '—'}</Field>
             {/* 団体の担当者に伝える。メンバーは初めての端末でこのリンクから開く(R1-d) */}
             {typeof window !== 'undefined' && <Field label="招待リンク">{inviteLink(window.location.origin, '', o.orgId)}</Field>}
             {o.contractNote && <Field label="契約のメモ">{o.contractNote}</Field>}
           </dl>
+          <SuspensionControl
+            org={o}
+            session={session}
+            draft={draft && draft.orgId === o.orgId ? draft : null}
+            onChanged={onChanged}
+            onAuthError={onAuthError}
+          />
         </li>
       ))}
     </ul>
+  )
+}
+
+// 停止の予定を入れる(①提供停止・②機能停止を選ぶ)・予定を取り消す・停止を解除する(R1-e)
+function SuspensionControl({
+  org,
+  session,
+  draft,
+  onChanged,
+  onAuthError,
+}: {
+  org: OrgSummary
+  session: AdminSession
+  draft: SuspensionInput | null
+  onChanged: () => void
+  onAuthError: (message?: string) => void
+}) {
+  const hasPlan = org.state !== 'active'
+  const [open, setOpen] = useState(!!draft)
+  const [kind, setKind] = useState<SuspendKind>(draft?.kind ?? 'restrict')
+  const [at, setAt] = useState(draft?.suspendAt ?? '')
+  const [reason, setReason] = useState(draft?.reason ?? '')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(draft ? 'ログインし直しました。内容を確かめて、もう一度「停止の予定を入れる」を押してください。' : null)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  const min = earliestSuspendLocal()
+
+  const fail = (e: unknown) => {
+    if (e instanceof RegistryError && e.authError) onAuthError(e.message)
+    else setMessage(e instanceof Error ? e.message : String(e))
+  }
+
+  const schedule = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const ms = Date.parse(at)
+    if (!at || !Number.isFinite(ms)) return setMessage('停止の日時を入れてください。')
+    if (!reason.trim()) return setMessage('停止の理由を入れてください(団体への予告に書きます)。')
+    const input: SuspensionInput = { orgId: org.orgId, kind, suspendAt: at, reason }
+    // 5分以内の Google でのログインが必要。古ければ入力を残して、ログインし直す
+    if (needsReauth(session)) {
+      saveSuspensionDraft(input)
+      onAuthError()
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      await scheduleSuspension(session, { ...input, suspendAt: new Date(ms).toISOString() })
+      setOpen(false)
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.reauthRequired) {
+        saveSuspensionDraft(input)
+        onAuthError()
+      } else fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      await clearSuspension(session, org.orgId, reason)
+      setOpen(false)
+      setReason('')
+      onChanged()
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const inEffect = org.state === 'suspended' || org.state === 'restricted'
+  if (!open) {
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" variant={hasPlan ? 'outline' : 'ghost'} onClick={() => { setOpen(true); setMessage(null) }}>
+          {inEffect ? '停止を解除する…' : hasPlan ? '停止の予定を取り消す…' : '停止の予定を入れる…'}
+        </Button>
+      </div>
+    )
+  }
+
+  if (hasPlan) {
+    return (
+      <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2">
+        <p className="text-xs">
+          {inEffect
+            ? '停止を解除すると、団体の GAS が次に確かめた時(使われていれば1分以内、遅くとも1時間以内)に元に戻ります。'
+            : '停止の予定を取り消します。送った予告の取り消しは、担当者に別に連絡してください。'}
+        </p>
+        <label className="block text-xs">
+          理由(操作の記録に残します)
+          <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={busy} onClick={() => void clear()}>{busy ? '処理しています…' : inEffect ? '停止を解除する' : '予定を取り消す'}</Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+        </div>
+        {message && <p className="text-sm break-words text-destructive">{message}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <form onSubmit={(e) => void schedule(e)} className="mt-2 space-y-2 rounded-md bg-muted/50 p-2">
+      <fieldset className="space-y-1 text-xs">
+        <legend className="mb-1">停止の種類</legend>
+        {(['suspend', 'restrict'] as const).map((k) => (
+          <label key={k} className="flex items-start gap-2">
+            <input type="radio" name={`suspend-kind-${org.orgId}`} checked={kind === k} onChange={() => setKind(k)} className="mt-0.5" />
+            <span className="min-w-0">
+              <span className="font-medium">{SUSPEND_KIND_LABELS[k].title}</span>: {SUSPEND_KIND_LABELS[k].description}
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <label className="block text-xs">
+        停止の日時(今から14日より後)
+        <input className={inputClass} type="datetime-local" value={at} min={min} onChange={(e) => setAt(e.target.value)} required />
+      </label>
+      <label className="block text-xs">
+        理由(必須。担当者・代表への予告のメールに書きます)
+        <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} required />
+      </label>
+      <p className="text-xs text-muted-foreground">
+        予告は、停止の14日前・7日前・1日前に、担当者(レジストリの連絡先)と団体の代表にメールで送ります。団体の画面にも、14日前から予告を出します。
+        入れる前に、5分以内の Google でのログインが必要です(古ければログインし直します)。
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" size="sm" disabled={busy}>{busy ? '入れています…' : '停止の予定を入れる'}</Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+      </div>
+      {message && <p className="text-sm break-words text-destructive">{message}</p>}
+    </form>
   )
 }
 

@@ -47,6 +47,9 @@ export const STEPS = [
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // 提供停止・機能停止(R1-e): 画面の上部の知らせ(文は ja.ts の app.contract*)
+  { name: 'OUTPUT(機能停止中の知らせ)', do: 'contract', contract: { phase: 'inEffect', kind: 'restrict', suspendAt: '2026-10-01T00:00:00.000Z' }, expect: 'アンケートへの回答をお願いします' },
+  { name: 'OUTPUT(提供停止の予告)', do: 'contract', contract: { phase: 'scheduled', kind: 'suspend', days: 6 }, expect: '提供を停止します' },
 ]
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
@@ -57,12 +60,24 @@ export const ADMIN_STEPS = [
     'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
 ]
 
+// 機能停止中(読み取り専用。R1-e)に、閲覧のための欄・ボタンと書き出しが使えること、書く欄が止まることを確かめる。
+// ラベルは日本語の表示(ja.ts)と同じ文字にする(lib/ohsumi/check-layout.test.ts で確かめる)
+export const READ_ONLY_CONTRACT = { phase: 'inEffect', kind: 'restrict', suspendAt: '2026-10-01T00:00:00.000Z' }
+export const READ_ONLY_STEPS = [
+  { name: '機能停止中: ワークスペース(期間・プロジェクト・表示・並び替え・表示項目)', do: 'readOnlyWorkspace',
+    labels: ['一覧', 'すべてのプロジェクト', '表示項目', '表示順', 'ワークフロー', 'リスト', 'カレンダー', 'ガント'] },
+  { name: '機能停止中: リスト(検索・Excel 出力)', do: 'readOnlyList', labels: ['リスト', 'Excel出力'] },
+  { name: '機能停止中: タスク詳細(書く欄は使えない)', do: 'readOnlyTask', view: 'リスト', text: '担当者が多いタスク' },
+  { name: '機能停止中: 管理画面(検索・絞り込み・書き出し)', do: 'readOnlyAdmin', labels: ['全データをExcel出力', 'Members', '日報・週報', '人材DB'] },
+]
+
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で確かめる)
 export const REGISTRY_URL = 'https://script.google.com/macros/s/LAYOUT_REGISTRY/exec'
 export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(ログイン)', do: 'registryLogin' },
   { name: 'レジストリ管理(団体)', do: 'registry' },
+  { name: 'レジストリ管理(停止の予定を入れる)', do: 'registrySuspend' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
@@ -78,15 +93,17 @@ export function registryResponse(body) {
         me: { email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 1800 },
         codeTtlDays: 14,
         orgs: [
-          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'v1' },
-          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', channel: 'standard', gasUrl: '', gasVersion: '' },
-          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: '', suspendReason: '', channel: '', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'r1e-1' },
+          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], channel: 'standard', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], channel: 'standard', gasUrl: '', gasVersion: 'r1e-1' },
+          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [14, 7, 1], channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
         audit: [
+          { at: iso(4), actor: 'registry.admin.with.a.long.address@example.com', action: 'scheduleSuspension', target: 'org_r', before: '', after: JSON.stringify({ kind: 'restrict', suspendAt: iso(2) }), reason: 'アンケートの未回答' },
           { at: iso(3), actor: 'registry.admin.with.a.long.address@example.com', action: 'issueRegistrationCode', target: 'rc_0abcdefghij', before: '', after: JSON.stringify({ orgName: long, contactEmail: 'contact.person.long.address@example.org', expiresAt: iso(14) }), reason: '' },
           { at: iso(2), actor: 'stranger@example.com', action: 'adminLoginDenied', target: '', before: '', after: '', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' },
         ],
@@ -243,12 +260,14 @@ async function run({ build = true } = {}) {
       if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } else if (m.method) listeners.forEach((l) => l(m))
     })
     const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
-    const evaluate = async (expression) => {
-      const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+    const evaluate = async (expression, userGesture = false) => {
+      const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true, userGesture })
       if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text)
       return r.result?.result?.value
     }
 
+    // 画面の上部の知らせを確かめる時に、GAS の応答に付ける停止の状態(R1-e)
+    let contract = null
     // GAS・Google への通信には偽の応答を返す(外には出さない)
     const gas = (body) => {
       switch (body.action) {
@@ -269,7 +288,7 @@ async function run({ build = true } = {}) {
       if (url.origin === base) return send('Fetch.continueRequest', { requestId })
       const fulfill = (type, body) => send('Fetch.fulfillRequest', { requestId, responseCode: 200, body: b64(body),
         responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }] })
-      if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')) }))
+      if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')), ...(contract ? { contract } : {}) }))
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
         // 接続先の解決: 一覧に無い団体(招待リンクの団体が見つからない画面)
@@ -306,6 +325,7 @@ async function run({ build = true } = {}) {
       { member: MEMBER, steps: STEPS },
       { member: ADMIN_MEMBER, steps: ADMIN_STEPS },
       { member: ADMIN_MEMBER, steps: REGISTRY_STEPS },
+      { member: ADMIN_MEMBER, steps: READ_ONLY_STEPS, contract: READ_ONLY_CONTRACT },
     ]
     const registrySession = () => evaluate(`sessionStorage.setItem('ohsumi-registry-admin-session', JSON.stringify({ token: 'ra1.layout.check', exp: Math.floor(Date.now() / 1000) + 1800, email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000) }))`)
     for (const pass of passes) {
@@ -324,6 +344,105 @@ async function run({ build = true } = {}) {
           const shown = await evaluate(`document.body.textContent.includes('団体が見つかりません')`)
           if (!shown) throw new Error('「団体が見つかりません」が表示されません')
         }
+        if (step.do === 'home' || step.do === 'admin') contract = null
+        if (step.do.startsWith('readOnly')) {
+          contract = pass.contract
+          if (step.do !== 'readOnlyTask') {
+            await signIn(); await navigate('/')
+            await clickText('あとで設定する').catch(() => {})
+            await sleep(800)
+            // 書き出しの数を数える(ファイルは実際には保存しない)
+            await evaluate(`(() => { window.__exports = 0; URL.createObjectURL = () => { window.__exports++; return 'blob:layout-check' }; HTMLAnchorElement.prototype.click = function () {}; return true })()`)
+            if (!(await evaluate(`document.body.textContent.includes('アンケートへの回答をお願いします')`))) throw new Error('機能停止中の知らせが表示されません')
+          }
+          // 閲覧のための欄が使えて、値を変えられること
+          const usable = (selector) => evaluate(`(() => {
+            const els = [...document.querySelectorAll(${JSON.stringify(selector)})]
+            if (!els.length) throw new Error('見つかりません: ' + ${JSON.stringify(selector)})
+            const off = els.filter((e) => e.disabled)
+            if (off.length) throw new Error('使えない欄があります: ' + ${JSON.stringify(selector)})
+            return els.length })()`)
+          const setValue = (selector, value) => evaluate(`(() => {
+            const el = document.querySelector(${JSON.stringify(selector)})
+            const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+            el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+            el.dispatchEvent(new Event('change', { bubbles: true }))
+            return true })()`)
+          const noNotice = async (what) => {
+            if (await evaluate(`!!document.getElementById('read-only-notice-title')`)) throw new Error(what + 'で「読み取り専用のため、保存できません」が出ました')
+          }
+          const exported = async (label) => {
+            const before = await evaluate('window.__exports')
+            await clickText(label); await sleep(1500)
+            if ((await evaluate('window.__exports')) <= before) throw new Error(label + ' で書き出せません')
+            await noNotice(label)
+          }
+          if (step.do === 'readOnlyWorkspace') {
+            await clickText('一覧'); await sleep(800)
+            // 期間(年/月/日)・プロジェクトの選択
+            await usable('input[type=date]')
+            await setValue('input[type=date]', '2026-01-01'); await sleep(300)
+            if ((await evaluate(`document.querySelector('input[type=date]').value`)) !== '2026-01-01') throw new Error('期間を入れられません')
+            const select = `[...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.text === 'すべてのプロジェクト'))`
+            if (await evaluate(`${select}.disabled`)) throw new Error('プロジェクトを選べません')
+            await evaluate(`(() => { const s = ${select}; s.value = s.options[s.options.length - 1].value; s.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+            await sleep(300)
+            // 表示項目・表示順(並び替え)
+            await clickText('表示項目'); await sleep(300)
+            await clickText('担当者', 'div.absolute button').catch(() => clickText('期限', 'div.absolute button')); await sleep(300)
+            await noNotice('表示項目')
+            await clickText('表示順'); await sleep(300)
+            await clickText('優先度', 'div.absolute button'); await sleep(300)
+            await noNotice('表示順')
+            // 表示の切り替え
+            for (const view of ['リスト', 'カレンダー', 'ガント', 'ワークフロー']) { await clickText(view); await sleep(600) }
+            await noNotice('表示の切り替え')
+          }
+          if (step.do === 'readOnlyList') {
+            await clickText('一覧'); await sleep(500)
+            await clickText('リスト'); await sleep(800)
+            await usable('input[placeholder]:not([type])[data-read-only-ok]')
+            await exported('Excel出力')
+          }
+          if (step.do === 'readOnlyTask') {
+            await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+            await clickText(step.view); await sleep(800)
+            await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+            // 書く欄(コメント・説明など)は止まっている
+            const open = await evaluate(`[...document.querySelectorAll('textarea, input:not([type]), input[type=text], input[type=number], input[type=file]')]
+              .filter((e) => !e.closest('[data-read-only-ok]') && !e.disabled).map((e) => e.outerHTML.slice(0, 80))`)
+            if (open.length) throw new Error('書く欄が使えます: ' + open.join(' / '))
+            if (!(await evaluate(`document.querySelectorAll('textarea[disabled], input[data-read-only-disabled]').length`))) throw new Error('止まった書く欄がありません')
+            // 編集の操作(優先度を変える)は、画面を変えずに止まり、知らせが出る(人が操作した時)
+            const priority = `[...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'high') && [...s.options].some((o) => o.value === 'low'))`
+            const before = await evaluate(`${priority}.value`)
+            await evaluate(`(() => { const s = ${priority}; s.value = s.value === 'low' ? 'high' : 'low'; s.dispatchEvent(new Event('change', { bubbles: true })); return true })()`, true)
+            await sleep(500)
+            if (!(await evaluate(`!!document.getElementById('read-only-notice-title')`))) throw new Error('編集の操作で「読み取り専用のため、保存できません」が出ません')
+            if ((await evaluate(`${priority}.value`)) !== before) throw new Error('編集の操作で画面が変わりました')
+            await clickText('閉じる', '[role=dialog] button'); await sleep(300)
+          }
+          if (step.do === 'readOnlyAdmin') {
+            await clickText('ADMIN'); await sleep(1500)
+            await exported('全データをExcel出力')
+            await clickText('Members', 'aside nav button'); await sleep(1000)
+            await usable('input[data-read-only-ok]')
+            await clickText('日報・週報', 'aside nav button'); await sleep(1000)
+            await usable('input[type=date][data-read-only-ok]')
+            await clickText('人材DB', 'aside nav button'); await sleep(1000)
+            await usable('th input[data-read-only-ok]')
+          }
+        }
+        if (step.do === 'contract') {
+          const c = step.contract
+          contract = c.days ? { phase: c.phase, kind: c.kind, suspendAt: new Date(Date.now() + c.days * 24 * 3600 * 1000).toISOString() } : c
+          await signIn(); await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          const shown = await evaluate(`document.body.textContent.includes(${JSON.stringify(step.expect)})`)
+          if (!shown) throw new Error('停止の知らせが表示されません')
+        }
         if (step.do === 'home') {
           await signIn(); await navigate('/')
           await clickText('あとで設定する').catch(() => {})
@@ -337,6 +456,11 @@ async function run({ build = true } = {}) {
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
         if (step.do === 'registry') { await registrySession(); await navigate('/registry-admin/') }
+        if (step.do === 'registrySuspend') {
+          await clickText('停止の予定を入れる…'); await sleep(500)
+          const shown = await evaluate(`!!document.querySelector('input[type=datetime-local]')`)
+          if (!shown) throw new Error('停止の予定を入れる欄が表示されません')
+        }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
           await evaluate(`(() => {

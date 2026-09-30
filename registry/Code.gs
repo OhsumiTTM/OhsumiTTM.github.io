@@ -2,6 +2,10 @@
 //   setupRegistry           最初の設定・コードを貼り替えた後に実行する(シート・保護・鍵・毎日のバックアップのトリガーを
 //                           用意する。今のコードに無い関数を指すトリガーを消す)
 //   rotateAdminSessionKey   管理画面のセッションの鍵を作り直す(ログイン中の管理者は全員ログアウトになる)
+//   testSuspendNow          (テスト環境だけ)TEST_ORG_ID の団体を、今すぐ停止する(種類は TEST_SUSPEND_KIND)
+//   testScheduleSuspension  (テスト環境だけ)TEST_SUSPEND_DAYS 日後に停止の予定を入れ、その時期の予告をすぐ送る
+//   testLiftSuspension      (テスト環境だけ)TEST_ORG_ID の団体の停止の予定・停止を解除する
+//                           test から始まる関数は、REGISTRY_TEST_MODE が true の時、REGISTRY_TEST_ORG_IDS の団体にだけ効く
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost           ウェブアプリの入口
 //   dailyRegistryBackup     毎日のバックアップ(トリガーから呼ばれる)
@@ -107,6 +111,28 @@ function rotateAdminSessionKey() {
   console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
 }
 
+// (テスト環境だけ)停止の動きを、14日待たずに確かめる。スクリプトプロパティ REGISTRY_TEST_MODE が true の時だけ動く
+// (管理画面からはできない)。レジストリは本番の団体と共通なので、対象にできるのはスクリプトプロパティ
+// REGISTRY_TEST_ORG_IDS(テスト環境の団体ID をカンマ区切り)に書いた団体だけ。それ以外の団体は、何も変えずに止まる。
+// 対象はスクリプトプロパティ TEST_ORG_ID の団体、種類は TEST_SUSPEND_KIND(suspend・restrict。無ければ restrict)。
+// 手順は registry/README.md の「1.9.1」
+
+// 今すぐ停止する(予定の日時を今にする。予告は送らない)
+function testSuspendNow() {
+  testSetSuspension_('now', Date.now())
+}
+
+// TEST_SUSPEND_DAYS 日後(例: 13.9・6.9・0.9)に停止の予定を入れ、その時期の予告(14日前・7日前・1日前)を担当者にすぐ送る。
+// 14日より前の日時も入れられる(管理画面は14日より後だけ)
+function testScheduleSuspension() {
+  testSetSuspension_('schedule', Date.now())
+}
+
+// 停止の予定・停止を解除する
+function testLiftSuspension() {
+  testSetSuspension_('lift', Date.now())
+}
+
 // ============================================================================
 // ウェブアプリの入口・トリガーから呼ばれる関数
 // ============================================================================
@@ -149,7 +175,7 @@ function doPost(e) {
   }
 }
 
-// 時間主導のトリガー(毎日)から呼ぶ。記録の無い直接の編集を数えてから、スプレッドシートをコピーする。
+// 時間主導のトリガー(毎日)から呼ぶ。記録の無い直接の編集を数え、停止の予告を送ってから、スプレッドシートをコピーする。
 // コピーは Secrets を含むので、編集者・閲覧者を外し、リンクの共有も「制限付き」にする。
 // 30日より古いコピーはゴミ箱へ移す
 function dailyRegistryBackup() {
@@ -160,6 +186,9 @@ function dailyRegistryBackup() {
     var unrecorded = findUnrecordedOrgEdits_()
     props.setProperty('LAST_UNRECORDED_EDITS', String(unrecorded.length))
     if (unrecorded.length) console.warn('記録の無い変更がある団体: ' + unrecorded.join(', '))
+
+    // 停止の予告(14日前・7日前・1日前)を、団体の担当者にメールで送る(失敗してもバックアップは続ける)
+    try { sendSuspensionNotices_(Date.now()) } catch (noticeErr) { console.error('停止の予告を送れませんでした: ' + noticeErr) }
 
     var folder = backupFolder_()
     var ss = SpreadsheetApp.getActiveSpreadsheet()
@@ -194,7 +223,7 @@ function removeOrphanTriggers_() {
   return removed
 }
 
-var REGISTRY_VERSION = 'r1d-1'
+var REGISTRY_VERSION = 'r1e-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -204,7 +233,7 @@ var REGISTRY_VERSION = 'r1d-1'
 //     suspend_scheduled_by(停止の予定を入れた管理者)・suspend_notices_json(停止の予告を送った記録)・updated_at
 var REGISTRY_SHEETS = {
   Orgs: ['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
-    'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at'],
+    'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   Usage: ['org_id', 'date', 'metrics_json'],
@@ -226,7 +255,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300 }
 
 // ---- 入口 ----
 
@@ -248,6 +277,9 @@ var REGISTRY_ACTIONS = {
   revokeRegistrationCode: function (body) { return revokeRegistrationCode_(body, Date.now()) },
   registerOrg: function (body) { return registerOrg_(body, Date.now()) },
   resolveOrg: function (body) { return resolveOrg_(body, Date.now()) },
+  checkIn: function (body) { return checkIn_(body, Date.now()) },
+  scheduleSuspension: function (body) { return scheduleSuspension_(body, Date.now()) },
+  clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
 }
 
 function registryJson_(obj) {
@@ -375,8 +407,11 @@ function appendAudit_(entry) {
 var ORG_FINGERPRINT_PREFIX = 'ORG_FP_'
 var ORG_FINGERPRINT_COLUMNS = ['gas_url', 'status', 'channel', 'suspend_at']
 
+// 停止の種類(suspend_kind。R1-e)は、入っている時だけ指紋に入れる(R1-d までに覚えた指紋と同じになるように)
 function orgFingerprint_(values) {
-  return sha256Hex_(JSON.stringify(ORG_FINGERPRINT_COLUMNS.map(function (c) { return String(values[c] === undefined ? '' : values[c]) })))
+  var parts = ORG_FINGERPRINT_COLUMNS.map(function (c) { return String(values[c] === undefined ? '' : values[c]) })
+  if (String(values.suspend_kind || '')) parts.push(String(values.suspend_kind))
+  return sha256Hex_(JSON.stringify(parts))
 }
 
 // 記録を伴う変更の後に呼ぶ(R1-b 以降の操作で使う)
@@ -556,13 +591,12 @@ function timeOf_(v) {
 var STALE_CHECK_DAYS = 7
 
 // 団体の表示用の状態(Google のサービスを使わない純粋な関数)。
-//   state: suspended(停止中。status が suspended か、停止の予定日時を過ぎた)/ scheduled(停止の予定あり)/ active(有効)
+//   state: suspended(提供停止中。status が suspended か、提供停止の予定日時を過ぎた)/ restricted(機能停止中。読み取り専用)/
+//          scheduled(停止の予定あり。種類は contractState_ の kind)/ active(有効)
 //   checkState: never(まだ一度も確認に来ていない)/ stale(最後の確認から7日を超えた)/ ok
 function orgDisplayState_(values, nowMs) {
-  var suspendAt = timeOf_(values.suspend_at)
-  var state = 'active'
-  if (String(values.status) === 'suspended' || (suspendAt > 0 && suspendAt <= nowMs)) state = 'suspended'
-  else if (suspendAt > nowMs) state = 'scheduled'
+  var c = contractState_(values, nowMs)
+  var state = c.phase === 'inEffect' ? (c.kind === 'restrict' ? 'restricted' : 'suspended') : c.phase === 'scheduled' ? 'scheduled' : 'active'
   var lastCheck = timeOf_(values.last_check_at)
   var checkState = !(lastCheck > 0) ? 'never' : nowMs - lastCheck > STALE_CHECK_DAYS * 24 * 3600 * 1000 ? 'stale' : 'ok'
   return { state: state, checkState: checkState }
@@ -583,6 +617,9 @@ function orgSummary_(values, nowMs) {
     createdAt: isoOf_(values.created_at),
     suspendAt: isoOf_(values.suspend_at),
     suspendReason: String(values.suspend_reason || ''),
+    suspendKind: contractState_(values, nowMs).kind,
+    suspendScheduledBy: String(values.suspend_scheduled_by || ''),
+    noticesSent: suspensionNoticesSent_(values).map(function (n) { return n.days }),
     channel: String(values.channel || ''),
     gasUrl: String(values.gas_url || ''),
     gasVersion: String(values.gas_version || ''),
@@ -977,11 +1014,13 @@ function resolveOrg_(body, nowMs) {
     // 無い団体も短く覚える(同じ ID の問い合わせが続いても、シートを読まない)
     answer = { notFound: true }
   } else {
-    var suspended = orgDisplayState_(row.values, nowMs).state === 'suspended'
+    // 提供停止中は接続先を返さない。機能停止中(読み取り専用)は、接続先を返して restricted を付ける
+    var shown = orgDisplayState_(row.values, nowMs).state
+    var suspended = shown === 'suspended'
     answer = {
       orgId: orgId,
       gasUrl: suspended ? '' : String(row.values.gas_url),
-      status: suspended ? 'suspended' : 'active',
+      status: suspended ? 'suspended' : shown === 'restricted' ? 'restricted' : 'active',
       channel: String(row.values.channel || 'standard'),
       checkedAt: new Date(nowMs).toISOString(),
       maxAgeSec: RESOLVE_MAX_AGE_SEC,
@@ -989,6 +1028,245 @@ function resolveOrg_(body, nowMs) {
   }
   cache.put(key, JSON.stringify(answer), answer.notFound ? 60 : RESOLVE_CACHE_SEC)
   return answer.notFound ? { ok: false, notFound: true, error: RESOLVE_NOT_FOUND } : { ok: true, result: answer }
+}
+
+// ---- 提供停止・機能停止(R1-e) ----
+//
+// 停止には2種類ある(suspend_kind)。どちらも管理画面で予定を入れ、予告(14日前・7日前・1日前)は同じ。
+//   suspend(提供停止): 契約の終了・規約違反など。団体の画面は「利用を停止しています」になり、ログインもできない。
+//                      団体の GAS は書き込み・通知・定期の処理を止める(データは団体のスプレッドシートにそのまま残る)
+//   restrict(機能停止): アンケートの未回答など。全員が読み取り専用になる(閲覧と書き出しはできる)。
+//                      画面の上部にアンケートへの回答のお願いを出す。通知・定期の処理は止めない。
+//                      管理画面で解除すると、団体の GAS が次に確かめた時(使っている間は1分以内)に元に戻る
+// 停止の予定は、今から SUSPEND_MIN_NOTICE_DAYS 日より後にだけ入れられる(予告を漏らさないため)。
+// 予定の取り消し・停止の解除は、いつでもできる。どの操作も操作の記録に残す。
+// 団体の GAS は、1時間ごと(停止の予定・停止中は使われるたび、1分に1回まで)に checkIn で状態を確かめる。
+// レジストリに確かめられない時、団体の GAS は最後に確かめた状態のまま使い続ける(最後に届いた停止の予定日時は守る)
+var SUSPEND_KINDS = ['suspend', 'restrict']
+var SUSPEND_MIN_NOTICE_DAYS = 14
+var SUSPEND_NOTICE_DAYS = [14, 7, 1]
+var CHECKIN_MAX_SKEW_SEC = 300
+var CHECKIN_WRITE_INTERVAL_MS = 10 * 60 * 1000
+var CHECKIN_INVALID = '確認できませんでした(団体ID・共有鍵・時刻を確かめてください)。'
+
+// 契約の状態(Google のサービスを使わない純粋な関数)。
+//   phase: none(停止の予定なし)/ scheduled(予定あり。まだ前)/ inEffect(停止中)。kind: suspend / restrict
+function contractState_(values, nowMs) {
+  var kind = String(values.suspend_kind || '') === 'restrict' ? 'restrict' : 'suspend'
+  var suspendAt = timeOf_(values.suspend_at)
+  var reason = String(values.suspend_reason || '')
+  if (String(values.status) === 'suspended') return { phase: 'inEffect', kind: 'suspend', suspendAt: isoOf_(values.suspend_at), reason: reason }
+  if (!(suspendAt > 0)) return { phase: 'none', kind: kind, suspendAt: '', reason: '' }
+  return { phase: suspendAt <= nowMs ? 'inEffect' : 'scheduled', kind: kind, suspendAt: new Date(suspendAt).toISOString(), reason: reason }
+}
+
+function suspensionNoticesSent_(values) {
+  try {
+    var list = JSON.parse(String(values.suspend_notices_json || '[]'))
+    return Array.isArray(list) ? list : []
+  } catch (e) {
+    return []
+  }
+}
+
+// 予告を送る日数(純粋な関数): 停止の予定まで days 日以内になった予告のうち、まだ送っていないいちばん近いもの。無ければ null
+function dueSuspensionNotice_(values, nowMs) {
+  var c = contractState_(values, nowMs)
+  if (c.phase !== 'scheduled') return null
+  var left = (timeOf_(c.suspendAt) - nowMs) / (24 * 3600 * 1000)
+  var sent = suspensionNoticesSent_(values).map(function (n) { return Number(n.days) })
+  var due = SUSPEND_NOTICE_DAYS.filter(function (d) { return left <= d })
+  if (!due.length) return null
+  var nearest = Math.min.apply(null, due)
+  return sent.indexOf(nearest) >= 0 ? null : nearest
+}
+
+// 停止の予告の文面(団体の GAS のメール・画面と同じ言い方)
+function suspensionNoticeText_(orgName, c, days) {
+  var when = c.suspendAt ? Utilities.formatDate(new Date(c.suspendAt), 'Asia/Tokyo', 'yyyy年M月d日 H:mm') : ''
+  var what = c.kind === 'restrict'
+    ? 'Ohsumi が読み取り専用になります(閲覧と書き出しはできますが、作成・編集はできなくなります)。アンケートへの回答をお願いします。回答が確認でき次第、再開します。'
+    : 'Ohsumi の提供を停止します。停止の後は、Ohsumi にログインできなくなります(団体のデータは、団体のスプレッドシートにそのまま残ります)。'
+  return {
+    subject: '[Ohsumi] ' + orgName + ': ' + when + ' から' + (c.kind === 'restrict' ? '読み取り専用になります' : '提供を停止します') + '(あと' + days + '日)',
+    body: orgName + ' ご担当者さま\n\n' + when + ' から、' + what + '\n\n理由: ' + (c.reason || '—') + '\n\nご不明な点は FSIF にお問い合わせください。',
+  }
+}
+
+// 毎日の処理(dailyRegistryBackup)から呼ぶ: 予告の時期になった団体の担当者(Contacts)にメールを送り、送ったことを記録する
+function sendSuspensionNotices_(nowMs) {
+  var contacts = {}
+  readRows_('Contacts').forEach(function (r) {
+    var id = String(r.values.org_id || '')
+    var email = String(r.values.email || '').trim()
+    if (id && /^[^@\s]+@[^@\s]+$/.test(email)) (contacts[id] = contacts[id] || []).push(email)
+  })
+  var sent = []
+  readRows_('Orgs').forEach(function (row) {
+    var orgId = String(row.values.org_id || '')
+    var days = dueSuspensionNotice_(row.values, nowMs)
+    if (!orgId || days === null) return
+    var c = contractState_(row.values, nowMs)
+    var text = suspensionNoticeText_(String(row.values.display_name || orgId), c, days)
+    var to = contacts[orgId] || []
+    if (to.length) MailApp.sendEmail({ to: to.join(','), subject: text.subject, body: text.body })
+    var list = suspensionNoticesSent_(row.values).concat([{ days: days, at: new Date(nowMs).toISOString(), to: to.length }])
+    setRowFields_('Orgs', row.row, { suspend_notices_json: JSON.stringify(list) })
+    appendAudit_({ actor: 'registry', action: 'sendSuspensionNotice', target: orgId, after: { days: days, kind: c.kind, suspendAt: c.suspendAt, recipients: to.length } })
+    sent.push(orgId)
+  })
+  if (sent.length) console.log('停止の予告を送りました: ' + sent.join(', '))
+  return sent
+}
+
+// テスト環境の停止の操作(testSuspendNow・testScheduleSuspension・testLiftSuspension)。mode: now / schedule / lift
+function testSetSuspension_(mode, nowMs) {
+  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  if (String(props.REGISTRY_TEST_MODE || '') !== 'true') {
+    throw new Error('テスト環境のレジストリだけで使えます(スクリプトプロパティ REGISTRY_TEST_MODE を true にしたレジストリ)。本番では、管理画面で停止の予定を入れてください。')
+  }
+  var orgId = String(props.TEST_ORG_ID || '').trim()
+  var testOrgIds = String(props.REGISTRY_TEST_ORG_IDS || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
+  if (!orgId || testOrgIds.indexOf(orgId) < 0) {
+    throw new Error('TEST_ORG_ID の団体(' + (orgId || '未設定') + ')は、テスト環境の団体の一覧(スクリプトプロパティ REGISTRY_TEST_ORG_IDS)にありません。' +
+      '本番の団体は止められません。何も変えていません。')
+  }
+  var kind = String(props.TEST_SUSPEND_KIND || 'restrict').trim()
+  if (SUSPEND_KINDS.indexOf(kind) < 0) throw new Error('TEST_SUSPEND_KIND は suspend(提供停止)か restrict(機能停止)にしてください。')
+  var days = Number(props.TEST_SUSPEND_DAYS)
+  if (mode === 'schedule' && !(days > 0)) throw new Error('TEST_SUSPEND_DAYS に、停止までの日数(例: 13.9・6.9・0.9)を入れてください。')
+  var result = withRegistryLock_(function () {
+    var row = findOrgRow_(orgId)
+    if (!row) throw new Error('TEST_ORG_ID の団体(' + orgId + ')が Orgs にありません。')
+    var before = contractState_(row.values, nowMs)
+    var fields = mode === 'lift'
+      ? { status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '' }
+      : {
+          suspend_at: new Date(mode === 'now' ? nowMs : nowMs + days * 24 * 3600 * 1000).toISOString(), suspend_kind: kind,
+          suspend_reason: '(テスト)' + (kind === 'restrict' ? '機能停止' : '提供停止') + 'の確かめ', suspend_scheduled_by: 'editor(test)',
+          suspend_notices_json: '[]',
+        }
+    fields.updated_at = new Date(nowMs).toISOString()
+    setRowFields_('Orgs', row.row, fields)
+    var after = merged_(row.values, fields)
+    rememberOrgFingerprint_(orgId, after)
+    forgetResolvedOrg_(orgId)
+    appendAudit_({ actor: 'editor(test)', action: mode === 'lift' ? 'testLiftSuspension' : mode === 'now' ? 'testSuspendNow' : 'testScheduleSuspension', target: orgId,
+      before: before.phase === 'none' ? undefined : { kind: before.kind, suspendAt: before.suspendAt, phase: before.phase },
+      after: mode === 'lift' ? { phase: 'none' } : { kind: kind, suspendAt: fields.suspend_at } })
+    return contractState_(after, nowMs)
+  })
+  // 予定を入れた時は、その時期の予告をすぐ送る(毎日の処理を待たない)
+  var noticed = mode === 'schedule' ? sendSuspensionNotices_(nowMs).indexOf(orgId) >= 0 : false
+  console.log('(テスト)' + orgId + ': ' + ({ none: '停止の予定なし', scheduled: '停止の予定あり', inEffect: '停止中' })[result.phase] +
+    (result.phase === 'none' ? '' : '(' + (result.kind === 'restrict' ? '② 機能停止' : '① 提供停止') + '・' + result.suspendAt + ')') +
+    (mode === 'schedule' ? (noticed ? '。担当者に予告を送りました' : '。予告の時期ではないため、予告は送っていません') : '') +
+    '。団体の GAS には、団体のエディタで checkContractStatus を実行すると、すぐ伝わります。')
+  return result
+}
+
+function requireAdminReauth_(session, nowMs, what) {
+  if (!(nowSecOf_(nowMs) - Number(session.auth) <= ADMIN_REAUTH_SEC)) {
+    throw registryError_(what + 'の前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。', { reauth: true })
+  }
+}
+
+// 管理画面: 停止の予定を入れる(入れ直す)。{ session, orgId, kind: suspend | restrict, suspendAt(ISO), reason }
+function scheduleSuspension_(body, nowMs) {
+  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '停止の予定を入れる')
+  var kind = String(body.kind || '')
+  if (SUSPEND_KINDS.indexOf(kind) < 0) throw registryError_('停止の種類(提供停止・機能停止)を選んでください。')
+  var at = timeOf_(body.suspendAt)
+  if (!(at > 0)) throw registryError_('停止の日時を入れてください。')
+  // 1分の余裕を見る(画面で「ちょうど14日後」を選んだ時に断らないため)
+  if (at < nowMs + SUSPEND_MIN_NOTICE_DAYS * 24 * 3600 * 1000 - 60 * 1000) {
+    throw registryError_('停止の日時は、今から' + SUSPEND_MIN_NOTICE_DAYS + '日より後にしてください(予告を14日前・7日前・1日前に送るため)。')
+  }
+  var reason = cleanText_(body.reason, 500)
+  if (!reason) throw registryError_('停止の理由を入れてください(団体への予告に書きます)。')
+  return withRegistryLock_(function () {
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    if (contractState_(row.values, nowMs).phase === 'inEffect') throw registryError_('この団体は停止中です。先に停止を解除してください。')
+    var orgId = String(row.values.org_id)
+    var before = contractState_(row.values, nowMs)
+    var fields = {
+      suspend_at: new Date(at).toISOString(), suspend_kind: kind, suspend_reason: reason, suspend_scheduled_by: session.sub,
+      suspend_notices_json: '[]', updated_at: new Date(nowMs).toISOString(),
+    }
+    setRowFields_('Orgs', row.row, fields)
+    var after = merged_(row.values, fields)
+    rememberOrgFingerprint_(orgId, after)
+    forgetResolvedOrg_(orgId)
+    appendAudit_({ actor: session.sub, action: 'scheduleSuspension', target: orgId,
+      before: before.phase === 'none' ? undefined : { kind: before.kind, suspendAt: before.suspendAt },
+      after: { kind: kind, suspendAt: fields.suspend_at }, reason: reason })
+    return { ok: true, result: orgSummary_(after, nowMs) }
+  })
+}
+
+// 管理画面: 停止の予定を取り消す・停止を解除する(元に戻す)。{ session, orgId, reason }
+function clearSuspension_(body, nowMs) {
+  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var before = contractState_(row.values, nowMs)
+    if (before.phase === 'none') throw registryError_('この団体には、停止の予定も停止もありません。')
+    var orgId = String(row.values.org_id)
+    var fields = {
+      status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '',
+      updated_at: new Date(nowMs).toISOString(),
+    }
+    setRowFields_('Orgs', row.row, fields)
+    var after = merged_(row.values, fields)
+    rememberOrgFingerprint_(orgId, after)
+    forgetResolvedOrg_(orgId)
+    appendAudit_({ actor: session.sub, action: before.phase === 'inEffect' ? 'liftSuspension' : 'cancelSuspension', target: orgId,
+      before: { kind: before.kind, suspendAt: before.suspendAt, phase: before.phase }, after: { phase: 'none' }, reason: reason })
+    return { ok: true, result: orgSummary_(after, nowMs) }
+  })
+}
+
+function merged_(values, fields) {
+  var out = {}
+  Object.keys(values).forEach(function (k) { out[k] = values[k] })
+  Object.keys(fields).forEach(function (k) { out[k] = fields[k] })
+  return out
+}
+
+// 団体の GAS が契約の状態を確かめる(1時間ごと・停止の予定や停止中は使われるたびに1分に1回まで)。
+//   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, sig }
+//          sig = base64url(HMAC-SHA256(共有鍵, 'checkIn.' + orgId + '.' + ts))。時刻は前後5分まで
+//   返事: { ok: true, result: { phase: none | scheduled | inEffect, kind, suspendAt, reason, checkedAt } }
+// 最後に確認に来た時刻・GAS の版を Orgs に書く(10分に1回まで)
+function checkIn_(body, nowMs) {
+  var orgId = String(body.orgId || '')
+  var ts = Number(body.ts)
+  var sig = String(body.sig || '')
+  if (!ORG_ID_PATTERN.test(orgId) || !(ts > 0) || !sig || Math.abs(nowSecOf_(nowMs) - ts) > CHECKIN_MAX_SKEW_SEC) {
+    countRejected_(nowMs)
+    throw registryError_(CHECKIN_INVALID, { authError: true })
+  }
+  var secret = findSecretRow_(orgId)
+  var row = findOrgRow_(orgId)
+  var key = secret ? String(secret.values.registry_key || '') : ''
+  var expected = key ? b64url_(Utilities.computeHmacSha256Signature('checkIn.' + orgId + '.' + ts, key)) : ''
+  if (!row || !expected || !safeEquals_(expected, sig)) {
+    countRejected_(nowMs)
+    throw registryError_(CHECKIN_INVALID, { authError: true })
+  }
+  var lastCheck = timeOf_(row.values.last_check_at)
+  var gasVersion = cleanText_(body.gasVersion, 40)
+  if (!(lastCheck > 0) || nowMs - lastCheck >= CHECKIN_WRITE_INTERVAL_MS || gasVersion !== String(row.values.gas_version || '')) {
+    setRowFields_('Orgs', row.row, { last_check_at: new Date(nowMs).toISOString(), gas_version: gasVersion })
+  }
+  var c = contractState_(row.values, nowMs)
+  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString() } }
 }
 
 // ---- 管理画面のセッションの鍵 ----

@@ -79,6 +79,7 @@ export function AdminDailyReports() {
         <input
           type="date"
           value={dateFilter}
+          data-read-only-ok
           onChange={(e) => setDateFilter(e.target.value)}
           className="h-9 rounded-md border border-border bg-background px-2 text-sm"
         />

@@ -154,9 +154,15 @@ export function LoginScreen() {
           setMode('orgMismatch')
           return
         }
-        saveLoginConfig(config)
+        saveLoginConfig({ orgId: config.orgId })
         setOrgId(config.orgId)
         setSavedOrgs(loadSavedOrgs())
+        // 提供停止中(R1-e): ログインできないことを知らせる(ほかの団体があれば選べる)
+        if (config.suspended) {
+          setNotice(null)
+          setMode('orgSuspended')
+          return
+        }
         setMode('id')
       } else if (!cached) {
         setMode('gasOutdated')

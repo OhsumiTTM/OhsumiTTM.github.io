@@ -768,6 +768,7 @@ export function OutputScreen() {
               <input
                 type="date"
                 value={fromDate}
+                data-read-only-ok
                 onChange={(e) => setFromDate(e.target.value)}
                 title={tr('output.filter.fromTitle')}
                 className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"
@@ -776,6 +777,7 @@ export function OutputScreen() {
               <input
                 type="date"
                 value={toDate}
+                data-read-only-ok
                 onChange={(e) => setToDate(e.target.value)}
                 title={tr('output.filter.toTitle')}
                 className="h-8 rounded-lg border border-border bg-card px-2 text-xs outline-none focus:border-primary"

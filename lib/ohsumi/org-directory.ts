@@ -209,7 +209,8 @@ async function resolveOnce(orgId: string): Promise<ResolveAnswer | null> {
     // 問い合わせた団体の答えだけを使う
     if (r.orgId !== orgId) return null
     if (r.status === 'suspended') return { kind: 'suspended' }
-    if (r.status !== 'active' || !CANONICAL_GAS_URL.test(String(r.gasUrl ?? ''))) return null
+    // 機能停止中(restricted)は読み取り専用で使えるので、ふつうにつなぐ(画面の上部の知らせは団体の GAS の応答で出す)
+    if ((r.status !== 'active' && r.status !== 'restricted') || !CANONICAL_GAS_URL.test(String(r.gasUrl ?? ''))) return null
     const checkedAt = Date.parse(String(r.checkedAt ?? ''))
     return {
       kind: 'found',

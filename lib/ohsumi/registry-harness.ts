@@ -49,6 +49,8 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   const triggers: { handler: string; hour?: number }[] = []
   const files: DriveFile[] = []
   const logs: string[] = []
+  // 送ったメール(停止の予告)
+  const mails: { to: string; subject: string; body: string }[] = []
   const newFile = (name: string, created = Date.now()): DriveFile => ({ name, created, trashed: false, removedEditors: [], removedViewers: [], sharing: [] })
   const driveHandle = (f: DriveFile) => ({
     getName: () => f.name,
@@ -73,6 +75,7 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   const ctx = vm.createContext({
     console: { log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error() {} },
     Logger: { log() {} },
+    MailApp: { sendEmail: (m: { to: string; subject: string; body: string }) => { mails.push(m) } },
     PropertiesService: { getScriptProperties: () => ({
       getProperties: () => ({ ...props }),
       getProperty: (k: string) => props[k] ?? null,
@@ -128,6 +131,6 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   vm.runInContext(CODE, ctx)
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
   const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
-  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, post, newFile }
+  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, mails, post, newFile }
 }
 

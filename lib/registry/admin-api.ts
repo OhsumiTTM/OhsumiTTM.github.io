@@ -23,7 +23,10 @@ export interface AdminSession {
   authAt: number // Google でログインした時刻(Unix 秒)
 }
 
-export type OrgState = 'active' | 'scheduled' | 'suspended'
+// restricted: 機能停止中(読み取り専用)。suspended: 提供停止中
+export type OrgState = 'active' | 'scheduled' | 'restricted' | 'suspended'
+// 停止の種類(R1-e)。suspend: 提供停止(契約の終了・規約違反など)/ restrict: 機能停止(アンケートの未回答など)
+export type SuspendKind = 'suspend' | 'restrict'
 export type CheckState = 'ok' | 'stale' | 'never'
 export type CodeState = 'unused' | 'used' | 'expired' | 'revoked'
 
@@ -40,6 +43,11 @@ export interface OrgSummary {
   createdAt: string
   suspendAt: string
   suspendReason: string
+  // 停止の種類(停止の予定・停止中の時)
+  suspendKind: SuspendKind
+  suspendScheduledBy: string
+  // 送った予告(停止の何日前か。14・7・1)
+  noticesSent: number[]
   channel: string
   gasUrl: string
   gasVersion: string
@@ -198,6 +206,31 @@ export function revokeRegistrationCode(session: AdminSession, codeId: string, re
   return callRegistry<{ codeId: string }>('revokeRegistrationCode', { session: session.token, codeId, reason })
 }
 
+export interface SuspensionInput {
+  orgId: string
+  kind: SuspendKind
+  suspendAt: string // ISO
+  reason: string
+}
+
+/** 停止の予定を入れる(今から14日より後。5分以内の Google でのログインが必要)。送り直さない */
+export function scheduleSuspension(session: AdminSession, input: SuspensionInput): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('scheduleSuspension', { session: session.token, ...input })
+}
+
+/** 停止の予定を取り消す・停止を解除する。送り直さない */
+export function clearSuspension(session: AdminSession, orgId: string, reason: string): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('clearSuspension', { session: session.token, orgId, reason })
+}
+
+// 停止の予定を入れられる、いちばん早い日時(今から14日後。datetime-local の値 'YYYY-MM-DDTHH:mm')
+export const SUSPEND_MIN_NOTICE_DAYS = 14
+export function earliestSuspendLocal(nowMs = Date.now()): string {
+  const d = new Date(nowMs + SUSPEND_MIN_NOTICE_DAYS * 24 * 3600 * 1000 + 60 * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 // ---- このタブに保存するもの ----
 
 function tabStorage(): Storage | null {
@@ -234,6 +267,23 @@ export function clearAdminSession() {
 /** 登録コードの発行の前に、ログインし直しが必要か(5分以内に Google でログインしたか) */
 export function needsReauth(session: AdminSession, nowSec = Math.floor(Date.now() / 1000)): boolean {
   return nowSec - session.authAt > 5 * 60
+}
+
+// 停止の予定の入力の途中でログインし直す時に、入力を残す(このタブだけ)
+const SUSPEND_DRAFT_KEY = 'ohsumi-registry-admin-suspend-draft'
+
+export function saveSuspensionDraft(input: SuspensionInput) {
+  try { tabStorage()?.setItem(SUSPEND_DRAFT_KEY, JSON.stringify(input)) } catch { /* ignore */ }
+}
+
+export function takeSuspensionDraft(): SuspensionInput | null {
+  try {
+    const raw = tabStorage()?.getItem(SUSPEND_DRAFT_KEY)
+    tabStorage()?.removeItem(SUSPEND_DRAFT_KEY)
+    return raw ? (JSON.parse(raw) as SuspensionInput) : null
+  } catch {
+    return null
+  }
 }
 
 // 発行の入力の途中でログインし直す時に、入力を残す(このタブだけ)

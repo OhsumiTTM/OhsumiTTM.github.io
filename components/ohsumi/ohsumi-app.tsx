@@ -6,6 +6,8 @@ import { NavProvider, useNav } from '@/lib/ohsumi/nav'
 import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
+import { ContractBanner } from './contract-banner'
+import { ReadOnlyInputs, ReadOnlyNotice } from './read-only-guard'
 import { ToastProvider, useToast } from './toast'
 import { LoginScreen } from './login-screen'
 import { OnboardingScreen } from './onboarding-screen'
@@ -142,7 +144,7 @@ function LocaleSyncWatcher() {
 }
 
 function Router() {
-  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
+  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, remoteRestricted, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
     useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
@@ -174,9 +176,12 @@ function Router() {
       {remoteEnabled && remoteError && (
         <div className="flex items-center justify-center gap-1.5 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
           <TriangleAlert className="size-3.5 shrink-0" />
-          {t(remoteReverted ? 'app.saveRevertedBanner' : 'app.syncFailedBanner')}
+          {t(remoteRestricted ? 'app.restrictedWriteBanner' : remoteReverted ? 'app.saveRevertedBanner' : 'app.syncFailedBanner')}
         </div>
       )}
+      {remoteEnabled && <ContractBanner />}
+      <ReadOnlyInputs />
+      <ReadOnlyNotice />
       {remoteEnabled && loadError && (
         <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
           <span className="flex items-center gap-1.5">

@@ -36,7 +36,7 @@
 //   doGet・doPost                   ウェブアプリの入口
 //   onOpen                          スプレッドシートを開いた時に「Ohsumi」メニューを出す
 //   registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
-//   sendBatchNotifications・dailyMaintenance・onSpreadsheetChange・onSpreadsheetEdit  トリガーから呼ばれる
+//   sendBatchNotifications・dailyMaintenance・onSpreadsheetChange・onSpreadsheetEdit・checkContractStatus  トリガーから呼ばれる
 //
 // ■ そのほかの関数は、中で使うだけ。名前の最後に _ を付けて、エディタの「実行」の一覧に出ないようにしている
 //   (_ を付けずに足すと lib/ohsumi/gas-functions.test.ts で止まる)
@@ -125,6 +125,14 @@ function setupOhsumi() {
       console.log('✅ sendBatchNotifications トリガー作成')
     } else {
       console.log('✅ sendBatchNotifications トリガー既存')
+    }
+    // 提供停止・機能停止の状態をレジストリに確かめる(R1-e。1時間ごと)
+    var hasContract = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'checkContractStatus' })
+    if (!hasContract) {
+      ScriptApp.newTrigger('checkContractStatus').timeBased().everyHours(1).create()
+      console.log('✅ checkContractStatus トリガー作成')
+    } else {
+      console.log('✅ checkContractStatus トリガー既存')
     }
   } catch (e) { console.error('❌ トリガー設定: ' + e) }
 
@@ -782,6 +790,9 @@ function doPost(e) {
   } finally {
     finishWrite_(state)
   }
+  // 画面が停止の予定・機能停止を表示できるように、停止の予定・停止中の時だけ状態を付ける
+  // (付いていない成功の応答は、停止の予定が無いことを表す)
+  if (state.contract && state.contract.phase !== 'none' && out) out.contract = contractForClient_(state.contract)
   return jsonOutput_(out)
 }
 
@@ -845,6 +856,8 @@ function regenerateInitialSetupCodeFromMenu() {
 function sendBatchNotifications() {
   // 毎時のトリガーのついでに、書き込み待ちの最終ログイン日時をシートに書く
   try { flushPendingLastLogins_() } catch (e) { console.error('flushPendingLastLogins failed: ' + e) }
+  // 提供停止中は、通知を送らない(機能停止中は送る)
+  if (contractSuspendedNow_()) return
   var props = PropertiesService.getScriptProperties()
   var allProps = props.getProperties()
   var now = new Date()
@@ -900,6 +913,8 @@ function sendBatchNotifications() {
 // Each step is isolated so a failure in one (e.g. generateRecurringTasksLocked_
 // throwing on a malformed rule) can't also skip the other.
 function dailyMaintenance() {
+  // 提供停止中は、定期の処理を止める(機能停止中は続ける)
+  if (contractSuspendedNow_()) return
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -937,6 +952,17 @@ function onSpreadsheetEdit(e) {
   }
   bumpDataVersion()
   bumpMemberEmailsVersion_()
+}
+
+// 1時間ごと(setupOhsumi でトリガーを作る): 提供停止・機能停止の状態をレジストリに確かめ、
+// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる
+function checkContractStatus() {
+  var state = refreshContractState_() || readContractState_()
+  try {
+    sendContractNotices_(state, Date.now())
+  } catch (e) {
+    console.error('停止の予告のメールを送れませんでした: ' + e)
+  }
 }
 
 // ============================================================================
@@ -2474,7 +2500,7 @@ var INITIAL_SETUP_FAIL_LIMIT = 10
 var SETUP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)
-var OHSUMI_GAS_VERSION = 'r1c-1'
+var OHSUMI_GAS_VERSION = 'r1e-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2516,19 +2542,25 @@ function topRoleRef_() {
   return DEFAULT_TOP_ROLE_NAME
 }
 
-// 代表(最上位の役職)のメンバーがいるか(シートから読む)
-function hasTopMember_() {
+// 代表(最上位の役職)のメンバーの ID(シートから読む)
+function topMemberIds_() {
   var sheet = getSheet_(SHEET_MEMBERS)
   var values = sheet.getDataRange().getValues()
   var headers = (values[0] || []).map(function (h) { return String(h).trim() })
   var roleCol = headers.indexOf('role')
   var idCol = headers.indexOf('id')
-  if (roleCol < 0 || idCol < 0) return false
+  if (roleCol < 0 || idCol < 0) return []
   var roles = getRoles_()
+  var ids = []
   for (var i = 1; i < values.length; i++) {
-    if (String(values[i][idCol]) && isTopRoleRef_(roles, values[i][roleCol])) return true
+    if (String(values[i][idCol]) && isTopRoleRef_(roles, values[i][roleCol])) ids.push(String(values[i][idCol]))
   }
-  return false
+  return ids
+}
+
+// 代表(最上位の役職)のメンバーがいるか
+function hasTopMember_() {
+  return topMemberIds_().length > 0
 }
 
 // 初期設定コードを作る(前のコードは使えなくなる)。元のコードを返す(保存するのは SHA-256 だけ)
@@ -2684,6 +2716,161 @@ function setupCodeMessage_(setupCode, expiresAt) {
   return '最初の代表の「初期設定コード」(この画面でだけ表示します。控えて、最初の代表に伝えてください):\n\n' +
     setupCode + '\n\n有効期限: ' + formatJaDateTime_(expiresAt) + '(72時間・1回限り)\n' +
     '最初の代表は、Ohsumi のログイン画面の「初期設定コード」の欄にこのコードを入れてから、Google でログインします。'
+}
+
+// ---- 提供停止・機能停止(R1-e) ---------------------------------------------------------
+//
+// 停止には2種類ある。どちらも FSIF がレジストリの管理画面で予定を入れる(14日より後)。
+//   suspend(提供停止): この GAS は、ログインの設定(getLoginConfig)以外のすべての操作を断り(orgSuspended)、
+//                      通知(sendBatchNotifications)・毎朝の処理(dailyMaintenance)も止める。データは消さない
+//   restrict(機能停止): 読み取り(閲覧・書き出し)とログインだけを受け付け、作成・編集は断る(restricted)。
+//                      通知・毎朝の処理は止めない。画面の上部に、アンケートへの回答のお願いを出す
+// 状態は、1時間ごとのトリガー(checkContractStatus)でレジストリの checkIn に確かめ、スクリプトプロパティ
+// CONTRACT_STATE に覚える。停止中(予定の日時を過ぎた時も)は、解除がすぐ効くように、使われるたびに確かめ直す
+// (1分に1回まで)。レジストリに確かめられない時は、最後に確かめた状態のまま使い続ける
+// (最後に届いた停止の予定の日時は守る)。
+// checkIn は、共有鍵(REGISTRY_SHARED_KEY)で 'checkIn.<団体ID>.<時刻(秒)>' に付けた HMAC-SHA256 の署名で確かめる。
+// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる(送った予告は CONTRACT_NOTICES_SENT に覚える)。
+// 応答には、画面が表示に使う contract({ phase, kind, suspendAt })を付ける
+var CONTRACT_NOTICE_DAYS = [14, 7, 1]
+var CONTRACT_RECHECK_SEC = 60
+var CONTRACT_SUSPENDED_MESSAGE = 'この団体は、Ohsumi の利用を停止しています。'
+var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いします。回答が確認でき次第、再開します。'
+// 機能停止中にも受け付ける操作(ログイン・読み取り・自分のログインの無効化・ルールどおりの定期タスクの生成)
+var RESTRICT_ALLOWED_ACTIONS = [
+  'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses', 'getFiles',
+  'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
+  'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin', 'checkAndGenerateRecurringTasks',
+]
+
+function readContractState_() {
+  try {
+    var state = JSON.parse(PropertiesService.getScriptProperties().getProperty('CONTRACT_STATE') || 'null')
+    return state && typeof state === 'object' ? state : null
+  } catch (e) {
+    return null
+  }
+}
+
+// 今の状態(Google のサービスを使わない純粋な関数)。予定の日時を過ぎていれば、確かめ直す前でも停止中とする
+function effectiveContract_(state, nowMs) {
+  if (!state) return { phase: 'none', kind: '', suspendAt: '' }
+  var kind = state.kind === 'restrict' ? 'restrict' : 'suspend'
+  var at = Date.parse(String(state.suspendAt || ''))
+  var suspendAt = at > 0 ? new Date(at).toISOString() : ''
+  if (state.phase === 'inEffect') return { phase: 'inEffect', kind: kind, suspendAt: suspendAt }
+  if (state.phase === 'scheduled' && at > 0) return { phase: at <= nowMs ? 'inEffect' : 'scheduled', kind: kind, suspendAt: suspendAt }
+  return { phase: 'none', kind: '', suspendAt: '' }
+}
+
+// トリガーから: 覚えている状態で、提供停止中か(レジストリには問い合わせない)
+function contractSuspendedNow_() {
+  var c = effectiveContract_(readContractState_(), Date.now())
+  return c.phase === 'inEffect' && c.kind === 'suspend'
+}
+
+// レジストリの checkIn で状態を確かめ、CONTRACT_STATE に覚えて返す。確かめられない時は null(覚えた状態は変えない)。
+// レジストリに登録していない団体(REGISTRY_URL・共有鍵が無い)も null
+function refreshContractState_(deps) {
+  deps = deps || {}
+  var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
+  var props = PropertiesService.getScriptProperties()
+  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
+  var orgId = String(props.getProperty('ORG_ID') || '')
+  if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return null
+  var ts = nowSec_()
+  var sig = base64UrlEncode_(Utilities.computeHmacSha256Signature('checkIn.' + orgId + '.' + ts, key))
+  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION })
+  var res
+  try {
+    var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
+    res = JSON.parse(r.getContentText())
+  } catch (e) {
+    console.warn('レジストリに停止の状態を確かめられませんでした(通信エラー・JSON ではない応答)。最後に確かめた状態のまま使います。')
+    return null
+  }
+  if (!res || !res.ok || !res.result) {
+    console.warn('レジストリに停止の状態を確かめられませんでした(' + String((res && res.error) || '応答の形が違います') + ')。最後に確かめた状態のまま使います。')
+    return null
+  }
+  var out = res.result
+  var state = {
+    phase: ['none', 'scheduled', 'inEffect'].indexOf(out.phase) >= 0 ? out.phase : 'none',
+    kind: out.kind === 'restrict' ? 'restrict' : 'suspend',
+    suspendAt: String(out.suspendAt || ''),
+    reason: String(out.reason || ''),
+    checkedAt: String(out.checkedAt || new Date().toISOString()),
+  }
+  setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
+  return state
+}
+
+// リクエストの時の状態。停止中(予定の日時を過ぎた時も)は、解除がすぐ効くように確かめ直す(1分に1回まで)
+function currentContract_(nowMs) {
+  var state = null
+  try { state = JSON.parse(requestProps_().CONTRACT_STATE || 'null') } catch (e) { state = null }
+  var c = effectiveContract_(state, nowMs)
+  if (c.phase !== 'inEffect') return c
+  var cache = CacheService.getScriptCache()
+  if (cache.get('contract:recheck')) return c
+  cache.put('contract:recheck', '1', CONTRACT_RECHECK_SEC)
+  var fresh = refreshContractState_()
+  return fresh ? effectiveContract_(fresh, nowMs) : c
+}
+
+// 停止中に断る時の応答(受け付ける時は null)
+function contractRejection_(c, body) {
+  if (c.phase !== 'inEffect') return null
+  if (c.kind === 'suspend') return { ok: false, orgSuspended: true, error: CONTRACT_SUSPENDED_MESSAGE }
+  if (RESTRICT_ALLOWED_ACTIONS.indexOf(body.action) >= 0) return null
+  return { ok: false, restricted: true, error: 'Ohsumi は読み取り専用になっています(作成・編集はできません)。' + CONTRACT_RESTRICTED_MESSAGE }
+}
+
+// 画面に渡す状態(停止の理由は渡さない。代表へのメールにだけ書く)
+function contractForClient_(c) {
+  return { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt }
+}
+
+// 停止の予告のメールの文面
+function contractNoticeText_(orgName, c, days) {
+  var when = Utilities.formatDate(new Date(c.suspendAt), Session.getScriptTimeZone(), 'yyyy年M月d日 H:mm')
+  var what = c.kind === 'restrict'
+    ? 'Ohsumi が読み取り専用になります(閲覧と書き出しはできますが、作成・編集はできなくなります)。' + CONTRACT_RESTRICTED_MESSAGE
+    : 'Ohsumi の提供を停止します。停止の後は、メンバー全員が Ohsumi にログインできなくなり、通知も止まります(団体のデータは、団体のスプレッドシートにそのまま残ります)。'
+  var name = orgName || 'Ohsumi'
+  return {
+    subject: '[Ohsumi] ' + name + ': ' + when + ' から' + (c.kind === 'restrict' ? '読み取り専用になります' : '提供を停止します') + '(あと' + days + '日)',
+    body: name + ' 代表の方へ\n\n' + when + ' から、' + what + '\n\n理由: ' + (c.reason || '—') + '\n\nご不明な点は FSIF にお問い合わせください。',
+  }
+}
+
+// 停止の予定があれば、予告の時期(14日前・7日前・1日前)になったものを代表に送る。送った日数を返す(送らなければ null)。
+// 同じ予定(日時と種類)に同じ予告は1回だけ。予定が変わったら、数え直す
+function sendContractNotices_(state, nowMs) {
+  var c = effectiveContract_(state, nowMs)
+  if (c.phase !== 'scheduled') return null
+  var left = (Date.parse(c.suspendAt) - nowMs) / (24 * 3600 * 1000)
+  var due = CONTRACT_NOTICE_DAYS.filter(function (d) { return left <= d })
+  if (!due.length) return null
+  var days = Math.min.apply(null, due)
+  var props = PropertiesService.getScriptProperties()
+  var planKey = c.suspendAt + '|' + c.kind
+  var sent = {}
+  try { sent = JSON.parse(props.getProperty('CONTRACT_NOTICES_SENT') || '{}') || {} } catch (e) { sent = {} }
+  if (sent.plan !== planKey) sent = { plan: planKey, days: [] }
+  if (sent.days.indexOf(days) >= 0) return null
+  var emails = getAllMemberEmails_()
+  var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  if (to.length) {
+    var text = contractNoticeText_(getSettingValue_('org_name'), { kind: c.kind, suspendAt: c.suspendAt, reason: state && state.reason }, days)
+    sendMail_({ to: to.join(','), subject: text.subject, body: text.body })
+  } else {
+    console.warn('停止の予告を送る代表のメールアドレスがありません(あと' + days + '日)')
+  }
+  sent.days.push(days)
+  props.setProperty('CONTRACT_NOTICES_SENT', JSON.stringify(sent))
+  return days
 }
 
 function exchangeIdToken_(body) {
@@ -3840,6 +4027,11 @@ function handlePost_(e, state) {
       if (!orgId) {
         return ({ ok: false, error: 'ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。' })
       }
+      // 提供停止中は、ログイン画面に「利用を停止しています」を出す
+      var loginContract = currentContract_(Date.now())
+      if (loginContract.phase === 'inEffect' && loginContract.kind === 'suspend') {
+        return ({ ok: true, result: { orgId: orgId, suspended: true } })
+      }
       return ({ ok: true, result: { orgId: orgId } })
     }
 
@@ -3847,6 +4039,12 @@ function handlePost_(e, state) {
     var versionError = checkClientVersion_(body)
     noteTiming_('propsMs', Date.now() - propsStart)
     if (versionError) return ({ ok: false, error: versionError, reloadRequired: true })
+
+    // 提供停止中はすべて断り、機能停止中は読み取りとログインだけを受け付ける(R1-e)
+    var contract = timed_('contractMs', function () { return currentContract_(Date.now()) })
+    state.contract = contract
+    var contractError = contractRejection_(contract, body)
+    if (contractError) return contractError
 
     // まとめて送られた書き込み(batch)は、中の操作がすべて受け付けられるものかを先に確かめる
     if (body.action === 'batch') {
