@@ -4162,7 +4162,7 @@ function notifyNewTasks(tasks) {
 // before this fix.
 function notifyReview(taskId) {
   try {
-    var task = findRow(SHEET_TASKS, taskId)
+    var task = requestRow(SHEET_TASKS, taskId)
     if (!task) return
     var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
       .split(',')
@@ -4251,7 +4251,7 @@ function debugNotifyTest() {
 // 宛先に含める共有の配信先アドレス。Settingsシートの org_notification_emails
 // キーにカンマ区切りで保存される（公開情報のため機密扱いではない）。
 function orgNotificationEmails() {
-  var raw = getSettingValue('org_notification_emails')
+  var raw = measureAction('recipientsMs', function () { return settingValueFromSnapshot('org_notification_emails') })
   if (!raw) return []
   return raw
     .split(',')
@@ -4277,7 +4277,7 @@ function uniqueEmails(list) {
 // Returns the notify frequency for a given member + kind.
 // Falls back to 'immediate' for kinds not configured yet.
 function getNotifyFrequency(memberId, kind) {
-  var row = findRow('Members', memberId)
+  var row = measureAction('recipientsMs', function () { return snapshotRowOrSheet(SHEET_MEMBERS, memberId) })
   if (!row) return 'immediate'
   var raw = row.notify_settings
   if (!raw) return 'immediate'
@@ -4436,9 +4436,9 @@ function notifyAdminsUnmeasured(subject, body, preferredEmails) {
       console.log('notifyAdmins: preferredEmails+orgに送信しました ' + to.join(','))
       return
     }
-    var sheet = getSheet(SHEET_MEMBERS)
-    var headers = headerRow(sheet)
-    var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), headers.length).getValues()
+    var members = measureAction('recipientsMs', function () { return snapshotTableOrSheet(SHEET_MEMBERS) })
+    var headers = members.headers
+    var rows = members.rows
     var idCol = headers.indexOf('id')
     var notifyCol = headers.indexOf('notify_new_task')
     var roleCol = headers.indexOf('role')
@@ -4484,34 +4484,34 @@ function notifyAdminsUnmeasured(subject, body, preferredEmails) {
 // email. Returns [] when nobody involved has a reports_to_id set, so
 // callers fall back to notifyAdmins' default opted-in/代表 logic.
 function reportsToEmails(assigneeIds) {
-  try {
-    var sheet = getSheet(SHEET_MEMBERS)
-    var headers = headerRow(sheet)
-    var idCol = headers.indexOf('id')
-    var reportsToCol = headers.indexOf('reports_to_id')
-    if (idCol === -1 || reportsToCol === -1) return []
-    var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), headers.length).getValues()
-    var emailMap = getAllMemberEmails()
+  return measureAction('recipientsMs', function () {
+    try {
+      var members = snapshotTableOrSheet(SHEET_MEMBERS)
+      var idCol = members.headers.indexOf('id')
+      var reportsToCol = members.headers.indexOf('reports_to_id')
+      if (idCol === -1 || reportsToCol === -1) return []
+      var emailMap = getAllMemberEmails()
 
-    var byId = {}
-    rows.forEach(function (r) {
-      byId[String(r[idCol])] = { reportsTo: String(r[reportsToCol] || '').trim() }
-    })
+      var byId = {}
+      members.rows.forEach(function (r) {
+        byId[String(r[idCol])] = { reportsTo: String(r[reportsToCol] || '').trim() }
+      })
 
-    var emails = []
-    ;(assigneeIds || []).forEach(function (aid) {
-      var m = byId[String(aid)]
-      var managerId = m && m.reportsTo
-      var managerEmail = managerId && emailMap[managerId]
-      if (managerEmail && emails.indexOf(managerEmail) === -1) {
-        emails.push(managerEmail)
-      }
-    })
-    return emails
-  } catch (err) {
-    console.error('reportsToEmailsの処理に失敗しました: ' + err)
-    return []
-  }
+      var emails = []
+      ;(assigneeIds || []).forEach(function (aid) {
+        var m = byId[String(aid)]
+        var managerId = m && m.reportsTo
+        var managerEmail = managerId && emailMap[managerId]
+        if (managerEmail && emails.indexOf(managerEmail) === -1) {
+          emails.push(managerEmail)
+        }
+      })
+      return emails
+    } catch (err) {
+      console.error('reportsToEmailsの処理に失敗しました: ' + err)
+      return []
+    }
+  })
 }
 
 // Resolves member ids to their email addresses (skips members with no
@@ -4536,25 +4536,21 @@ function memberEmailsByIds(memberIds) {
 // 多言語メール送信（sendLocalizedEmail）で、宛先ごとに言語を
 // 出し分けるために使う。
 function localesByEmails(emails) {
+  return measureAction('recipientsMs', function () { return localesByEmailsUnmeasured(emails) })
+}
+
+function localesByEmailsUnmeasured(emails) {
   var result = {}
   if (!emails || emails.length === 0) return result
   var wanted = {}
   emails.forEach(function (e) { wanted[e.toLowerCase()] = true })
   try {
-    // まずMemberEmails側で「wantedなメールを持つのはどのmemberIdか」を引く
+    // まずメールアドレス表で「wantedなメールを持つのはどのmemberIdか」を引く
     // (1人が複数メールをカンマ区切りで登録している場合にも対応)
-    var emailSheet = getMemberEmailsSheet()
-    var eHeaders = headerRow(emailSheet)
-    var eIdCol = eHeaders.indexOf('id')
-    var eEmailCol = eHeaders.indexOf('email')
-    var eLastRow = emailSheet.getLastRow()
-    if (eLastRow < 2) return result
-    var eValues = emailSheet.getRange(2, 1, eLastRow - 1, eHeaders.length).getValues()
-
+    var emailMap = loadMemberEmailMap()
     var idToMatchedEmails = {}
-    eValues.forEach(function (r) {
-      var mid = String(r[eIdCol])
-      String(r[eEmailCol] || '').split(',').map(function (e) { return e.trim() }).filter(Boolean).forEach(function (e) {
+    Object.keys(emailMap).forEach(function (mid) {
+      String(emailMap[mid] || '').split(',').map(function (e) { return e.trim() }).filter(Boolean).forEach(function (e) {
         if (wanted[e.toLowerCase()]) {
           if (!idToMatchedEmails[mid]) idToMatchedEmails[mid] = []
           idToMatchedEmails[mid].push(e)
@@ -4563,18 +4559,16 @@ function localesByEmails(emails) {
     })
     if (Object.keys(idToMatchedEmails).length === 0) return result
 
-    // 次にMembers側でそのmemberIdのlocaleを引く
-    var sheet = getSheet(SHEET_MEMBERS)
-    var headers = headerRow(sheet)
-    var idCol = headers.indexOf('id')
-    var localeCol = headers.indexOf('locale')
+    // 次にメンバー(スナップショット)でそのmemberIdのlocaleを引く
+    var members = snapshotTableOrSheet(SHEET_MEMBERS)
+    var idCol = members.headers.indexOf('id')
+    var localeCol = members.headers.indexOf('locale')
     if (idCol === -1) return result
-    var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), headers.length).getValues()
-    rows.forEach(function (r) {
+    members.rows.forEach(function (r) {
       var mid = String(r[idCol])
       var matched = idToMatchedEmails[mid]
       if (!matched) return
-      var locale = (localeCol !== -1 && r[localeCol] === 'en') ? 'en' : 'ja'
+      var locale = (localeCol !== -1 && String(r[localeCol]) === 'en') ? 'en' : 'ja'
       matched.forEach(function (e) { result[e] = locale })
     })
   } catch (err) {
@@ -4609,7 +4603,7 @@ function sendLocalizedEmail(emails, templates) {
 // Respects each member's 'mention' frequency setting via queueNotification.
 function notifyMention(taskId, commentText, memberIds) {
   try {
-    var task = findRow(SHEET_TASKS, taskId)
+    var task = requestRow(SHEET_TASKS, taskId)
     if (!task) return
     if (!memberIds || memberIds.length === 0) return
     var templates = {
@@ -4725,7 +4719,7 @@ function notifyTrainingDecision(memberId, trainingName, approved) {
 // store.tsx から呼ばれ、作成者へ集計結果をメールする。
 function notifyScheduleResult(taskId) {
   try {
-    var task = findRow(SHEET_TASKS, taskId)
+    var task = requestRow(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return
     var emails = memberEmailsByIds([task.creator_id])
     if (emails.length === 0) {
@@ -4783,7 +4777,7 @@ function notifyScheduleResult(taskId) {
 // 呼ばれ、作成者へ回答結果をメールする。
 function notifyFormResult(taskId) {
   try {
-    var task = findRow(SHEET_TASKS, taskId)
+    var task = requestRow(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return
     var emails = memberEmailsByIds([task.creator_id])
     if (emails.length === 0) {
@@ -4846,7 +4840,7 @@ function notifyFormResult(taskId) {
 // the detail drawer.
 function notifyScheduleChange(taskId) {
   try {
-    var task = findRow(SHEET_TASKS, taskId)
+    var task = requestRow(SHEET_TASKS, taskId)
     if (!task) return
     var assigneeIds = String(task.assignee_id || '')
       .split(',')
@@ -4968,6 +4962,7 @@ function removeProject(projectId) {
   for (var i = 0; i < ids.length; i++) {
     if (String(ids[i][0]) === String(projectId)) {
       projects.deleteRow(i + 2)
+      forgetSheetGrid()
       break
     }
   }
@@ -4984,6 +4979,7 @@ function removeProject(projectId) {
     for (var j = projectIds.length - 1; j >= 0; j--) {
       if (String(projectIds[j][0]) === String(projectId)) {
         tasks.deleteRow(j + 2)
+        forgetSheetGrid()
       }
     }
   }
@@ -5029,6 +5025,7 @@ function removeTask(taskId) {
   for (var i = 0; i < ids.length; i++) {
     if (String(ids[i][0]) === String(taskId)) {
       tasks.deleteRow(i + 2)
+      forgetSheetGrid()
       break
     }
   }
@@ -5120,16 +5117,48 @@ function getMemberEmailValue(memberId) {
 
 // getMemberEmailValue と同じ値を、メールアドレス表の版ごとのキャッシュ(メンバーID → メール)から返す。
 // 版はメールの登録・変更・メンバーの削除・直接の編集で変わる(findMemberIdByEmailCached と同じ)
-function getMemberEmailValueCached(memberId) {
-  var cache = CacheService.getScriptCache()
-  var key = memberEmailMapKey()
-  var map = _requestEmailMap && _requestEmailMap.key === key ? _requestEmailMap.map : null
-  if (!map) {
-    try {
-      var raw = cache.get(key)
-      if (raw) map = JSON.parse(raw)
-    } catch (e) { map = null }
+// ---- 通知の宛先を調べる時の、メンバー・メールアドレス・設定 ----
+// メンバー・設定は、スナップショット(読み取り・認証と同じキャッシュ。版で作り直される)から、
+// メールアドレスは、メールアドレス表の版ごとのキャッシュ(ID → メール)から引く(シートを読み直さない)。
+// 読めない時はシートから読む。通知の宛先・言語だけに使う(権限の判定には使わない)
+
+function snapshotTableOrSheet(name) {
+  try {
+    var table = loadSnapshot().data[name]
+    if (table && table.headers) return table
+  } catch (e) {
+    // 読めなければシートから
   }
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  if (!sheet) return { headers: [], rows: [] }
+  var values = sheet.getDataRange().getValues()
+  return { headers: (values[0] || []).map(function (h) { return String(h).trim() }), rows: values.slice(1) }
+}
+
+function snapshotRowOrSheet(name, rowId) {
+  var table = snapshotTableOrSheet(name)
+  var idCol = table.headers.indexOf('id')
+  if (idCol < 0) return null
+  for (var i = 0; i < table.rows.length; i++) {
+    if (String(table.rows[i][idCol]) !== String(rowId)) continue
+    var obj = {}
+    table.headers.forEach(function (h, c) { obj[h] = table.rows[i][c] })
+    return obj
+  }
+  return null
+}
+
+// メンバーID → メール(登録のまま。カンマ区切りで複数のことがある)。空のメンバーも入る
+function loadMemberEmailMap() {
+  var key = memberEmailMapKey()
+  if (_requestEmailMap && _requestEmailMap.key === key) return _requestEmailMap.map
+  var cache = null
+  var map = null
+  try {
+    cache = CacheService.getScriptCache()
+    var raw = cache.get(key)
+    if (raw) map = JSON.parse(raw)
+  } catch (e) { map = null }
   if (map) {
     noteTiming('myEmailCache', 'hit')
   } else {
@@ -5146,7 +5175,12 @@ function getMemberEmailValueCached(memberId) {
     }
     try { cache.put(key, JSON.stringify(map), SNAPSHOT_CACHE_TTL) } catch (e) { /* 大きすぎる場合は毎回読む */ }
   }
-  return map[String(memberId)] || ''
+  _requestEmailMap = { key: key, map: map }
+  return map
+}
+
+function getMemberEmailValueCached(memberId) {
+  return loadMemberEmailMap()[String(memberId)] || ''
 }
 
 // メンバー1人分のメールを書く(行が無ければ追加、あれば上書き)。
@@ -5187,19 +5221,15 @@ function writeMemberEmail(memberId, email) {
 // メール解決が必要な箇所(通知・カレンダー招待・言語判定など)はここから
 // 引く — Membersシートはもうemail列を持たない。
 function getAllMemberEmails() {
-  var sheet = getMemberEmailsSheet()
-  var headers = headerRow(sheet)
-  var idCol = headers.indexOf('id')
-  var emailCol = headers.indexOf('email')
-  var lastRow = sheet.getLastRow()
-  var map = {}
-  if (lastRow < 2) return map
-  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
-  values.forEach(function (r) {
-    var email = String(r[emailCol] || '').trim()
-    if (email) map[String(r[idCol])] = email
+  return measureAction('recipientsMs', function () {
+    var map = {}
+    var all = loadMemberEmailMap()
+    Object.keys(all).forEach(function (id) {
+      var email = String(all[id] || '').trim()
+      if (email) map[id] = email
+    })
+    return map
   })
-  return map
 }
 
 // Saves a profile picture (sent as a data: URL, already resized client-side)
@@ -5324,6 +5354,7 @@ function removeMember(memberId) {
   for (var i = 0; i < ids.length; i++) {
     if (String(ids[i][0]) === String(memberId)) {
       members.deleteRow(i + 2)
+      forgetSheetGrid()
       break
     }
   }
@@ -5622,26 +5653,59 @@ function updateRowFields(sheetName, rowId, fields) {
   return measureAction('sheetWriteMs', function () { return updateRowFieldsUnmeasured(sheetName, rowId, fields) })
 }
 
-function updateRowFieldsUnmeasured(sheetName, rowId, fields) {
-  var sheet = getSheet(sheetName)
-  var headers = headerRow(sheet)
-  var idCol = headers.indexOf('id') + 1
-  // F14: シート名などの内部情報はエラーメッセージに含めない
-  if (idCol === 0) throw userError('シートの構成が不正です。管理者にお問い合わせください。')
+// 1回の実行(リクエスト)の中で読んだシートの形(見出しと、ID → 行番号)を覚えて、同じシートへの
+// 2回目からの書き込み・行の読み込みで使い回す(batch で同じタスクに2つの操作を書く時など)。
+// 読む時はシート全体を1回の呼び出し(getDataRange)で読む(これまでは見出し・最終行・ID の列を別々に読んでいた)。
+// この実行の中で書いた値は values にも入れる(requestRow が書いた後の行を返せるように)。
+// 行を削除した時は forgetSheetGrid で忘れる(行番号がずれるため)。行の追加では既存の行番号は変わらないので、
+// 見つからない ID があった時だけ読み直す
+var _sheetGrids = {}
 
-  var lastRow = sheet.getLastRow()
-  var ids = sheet.getRange(2, idCol, Math.max(lastRow - 1, 0), 1).getValues()
-  var targetRow = -1
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(rowId)) {
-      targetRow = i + 2
-      break
+function forgetSheetGrid(sheetName) {
+  if (sheetName) delete _sheetGrids[sheetName]
+  else _sheetGrids = {}
+}
+
+function loadSheetGrid(sheetName) {
+  var sheet = getSheet(sheetName)
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var idCol = headers.indexOf('id')
+  var rowOf = {}
+  if (idCol >= 0) {
+    for (var i = 1; i < values.length; i++) {
+      var id = String(values[i][idCol])
+      if (id !== '' && !(id in rowOf)) rowOf[id] = i + 1
     }
   }
+  var grid = { sheet: sheet, headers: headers, idCol: idCol, rowOf: rowOf, values: values }
+  _sheetGrids[sheetName] = grid
+  return grid
+}
+
+// 行番号(見つからなければ、一度だけ読み直して探す)
+function sheetGridRow(sheetName, rowId) {
+  var grid = _sheetGrids[sheetName] || loadSheetGrid(sheetName)
+  var r = grid.rowOf[String(rowId)]
+  if (!r && grid.loadedFresh !== true) {
+    grid = loadSheetGrid(sheetName)
+    grid.loadedFresh = true
+    r = grid.rowOf[String(rowId)]
+  }
+  return { grid: grid, row: r || -1 }
+}
+
+function updateRowFieldsUnmeasured(sheetName, rowId, fields) {
+  var found = sheetGridRow(sheetName, rowId)
+  var grid = found.grid
+  var headers = grid.headers
+  // F14: シート名などの内部情報はエラーメッセージに含めない
+  if (grid.idCol < 0) throw userError('シートの構成が不正です。管理者にお問い合わせください。')
+  var targetRow = found.row
   if (targetRow === -1) throw userError(sheetName + ' row not found for id ' + rowId)
 
   var missingKeys = []
-  var matchedCount = 0
+  var cols = []
   // F4(性能・レビュー指摘対応4): ここでは書式を設定しない。保護対象列は
   // 行の新規作成時に必ずprotectRowFromFormulaInjection()で書式なしテキスト
   // (@)にしてからappendRowしているため、既存行のセルは既にその書式に
@@ -5654,21 +5718,63 @@ function updateRowFieldsUnmeasured(sheetName, rowId, fields) {
       missingKeys.push(key)
       return // このシートにまだ無い列 — 個別にはスキップするが、下でまとめて報告する
     }
-    sheet.getRange(targetRow, col).setValue(fields[key])
-    matchedCount++
+    cols.push({ col: col, value: fields[key] })
   })
   // 更新しようとした列が1つも見つからなかった場合、無音で「成功」を返すと
   // フロント側は保存できたと誤認する（実際は何も書き込まれていない）。
   // 新しい列をCode.gs側に追加しただけでは既存のシートには反映されない
   // （setupOhsumi()の再実行が必要）ため、このケースは実運用で起こりうる。
-  if (matchedCount === 0 && missingKeys.length > 0) {
+  if (cols.length === 0 && missingKeys.length > 0) {
     throw userError(
       sheetName + 'シートに列が見つかりません: ' + missingKeys.join(', ') +
       '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。',
     )
   }
+  // 隣り合う列は1回の setValues にまとめる。離れた列は、間のセル(数式など)を書き換えないよう別に書く
+  // (セルへの書き込みは、Apps Script が書き込みの確定の時にまとめて送る)
+  contiguousColumnRuns(cols).forEach(function (run) {
+    grid.sheet.getRange(targetRow, run[0].col, 1, run.length).setValues([run.map(function (c) { return c.value })])
+  })
+  var rowValues = grid.values[targetRow - 1]
+  if (rowValues) cols.forEach(function (c) { rowValues[c.col - 1] = c.value })
 
   return { id: rowId, updated: Object.keys(fields) }
+}
+
+// 列の番号の並び(書く値つき)を、隣り合う列ごとのまとまりにする(Google のサービスを使わない)
+function contiguousColumnRuns(cols) {
+  var sorted = cols.slice().sort(function (a, b) { return a.col - b.col })
+  var runs = []
+  sorted.forEach(function (c) {
+    var last = runs.length ? runs[runs.length - 1] : null
+    if (last && last[last.length - 1].col === c.col) {
+      last[last.length - 1] = c // 同じ列を2回書く時は後の値
+    } else if (last && last[last.length - 1].col + 1 === c.col) {
+      last.push(c)
+    } else {
+      runs.push([c])
+    }
+  })
+  return runs
+}
+
+// 通知などで、書いた後の行を読む(判定には使わない)。この実行でそのシートを読んだ・書いた時は、
+// 覚えている行(書いた値を含む)を返す。そうでなければ、権限の判定に使ったスナップショットの行
+// (同じ版。値は表示の文字列)、それも無ければシートから読む(findRow)
+function requestRow(sheetName, rowId) {
+  var grid = _sheetGrids[sheetName]
+  if (grid && grid.idCol >= 0) {
+    var r = grid.rowOf[String(rowId)]
+    if (r) {
+      var obj = {}
+      grid.headers.forEach(function (h, c) { obj[h] = grid.values[r - 1][c] })
+      return obj
+    }
+  }
+  if (_authSnapshotVersion !== null && _requestSnapshot && _requestSnapshot.version === _authSnapshotVersion && !grid) {
+    return authFindRow(sheetName, rowId)
+  }
+  return findRow(sheetName, rowId)
 }
 
 function todayStr() {
@@ -5754,6 +5860,7 @@ function startRequestTiming() {
   _authSnapshotVersion = null
   _prefetchedSheets = {}
   _requestEmailMap = null
+  _sheetGrids = {}
 }
 
 function noteTiming(key, value) {
@@ -5796,7 +5903,8 @@ function timed(key, fn) {
 //   actionMs       処理の全体
 //   sheetReadMs    行を探す読み込み(findRow)
 //   sheetWriteMs   行への書き込み(updateRowFields。書く行を探す読み込みを含む。確定は flushMs)
-//   notifyMs       管理者への通知の準備(宛先・言語を調べる)
+//   notifyMs       管理者への通知の準備(宛先を調べる時間を除く)
+//   recipientsMs   通知の宛先・言語を調べる(メンバー・メールアドレス・団体の通知先。スナップショットとキャッシュから)
 //   mailMs         メールの送信(mailCount 件)
 //   chatMs         Discord・Slack への送信
 //   calendarMs     Google カレンダーの予定の更新
@@ -7077,6 +7185,7 @@ function removeCandidate(candidateId) {
   for (var i = 0; i < ids.length; i++) {
     if (String(ids[i][0]) === String(candidateId)) {
       sheet.deleteRow(i + 2)
+      forgetSheetGrid()
       break
     }
   }
@@ -8886,6 +8995,7 @@ function memberEmailMapCached() {
     var raw = CacheService.getScriptCache().get(key)
     if (!raw) return false
     _requestEmailMap = { key: key, map: JSON.parse(raw) }
+    noteTiming('myEmailCache', 'hit')
     return true
   } catch (e) {
     return false
@@ -9356,6 +9466,7 @@ function deletePerformanceTestData() {
       while (i >= 0 && String(ids[i][0]).indexOf(PERF_TEST_ID_PREFIX) === 0) i--
       var count = end - i
       sheet.deleteRows(i + 3, count)
+      forgetSheetGrid()
       deleted[name] += count
     }
   })
@@ -10190,6 +10301,7 @@ function deleteSampleRows(sheetName, match) {
     var end = i
     while (i >= 0 && hit[i]) i--
     sheet.deleteRows(i + 3, end - i)
+    forgetSheetGrid()
     deleted += end - i
   }
   return deleted
