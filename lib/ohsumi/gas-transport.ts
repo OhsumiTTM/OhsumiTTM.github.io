@@ -34,6 +34,12 @@ export interface GasResponse<T = unknown> {
   // 権限が足りない(セッションは有効。ログイン画面には戻さない)
   forbidden?: boolean
   reloadRequired?: boolean
+  // 提供停止中(R1-e): すべての操作を断った
+  orgSuspended?: boolean
+  // 機能停止中(R1-e): 読み取り専用のため、作成・編集を断った
+  restricted?: boolean
+  // 停止の予定・停止中の時だけ付く({ phase, kind, suspendAt }。lib/ohsumi/contract.ts)
+  contract?: unknown
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)
   retryLater?: boolean
   // 同じ requestId の前回の結果を返した(処理はやり直していない)

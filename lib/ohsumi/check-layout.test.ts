@@ -73,11 +73,20 @@ describe('スマホの幅の表示の確認', () => {
   })
 })
 
+describe('提供停止・機能停止の知らせ(375px)', () => {
+  it('機能停止中の知らせと、停止の予告を開く(確かめる文は ja.ts の知らせにある)', () => {
+    const steps = (layout.STEPS as { do: string; contract?: { phase: string; kind: string }; expect?: string }[]).filter((s) => s.do === 'contract')
+    expect(steps.map((s) => `${s.contract!.phase}/${s.contract!.kind}`)).toEqual(['inEffect/restrict', 'scheduled/suspend'])
+    expect(ja['app.contractRestricted']).toContain(steps[0].expect!)
+    expect(ja['app.contractScheduledSuspend']).toContain(steps[1].expect!)
+  })
+})
+
 describe('レジストリの管理画面(375px)', () => {
   it('ログイン・団体・登録コード・発行した後・操作の記録を開く(タブのラベルは管理画面の TABS と同じ)', () => {
     const steps = layout.REGISTRY_STEPS as { do: string; text?: string }[]
     const kinds = new Set(steps.map((s) => s.do))
-    for (const k of ['registryLogin', 'registry', 'registryIssue']) expect(kinds.has(k), k).toBe(true)
+    for (const k of ['registryLogin', 'registry', 'registrySuspend', 'registryIssue']) expect(kinds.has(k), k).toBe(true)
     const src = readFileSync(join(ROOT, 'components', 'registry', 'registry-admin.tsx'), 'utf8')
     for (const s of steps.filter((s) => s.do === 'click')) expect(src).toContain(`label: '${s.text}'`)
     expect(src).toContain('発行する')
@@ -85,7 +94,7 @@ describe('レジストリの管理画面(375px)', () => {
 
   it('偽の応答は、団体の状態・登録コードの状態をすべて含む', () => {
     const r = layout.registryResponse({ action: 'adminOverview' }) as { orgs: { state: string }[]; codes: { state: string }[] }
-    expect(new Set(r.orgs.map((o) => o.state))).toEqual(new Set(['active', 'scheduled', 'suspended']))
+    expect(new Set(r.orgs.map((o) => o.state))).toEqual(new Set(['active', 'scheduled', 'restricted', 'suspended']))
     expect(new Set(r.codes.map((c) => c.state))).toEqual(new Set(['unused', 'used', 'expired', 'revoked']))
   })
 })

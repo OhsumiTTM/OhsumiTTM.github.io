@@ -95,6 +95,36 @@ describe('送り直し', () => {
   })
 })
 
+describe('停止の予定(R1-e)', () => {
+  it('停止の予定を入れる・取り消す(書き込みなので送り直さない)', async () => {
+    const { api, bodies } = await load([
+      JSON.stringify({ ok: true, result: { orgId: 'org_A', state: 'scheduled' } }),
+      new Error('network'),
+      JSON.stringify({ ok: true, result: {} }),
+    ])
+    const input = { orgId: 'org_A', kind: 'restrict' as const, suspendAt: '2026-11-01T00:00:00.000Z', reason: 'アンケートの未回答' }
+    expect(await api.scheduleSuspension(session, input)).toMatchObject({ state: 'scheduled' })
+    expect(bodies[0]).toEqual({ action: 'scheduleSuspension', session: session.token, ...input })
+    await expect(api.clearSuspension(session, 'org_A', '回答を確認')).rejects.toThrow(/応答を受け取れませんでした/)
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]).toEqual({ action: 'clearSuspension', session: session.token, orgId: 'org_A', reason: '回答を確認' })
+  })
+
+  it('入れられるいちばん早い日時は、今から14日後(datetime-local の形)', async () => {
+    const { api } = await load([])
+    const now = new Date(2026, 9, 1, 9, 30).getTime()
+    expect(api.earliestSuspendLocal(now)).toBe('2026-10-15T09:31')
+  })
+
+  it('停止の予定の入力の途中でログインし直す時の入力は、このタブに一度だけ残す', async () => {
+    const { api } = await load([])
+    const input = { orgId: 'org_A', kind: 'suspend' as const, suspendAt: '2026-11-01T09:00', reason: '契約の終了' }
+    api.saveSuspensionDraft(input)
+    expect(api.takeSuspensionDraft()).toEqual(input)
+    expect(api.takeSuspensionDraft()).toBeNull()
+  })
+})
+
 describe('管理画面の置き方', () => {
   it('検索エンジンに載せない(noindex・nofollow)', () => {
     const page = readFileSync(join(ROOT, 'app', 'registry-admin', 'page.tsx'), 'utf8')

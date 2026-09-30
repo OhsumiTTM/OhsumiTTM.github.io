@@ -47,6 +47,9 @@ export const STEPS = [
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // 提供停止・機能停止(R1-e): 画面の上部の知らせ(文は ja.ts の app.contract*)
+  { name: 'OUTPUT(機能停止中の知らせ)', do: 'contract', contract: { phase: 'inEffect', kind: 'restrict', suspendAt: '2026-10-01T00:00:00.000Z' }, expect: 'アンケートへの回答をお願いします' },
+  { name: 'OUTPUT(提供停止の予告)', do: 'contract', contract: { phase: 'scheduled', kind: 'suspend', days: 6 }, expect: '提供を停止します' },
 ]
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
@@ -63,6 +66,7 @@ export const REGISTRY_URL = 'https://script.google.com/macros/s/LAYOUT_REGISTRY/
 export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(ログイン)', do: 'registryLogin' },
   { name: 'レジストリ管理(団体)', do: 'registry' },
+  { name: 'レジストリ管理(停止の予定を入れる)', do: 'registrySuspend' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
@@ -78,15 +82,17 @@ export function registryResponse(body) {
         me: { email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 1800 },
         codeTtlDays: 14,
         orgs: [
-          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'v1' },
-          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', channel: 'standard', gasUrl: '', gasVersion: '' },
-          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: '', suspendReason: '', channel: '', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'r1e-1' },
+          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], channel: 'standard', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], channel: 'standard', gasUrl: '', gasVersion: 'r1e-1' },
+          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [14, 7, 1], channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
         audit: [
+          { at: iso(4), actor: 'registry.admin.with.a.long.address@example.com', action: 'scheduleSuspension', target: 'org_r', before: '', after: JSON.stringify({ kind: 'restrict', suspendAt: iso(2) }), reason: 'アンケートの未回答' },
           { at: iso(3), actor: 'registry.admin.with.a.long.address@example.com', action: 'issueRegistrationCode', target: 'rc_0abcdefghij', before: '', after: JSON.stringify({ orgName: long, contactEmail: 'contact.person.long.address@example.org', expiresAt: iso(14) }), reason: '' },
           { at: iso(2), actor: 'stranger@example.com', action: 'adminLoginDenied', target: '', before: '', after: '', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' },
         ],
@@ -249,6 +255,8 @@ async function run({ build = true } = {}) {
       return r.result?.result?.value
     }
 
+    // 画面の上部の知らせを確かめる時に、GAS の応答に付ける停止の状態(R1-e)
+    let contract = null
     // GAS・Google への通信には偽の応答を返す(外には出さない)
     const gas = (body) => {
       switch (body.action) {
@@ -269,7 +277,7 @@ async function run({ build = true } = {}) {
       if (url.origin === base) return send('Fetch.continueRequest', { requestId })
       const fulfill = (type, body) => send('Fetch.fulfillRequest', { requestId, responseCode: 200, body: b64(body),
         responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }] })
-      if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')) }))
+      if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')), ...(contract ? { contract } : {}) }))
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
         // 接続先の解決: 一覧に無い団体(招待リンクの団体が見つからない画面)
@@ -324,6 +332,16 @@ async function run({ build = true } = {}) {
           const shown = await evaluate(`document.body.textContent.includes('団体が見つかりません')`)
           if (!shown) throw new Error('「団体が見つかりません」が表示されません')
         }
+        if (step.do === 'home' || step.do === 'admin') contract = null
+        if (step.do === 'contract') {
+          const c = step.contract
+          contract = c.days ? { phase: c.phase, kind: c.kind, suspendAt: new Date(Date.now() + c.days * 24 * 3600 * 1000).toISOString() } : c
+          await signIn(); await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          const shown = await evaluate(`document.body.textContent.includes(${JSON.stringify(step.expect)})`)
+          if (!shown) throw new Error('停止の知らせが表示されません')
+        }
         if (step.do === 'home') {
           await signIn(); await navigate('/')
           await clickText('あとで設定する').catch(() => {})
@@ -337,6 +355,11 @@ async function run({ build = true } = {}) {
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
         if (step.do === 'registry') { await registrySession(); await navigate('/registry-admin/') }
+        if (step.do === 'registrySuspend') {
+          await clickText('停止の予定を入れる…'); await sleep(500)
+          const shown = await evaluate(`!!document.querySelector('input[type=datetime-local]')`)
+          if (!shown) throw new Error('停止の予定を入れる欄が表示されません')
+        }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
           await evaluate(`(() => {

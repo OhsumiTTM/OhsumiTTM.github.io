@@ -66,11 +66,20 @@ import {
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
 import { checkGasUrl } from './gas-url'
-import { DEFAULT_GAS_URL, REGISTRY_URL, getActiveGasUrl } from './org-directory'
+import { DEFAULT_GAS_URL, ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
+import { noteContractResponse } from './contract'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
+
+/** 機能停止中(読み取り専用)のため、GAS が書き込みを断った(R1-e。lib/ohsumi/contract.ts) */
+export class ContractRestrictedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ContractRestrictedError'
+  }
+}
 
 // 送り先の団体の GAS は、ページを開いた時に決まる(org-directory.ts。招待リンク・この端末の団体の一覧・
 // ビルド時の既定の団体 NEXT_PUBLIC_GAS_URL)。レジストリ(NEXT_PUBLIC_REGISTRY_URL)があれば、既定の団体が
@@ -646,15 +655,21 @@ async function callGas<T>(body: Record<string, unknown> & { action: string }): P
 // 指定した団体の GAS に、認証なしで送る(招待リンクの団体の団体ID を、使う前に確かめる時)
 async function sendToGasAt<T>(url: string, body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
   if (!url) throw new Error('GAS Web App URL is not configured')
-  return sendToGas<T>(url, { ...body, clientVersion: CLIENT_VERSION })
+  const json = await sendToGas<T>(url, { ...body, clientVersion: CLIENT_VERSION })
+  // 招待リンクの確認(ほかの団体の GAS)の応答は、今の団体の状態にしない
+  if (url === getActiveGasUrl()) noteContractResponse(json)
+  return json
 }
 
 /** ログイン前に団体ID(IDトークンの nonce に含める)を取得する。GAS が古い場合などは null。gasUrl を省くと今の団体の GAS */
-export async function fetchLoginConfig(gasUrl?: string): Promise<{ orgId: string } | null> {
+export async function fetchLoginConfig(gasUrl?: string): Promise<{ orgId: string; suspended?: boolean } | null> {
   try {
     const body = { action: 'getLoginConfig' }
-    const json = gasUrl ? await sendToGasAt<{ orgId: string }>(gasUrl, body) : await callGas<{ orgId: string }>(body)
-    return json.ok && json.result?.orgId ? { orgId: json.result.orgId } : null
+    type Config = { orgId: string; suspended?: boolean }
+    const json = gasUrl ? await sendToGasAt<Config>(gasUrl, body) : await callGas<Config>(body)
+    if (!json.ok || !json.result?.orgId) return null
+    // 提供停止中(R1-e): ログイン画面に「利用を停止しています」を出す
+    return json.result.suspended === true ? { orgId: json.result.orgId, suspended: true } : { orgId: json.result.orgId }
   } catch {
     return null
   }
@@ -719,6 +734,17 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   const json = await sendToGas<T>(gasUrl, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload })
 
   if (json.session) applyRenewedSession(json.session)
+  noteContractResponse(json)
+
+  // 提供停止中(R1-e): GAS はすべての操作を断る。ログインを終え、「利用を停止しています」を出すログイン画面に戻す
+  if (!json.ok && json.orgSuspended) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(ORG_CHANGED_EVENT, { detail: { orgId: getActiveOrg().orgId, notice: 'orgSuspended' } }))
+    }
+    throw new Error(json.error || 'この団体は、Ohsumi の利用を停止しています。')
+  }
+  // 機能停止中(読み取り専用): 作成・編集は断られる
+  if (!json.ok && json.restricted) throw new ContractRestrictedError(json.error || '読み取り専用です')
 
   // セッションが無効(期限切れ・全端末でログアウト・鍵の変更など): 保存したトークンを消し、
   // ログイン画面に戻す

@@ -97,6 +97,7 @@ import {
   colorForId,
   fetchInitialData,
   exchangeIdToken,
+  ContractRestrictedError,
   SESSION_ENDED_EVENT,
   type BackgroundData,
   type InitialData,
@@ -208,6 +209,8 @@ interface OhsumiContextValue extends OhsumiState {
   remoteError: string | null
   // 保存に失敗したため、画面の変更を元に戻した
   remoteReverted: boolean
+  // 機能停止中(読み取り専用)のため、保存を断られた(R1-e。読み込み直して、画面の変更を元に戻す)
+  remoteRestricted: boolean
   // true once every configured remote source (spreadsheet + optional
   // Settings sheet) has resolved or given up — see store.tsx's dataReady
   dataReady: boolean
@@ -872,6 +875,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [remoteError, setRemoteError] = useState<string | null>(null)
   // 保存に失敗したため、画面の変更を元に戻した(次の保存が成功したら消す)
   const [remoteReverted, setRemoteReverted] = useState(false)
+  const [remoteRestricted, setRemoteRestricted] = useState(false)
+  // 読み取り専用で断られた回数(増えたら読み込み直す)
+  const [restrictedRejections, setRestrictedRejections] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   // mirrors remoteStatus but for the separate, optional Settings-sheet
   // fetch (role levels/permissions/pools) — true immediately when that
@@ -1014,11 +1020,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         .then(() => {
           setRemoteError(null)
           setRemoteReverted(false)
+          setRemoteRestricted(false)
         })
         .catch((err) => {
           if (onFailure) {
             onFailure()
             setRemoteReverted(true)
+          }
+          if (err instanceof ContractRestrictedError) {
+            setRemoteRestricted(true)
+            setRestrictedRejections((n) => n + 1)
           }
           reportRemoteError(err)
         })
@@ -1363,6 +1374,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       .catch(reportLoadError)
       .finally(() => setRefreshing(false))
   }, [reportLoadError, applyInitialData, applyOrLoadRecords])
+
+  // 機能停止中(読み取り専用)に保存を断られたら、読み込み直して画面の変更を元に戻す
+  // (続けて断られた時は、まとめて1回)
+  useEffect(() => {
+    if (restrictedRejections === 0) return
+    const timer = setTimeout(refreshAll, 500)
+    return () => clearTimeout(timer)
+  }, [restrictedRejections, refreshAll])
 
   // 「もう一度試す」
   const retryLoad = useCallback(() => {
@@ -5116,6 +5135,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     remoteStatus,
     remoteError,
     remoteReverted,
+    remoteRestricted,
     dataReady,
     refreshing,
     refreshAll,
