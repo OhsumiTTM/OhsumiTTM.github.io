@@ -23,7 +23,9 @@ import {
   loadRememberPreference,
   prepareGoogleSignIn,
   resetGoogleSignIn,
+  retrySignInOnFreshPage,
   saveRememberPreference,
+  takeLoginRetryNotice,
 } from '@/lib/ohsumi/session'
 import { LegalLinks } from './legal-links'
 
@@ -96,6 +98,16 @@ export function LoginScreen() {
   const buttonRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
   const autoPromptedRef = useRef(false)
+
+  // 前のページでログインに失敗して読み込み直した時: その知らせを出し、自動ログインは試さない
+  // (同じアカウントで自動ログインを繰り返さないように)
+  useEffect(() => {
+    const retried = takeLoginRetryNotice()
+    if (!retried) return
+    autoPromptedRef.current = true
+    if (retried.error) setLoginError(retried.error)
+    if (retried.setupOpen) setSetupOpen(true)
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
@@ -194,8 +206,10 @@ export function LoginScreen() {
     if (!orgId) return
     const autoPrompt = !autoPromptedRef.current
     autoPromptedRef.current = true
-    // ログインに失敗した時は、新しい nonce(新しい試行)で準備し直す
-    const retry = () => {
+    // ログインに失敗した時は、新しい nonce(新しい試行)で準備し直す。このページで initialize を呼んだ後なら、
+    // 同じページで2回呼ばないよう、知らせを残してページを読み込み直す(読み込み直したページの1回目で準備する)
+    const retry = (error: string | null, setupOpen: boolean) => {
+      if (retrySignInOnFreshPage({ error: error ?? '', setupOpen })) return
       resetGoogleSignIn()
       if (mountedRef.current) prepareRef.current()
     }
@@ -210,29 +224,34 @@ export function LoginScreen() {
         setError(false)
         setLoginError(null)
         let ok = false
+        let failure: string | null = null
+        let openSetup = false
         try {
           const result = await signInRef.current(idToken, secret, rememberRef.current, orgId, setupCodeRef.current || undefined)
           ok = result.status === 'ok'
           if (result.status === 'notRegistered') {
             // 同じアカウントで自動ログインを繰り返さないようにする
             window.google?.accounts?.id?.disableAutoSelect()
+            failure = tRef.current('login.notRegistered', { email: result.email ?? '' })
+            // 最初の代表の場合に備えて、初期設定コードの欄を開く
+            openSetup = true
             if (mountedRef.current) {
-              setLoginError(tRef.current('login.notRegistered', { email: result.email ?? '' }))
-              // 最初の代表の場合に備えて、初期設定コードの欄を開く
+              setLoginError(failure)
               setSetupOpen(true)
             }
           }
         } catch (e) {
-          if (mountedRef.current) setLoginError(e instanceof Error ? e.message : tRef.current('login.failed'))
+          failure = e instanceof Error ? e.message : tRef.current('login.failed')
+          if (mountedRef.current) setLoginError(failure)
         } finally {
           if (mountedRef.current) setLoading(false)
           // 成功した場合は準備し直さない(このままアプリの画面に切り替わる)
-          if (!ok) retry()
+          if (!ok) retry(failure, openSetup)
         }
       },
       onNonceMismatch: () => {
         if (mountedRef.current) setLoginError(tRef.current('login.failed'))
-        retry()
+        retry(tRef.current('login.failed'), false)
       },
     }).catch(() => {
       if (mountedRef.current) setError(true)

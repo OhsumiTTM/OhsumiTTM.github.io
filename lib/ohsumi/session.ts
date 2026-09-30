@@ -265,6 +265,38 @@ export function reloadPage(): void {
   }
 }
 
+// ログインに失敗した後、ページを読み込み直してもう一度ログイン画面を出す時の知らせ(このタブだけ・1回だけ)。
+// 同じページで initialize を2回呼ばないように、失敗した後の新しい試行は、読み込み直したページで作る
+const LOGIN_RETRY_KEY = 'ohsumi-login-retry'
+
+export interface LoginRetryNotice {
+  error: string
+  // 初期設定コードの欄を開いておく(未登録のアカウントでログインした時)
+  setupOpen: boolean
+}
+
+/** ログインに失敗した後の新しい試行: このページで initialize を呼んでいれば、知らせを残して読み込み直す(true)。呼んでいなければ false */
+export function retrySignInOnFreshPage(notice: LoginRetryNotice, reload: () => void = reloadPage): boolean {
+  if (!initializedThisPage) return false
+  try { safeStorage('session')?.setItem(LOGIN_RETRY_KEY, JSON.stringify(notice)) } catch { /* 知らせは出ないが、ログインはできる */ }
+  reload()
+  return true
+}
+
+/** 読み込み直した後に出す、前のログインの失敗の知らせ(1回だけ) */
+export function takeLoginRetryNotice(): LoginRetryNotice | null {
+  try {
+    const s = safeStorage('session')
+    const raw = s?.getItem(LOGIN_RETRY_KEY)
+    s?.removeItem(LOGIN_RETRY_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw) as Partial<LoginRetryNotice>
+    return { error: String(v.error ?? ''), setupOpen: v.setupOpen === true }
+  } catch {
+    return null
+  }
+}
+
 /** 今のログインの試行を終える。次に prepareGoogleSignIn を呼ぶと、新しい nonce で準備し直す */
 export function resetGoogleSignIn(): void {
   attempt = null
