@@ -27,6 +27,8 @@ export interface AdminSession {
 export type OrgState = 'active' | 'scheduled' | 'restricted' | 'suspended'
 // 停止の種類(R1-e)。suspend: 提供停止(契約の終了・規約違反など)/ restrict: 機能停止(アンケートの未回答など)
 export type SuspendKind = 'suspend' | 'restrict'
+// プラン(利用契約書の案 第3条)。空は未設定。有償(paid)の団体には、機能停止を入れられない
+export type Plan = 'cosmo_base' | 'ohsumi' | 'paid'
 export type CheckState = 'ok' | 'stale' | 'never'
 export type CodeState = 'unused' | 'used' | 'expired' | 'revoked'
 
@@ -45,6 +47,7 @@ export interface OrgSummary {
   suspendReason: string
   // 停止の種類(停止の予定・停止中の時)
   suspendKind: SuspendKind
+  plan: Plan | ''
   suspendScheduledBy: string
   // 送った予告(停止の何日前か。14・7・1)
   noticesSent: number[]
@@ -209,13 +212,25 @@ export function revokeRegistrationCode(session: AdminSession, codeId: string, re
 export interface SuspensionInput {
   orgId: string
   kind: SuspendKind
-  suspendAt: string // ISO
+  suspendAt: string // ISO(当日の停止では使わない)
   reason: string
+  // 当日の停止(緊急。提供停止だけ)。確認の画面を経た時だけ confirm を付けて送る
+  immediate?: boolean
 }
 
 /** 停止の予定を入れる(今から14日より後。5分以内の Google でのログインが必要)。送り直さない */
 export function scheduleSuspension(session: AdminSession, input: SuspensionInput): Promise<OrgSummary> {
   return callRegistry<OrgSummary>('scheduleSuspension', { session: session.token, ...input })
+}
+
+/** 提供停止を当日に行う(緊急)。確認の画面を経た時だけ呼ぶ。送り直さない */
+export function suspendNow(session: AdminSession, orgId: string, reason: string): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('scheduleSuspension', { session: session.token, orgId, kind: 'suspend', immediate: true, confirm: true, reason })
+}
+
+/** 団体のプランを記録する。送り直さない */
+export function setOrgPlan(session: AdminSession, orgId: string, plan: Plan, reason: string): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('setOrgPlan', { session: session.token, orgId, plan, reason })
 }
 
 /** 停止の予定を取り消す・停止を解除する。送り直さない */
