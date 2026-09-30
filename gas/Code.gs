@@ -2112,7 +2112,7 @@ function getActingMemberById_(memberId) {
 // 画面に見えているデータと同じ時点の権限で判定する。書き込みは、これまでどおりシートから読む
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
-  'getMyEmails', 'getWebhookStatus', 'fetchDailyReports',
+  'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2747,6 +2747,8 @@ var READ_ONLY_ACTIONS = [
   'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses', 'getFiles',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
+  // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
+  'getInviteMailStatus', 'sendInviteLinkToMe',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2814,6 +2816,8 @@ function refreshContractState_(deps) {
     suspendAt: String(out.suspendAt || ''),
     reason: String(out.reason || ''),
     checkedAt: String(out.checkedAt || new Date().toISOString()),
+    // サイトの origin の一覧(本人あての招待リンクのメールに使う。レジストリのスクリプトプロパティ SITE_ORIGINS)
+    siteOrigins: parseSiteOrigins_(out.siteOrigins),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -2845,6 +2849,121 @@ function contractRejection_(c, body) {
 // 画面に渡す状態(停止の理由は渡さない。代表へのメールにだけ書く)
 function contractForClient_(c) {
   return { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt }
+}
+
+// ---- ほかの端末で開く: 本人あての招待リンクのメール ----------------------------------
+//
+// 招待リンク(<サイトの origin>/?org=<団体ID>)を、ログインしている本人の登録済みのメールアドレス(MemberEmails。
+// 複数あればすべて)にだけ送る。宛先は画面から受け取らない。リンクには団体ID だけを入れる(セッション・メールアドレスは入れない)。
+// サイトの origin は、レジストリの checkIn が配る一覧(CONTRACT_STATE.siteOrigins)の中から選ぶ。画面が今開いている
+// origin が一覧にあればそれを、無ければ一覧の最初(正式なサイト)を使う(画面が送った値を、そのままリンクにはしない)。
+// レジストリに一度も確かめられていない団体・一覧が空の団体では送れない。
+// 送れるのは1人1時間に INVITE_MAIL_LIMIT 回まで(CacheService に送った時刻を覚える)。
+// 機能停止中(読み取り専用)も使える(READ_ONLY_ACTIONS。データを書き換えないため)。テスト環境の宛先の決まりは sendMail_ に従う
+var INVITE_MAIL_LIMIT = 3
+var INVITE_MAIL_WINDOW_SEC = 3600
+var SITE_ORIGIN_PATTERN = /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/
+var SITE_ORIGINS_MAX = 5
+var INVITE_MAIL_UNAVAILABLE = 'この団体では、まだメールで送れません(接続先の確認が済んでいません)。QR コードか共有をお使いください。'
+
+// レジストリが配った origin の一覧を、形を確かめて取り出す(配列・文字列のどちらでも)
+function parseSiteOrigins_(raw) {
+  var list = Array.isArray(raw) ? raw : String(raw || '').split(/[\s,]+/)
+  var out = []
+  list.forEach(function (v) {
+    var o = String(v || '').trim().toLowerCase().replace(/\/+$/, '')
+    if (o && SITE_ORIGIN_PATTERN.test(o) && out.indexOf(o) < 0 && out.length < SITE_ORIGINS_MAX) out.push(o)
+  })
+  return out
+}
+
+// レジストリに確かめた時に受け取った origin の一覧(一度も確かめていなければ空)
+function inviteSiteOrigins_() {
+  var state = readContractState_()
+  if (!state || !state.checkedAt) return []
+  return parseSiteOrigins_(state.siteOrigins)
+}
+
+function inviteMailKey_(memberId) {
+  return 'invmail:' + sha256Base64Url_(String(memberId))
+}
+
+// この1時間に送った時刻(ミリ秒)
+function inviteMailSentTimes_(memberId, nowMs) {
+  var times = []
+  try { times = JSON.parse(CacheService.getScriptCache().get(inviteMailKey_(memberId)) || '[]') } catch (e) { times = [] }
+  if (!Array.isArray(times)) times = []
+  return times.filter(function (t) { return typeof t === 'number' && t > nowMs - INVITE_MAIL_WINDOW_SEC * 1000 && t <= nowMs })
+}
+
+function registeredEmailsOf_(memberId) {
+  return String(getMemberEmailValueCached_(memberId) || '').split(/[\s,;]+/).map(function (e) { return e.trim() })
+    .filter(function (e) { return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) })
+}
+
+/** 本人あてのメールを送れるか({ available, reason?, remaining, retryAt? }) */
+function inviteMailStatus_(memberId, nowMs) {
+  var remaining = Math.max(0, INVITE_MAIL_LIMIT - inviteMailSentTimes_(memberId, nowMs).length)
+  if (inviteSiteOrigins_().length === 0) return { available: false, reason: 'notChecked', remaining: remaining }
+  if (registeredEmailsOf_(memberId).length === 0) return { available: false, reason: 'noEmail', remaining: remaining }
+  if (remaining === 0) {
+    var times = inviteMailSentTimes_(memberId, nowMs)
+    return { available: false, reason: 'limit', remaining: 0, retryAt: new Date(Math.min.apply(null, times) + INVITE_MAIL_WINDOW_SEC * 1000).toISOString() }
+  }
+  return { available: true, remaining: remaining }
+}
+
+// 本人あての招待リンクのメールの文面(団体ID 以外は入れない)
+function inviteMailText_(orgName, link, locale) {
+  var name = orgName || 'Ohsumi'
+  if (locale === 'en') {
+    return {
+      subject: '[Ohsumi] ' + name + ': link to open on another device',
+      body: 'Open this link on the device you want to use, then sign in with Google.\n\n' + link +
+        '\n\nOn a smartphone, add it to your home screen after opening it so you can open it right away next time.' +
+        '\n\nThis email was sent because you asked for it in Ohsumi. If you did not, you can ignore it.',
+    }
+  }
+  return {
+    subject: '[Ohsumi] ' + name + ': ほかの端末で開くためのリンク',
+    body: '使いたい端末で次のリンクを開き、Googleでログインしてください。\n\n' + link +
+      '\n\nスマホでは、開いた後に「ホーム画面に追加」をすると、次からすぐに開けます。' +
+      '\n\nこのメールは、Ohsumi の「ほかの端末で開く」から、ご本人が送ったものです。心当たりが無ければ、このメールは無視してください。',
+  }
+}
+
+/** 本人の登録済みのアドレスにだけ、招待リンクを送る。body.siteOrigin(画面が開いている origin)は一覧にある時だけ使う */
+function sendInviteLinkToMe_(memberId, body, nowMs) {
+  var origins = inviteSiteOrigins_()
+  if (origins.length === 0) throw userError_(INVITE_MAIL_UNAVAILABLE)
+  var emails = registeredEmailsOf_(memberId)
+  if (emails.length === 0) throw userError_('メールアドレスが登録されていません。管理者に登録を頼んでください。')
+  var requested = String((body && body.siteOrigin) || '').trim().toLowerCase().replace(/\/+$/, '')
+  var origin = origins.indexOf(requested) >= 0 ? requested : origins[0]
+  var orgId = String(requestProps_().ORG_ID || '')
+  if (!orgId) throw userError_(INVITE_MAIL_UNAVAILABLE)
+  var link = origin + '/?org=' + encodeURIComponent(orgId)
+  // 回数の確認と記録は、ほかの送信と重ならないようにロックの中で行う(送信はロックの外)
+  var lock = LockService.getScriptLock()
+  try {
+    lock.waitLock(10000)
+  } catch (lockErr) {
+    throw userError_('混み合っています。少し待って再度お試しください。')
+  }
+  var times
+  try {
+    times = inviteMailSentTimes_(memberId, nowMs)
+    if (times.length >= INVITE_MAIL_LIMIT) {
+      throw userError_('メールで送れるのは1時間に' + INVITE_MAIL_LIMIT + '回までです。しばらくしてから、もう一度お試しください。')
+    }
+    times.push(nowMs)
+    CacheService.getScriptCache().put(inviteMailKey_(memberId), JSON.stringify(times), INVITE_MAIL_WINDOW_SEC)
+  } finally {
+    lock.releaseLock()
+  }
+  var text = inviteMailText_(getSettingValue_('org_name'), link, body && body.locale === 'en' ? 'en' : 'ja')
+  sendMail_({ to: emails.join(','), subject: text.subject, body: text.body })
+  return { sent: true, count: emails.length, remaining: Math.max(0, INVITE_MAIL_LIMIT - times.length) }
 }
 
 // 停止の予告のメールの文面
@@ -3733,6 +3852,8 @@ function authorizeAction_(acting, action, body) {
     'getFiles',                // アップロードしたファイルの取得。種類ごとの権限を getFiles 内で確認する
     'getBackgroundData',       // 裏での読み込み(経費・フォームの回答・候補者・自分のメール)。中身はそれぞれ上の読み取りと同じ確認を通す
     'revokeMySessions',        // 全端末でログアウト(常に acting.id が対象、body の memberId は見ない)
+    'getInviteMailStatus',     // ほかの端末で開く: 本人あてのメールを送れるか(常に acting.id が対象)
+    'sendInviteLinkToMe',      // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は受け取らない)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -3973,6 +4094,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
   'revokeMySessions', 'revokeMemberSessions',
+  // 本人あての招待リンクのメール(シートを書き換えない。送った回数は CacheService に数える)
+  'getInviteMailStatus', 'sendInviteLinkToMe',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -4266,7 +4389,7 @@ function remember_(key, obj) {
 // 結果は { results: [{ ok, result } | { ok: false, error, forbidden? }, ...] }(ops と同じ順番)
 var BATCH_MAX_OPS = 20
 // まとめて送れない操作(ログイン・読み取り・ロックを取らない操作)
-var BATCH_EXCLUDED_ACTIONS = ['batch', 'ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData']
+var BATCH_EXCLUDED_ACTIONS = ['batch', 'ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 function validateBatch_(body) {
   var ops = body && body.ops
@@ -4829,6 +4952,12 @@ function runWriteAction_(body, actingMember) {
       if (!findRow_(SHEET_MEMBERS, String(body.memberId || ''))) throw userError_('メンバーが見つかりません。')
       bumpSessionGeneration_(String(body.memberId))
       result = { revoked: true }
+      break
+    case 'getInviteMailStatus':
+      result = inviteMailStatus_(actingMember.id, Date.now())
+      break
+    case 'sendInviteLinkToMe':
+      result = sendInviteLinkToMe_(actingMember.id, body, Date.now())
       break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、

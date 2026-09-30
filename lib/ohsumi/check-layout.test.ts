@@ -86,7 +86,7 @@ describe('機能停止中(読み取り専用)の閲覧・書き出し', () => {
   it('期間・プロジェクト・表示・並び替え・表示項目・リスト・タスク詳細・管理画面を確かめる(ラベルは画面の表示と同じ)', () => {
     const steps = layout.READ_ONLY_STEPS as { do: string; labels?: string[] }[]
     expect(steps.map((s) => s.do)).toEqual(['readOnlyWorkspace', 'readOnlyList', 'readOnlyTask', 'readOnlyAdmin',
-      'readOnlyAddTask', 'readOnlyComment', 'readOnlyExpense', 'readOnlyApprove'])
+      'readOnlyAddTask', 'readOnlyComment', 'readOnlyExpense', 'readOnlyApprove', 'otherDevice'])
     expect(layout.READ_ONLY_CONTRACT).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
     const values = new Set(Object.values(ja))
     const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
@@ -120,5 +120,20 @@ describe('レジストリの管理画面(375px)', () => {
     const r = layout.registryResponse({ action: 'adminOverview' }) as { orgs: { state: string }[]; codes: { state: string }[] }
     expect(new Set(r.orgs.map((o) => o.state))).toEqual(new Set(['active', 'scheduled', 'restricted', 'suspended']))
     expect(new Set(r.codes.map((c) => c.state))).toEqual(new Set(['unused', 'used', 'expired', 'revoked']))
+  })
+})
+
+describe('ほかの端末で開く', () => {
+  it('スマホの幅とパソコンの幅の両方、共有の有無、メールを送れない団体、機能停止中を確かめる(ラベル・文は ja.ts と同じ)', () => {
+    type Step = { do: string; width?: number; share?: boolean; mail?: string; readOnly?: boolean }
+    const steps = [...(layout.STEPS as Step[]), ...(layout.READ_ONLY_STEPS as Step[])].filter((s) => s.do === 'otherDevice')
+    expect(steps.some((s) => !s.width)).toBe(true)
+    expect(steps.some((s) => (s.width ?? 0) >= 1024)).toBe(true)
+    expect(steps.some((s) => s.share)).toBe(true)
+    expect(steps.some((s) => s.mail === 'notChecked')).toBe(true)
+    expect(steps.some((s) => s.readOnly)).toBe(true)
+    const values = Object.values(ja)
+    for (const label of layout.OTHER_DEVICE_LABELS as string[]) expect(values, label).toContain(label)
+    for (const text of layout.OTHER_DEVICE_TEXTS as string[]) expect(values.some((v) => v.includes(text)), text).toBe(true)
   })
 })

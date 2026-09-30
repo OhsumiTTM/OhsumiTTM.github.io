@@ -70,6 +70,7 @@ export const READ_ACTIONS = new Set([
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
+  'getInviteMailStatus',
   'ping',
 ])
 
@@ -484,6 +485,8 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'checkAndGenerateRecurringTasks',
   'testDiscordWebhook',
   'testSlackWebhook',
+  // 本人あての招待リンクのメール(ロックを取らない。送り直しは requestId で1通にする)
+  'sendInviteLinkToMe',
 ])
 
 export function isBatchableWrite(action: string): boolean {

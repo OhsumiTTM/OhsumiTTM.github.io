@@ -370,3 +370,12 @@ describe('提供停止を当日に(緊急)', () => {
     expect(t.mails).toHaveLength(0)
   })
 })
+
+describe('サイトの origin の一覧(checkIn で団体の GAS に配る)', () => {
+  it('SITE_ORIGINS の https の origin だけを、書いた順に返す(パス付き・http・重複は捨てる)', () => {
+    const t = ready()
+    expect(t.checkIn().result.siteOrigins).toEqual([])
+    t.props.SITE_ORIGINS = 'https://Site-A.example.com/, https://b.example.jp\nhttp://c.example.com https://d.example.com/path https://site-a.example.com https://u:p@e.example.com https://f.example.com:8443'
+    expect(t.checkIn().result.siteOrigins).toEqual(['https://site-a.example.com', 'https://b.example.jp', 'https://f.example.com:8443'])
+  })
+})

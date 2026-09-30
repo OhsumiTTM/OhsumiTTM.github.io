@@ -71,6 +71,15 @@ import { extractUnsavedTexts } from './read-only'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
+/** 本人あての招待リンクのメールを送れるか(gas/Code.gs の inviteMailStatus_) */
+export interface InviteMailStatus {
+  available: boolean
+  // notChecked: レジストリに一度も確かめていない団体 / noEmail: 登録済みのアドレスが無い / limit: 1時間の上限
+  reason?: 'notChecked' | 'noEmail' | 'limit'
+  remaining: number
+  retryAt?: string
+}
+
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 
 /** 機能停止中(読み取り専用)のため、GAS が書き込みを断った(R1-e。lib/ohsumi/contract.ts) */
@@ -921,6 +930,10 @@ export const remoteApi = {
   getMyEmails: () => postToGas<{ email: string }>('getMyEmails', {}),
   // 全端末でログアウト(自分)。発行済みのセッションがすべて無効になる
   revokeMySessions: () => postToGas<{ revoked: boolean }>('revokeMySessions', {}),
+  // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は送らない。GAS が決める)
+  getInviteMailStatus: () => postToGas<InviteMailStatus>('getInviteMailStatus', {}),
+  sendInviteLinkToMe: (siteOrigin: string, locale: string) =>
+    postToGas<{ sent: boolean; count: number; remaining: number }>('sendInviteLinkToMe', { siteOrigin, locale }),
   // 全端末でログアウト(代表・全権管理者が他のメンバーに対して)
   revokeMemberSessions: (memberId: string) => postToGas<{ revoked: boolean }>('revokeMemberSessions', { memberId }),
   updateSetting: (key: string, value: string) => postToGas('updateSetting', { key, value }),
