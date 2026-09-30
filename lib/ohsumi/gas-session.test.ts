@@ -176,10 +176,11 @@ describe('IDトークンの交換(exchangeIdToken)', () => {
     expect(reused.error).toMatch(/既に使われています/)
   })
 
-  it('登録されていないアカウントは、本人のメールアドレスだけを返す(セッションは発行しない)', () => {
+  it('登録されていないアカウントは、本人のメールアドレスと団体名だけを返す(セッションは発行しない)', () => {
     const t = setup()
+    t.gas.getSettingValue_ = ((k: string) => (k === 'org_name' ? 'テスト団体' : '')) as never
     const res = t.post({ action: 'exchangeIdToken', ...t.googleLogin('stranger@example.com'), remember: true })
-    expect(res.result).toEqual({ memberId: null, email: 'stranger@example.com' })
+    expect(res.result).toEqual({ memberId: null, email: 'stranger@example.com', orgName: 'テスト団体' })
   })
 
   it('getLoginConfig は団体IDだけを返し、setupOhsumi 前はエラーにする', () => {
