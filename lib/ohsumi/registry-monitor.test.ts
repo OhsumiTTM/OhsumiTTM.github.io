@@ -67,6 +67,60 @@ describe('応答の判定(evaluateHealth)', () => {
   })
 })
 
+describe('鍵(HEALTH_KEY)が違う時', () => {
+  it('レジストリが keyValid: false を返したら「状態を確かめられない」とする(🟠 バックアップの誤った通知にしない)', () => {
+    const t = setup()
+    const r = plain(t.gas.evaluateHealth({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
+    expect(r).toMatchObject({ reachable: false, keyMismatch: true })
+    expect(r.reason).toContain('HEALTH_KEY')
+    expect(r.problems).toEqual({})
+  })
+
+  it('2回続いたら1回だけ知らせ、鍵を戻したら確かめられるようになったことを知らせる', () => {
+    const t = setup()
+    const step = (state: unknown, r: unknown, at: number) => plain(t.gas.nextMonitorState(state, r, at))
+    const mismatch = plain(t.gas.evaluateHealth({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
+    let s = step(null, mismatch, NOW)
+    expect(s.messages).toEqual([])
+    s = step(s.state, mismatch, NOW + 15 * 60000)
+    expect(s.messages).toHaveLength(1)
+    expect(s.messages[0]).toMatch(/^🔴 レジストリの状態を確かめられません\(2回続けて。原因: 鍵\(HEALTH_KEY\)が違います/)
+    s = step(s.state, mismatch, NOW + 30 * 60000)
+    expect(s.messages).toEqual([])
+    s = step(s.state, plain(t.gas.evaluateHealth(good(), NOW)), NOW + 45 * 60000)
+    expect(s.messages).toEqual(['🟢 レジストリの状態を確かめられるようになりました(確かめられなかった時間: 45分)'])
+  })
+
+  it('手順どおり、監視の HEALTH_KEY を1文字変えて checkRegistry を2回実行すると、メールと Discord に届く', () => {
+    const t = setup()
+    t.props.HEALTH_KEY = 'k2'
+    // レジストリは、送られた鍵が違うと keyValid: false を返す
+    t.setHealth({ ok: true, version: 'r1b-2', keyValid: false })
+    t.gas.checkRegistry()
+    t.gas.checkRegistry()
+    expect(t.sentKeys).toEqual(['k2', 'k2'])
+    expect(t.mails.length).toBeGreaterThan(0)
+    expect(t.mails.every((m) => m.body.includes('状態を確かめられません'))).toBe(true)
+    expect(t.discord.some((d) => d.includes('状態を確かめられません'))).toBe(true)
+    // 鍵を戻す
+    t.props.HEALTH_KEY = 'k'
+    t.setHealth(good())
+    t.gas.checkRegistry()
+    expect(t.discord.some((d) => d.includes('確かめられるようになりました'))).toBe(true)
+  })
+
+  it('手順どおり、監視の REGISTRY_URL を1文字変える(Google が HTML の 404 を返す)と「応答しません」になる', () => {
+    const t = setup()
+    t.setHealth({ raw: '<html><title>Error 404</title>Not Found</html>', status: 404 })
+    t.gas.checkRegistry()
+    t.gas.checkRegistry()
+    expect(t.discord.some((d) => d.includes('🔴 レジストリが応答しません'))).toBe(true)
+    t.setHealth(good())
+    t.gas.checkRegistry()
+    expect(t.discord.some((d) => d.includes('🟢 レジストリが復旧しました'))).toBe(true)
+  })
+})
+
 describe('知らせる時(nextMonitorState)', () => {
   const down = { reachable: false, reason: '通信エラー', problems: {} }
   const up = { reachable: true, problems: {} }
