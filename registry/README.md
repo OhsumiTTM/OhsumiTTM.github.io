@@ -10,8 +10,12 @@ FSIF が1つだけ運用する、団体の一覧と状態を管理する仕組�
 |---|---|
 | `registry/Code.gs` | レジストリ専用の Google アカウントのスプレッドシートの Apps Script |
 | `registry/monitor/Monitor.gs` | 監視用の別の Google アカウントの Apps Script(スプレッドシートは不要) |
+| `app/registry-admin/`・`components/registry/`・`lib/registry/` | 管理画面(`<サイトの URL>/registry-admin/`。Ohsumi の画面からはリンクせず、検索エンジンにも載せない) |
 
-| `app/registry-admin/`・`components/registry/`・`lib/registry/` | 管理画面(`https://ohsumittm.github.io/registry-admin/`。Ohsumi の画面からはリンクせず、検索エンジンにも載せない) |
+**サイトの URL:** 以下では Ohsumi のサイトの URL を `<サイトの URL>` と書きます。
+今は `https://ohsumittm.github.io`、独自ドメインに移った後は `https://ohsumi.fsif.com` です。
+コード・CSP にはサイトの URL を書いていません(CSP は `'self'`、ログインの確認は OAuth クライアント ID で行うため)。
+ドメインを移る時に変えるのは、Google Auth Platform の「承認済みの JavaScript 生成元」(1.5 の (1))だけです。
 
 テストは `lib/ohsumi/registry.test.ts`・`lib/ohsumi/registry-admin.test.ts`・`lib/ohsumi/registry-monitor.test.ts`・
 `lib/registry/admin-api.test.ts` です(`pnpm test` で実行)。管理画面のスマホの幅(375px)の確認は `pnpm check:layout` に入っています。
@@ -108,7 +112,7 @@ FSIF が1つだけ運用する、団体の一覧と状態を管理する仕組�
 
 ### 1.5. 管理画面(`/registry-admin/`)
 
-管理画面は、Ohsumi のサイト(`https://ohsumittm.github.io/registry-admin/`)の中の、どこからもリンクしていないページです。
+管理画面は、Ohsumi のサイト(`<サイトの URL>/registry-admin/`)の中の、どこからもリンクしていないページです。
 検索エンジンには載せません(noindex)。ログインと判定はすべてレジストリの GAS が行います。
 
 #### (1) ログイン用の OAuth クライアントを作る(Google Auth Platform)
@@ -128,6 +132,9 @@ Ohsumi 本体とは別の、レジストリ用の OAuth クライアントを作
    - アプリケーションの種類: **ウェブ アプリケーション**
    - 名前: `registry-admin`
    - 承認済みの JavaScript 生成元: `https://ohsumittm.github.io`
+     - **独自ドメイン(`https://ohsumi.fsif.com`)に移る時に、ここへ `https://ohsumi.fsif.com` を追加します。**
+       移る前に追加しておけば、切り替えた直後からログインできます。古い `https://ohsumittm.github.io` は、新しいドメインでログインできることを確かめてから消します
+       (生成元は末尾の `/` やパスを付けずに入れます。反映に数分かかることがあります)
    - 承認済みのリダイレクト URI: 入れません
 6. 表示された **クライアント ID**(`….apps.googleusercontent.com`)を控えます(秘密ではありませんが、ここ以外には使いません)
 
@@ -159,7 +166,7 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 
 #### (4) 確かめる
 
-1. `https://ohsumittm.github.io/registry-admin/` を開き、管理者のアカウントで「Google でログイン」します。団体の一覧が出ることを確かめます
+1. `<サイトの URL>/registry-admin/` を開き、管理者のアカウントで「Google でログイン」します。団体の一覧が出ることを確かめます
 2. 許可リストに無いアカウントでログインし、「管理者として登録されていません」と出ること、「操作の記録」に「ログインを断った」が残ることを確かめます
    (Google Auth Platform のテストユーザーに入っていないアカウントは、Google の画面で止まります。それも正しい動きです)
 3. 「登録コード」で試しのコードを発行し、コードが1回だけ表示されること、一覧に「未使用」で出ることを確かめます
