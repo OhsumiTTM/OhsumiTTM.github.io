@@ -32,7 +32,9 @@ import {
   Grid3x3,
   TrendingDown,
   GraduationCap,
+  Smartphone,
 } from 'lucide-react'
+import { OtherDeviceModal, currentInviteLink } from './other-device'
 
 
 export function Header() {
@@ -63,6 +65,7 @@ export function Header() {
   const { openTask } = useTaskDrawer()
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
+  const [otherDeviceOpen, setOtherDeviceOpen] = useState(false)
   const [query, setQuery] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
   const notifRef = useRef<HTMLDivElement>(null)
@@ -448,6 +451,17 @@ export function Header() {
                   <MessageSquare className="size-4" />
                   {t('header.menu.feedback')}
                 </MenuItem>
+                {currentInviteLink() && (
+                  <MenuItem
+                    onClick={() => {
+                      setMenuOpen(false)
+                      setOtherDeviceOpen(true)
+                    }}
+                  >
+                    <Smartphone className="size-4" />
+                    {t('header.menu.otherDevice')}
+                  </MenuItem>
+                )}
                 <div className="my-1 h-px bg-border" />
                 <MenuItem onClick={logout}>
                   <LogOut className="size-4" />
@@ -458,6 +472,7 @@ export function Header() {
           </div>
         </div>
       </div>
+      <OtherDeviceModal open={otherDeviceOpen} onClose={() => setOtherDeviceOpen(false)} />
     </header>
   )
 }
