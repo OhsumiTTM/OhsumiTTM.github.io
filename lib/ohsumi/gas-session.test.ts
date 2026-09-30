@@ -190,6 +190,71 @@ describe('IDトークンの交換(exchangeIdToken)', () => {
   })
 })
 
+describe('ログインの送り直し(exchangeIdToken + requestId)', () => {
+  it('同じ requestId・IDトークン・画面の乱数で送り直されたら、確認をやり直さずに同じセッションを返す', () => {
+    const t = setup()
+    const login = t.googleLogin('member@example.com')
+    const first = t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000001' })
+    expect(first.ok, first.error).toBe(true)
+    const calls = t.tokeninfoCalls
+    const again = t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000001' })
+    expect(again.ok).toBe(true)
+    expect((again as Record<string, unknown>).replayed).toBe(true)
+    // 1回目と同じセッション。初期データは覚えないので、画面に読み直してもらう
+    expect(again.result!.session).toEqual(first.result!.session)
+    expect(again.result!.memberId).toBe('m2')
+    expect(again.result!.reloadInitialData).toBe(true)
+    expect(t.tokeninfoCalls).toBe(calls)
+  })
+
+  it('requestId・画面の乱数・IDトークンのどれかが違えば、覚えた結果は返さない(使い回しとして拒否)', () => {
+    const t = setup()
+    const login = t.googleLogin('member@example.com')
+    expect(t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000002' }).ok).toBe(true)
+    const otherId = t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000003' })
+    expect(otherId.ok).toBe(false)
+    expect(otherId.error).toMatch(/既に使われています/)
+    const noId = t.post({ action: 'exchangeIdToken', ...login, remember: true })
+    expect(noId.error).toMatch(/既に使われています/)
+    const otherSecret = t.post({ action: 'exchangeIdToken', idToken: login.idToken, nonceSecret: 'x'.repeat(43), remember: true, requestId: 'login-00000002' })
+    expect(otherSecret.ok).toBe(false)
+    expect(otherSecret.result).toBeUndefined()
+    const otherToken = t.post({ action: 'exchangeIdToken', idToken: 'ddd.eee.fff', nonceSecret: login.nonceSecret, remember: true, requestId: 'login-00000002' })
+    expect(otherToken.ok).toBe(false)
+    expect(otherToken.result).toBeUndefined()
+  })
+
+  it('1回目が失敗だった時は、同じ失敗を返す。処理中なら少し待つよう返す', () => {
+    const t = setup()
+    const bad = t.googleLogin('member@example.com', { aud: 'other-client' })
+    const first = t.post({ action: 'exchangeIdToken', ...bad, remember: true, requestId: 'login-00000004' })
+    expect(first.ok).toBe(false)
+    const calls = t.tokeninfoCalls
+    const again = t.post({ action: 'exchangeIdToken', ...bad, remember: true, requestId: 'login-00000004' })
+    expect(again).toMatchObject({ ok: false, authError: true, error: first.error, replayed: true })
+    expect(t.tokeninfoCalls).toBe(calls)
+
+    const login = t.googleLogin('member@example.com')
+    const key = t.gas.loginReplayKey_({ ...login, requestId: 'login-00000005' }) as string
+    t.cache[key] = JSON.stringify({ inFlight: true })
+    const busy = t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000005' }) as Record<string, unknown>
+    expect(busy.ok).toBe(false)
+    expect(busy.retryLater).toBe(true)
+    expect(busy.authError).toBeUndefined()
+  })
+
+  it('覚えておく記録には、画面の乱数・IDトークンそのものは入れない', () => {
+    const t = setup()
+    const login = t.googleLogin('member@example.com')
+    t.post({ action: 'exchangeIdToken', ...login, remember: true, requestId: 'login-00000006' })
+    const keys = Object.keys(t.cache).filter((k) => k.startsWith('rqlogin:'))
+    expect(keys).toHaveLength(1)
+    const all = keys.join() + Object.values(t.cache).join()
+    expect(all).not.toContain(login.nonceSecret)
+    expect(all).not.toContain('login-00000006')
+  })
+})
+
 describe('セッショントークンの確認', () => {
   it('正しいトークンで操作でき、Google には問い合わせない。プロパティは1リクエスト1回だけ読む', () => {
     const t = setup()

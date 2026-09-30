@@ -209,11 +209,14 @@ describe('JSON が返らなかった時の再試行', () => {
     expect(h.logs.filter((l) => l.level !== 'info')).toEqual([])
   })
 
-  it('exchangeIdToken は送り直さない(IDトークンの nonce は1回しか使えない)', async () => {
-    const h = harness(() => echo404)
-    await expect(sendToGas(URL, { action: 'exchangeIdToken' })).rejects.toBeInstanceOf(GasTransportError)
-    expect(h.sent).toHaveLength(1)
-    expect(h.sent[0].requestId).toBeUndefined()
+  it('exchangeIdToken は、同じ requestId で送り直す(GAS が前回の結果を返す)。ほかの書き込みとはまとめない', async () => {
+    let n = 0
+    const h = harness(() => (++n === 1 ? echo404 : json({ ok: true, replayed: true, result: { memberId: 'm1' } })))
+    expect(await sendToGas(URL, { action: 'exchangeIdToken', idToken: 'x' })).toMatchObject({ ok: true, replayed: true })
+    expect(h.sent).toHaveLength(2)
+    expect(h.sent[0].requestId).toBeTruthy()
+    expect(h.sent[1].requestId).toBe(h.sent[0].requestId)
+    expect(h.sent.every((b) => b.action === 'exchangeIdToken')).toBe(true)
   })
 
   it('失敗した1本の後も、次のリクエストは送る', async () => {

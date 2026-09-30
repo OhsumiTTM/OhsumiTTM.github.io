@@ -4194,13 +4194,26 @@ function handlePost_(e, state) {
     normalizeRequestCodes_(body)
     if (body.action === 'batch') body.ops.forEach(normalizeRequestCodes_)
 
-    // exchangeIdToken: Google の IDトークンを確かめ、セッショントークンと初期データを返す
+    // exchangeIdToken: Google の IDトークンを確かめ、セッショントークンと初期データを返す。
+    // 結果の受け渡し(echo)で失われて送り直された時は、処理をやり直さずに前回の結果(同じセッション)を返す(loginReplayKey_)
     if (body.action === 'exchangeIdToken') {
-      try {
-        return ({ ok: true, result: exchangeIdToken_(body) })
-      } catch (exchangeErr) {
-        return ({ ok: false, error: toErrorMessage_(exchangeErr), authError: true })
+      var loginKey = loginReplayKey_(body)
+      if (loginKey) {
+        var priorLogin = readRequestReplay_(loginKey)
+        if (priorLogin) {
+          if (priorLogin.inFlight) return ({ ok: false, error: 'ログインを処理しています。少し待ってください。', retryLater: true })
+          return priorLogin
+        }
+        markRequestInFlight_(loginKey)
       }
+      var loginOut
+      try {
+        loginOut = { ok: true, result: exchangeIdToken_(body) }
+      } catch (exchangeErr) {
+        loginOut = { ok: false, error: toErrorMessage_(exchangeErr), authError: true }
+      }
+      if (loginKey) rememberLogin_(loginKey, loginOut)
+      return loginOut
     }
 
     // getInitialData: ログインと初期データの取得をまとめて行う読み取り専用
@@ -6921,6 +6934,31 @@ var REQUEST_REPLAY_TTL_SEC = 600
 var REQUEST_IN_FLIGHT_TTL_SEC = 120
 // CacheService の1件の上限(100KB)より小さくする
 var REQUEST_REPLAY_MAX_CHARS = 90000
+
+// ログイン(exchangeIdToken)の送り直しの記録の鍵。requestId・IDトークン・画面だけが知る乱数(nonceSecret)をまとめたハッシュにする。
+// 同じ3つを送れるのは、ログインを始めたその画面だけなので、IDトークンだけを手に入れた人は、前回の結果(セッション)を受け取れない。
+// IDトークンの1回限り(verifyGoogleIdToken_ の nonce の記録)は、そのまま守る(記録を返す時は、確かめ直さない)
+function loginReplayKey_(body) {
+  var id = body && body.requestId
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) return null
+  if (!body.idToken || !body.nonceSecret) return null
+  return 'rqlogin:' + sha256Base64Url_(id + '|' + body.idToken + '|' + body.nonceSecret)
+}
+
+// ログインの結果を覚える。初期データは大きく覚えられないので、メンバーID・セッションなどだけを覚え、
+// 送り直しの時は画面が初期データを読み直す(reloadInitialData)。失敗も覚える(やり直さない)
+function rememberLogin_(key, out) {
+  var stored
+  if (out.ok) {
+    var r = out.result || {}
+    stored = r.memberId
+      ? { ok: true, replayed: true, result: { memberId: r.memberId, email: r.email, session: r.session, lastLoginRecorded: r.lastLoginRecorded, reloadInitialData: true } }
+      : { ok: true, replayed: true, result: { memberId: null, email: r.email } }
+  } else {
+    stored = { ok: false, replayed: true, error: out.error, authError: true }
+  }
+  try { CacheService.getScriptCache().put(key, JSON.stringify(stored), REQUEST_REPLAY_TTL_SEC) } catch (e) { /* 覚えられなくても応答は返す */ }
+}
 
 function requestReplayKey_(memberId, body) {
   var id = body && body.requestId

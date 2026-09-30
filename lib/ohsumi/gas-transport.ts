@@ -11,8 +11,9 @@
 //    - 読み取りは、そのまま送り直す
 //    - 書き込みには、リクエストごとの ID(requestId)を付ける。GAS は同じ ID の結果を
 //      しばらく覚えていて、送り直された時は処理をやり直さずに前回の結果を返す(二重に書かない)
-//    - exchangeIdToken は送り直さない(IDトークンの nonce は1回しか使えないため。
-//      失敗した時は、ログイン画面からもう一度ログインする)
+//    - ログイン(exchangeIdToken)も、書き込みと同じく requestId を付けて送り直す。IDトークンの nonce は1回しか
+//      使えないが、GAS は requestId・IDトークン・画面だけが知る乱数の組で前回の結果(同じセッション)を覚えていて、
+//      送り直された時はそれを返す(gas/Code.gs の loginReplayKey_)。ほかの書き込みとはまとめない
 // 3. 再試行の回数と原因は、コンソールに [ohsumi] で始まる行で記録する。
 //    往復の時間は、ブラウザの記録(PerformanceResourceTiming)で exec への往復と echo の取得に分けられる
 //    時は分けて出す(Google が Timing-Allow-Origin を付けていない時は分けられない)。
@@ -73,8 +74,8 @@ export const READ_ACTIONS = new Set([
   'ping',
 ])
 
-// 送り直さない(1回しか使えない値を送る)
-export const NO_RETRY_ACTIONS = new Set(['exchangeIdToken'])
+// ログイン: 書き込みと同じく requestId を付けて送り直すが、ほかの書き込みとはまとめない
+export const LOGIN_ACTIONS = new Set(['exchangeIdToken'])
 
 // 裏で読み込むもの。画面の操作のリクエストを先に送る
 export const BACKGROUND_ACTIONS = new Set([
@@ -97,7 +98,7 @@ export const RETRY_DELAYS_MS = [1000, 3000]
 export const ATTEMPT_TIMEOUT_MS = { read: 20000, write: 45000 }
 
 export function attemptTimeoutOf(action: string): number {
-  return isWriteAction(action) || NO_RETRY_ACTIONS.has(action) ? ATTEMPT_TIMEOUT_MS.write : ATTEMPT_TIMEOUT_MS.read
+  return isWriteAction(action) ? ATTEMPT_TIMEOUT_MS.write : ATTEMPT_TIMEOUT_MS.read
 }
 
 // fetch の設定。Google のログイン情報(Cookie)を送らない・キャッシュしない・転送はたどる
@@ -313,11 +314,12 @@ export function priorityOf(action: string): GasPriority {
 }
 
 export function isWriteAction(action: string): boolean {
-  return !READ_ACTIONS.has(action) && !NO_RETRY_ACTIONS.has(action)
+  return !READ_ACTIONS.has(action)
 }
 
-export function maxAttemptsOf(action: string): number {
-  return NO_RETRY_ACTIONS.has(action) ? 1 : RETRY_DELAYS_MS.length + 1
+// 送る回数の上限(どの操作も同じ。ログインも、requestId で前回の結果を受け取れるので送り直す)
+export function maxAttempts(): number {
+  return RETRY_DELAYS_MS.length + 1
 }
 
 /** 何度送っても JSON の応答を受け取れなかった */
@@ -488,7 +490,7 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
 ])
 
 export function isBatchableWrite(action: string): boolean {
-  return !batchUnsupported && isWriteAction(action) && !UNBATCHED_WRITE_ACTIONS.has(action) && !/^upload/.test(action)
+  return !batchUnsupported && isWriteAction(action) && !UNBATCHED_WRITE_ACTIONS.has(action) && !LOGIN_ACTIONS.has(action) && !/^upload/.test(action)
 }
 
 // 同じ送り先・同じセッションで、間にまとめない書き込みを挟んでいない間だけ、まとめてよい
@@ -567,7 +569,7 @@ async function sendOneByOne(group: PendingWrite[], sent: PendingWrite[], sameAs:
   const results = new Map<PendingWrite, { r?: GasResponse; err?: unknown }>()
   for (const p of sent) {
     try {
-      results.set(p, { r: await sendWithRetry(p.url, p.body.action, JSON.stringify(p.body), maxAttemptsOf(p.body.action), queuedMs) })
+      results.set(p, { r: await sendWithRetry(p.url, p.body.action, JSON.stringify(p.body), maxAttempts(), queuedMs) })
     } catch (err) {
       results.set(p, { err })
     }
@@ -603,7 +605,7 @@ async function sendGroup(group: PendingWrite[]): Promise<void> {
   const label = `batch(${sent.map((p) => p.body.action).join('+')})`
   let r: GasResponse<{ results?: GasResponse[] }>
   try {
-    r = await sendWithRetry<{ results?: GasResponse[] }>(first.url, 'batch', JSON.stringify(batch), maxAttemptsOf('batch'), queuedMs, label)
+    r = await sendWithRetry<{ results?: GasResponse[] }>(first.url, 'batch', JSON.stringify(batch), maxAttempts(), queuedMs, label)
   } catch (err) {
     for (const p of group) p.reject(err)
     return
@@ -741,7 +743,7 @@ export function sendToGas<T = unknown>(url: string, body: Record<string, unknown
   const payload = isWriteAction(action) ? { ...body, requestId: deps.newId() } : body
   if (isBatchableWrite(action)) return enqueueBatchableWrite<T>(url, payload)
   const text = JSON.stringify(payload)
-  const task = (queuedMs: number) => sendWithRetry<T>(url, action, text, maxAttemptsOf(action), queuedMs)
+  const task = (queuedMs: number) => sendWithRetry<T>(url, action, text, maxAttempts(), queuedMs)
   if (!READ_ACTIONS.has(action)) {
     writeEpoch++
     return enqueueWrite(task)
