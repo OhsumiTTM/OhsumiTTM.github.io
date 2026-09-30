@@ -41,6 +41,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   adminLoginDenied: 'ログインを断った(許可リストに無い)',
   issueRegistrationCode: '登録コードの発行',
   revokeRegistrationCode: '登録コードの取り消し',
+  registerOrg: '団体の登録',
+  reregisterOrg: '団体の再登録(共有鍵の作り直し・接続先の変更)',
   rotateAdminSessionKey: 'セッションの鍵の作り直し',
 }
 export const TABS = [
@@ -66,7 +68,7 @@ function fmt(iso: string): string {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-const EMPTY_INPUT: IssueInput = { orgName: '', contactName: '', contactEmail: '', note: '' }
+const EMPTY_INPUT: IssueInput = { kind: 'new', targetOrgId: '', orgName: '', contactName: '', contactEmail: '', note: '' }
 
 export function RegistryAdmin() {
   const [session, setSession] = useState<AdminSession | null>(null)
@@ -179,6 +181,7 @@ export function RegistryAdmin() {
         <CodesPanel
           session={session}
           codes={overview.codes}
+          orgs={overview.orgs}
           ttlDays={overview.codeTtlDays}
           initialInput={draft}
           onChanged={() => void load(session)}
@@ -313,6 +316,7 @@ function OrgList({ orgs }: { orgs: OrgSummary[] }) {
 function CodesPanel({
   session,
   codes,
+  orgs,
   ttlDays,
   initialInput,
   onChanged,
@@ -320,12 +324,14 @@ function CodesPanel({
 }: {
   session: AdminSession
   codes: CodeSummary[]
+  orgs: OrgSummary[]
   ttlDays: number
   initialInput: IssueInput | null
   onChanged: () => void
   onAuthError: (message?: string) => void
 }) {
-  const [input, setInput] = useState<IssueInput>(initialInput ?? EMPTY_INPUT)
+  const [input, setInput] = useState<IssueInput>({ ...EMPTY_INPUT, ...(initialInput ?? {}) })
+  const reissue = input.kind === 'reissue'
   const [issued, setIssued] = useState<IssuedCode | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(initialInput ? 'ログインし直しました。内容を確かめて、もう一度「発行する」を押してください。' : null)
@@ -339,7 +345,11 @@ function CodesPanel({
 
   const issue = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.orgName.trim()) {
+    if (reissue && !input.targetOrgId) {
+      setMessage('再登録する団体を選んでください。')
+      return
+    }
+    if (!reissue && !input.orgName.trim()) {
       setMessage('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
       return
     }
@@ -350,7 +360,7 @@ function CodesPanel({
     setBusy(true)
     setMessage(null)
     try {
-      const res = await issueRegistrationCode(session, input)
+      const res = await issueRegistrationCode(session, reissue ? { ...input, orgName: '' } : { ...input, targetOrgId: '' })
       setIssued(res)
       setCopied(false)
       setInput(EMPTY_INPUT)
@@ -381,7 +391,7 @@ function CodesPanel({
     <div className="space-y-5">
       {issued && (
         <section className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3" aria-live="polite">
-          <p className="text-sm font-medium">「{issued.orgName}」向けの登録コード</p>
+          <p className="text-sm font-medium">「{issued.orgName}」向けの{issued.kind === 'reissue' ? '再登録コード' : '登録コード'}</p>
           <p className="my-2 font-mono text-lg tracking-wider break-all select-all">{issued.code}</p>
           <p className="text-xs">有効期限: {fmt(issued.expiresAt)}(1回だけ使えます)</p>
           <p className="mt-1 text-xs font-medium text-amber-900">このコードは今だけ表示されます。レジストリには元に戻せない形でしか残りません。担当者へ別の連絡手段で渡してください。</p>
@@ -395,10 +405,33 @@ function CodesPanel({
       <section className="rounded-lg border border-border p-3">
         <h2 className="mb-2 text-sm font-medium">登録コードを発行する</h2>
         <form onSubmit={(e) => void issue(e)} className="space-y-2">
-          <label className="block text-xs">
-            団体名(契約先の名前・必須)
-            <input className={inputClass} value={input.orgName} onChange={set('orgName')} maxLength={100} required />
-          </label>
+          <fieldset className="space-y-1 text-xs">
+            <legend className="mb-1">種類</legend>
+            <label className="flex items-start gap-2">
+              <input type="radio" name="code-kind" checked={!reissue} onChange={() => setInput({ ...input, kind: 'new' })} className="mt-0.5" />
+              <span>新しい団体の登録コード</span>
+            </label>
+            <label className="flex items-start gap-2">
+              <input type="radio" name="code-kind" checked={reissue} onChange={() => setInput({ ...input, kind: 'reissue' })} className="mt-0.5" disabled={!orgs.length} />
+              <span className="min-w-0">登録済みの団体の再登録コード(共有鍵が漏れた時の作り直し・接続先の変更)</span>
+            </label>
+          </fieldset>
+          {reissue ? (
+            <label className="block text-xs">
+              再登録する団体(必須)
+              <select className={inputClass} value={input.targetOrgId ?? ''} onChange={(e) => setInput({ ...input, targetOrgId: e.target.value })} required>
+                <option value="">選んでください</option>
+                {orgs.map((o) => (
+                  <option key={o.orgId} value={o.orgId}>{o.displayName || o.orgId}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label className="block text-xs">
+              団体名(契約先の名前・必須)
+              <input className={inputClass} value={input.orgName} onChange={set('orgName')} maxLength={100} required />
+            </label>
+          )}
           <label className="block text-xs">
             担当者の名前
             <input className={inputClass} value={input.contactName} onChange={set('contactName')} maxLength={100} />
@@ -411,6 +444,9 @@ function CodesPanel({
             メモ
             <textarea className={inputClass} rows={2} value={input.note} onChange={set('note')} maxLength={500} />
           </label>
+          {reissue && (
+            <p className="text-xs text-muted-foreground">団体の担当者が、団体のスプレッドシートの「Ohsumi」メニュー →「レジストリに登録する…」でこのコードを使うと、新しい共有鍵に入れ替わり、古い共有鍵は使えなくなります。接続先の URL も新しくなります。</p>
+          )}
           <p className="text-xs text-muted-foreground">有効期限は{ttlDays}日です。発行の前に、5分以内の Google でのログインが必要です(古ければログインし直します)。</p>
           <Button type="submit" disabled={busy}>{busy ? '発行しています…' : '発行する'}</Button>
           {message && <p className="text-sm break-words text-destructive">{message}</p>}
@@ -458,12 +494,14 @@ function CodeItem({ code, session, onChanged, onAuthError }: { code: CodeSummary
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="min-w-0 font-medium break-words">{code.orgName || '(団体名なし)'}</span>
         <Badge tone={tone}>{CODE_STATE_LABELS[code.state]}</Badge>
+        {code.kind === 'reissue' && <Badge tone="muted">再登録</Badge>}
       </div>
       <dl className="space-y-1">
         <Field label="有効期限">{fmt(code.expiresAt)}</Field>
         <Field label="発行">{fmt(code.issuedAt)} {code.issuedBy}</Field>
         {(code.contactName || code.contactEmail) && <Field label="担当者">{[code.contactName, code.contactEmail].filter(Boolean).join(' ')}</Field>}
         {code.note && <Field label="メモ">{code.note}</Field>}
+        {code.kind === 'reissue' && code.targetOrgId && <Field label="再登録する団体ID">{code.targetOrgId}</Field>}
         {code.usedAt && <Field label="使用">{fmt(code.usedAt)} {code.usedOrgId}</Field>}
         {code.revokedAt && <Field label="取り消し">{fmt(code.revokedAt)} {code.revokedBy}</Field>}
         <Field label="コードの番号">{code.codeId}</Field>

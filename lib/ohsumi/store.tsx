@@ -349,6 +349,8 @@ interface OhsumiContextValue extends OhsumiState {
     nonceSecret: string,
     remember: boolean,
     orgId: string,
+    // 初期設定コード(最初の代表が団体に入る時だけ)
+    setupCode?: string,
   ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string }>
   // 保存したセッションで自動的にログインし直している途中(読み込み中の画面を出す)
   sessionResuming: boolean
@@ -1264,14 +1266,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   // ログイン: Google の IDトークンを団体の GAS でセッショントークンに交換する
   const signInWithGoogle = useCallback(
-    async (idToken: string, nonceSecret: string, remember: boolean, orgId: string) => {
+    async (idToken: string, nonceSecret: string, remember: boolean, orgId: string, setupCode?: string) => {
       // 読み込み中の表示はログイン画面側で行う(失敗したらログイン画面にそのまま
       // エラーを出すため、ここでは remoteStatus を loading にしない)
       setRemoteError(null)
       setLoadError(null)
       if (typeof performance !== 'undefined') loadStartedRef.current = { at: performance.now(), label: 'ログイン' }
       try {
-        const res = await exchangeIdToken(idToken, nonceSecret, remember)
+        const res = await exchangeIdToken(idToken, nonceSecret, remember, setupCode)
         if (!res.memberId || !res.session) {
           return { status: 'notRegistered' as const, email: res.email }
         }
