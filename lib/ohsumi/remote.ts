@@ -68,14 +68,16 @@ import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-t
 import { checkGasUrl } from './gas-url'
 import { DEFAULT_GAS_URL, ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
 import { noteContractResponse } from './contract'
+import { extractUnsavedTexts } from './read-only'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 
 /** 機能停止中(読み取り専用)のため、GAS が書き込みを断った(R1-e。lib/ohsumi/contract.ts) */
+// texts: 送ろうとした文章(画面は読み込み直さずに、コピーできるように出す)
 export class ContractRestrictedError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly texts: string[] = []) {
     super(message)
     this.name = 'ContractRestrictedError'
   }
@@ -744,7 +746,7 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
     throw new Error(json.error || 'この団体は、Ohsumi の利用を停止しています。')
   }
   // 機能停止中(読み取り専用): 作成・編集は断られる
-  if (!json.ok && json.restricted) throw new ContractRestrictedError(json.error || '読み取り専用です')
+  if (!json.ok && json.restricted) throw new ContractRestrictedError(json.error || '読み取り専用です', extractUnsavedTexts(payload))
 
   // セッションが無効(期限切れ・全端末でログアウト・鍵の変更など): 保存したトークンを消し、
   // ログイン画面に戻す

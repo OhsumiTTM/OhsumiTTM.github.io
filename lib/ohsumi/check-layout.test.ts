@@ -82,6 +82,17 @@ describe('提供停止・機能停止の知らせ(375px)', () => {
   })
 })
 
+describe('機能停止中(読み取り専用)の閲覧・書き出し', () => {
+  it('期間・プロジェクト・表示・並び替え・表示項目・リスト・タスク詳細・管理画面を確かめる(ラベルは画面の表示と同じ)', () => {
+    const steps = layout.READ_ONLY_STEPS as { do: string; labels?: string[] }[]
+    expect(steps.map((s) => s.do)).toEqual(['readOnlyWorkspace', 'readOnlyList', 'readOnlyTask', 'readOnlyAdmin'])
+    expect(layout.READ_ONLY_CONTRACT).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
+    const values = new Set(Object.values(ja))
+    const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
+    for (const label of steps.flatMap((s) => s.labels ?? [])) expect(values.has(label) || nav.includes(`label: '${label}'`), label).toBe(true)
+  })
+})
+
 describe('レジストリの管理画面(375px)', () => {
   it('ログイン・団体・登録コード・発行した後・操作の記録を開く(タブのラベルは管理画面の TABS と同じ)', () => {
     const steps = layout.REGISTRY_STEPS as { do: string; text?: string }[]

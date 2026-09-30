@@ -7,6 +7,7 @@ import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { ContractBanner } from './contract-banner'
+import { ReadOnlyInputs, ReadOnlyNotice } from './read-only-guard'
 import { ToastProvider, useToast } from './toast'
 import { LoginScreen } from './login-screen'
 import { OnboardingScreen } from './onboarding-screen'
@@ -179,6 +180,8 @@ function Router() {
         </div>
       )}
       {remoteEnabled && <ContractBanner />}
+      <ReadOnlyInputs />
+      <ReadOnlyNotice />
       {remoteEnabled && loadError && (
         <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 bg-warning-muted px-4 py-1.5 text-center text-xs font-medium text-warning">
           <span className="flex items-center gap-1.5">

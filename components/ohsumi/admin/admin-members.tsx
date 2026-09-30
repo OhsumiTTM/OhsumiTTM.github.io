@@ -321,6 +321,7 @@ export function AdminMembers() {
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
+            data-read-only-ok
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('admin.members.search.placeholder')}
             className="h-9 w-full rounded-lg border border-border bg-card pl-9 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
@@ -330,6 +331,7 @@ export function AdminMembers() {
           type="number"
           min={0}
           value={minTenureYears}
+          data-read-only-ok
           onChange={(e) => setMinTenureYears(e.target.value)}
           placeholder={t('admin.members.search.tenurePlaceholder')}
           title={t('admin.members.search.tenureTitle')}
@@ -337,6 +339,7 @@ export function AdminMembers() {
         />
         <input
           value={experienceQuery}
+          data-read-only-ok
           onChange={(e) => setExperienceQuery(e.target.value)}
           placeholder={t('admin.members.search.experiencePlaceholder')}
           title={t('admin.members.search.experienceTitle')}

@@ -9,7 +9,10 @@ import {
   useRef,
   useState,
   useCallback,
+  useSyncExternalStore,
 } from 'react'
+import { NO_CONTRACT, getContract, subscribeContract } from './contract'
+import { extractUnsavedTexts, guardStoreWrites, hasUserActivation, isReadOnlyContract } from './read-only'
 import type {
   AdminSection,
   ApprovalRecord,
@@ -209,8 +212,13 @@ interface OhsumiContextValue extends OhsumiState {
   remoteError: string | null
   // 保存に失敗したため、画面の変更を元に戻した
   remoteReverted: boolean
-  // 機能停止中(読み取り専用)のため、保存を断られた(R1-e。読み込み直して、画面の変更を元に戻す)
+  // 機能停止中(読み取り専用)のため、保存を断られた(R1-e)
   remoteRestricted: boolean
+  // 機能停止中(読み取り専用)か。作成・編集の関数は、画面を変える前に止まる(lib/ohsumi/read-only.ts)
+  readOnly: boolean
+  // 「読み取り専用のため、保存できません」の知らせ(送ろうとした文章をコピーできるように持つ)
+  readOnlyNotice: { texts: string[]; at: number } | null
+  closeReadOnlyNotice: () => void
   // true once every configured remote source (spreadsheet + optional
   // Settings sheet) has resolved or given up — see store.tsx's dataReady
   dataReady: boolean
@@ -876,8 +884,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 保存に失敗したため、画面の変更を元に戻した(次の保存が成功したら消す)
   const [remoteReverted, setRemoteReverted] = useState(false)
   const [remoteRestricted, setRemoteRestricted] = useState(false)
-  // 読み取り専用で断られた回数(増えたら読み込み直す)
-  const [restrictedRejections, setRestrictedRejections] = useState(0)
+  const [readOnlyNotice, setReadOnlyNotice] = useState<{ texts: string[]; at: number } | null>(null)
+  const closeReadOnlyNotice = useCallback(() => setReadOnlyNotice(null), [])
+  const contract = useSyncExternalStore(subscribeContract, getContract, () => NO_CONTRACT)
+  const readOnly = isReadOnlyContract(contract)
   const [loadError, setLoadError] = useState<string | null>(null)
   // mirrors remoteStatus but for the separate, optional Settings-sheet
   // fetch (role levels/permissions/pools) — true immediately when that
@@ -1027,9 +1037,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             onFailure()
             setRemoteReverted(true)
           }
+          // 機能停止中に断られた(画面で止める前に機能停止になった時など): 読み込み直さずに知らせ、
+          // 送ろうとした文章をコピーできるように出す
           if (err instanceof ContractRestrictedError) {
             setRemoteRestricted(true)
-            setRestrictedRejections((n) => n + 1)
+            if (err.texts.length) setReadOnlyNotice({ texts: err.texts, at: Date.now() })
           }
           reportRemoteError(err)
         })
@@ -1375,13 +1387,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       .finally(() => setRefreshing(false))
   }, [reportLoadError, applyInitialData, applyOrLoadRecords])
 
-  // 機能停止中(読み取り専用)に保存を断られたら、読み込み直して画面の変更を元に戻す
-  // (続けて断られた時は、まとめて1回)
+  // 機能停止中(読み取り専用)は、作成・編集をしないので GAS への書き込みが無い。解除がすぐ画面に伝わるよう、
+  // 3分ごとに読み込み直す(変わっていなければ中身は受け取らない)
   useEffect(() => {
-    if (restrictedRejections === 0) return
-    const timer = setTimeout(refreshAll, 500)
-    return () => clearTimeout(timer)
-  }, [restrictedRejections, refreshAll])
+    if (!readOnly || !isRemoteConfigured) return
+    const timer = setInterval(refreshAll, 3 * 60 * 1000)
+    return () => clearInterval(timer)
+  }, [readOnly, refreshAll])
 
   // 「もう一度試す」
   const retryLoad = useCallback(() => {
@@ -5136,6 +5148,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     remoteError,
     remoteReverted,
     remoteRestricted,
+    readOnly,
+    readOnlyNotice,
+    closeReadOnlyNotice,
     dataReady,
     refreshing,
     refreshAll,
@@ -5373,7 +5388,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     submitSurveyResponse,
   }
 
-  return <OhsumiContext.Provider value={value}>{children}</OhsumiContext.Provider>
+  // 機能停止中は、作成・編集の関数を、画面を変える前に止める(押された時だけ知らせる。自動で呼ばれた時は何もしない)
+  const provided = readOnly
+    ? guardStoreWrites(value, (_name, args) => {
+        if (hasUserActivation()) setReadOnlyNotice({ texts: extractUnsavedTexts(args), at: Date.now() })
+      })
+    : value
+
+  return <OhsumiContext.Provider value={provided}>{children}</OhsumiContext.Provider>
 }
 
 export function useOhsumi() {

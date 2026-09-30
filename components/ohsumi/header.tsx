@@ -310,6 +310,7 @@ export function Header() {
                     <Search className="size-3.5 shrink-0 text-muted-foreground" />
                     <input
                       value={query}
+                      data-read-only-ok
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder={t('header.search.placeholder')}
                       className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"

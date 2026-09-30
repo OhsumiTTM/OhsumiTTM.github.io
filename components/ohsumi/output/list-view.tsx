@@ -143,6 +143,7 @@ export function ListView({
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
+            data-read-only-ok
             onChange={(e) => setQuery(e.target.value)}
             placeholder={tr('output.list.searchPlaceholder')}
             className="h-9 w-full rounded-lg border border-border bg-card pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"

@@ -497,6 +497,7 @@ export function AdminMemberDb() {
                     <Search className="size-3 text-muted-foreground shrink-0" />
                     <input
                       value={filters[col.key] ?? ''}
+                      data-read-only-ok
                       onChange={(e) => setFilters((f) => ({ ...f, [col.key]: e.target.value }))}
                       placeholder={col.label}
                       className="w-full bg-transparent outline-none placeholder:text-muted-foreground/60 text-[11px]"
