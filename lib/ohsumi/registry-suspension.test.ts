@@ -289,3 +289,84 @@ describe('テスト環境で、14日待たずに確かめる(エディタから�
     expect(() => call(t, 'testScheduleSuspension')).toThrow(/TEST_SUSPEND_DAYS/)
   })
 })
+
+describe('プラン(cosmo_base・ohsumi・paid)', () => {
+  const setPlan = (t: ReturnType<typeof ready>, plan: string, reason = '契約の更新') =>
+    t.post({ action: 'setOrgPlan', session: t.session, orgId: ORG_A, plan, reason })
+
+  it('管理画面でプランを記録し、一覧に出す。操作の記録に残り、記録の無い変更には数えない', () => {
+    const t = ready()
+    expect(t.org().plan).toBe('')
+    expect(setPlan(t, 'ohsumi').ok).toBe(true)
+    expect(t.org().plan).toBe('ohsumi')
+    expect(setPlan(t, 'paid').ok).toBe(true)
+    expect(t.orgsRow().get('plan')).toBe('paid')
+    expect(t.audit()).toContainEqual(expect.objectContaining({ actor: 'admin@example.com', action: 'setOrgPlan', target: ORG_A, reason: '契約の更新' }))
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([])
+    // 知らないプラン・セッションが無い時は断る
+    expect(setPlan(t, 'gold').error).toMatch(/プラン/)
+    expect(t.post({ action: 'setOrgPlan', orgId: ORG_A, plan: 'ohsumi' }).ok).toBe(false)
+    // シートを直接書き換えたプランは、記録の無い変更として見つかる
+    t.orgsRow().set('plan', 'cosmo_base')
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([ORG_A])
+  })
+
+  it('有償の団体には、機能停止を入れられない(提供停止は入れられる)。テスト環境の関数でも同じ', () => {
+    const t = ready()
+    setPlan(t, 'paid')
+    const res = t.schedule('restrict', Date.now() + 20 * DAY, 'アンケートの未回答')
+    expect(res).toMatchObject({ ok: false })
+    expect(res.error).toMatch(/有償プランの団体には、機能停止を入れられません/)
+    expect(t.org().state).toBe('active')
+    expect(t.schedule('suspend', Date.now() + 20 * DAY).ok).toBe(true)
+    t.clear()
+    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', REGISTRY_TEST_ORG_IDS: ORG_A, TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'restrict' })
+    expect(() => (t.gas.testSuspendNow as () => unknown)()).toThrow(/有償プランの団体には、機能停止を入れられません/)
+  })
+
+  it('機能停止の予定が入っている団体は、先に取り消さないと有償にできない', () => {
+    const t = ready()
+    setPlan(t, 'ohsumi')
+    t.schedule('restrict', Date.now() + 20 * DAY, 'アンケートの未回答')
+    expect(setPlan(t, 'paid').error).toMatch(/有償プランにする前に/)
+    expect(t.org().plan).toBe('ohsumi')
+    t.clear()
+    expect(setPlan(t, 'paid').ok).toBe(true)
+  })
+})
+
+describe('提供停止を当日に(緊急)', () => {
+  const now = (t: ReturnType<typeof ready>, extra: Record<string, unknown> = {}) =>
+    t.post({ action: 'scheduleSuspension', session: t.session, orgId: ORG_A, kind: 'suspend', immediate: true, confirm: true, reason: '規約違反(緊急)', ...extra })
+
+  it('提供停止だけ、今すぐ停止できる。担当者にその場で知らせ、操作の記録に残す', () => {
+    const t = ready()
+    const res = now(t)
+    expect(res.ok, JSON.stringify(res)).toBe(true)
+    expect(t.org()).toMatchObject({ state: 'suspended', suspendKind: 'suspend', suspendReason: '規約違反(緊急)', noticesSent: [0] })
+    expect(t.checkIn().result).toMatchObject({ phase: 'inEffect', kind: 'suspend' })
+    expect(t.post({ action: 'resolveOrg', orgId: ORG_A }).result).toMatchObject({ status: 'suspended', gasUrl: '' })
+    expect(t.mails).toHaveLength(1)
+    expect(t.mails[0]).toMatchObject({ to: 'yamada@example.org' })
+    expect(t.mails[0].subject).toContain('提供を停止しました')
+    expect(t.mails[0].body).toContain('規約違反(緊急)')
+    expect(t.audit()).toContainEqual(expect.objectContaining({ actor: 'admin@example.com', action: 'suspendNow', target: ORG_A, reason: '規約違反(緊急)' }))
+    // 毎日の予告は送らない(もう停止中)
+    ;(t.gas.dailyRegistryBackup as () => unknown)()
+    expect(t.mails).toHaveLength(1)
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([])
+  })
+
+  it('機能停止は当日にできない(14日より後だけ)。確認・理由・5分以内のログインが無い時も断る', () => {
+    const t = ready()
+    expect(now(t, { kind: 'restrict' }).error).toMatch(/当日に停止できるのは、提供停止だけです/)
+    expect(now(t, { confirm: false }).error).toMatch(/確認の画面/)
+    expect(now(t, { reason: '' }).error).toMatch(/理由/)
+    // 当日にしない時は、提供停止も14日より後だけ
+    expect(t.schedule('suspend', Date.now() + DAY).error).toMatch(/14日より後[\s\S]*当日に提供停止にする/)
+    const body = { session: t.session, orgId: ORG_A, kind: 'suspend', immediate: true, confirm: true, reason: '緊急' }
+    expect(() => (t.gas.scheduleSuspension_ as (b: object, n: number) => unknown)(body, Date.now() + 6 * 60 * 1000)).toThrow(/もう一度 Google でログイン/)
+    expect(t.org().state).toBe('active')
+    expect(t.mails).toHaveLength(0)
+  })
+})

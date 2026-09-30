@@ -92,6 +92,8 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(ログイン)', do: 'registryLogin' },
   { name: 'レジストリ管理(団体)', do: 'registry' },
   { name: 'レジストリ管理(停止の予定を入れる)', do: 'registrySuspend' },
+  { name: 'レジストリ管理(当日の提供停止の確認)', do: 'registrySuspendNow' },
+  { name: 'レジストリ管理(プランを変える)', do: 'registryPlan' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
@@ -107,10 +109,10 @@ export function registryResponse(body) {
         me: { email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 1800 },
         codeTtlDays: 14,
         orgs: [
-          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'r1e-1' },
-          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], channel: 'standard', gasUrl: '', gasVersion: '' },
-          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], channel: 'standard', gasUrl: '', gasVersion: 'r1e-1' },
-          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [14, 7, 1], channel: '', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'cosmo_base', channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'r1e-1' },
+          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], plan: '', channel: 'standard', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1' },
+          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
@@ -559,6 +561,28 @@ async function run({ build = true } = {}) {
           await clickText('停止の予定を入れる…'); await sleep(500)
           const shown = await evaluate(`!!document.querySelector('input[type=datetime-local]')`)
           if (!shown) throw new Error('停止の予定を入れる欄が表示されません')
+        }
+        if (step.do === 'registrySuspendNow') {
+          // 停止の予定の欄(前の手順で開いたもの)で、提供停止・当日を選び、理由を入れて進むと、確認の画面が出る
+          await evaluate(`(() => {
+            const form = document.querySelector('input[type=datetime-local]').closest('form')
+            form.querySelectorAll('input[type=radio]')[0].click()
+            return true })()`)
+          await sleep(200)
+          await evaluate(`(() => {
+            const form = document.querySelector('input[type=datetime-local]').closest('form')
+            form.querySelector('input[type=checkbox]').click()
+            const reason = [...form.querySelectorAll('label')].find((l) => l.textContent.startsWith('理由')).querySelector('input')
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(reason, 'とても長い理由の例です。'.repeat(6))
+            reason.dispatchEvent(new Event('input', { bubbles: true }))
+            return true })()`)
+          await sleep(300)
+          await clickText('当日の提供停止へ進む…'); await sleep(500)
+          if (!(await evaluate(`!!document.querySelector('[role=alertdialog]') && document.body.textContent.includes('今すぐ提供停止にする')`))) throw new Error('当日の提供停止の確認の画面が出ません')
+        }
+        if (step.do === 'registryPlan') {
+          await clickText('プランを変える…'); await sleep(500)
+          if (!(await evaluate(`[...document.querySelectorAll('select option')].some((o) => o.textContent === '有償プラン')`))) throw new Error('プランを選ぶ欄が出ません')
         }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
