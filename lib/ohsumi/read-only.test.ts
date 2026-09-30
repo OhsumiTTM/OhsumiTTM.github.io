@@ -8,10 +8,13 @@ import {
   ReadOnlyBlockedError,
   applyReadOnlyInputs,
   blockedJustNow,
+  clearUnsentTexts,
   extractUnsavedTexts,
   guardStoreWrites,
   isReadOnlyContract,
+  keepUnsentTexts,
   shouldDisableForReadOnly,
+  takeUnsentTexts,
 } from './read-only'
 
 const ROOT = join(__dirname, '..', '..')
@@ -119,5 +122,26 @@ describe('送ろうとした文章(コピーできるように出す)', () => {
     })
     expect(texts).toEqual(['長い説明\n2行目も書いた', '新しいタスク名', '了解です'])
     expect(extractUnsavedTexts(['t1', 'コメントの本文'])).toEqual(['コメントの本文'])
+  })
+})
+
+describe('保存できなかった文章を、読み込み直しの後まで残す(このタブだけ)', () => {
+  it('残した文章は、閉じる(clear)まで何度でも読める。足した分は重ねずに加える', () => {
+    const data = new Map<string, string>()
+    vi.stubGlobal('window', { sessionStorage: { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, v) }, removeItem: (k: string) => { data.delete(k) } } })
+    try {
+      expect(takeUnsentTexts()).toBeNull()
+      keepUnsentTexts('sessionEnded', ['コメントA'])
+      keepUnsentTexts('sessionEnded', ['コメントA', '進捗B'])
+      expect(takeUnsentTexts()).toEqual({ kind: 'sessionEnded', texts: ['コメントA', '進捗B'] })
+      expect(takeUnsentTexts()).not.toBeNull()
+      clearUnsentTexts()
+      expect(takeUnsentTexts()).toBeNull()
+      // 空なら残さない
+      keepUnsentTexts('orgSuspended', [])
+      expect(takeUnsentTexts()).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

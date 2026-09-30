@@ -90,6 +90,17 @@ export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 // 通知の回数の上限を超えて、GAS が一部の通知を送らなかった時に window に送るイベント(ohsumi-app.tsx が知らせる)
 export const NOTIFY_LIMITED_EVENT = 'ohsumi:notify-limited'
 
+/** 画面が古い(移行の後の GAS が、以前の画面からの書き込みを断った)。送ろうとした文章を残して、読み込み直してもらう */
+export class ReloadRequiredError extends Error {
+  constructor(message: string, readonly texts: string[] = []) {
+    super(message)
+    this.name = 'ReloadRequiredError'
+  }
+}
+
+// 権限が足りないと断られた時に window に送るイベント(役職が変わったかもしれないので、store.tsx がデータを読み直す)
+export const FORBIDDEN_EVENT = 'ohsumi:forbidden'
+
 /** 機能停止中(読み取り専用)のため、GAS が書き込みを断った(R1-e。lib/ohsumi/contract.ts) */
 // texts: 送ろうとした文章(画面は読み込み直さずに、コピーできるように出す)
 export class ContractRestrictedError extends Error {
@@ -757,7 +768,8 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   // 提供停止中(R1-e): GAS はすべての操作を断る。ログインを終え、「利用を停止しています」を出すログイン画面に戻す
   if (!json.ok && json.orgSuspended) {
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(ORG_CHANGED_EVENT, { detail: { orgId: getActiveOrg().orgId, notice: 'orgSuspended' } }))
+      // 送ろうとした文章は、読み込み直した画面でコピーできるように渡す
+      window.dispatchEvent(new CustomEvent(ORG_CHANGED_EVENT, { detail: { orgId: getActiveOrg().orgId, notice: 'orgSuspended', texts: extractUnsavedTexts(payload) } }))
     }
     throw new Error(json.error || 'この団体は、Ohsumi の利用を停止しています。')
   }
@@ -769,9 +781,15 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   // (セッションの期限がこの端末で切れている場合も、トークンを送らずに同じ扱いにする)
   if (!json.ok && json.authError) {
     clearSession()
-    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: json.error }))
+    // 送ろうとした文章は、読み込み直した画面でコピーできるように渡す(書きかけの INPUT も消さない)
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: { error: json.error, texts: extractUnsavedTexts(payload) } }))
     throw new Error(json.error || 'ログインの有効期限が切れました。再ログインしてください。')
   }
+
+  // 画面が古い: 書きかけを残したまま、読み込み直すよう案内する
+  if (!json.ok && json.reloadRequired) throw new ReloadRequiredError(json.error || '画面が古くなりました。読み込み直してください。', extractUnsavedTexts(payload))
+  // 権限が足りない: 役職が変わったかもしれないので、画面のデータを読み直す(store.tsx)
+  if (!json.ok && json.forbidden && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(FORBIDDEN_EVENT))
 
   if (!json.ok) throw new Error(json.error || `GAS action "${action}" failed`)
   return json.result as T
