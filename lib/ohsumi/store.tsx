@@ -363,7 +363,7 @@ interface OhsumiContextValue extends OhsumiState {
     orgId: string,
     // 初期設定コード(最初の代表が団体に入る時だけ)
     setupCode?: string,
-  ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string }>
+  ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string; orgName?: string }>
   // 保存したセッションで自動的にログインし直している途中(読み込み中の画面を出す)
   sessionResuming: boolean
   // 全端末でログアウト(自分)。この端末もログアウトする
@@ -415,7 +415,7 @@ interface OhsumiContextValue extends OhsumiState {
   setProjectArchived: (projectId: string, archived: boolean) => void
   setProjectOrder: (orderedIds: string[]) => void
   updateProjectHealth: (projectId: string, override: import('./types').ProjectHealthLevel | null) => void
-  addMember: (name: string, email: string, affiliation: string, role: string) => Promise<void>
+  addMember: (name: string, email: string, affiliation: string, role: string, sendInvite?: boolean) => Promise<import('./remote').MemberInviteResult | undefined>
   removeMember: (memberId: string) => void
   updateNotify: (memberId: string, notify: boolean) => void
   updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => void
@@ -589,7 +589,7 @@ interface OhsumiContextValue extends OhsumiState {
     fields: Partial<Pick<import('./types').Candidate, 'name' | 'email' | 'phone' | 'resumeText' | 'interviewNotes' | 'status'>>,
   ) => void
   removeCandidate: (candidateId: string) => void
-  convertCandidateToMember: (candidateId: string, role?: string) => void
+  convertCandidateToMember: (candidateId: string, role?: string, sendInvite?: boolean) => Promise<import('./remote').MemberInviteResult | undefined>
   // ---- アンケート（item 22/30） -------------------------------------------
   surveyResponses: import('./types').SurveyResponse[]
   submitSurveyResponse: (answers: Record<string, number | string>) => void
@@ -1305,7 +1305,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await exchangeIdToken(idToken, nonceSecret, remember, setupCode)
         if (!res.memberId || !res.session) {
-          return { status: 'notRegistered' as const, email: res.email }
+          return { status: 'notRegistered' as const, email: res.email, orgName: res.orgName }
         }
         saveSession(orgId, res.session)
         lastLoginRecordedRef.current = res.lastLoginRecorded === true
@@ -2411,11 +2411,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // （手動でremoveCandidateするまで残る）ため、ローカルstateもここでは消さず
   // statusを'hired'にするだけに留める。
   const convertCandidateToMember = useCallback(
-    (candidateId: string, role?: string) => {
+    (candidateId: string, role?: string, sendInvite = false): Promise<import('./remote').MemberInviteResult | undefined> => {
       setCandidates((prev) =>
         prev.map((c) => (c.id === candidateId ? { ...c, status: 'hired', updatedAt: new Date().toISOString() } : c)),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.convertCandidateToMember(candidateId, role))
+      if (!isRemoteConfigured) return Promise.resolve(undefined)
+      const saving = remoteApi.convertCandidateToMember(candidateId, role, sendInvite)
+      runRemote(saving)
+      return saving.then((r) => r?.invite, () => undefined)
     },
     [runRemote],
   )
@@ -3702,7 +3705,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const addMember = useCallback(
-    (name: string, email: string, affiliation: string, role: string): Promise<void> => {
+    (name: string, email: string, affiliation: string, role: string, sendInvite = false): Promise<import('./remote').MemberInviteResult | undefined> => {
       const tempId = `m-${Math.random().toString(36).slice(2, 9)}`
       const newMember: Member = {
         id: tempId,
@@ -3719,13 +3722,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       }
       setMembers((prev) => [...prev, newMember])
 
-      if (!isRemoteConfigured) return Promise.resolve()
+      if (!isRemoteConfigured) return Promise.resolve(undefined)
 
       return remoteApi
-        .addMember(name, email, affiliation, role)
-        .then(({ id }) => {
+        .addMember(name, email, affiliation, role, sendInvite && !!email)
+        .then(({ id, invite }) => {
           setMembers((prev) => prev.map((m) => (m.id === tempId ? { ...m, id } : m)))
           setRemoteError(null)
+          return invite
         })
         .catch((err: unknown) => {
           // Roll back the optimistic add so the local state stays consistent
