@@ -169,8 +169,8 @@ describe('権限が足りない時と、セッションが無効な時の違い'
 })
 
 describe('権限の一覧への登録漏れ', () => {
-  it('doPost で扱うすべての操作が、authorizeAction のどれかの一覧に入っている(既定の「管理者のみ」に落ちない)', () => {
-    const start = CODE_GS.indexOf('function doPost(e)')
+  it('doPost で扱うすべての操作(runWriteAction)が、authorizeAction のどれかの一覧に入っている(既定の「管理者のみ」に落ちない)', () => {
+    const start = CODE_GS.indexOf('function runWriteAction(')
     const doPost = CODE_GS.slice(start, CODE_GS.indexOf('\nfunction ', start + 10))
     const cases = new Set([...doPost.matchAll(/case '(\w+)':/g)].map((m) => m[1]))
     const aStart = CODE_GS.indexOf('function authorizeAction(')
@@ -202,7 +202,8 @@ describe('処理時間の内訳(otherMs)', () => {
       t.advance(300)
       return { tables: { Members: { headers: ['id', 'role'], rows: [['m-base', 'base']] }, Settings: { headers: ['key', 'value'], rows: [['roles', ROLES]] } } }
     }
-    t.c.requestReplayKey = () => { t.advance(70); return null } // 内訳に無い処理
+    const normalize = t.c.normalizeRequestCodes as (b: object) => void
+    t.c.normalizeRequestCodes = (b: object) => { t.advance(70); normalize(b) } // 内訳に無い処理
     const res = t.post({ action: 'getBackgroundData', sessionToken: 'm-base' })
     expect(res.timing.authMs).toBe(300)
     expect(res.timing.readMs).toBe(300)

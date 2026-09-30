@@ -1338,15 +1338,39 @@ function roleSettingsFromTable(table) {
   return out
 }
 
-// 操作するメンバーを引く。読み取りだけの操作はスナップショットから(役職の設定もそこから)、
-// それ以外と、スナップショットに見つからない場合はシートから
+// 権限そのものを変える操作。これらは、操作するメンバー・役職・判定に使う行をシートから読んで判定する
+// (代表だけ・全権管理者だけの操作と、メンバーの状態・担当を変える操作)。
+// それ以外の書き込みは、スナップショットから判定する(getActingMember)。
+// 代表だけ・全権管理者だけの操作を authorizeAction に足した時は、ここにも足すこと
+// (lib/ohsumi/gas-write-auth.test.ts で確かめる)
+var SHEET_AUTH_ACTIONS = [
+  // 代表だけ
+  'updateRole', 'removeMember', 'removeProject', 'uploadOrgLogo', 'addMember', 'updateEmail', 'updateJoinedAt',
+  'updateReportsTo', 'updateMentor', 'notifyTrainingDecision', 'updatePermissionOverrides', 'updateMemberProjects',
+  'addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember',
+  // 代表・全権管理者だけ(役職・部門・設定・通知先・ログインの取り消し)
+  'updateSetting', 'updateRoles', 'deleteRole', 'updateDepartments', 'deleteDepartment', 'moveDepartmentTasks',
+  'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth',
+  'revokeMemberSessions',
+  // メンバーの状態・部門・プロジェクトの担当(班長の担当範囲の判定に使う)
+  'updateMemberInactive', 'updateMemberDepartmentPath', 'updateProjectMembers',
+]
+
+// 権限の判定に使ったスナップショットの版(シートから判定した時は null)
+var _authSnapshotVersion = null
+
+// 操作するメンバーを引く。権限そのものを変える操作(SHEET_AUTH_ACTIONS)はシートから、
+// それ以外(読み取り・普通の書き込み)はスナップショットから(役職の設定もそこから)。
+// スナップショットに見つからない・読めない時はシートから
 function getActingMember(memberId, action) {
-  if (SNAPSHOT_AUTH_ACTIONS.indexOf(action) >= 0) {
+  _authSnapshotVersion = null
+  if (SNAPSHOT_AUTH_ACTIONS.indexOf(action) >= 0 || SHEET_AUTH_ACTIONS.indexOf(action) < 0) {
     try {
       var snap = loadSnapshot()
       var member = actingMemberFromTable(snap.data.Members, memberId)
       if (member) {
         _requestRoles = requestRolesFrom(roleSettingsFromTable(snap.data.Settings))
+        _authSnapshotVersion = snap.version
         noteTiming('authFrom', 'snapshot')
         return member
       }
@@ -1354,8 +1378,51 @@ function getActingMember(memberId, action) {
       // 読めなければシートから
     }
   }
+  return getActingMemberFromSheet(memberId)
+}
+
+function getActingMemberFromSheet(memberId) {
+  _authSnapshotVersion = null
+  _requestRoles = null
   noteTiming('authFrom', 'sheet')
   return getActingMemberById(memberId)
+}
+
+// 権限の判定に使う操作の名前。まとめて送られた書き込みは、権限そのものを変える操作が1つでも
+// あればその操作(シートから判定する)、無ければ最初の操作
+function requestAuthAction(body) {
+  if (!body || body.action !== 'batch') return body && body.action
+  var ops = body.ops || []
+  for (var i = 0; i < ops.length; i++) {
+    if (SHEET_AUTH_ACTIONS.indexOf(ops[i].action) >= 0) return ops[i].action
+  }
+  return ops.length ? ops[0].action : 'batch'
+}
+
+// スナップショットで判定した後に、スナップショットの版が変わったか(ロックを取った後に確かめる)。
+// 変わっていたら、判定の間にほかの書き込みで権限が変わったかもしれないので、シートから判定し直す
+function authSnapshotChanged() {
+  if (_authSnapshotVersion === null) return false
+  return getDataVersion() !== _authSnapshotVersion
+}
+
+// 権限の判定で使う行(タスクの担当者・プロジェクト、登録者の上長など)。スナップショットで判定している時は
+// 同じ版のスナップショットから、そうでなければシートから読む(findRow と同じ形。値は表示の文字列)
+function authFindRow(sheetName, rowId) {
+  if (_authSnapshotVersion !== null && _requestSnapshot && _requestSnapshot.version === _authSnapshotVersion) {
+    var table = _requestSnapshot.data[sheetName]
+    var idCol = table && table.headers ? table.headers.indexOf('id') : -1
+    if (idCol >= 0) {
+      for (var i = 0; i < table.rows.length; i++) {
+        if (String(table.rows[i][idCol]) !== String(rowId)) continue
+        var obj = {}
+        table.headers.forEach(function (h, c) { obj[h] = table.rows[i][c] })
+        return obj
+      }
+      return null
+    }
+  }
+  return findRow(sheetName, rowId)
 }
 
 // ---- ログイン(IDトークン)とセッショントークン ----------------------------------
@@ -1855,7 +1922,7 @@ function checkPermissionOverride(acting, action, body) {
     if (!taskId) return false
     targets.task = taskId
     var taskRow = null
-    try { taskRow = findRow(SHEET_TASKS, taskId) } catch (e) { taskRow = null }
+    try { taskRow = authFindRow(SHEET_TASKS, taskId) } catch (e) { taskRow = null }
     if (taskRow) {
       targets.project = String(taskRow.project_id || '')
       targets.department = String(taskRow.department || '')
@@ -2213,7 +2280,7 @@ function authorizeAction(acting, action, body) {
     // 既存の担当者変更・他人の追加・複数人同時追加は引き続き代表/管理者限定のまま。
     if (action === 'assignTask' && !isLeader) {
       var atTask = null
-      try { atTask = findRow(SHEET_TASKS, String(body.taskId || '')) } catch (e) {}
+      try { atTask = authFindRow(SHEET_TASKS, String(body.taskId || '')) } catch (e) {}
       var atCurrentAssignees = atTask
         ? String(atTask.assignee_id || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
         : []
@@ -2271,7 +2338,7 @@ function authorizeAction(acting, action, body) {
     // approveTask: importance に応じた承認者チェック（lib/ohsumi/permissions.ts の canApproveTask と同じロジック）
     if (action === 'approveTask') {
       var taskForApprove = null
-      try { taskForApprove = findRow(SHEET_TASKS, String(body.taskId || '')) } catch(e) {}
+      try { taskForApprove = authFindRow(SHEET_TASKS, String(body.taskId || '')) } catch(e) {}
       if (taskForApprove) {
         var taskImportance = normalizeCode('importance', taskForApprove.importance)
         if (taskImportance === 'important' || taskImportance === 'external') {
@@ -2287,7 +2354,7 @@ function authorizeAction(acting, action, body) {
             var approverId = ''
             if (creatorId) {
               try {
-                var creatorRow = findRow(SHEET_MEMBERS, creatorId)
+                var creatorRow = authFindRow(SHEET_MEMBERS, creatorId)
                 approverId = String(creatorRow.reports_to_id || '').trim()
               } catch(e) {}
             }
@@ -2312,7 +2379,7 @@ function authorizeAction(acting, action, body) {
       } else if (body.taskId) {
         // タスク操作: タスクの project_id を引く
         try {
-          var taskObj = findRow(SHEET_TASKS, String(body.taskId))
+          var taskObj = authFindRow(SHEET_TASKS, String(body.taskId))
           if (taskObj) targetProjectId = String(taskObj.project_id || '')
         } catch(e) {}
       }
@@ -2456,7 +2523,7 @@ function authorizeAction(acting, action, body) {
     if (action === 'updateTaskStatus') {
       if (!isActingFullAdmin(acting)) {
         var taskId = String(body.taskId || '')
-        var task = findRow(SHEET_TASKS, taskId)
+        var task = authFindRow(SHEET_TASKS, taskId)
         if (body.status === 'done') {
           // 「完了」への変更は確認者（reviewer_id / reviewer_ids）のみ許可
           var reviewerAllowed = false
@@ -2481,7 +2548,7 @@ function authorizeAction(acting, action, body) {
     }
     if (action === 'approveTaskReview') {
       if (!isActingFullAdmin(acting)) {
-        var taskForApproval = findRow(SHEET_TASKS, String(body.taskId || ''))
+        var taskForApproval = authFindRow(SHEET_TASKS, String(body.taskId || ''))
         var approvalReviewerIds = taskForApproval
           ? String(taskForApproval.reviewer_ids || taskForApproval.reviewer_id || '').split(',').map(function(s){return s.trim()}).filter(Boolean)
           : []
@@ -2499,7 +2566,7 @@ function authorizeAction(acting, action, body) {
     // それ以外は誰でも見える、をそのままGAS側で再現する。既存コメントの
     // 編集・削除は投稿者本人・全権管理者のみ(validateCommentsUpdate)のまま。
     if (action === 'updateComments') {
-      var ucTask = findRow(SHEET_TASKS, String(body.taskId || ''))
+      var ucTask = authFindRow(SHEET_TASKS, String(body.taskId || ''))
       if (!ucTask) throw userError('対象のタスクが見つかりません。')
       if (normalizeCode('visibility', ucTask.visibility) === 'leaders' && !isAdminRoleRef(getRoles(), acting.role)) {
         throw userError('この操作は幹部限定タスクを閲覧できるメンバーのみ実行できます。')
@@ -2518,7 +2585,7 @@ function authorizeAction(acting, action, body) {
       'updateTaskSchedule', 'updateTaskForm',
     ]
     if (taskOwnerScopedActions.indexOf(action) >= 0) {
-      var tosTask = findRow(SHEET_TASKS, String(body.taskId || ''))
+      var tosTask = authFindRow(SHEET_TASKS, String(body.taskId || ''))
       if (!tosTask) throw userError('対象のタスクが見つかりません。')
 
       if (!isActingFullAdmin(acting)) {
@@ -2739,9 +2806,8 @@ function normalizeRequestCodes(body) {
   }
 }
 
-function doPost(e) {
+function handlePost(e, state) {
   var result
-  var lock = null
   // 書き込みの requestId(同じ ID の結果を覚えておき、送り直された時は前回の結果を返す)
   var replayKey = null
   try {
@@ -2749,7 +2815,7 @@ function doPost(e) {
     var body = JSON.parse(e.postData.contents)
     // ping: 何もせずにすぐ返す(認証・スクリプトプロパティ・シートを読まない)。
     // 画面の往復時間と GAS の中の時間(timing.totalMs)を比べて、遅さが Google 側・回線側か切り分ける
-    if (body.action === 'ping') return jsonOutput({ ok: true, result: { pong: true } })
+    if (body.action === 'ping') return ({ ok: true, result: { pong: true } })
     // スクリプトプロパティはこのリクエストの中で1回だけまとめて読む(requestProps)
     var propsStart = Date.now()
     resetRequestProps()
@@ -2758,25 +2824,32 @@ function doPost(e) {
     if (body.action === 'getLoginConfig') {
       var orgId = requestProps().ORG_ID
       if (!orgId) {
-        return jsonOutput({ ok: false, error: 'ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。' })
+        return ({ ok: false, error: 'ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。' })
       }
-      return jsonOutput({ ok: true, result: { orgId: orgId } })
+      return ({ ok: true, result: { orgId: orgId } })
     }
 
     // 移行の後は、コードを読めない古いタブからのリクエストを断る(再読み込みを促す)
     var versionError = checkClientVersion(body)
     noteTiming('propsMs', Date.now() - propsStart)
-    if (versionError) return jsonOutput({ ok: false, error: versionError, reloadRequired: true })
+    if (versionError) return ({ ok: false, error: versionError, reloadRequired: true })
+
+    // まとめて送られた書き込み(batch)は、中の操作がすべて受け付けられるものかを先に確かめる
+    if (body.action === 'batch') {
+      var batchError = validateBatch(body)
+      if (batchError) return ({ ok: false, error: batchError })
+    }
 
     // 選択肢の値は、以降の処理ではすべてコードで扱う(古いタブは日本語で送ってくる)
     normalizeRequestCodes(body)
+    if (body.action === 'batch') body.ops.forEach(normalizeRequestCodes)
 
     // exchangeIdToken: Google の IDトークンを確かめ、セッショントークンと初期データを返す
     if (body.action === 'exchangeIdToken') {
       try {
-        return jsonOutput({ ok: true, result: exchangeIdToken(body) })
+        return ({ ok: true, result: exchangeIdToken(body) })
       } catch (exchangeErr) {
-        return jsonOutput({ ok: false, error: toErrorMessage(exchangeErr), authError: true })
+        return ({ ok: false, error: toErrorMessage(exchangeErr), authError: true })
       }
     }
 
@@ -2788,16 +2861,16 @@ function doPost(e) {
       try {
         initAuth = timed('authMs', function () { return authenticateRequest(body) })
       } catch (initAuthErr) {
-        return jsonOutput({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
+        return ({ ok: false, error: toErrorMessage(initAuthErr), authError: true })
       }
       try {
-        return jsonOutput({
+        return ({
           ok: true,
           result: attachBackgroundData(getInitialDataForMember(initAuth.memberId, body.knownVersion), initAuth.memberId, body),
           session: initAuth.renewed || undefined,
         })
       } catch (initErr) {
-        return jsonOutput({ ok: false, error: toErrorMessage(initErr) })
+        return ({ ok: false, error: toErrorMessage(initErr) })
       }
     }
 
@@ -2811,652 +2884,780 @@ function doPost(e) {
     // distinguish them from business logic errors (session expired → login).
     // authError はセッションが無効・期限切れ・メンバーが見つからない時だけ(画面はログイン画面に戻す)。
     // 権限が足りない時は forbidden を返す(セッションは有効なので、ログイン画面には戻さない)
+    //
+    // 操作するメンバー・役職は、権限そのものを変える操作(SHEET_AUTH_ACTIONS)を除き、スナップショット
+    // (読み取りと同じキャッシュ)から引く。ロックを取った後に版をもう一度確かめ、判定の後に版が
+    // 変わっていたら(ほかの書き込みで権限が変わったかもしれない)、シートから判定し直す
     var actingMember
     var renewedSession = null
+    var auth
+    var batchDenied = null
     var authStart = beginTiming()
     try {
-      var auth = authenticateRequest(body)
+      auth = authenticateRequest(body)
       renewedSession = auth.renewed
-      actingMember = getActingMember(auth.memberId, body.action)
+      actingMember = getActingMember(auth.memberId, requestAuthAction(body))
     } catch (authErr) {
       endTiming('authMs', authStart)
-      return jsonOutput({ ok: false, error: toErrorMessage(authErr), authError: true })
+      return ({ ok: false, error: toErrorMessage(authErr), authError: true })
     }
-    try {
-      authorizeAction(actingMember, body.action, body)
-    } catch (forbiddenErr) {
-      endTiming('authMs', authStart)
-      return jsonOutput({ ok: false, error: toErrorMessage(forbiddenErr), forbidden: true, session: renewedSession || undefined })
+    if (body.action === 'batch') {
+      batchDenied = authorizeBatch(actingMember, body.ops)
+    } else {
+      try {
+        authorizeAction(actingMember, body.action, body)
+      } catch (forbiddenErr) {
+        endTiming('authMs', authStart)
+        return ({ ok: false, error: toErrorMessage(forbiddenErr), forbidden: true, session: renewedSession || undefined })
+      }
     }
     endTiming('authMs', authStart)
     // ------------------------------------------------------------------------
 
     // F7: 書き込みを伴うアクションはLockService.getScriptLock()で排他制御する。
     // 同時書き込みによる行の取り違え・カウンタの競合等を防ぐ。取得できな
-    // かった場合はエラーを返す(finallyで確実にreleaseLockする)。
-    if (LOCK_EXEMPT_ACTIONS.indexOf(body.action) < 0) {
-      lock = LockService.getScriptLock()
+    // かった場合はエラーを返す(doPost の finishWrite で確実に releaseLock する)。
+    if (body.action === 'batch' || LOCK_EXEMPT_ACTIONS.indexOf(body.action) < 0) {
+      var lock = LockService.getScriptLock()
       var lockStart = Date.now()
       try {
         lock.waitLock(10000)
         noteTiming('lockMs', Date.now() - lockStart)
       } catch (lockErr) {
         noteTiming('lockMs', Date.now() - lockStart)
-        lock = null
         // まだ何も処理していないので、フロントは少し待ってから送り直してよい
-        return jsonOutput({ ok: false, error: '混み合っています。少し待って再度お試しください。', retryLater: true })
+        return ({ ok: false, error: '混み合っています。少し待って再度お試しください。', retryLater: true })
+      }
+      state.lock = lock
+      state.actions = body.action === 'batch' ? body.ops.map(function (op) { return op.action }) : [body.action]
+
+      // スナップショットで判定した後に版が変わっていたら、シートから判定し直す
+      if (authSnapshotChanged()) {
+        var recheckStart = beginTiming()
+        noteTiming('authRecheck', 'sheet')
+        try {
+          actingMember = getActingMemberFromSheet(auth.memberId)
+        } catch (recheckAuthErr) {
+          endTiming('authRecheckMs', recheckStart)
+          return ({ ok: false, error: toErrorMessage(recheckAuthErr), authError: true })
+        }
+        if (body.action === 'batch') {
+          batchDenied = authorizeBatch(actingMember, body.ops)
+        } else {
+          try {
+            authorizeAction(actingMember, body.action, body)
+          } catch (recheckForbiddenErr) {
+            endTiming('authRecheckMs', recheckStart)
+            return ({ ok: false, error: toErrorMessage(recheckForbiddenErr), forbidden: true, session: renewedSession || undefined })
+          }
+        }
+        endTiming('authRecheckMs', recheckStart)
       }
     }
 
     // 送り直された書き込み(同じ requestId)は、処理をやり直さずに前回の結果を返す。
     // ロックを取った後に確かめるので、同じ ID の2本目は1本目の結果を受け取る
+    var replayStart = beginTiming()
     replayKey = requestReplayKey(actingMember.id, body)
     if (replayKey) {
       var prior = readRequestReplay(replayKey)
       if (prior) {
         replayKey = null
-        if (prior.inFlight) return jsonOutput({ ok: false, error: '同じ操作を処理しています。少し待ってください。', retryLater: true })
-        return jsonOutput(prior)
+        endTiming('replayMs', replayStart)
+        if (prior.inFlight) return ({ ok: false, error: '同じ操作を処理しています。少し待ってください。', retryLater: true })
+        return prior
       }
       markRequestInFlight(replayKey)
     }
+    endTiming('replayMs', replayStart)
 
-    switch (body.action) {
-      case 'createTasks':
-        // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
-        result = createTasks(body.tasks, actingMember.id)
-        break
-      case 'updateTaskStatus':
-        // body.status は入口でコードにそろえている(normalizeRequestCodes)
-        result = updateTaskFields(body.taskId, {
-          status: sheetCode('status', body.status),
-          last_activity: todayStr(),
-          completed_date: body.status === 'done' ? todayStr() : '',
-        })
-        // the assignee's "I'm done" signal — email the admins so they know
-        // to go confirm it (they already see it in their 確認待ち panel)
-        if (body.status === 'review') notifyReview(body.taskId)
-        break
-      case 'assignTask':
-        result = updateTaskFields(body.taskId, {
-          assignee_id: (body.assigneeIds || []).join(','),
-        })
-        syncCalendarForTask(body.taskId)
-        break
-      case 'applyToOpenBid':
-        // TSK-027: 公募タスクへの応募(承認制)。担当者(assignee_id)には
-        // 触れず、応募者リストのみ更新する
-        result = updateTaskFields(body.taskId, {
-          open_bid_applicant_ids: (body.applicantIds || []).join(','),
-        })
-        break
-      case 'updatePriority':
-        result = updateTaskFields(body.taskId, { priority: sheetCode('priority', body.priority) })
-        break
-      case 'updateDifficulty':
-        result = updateTaskFields(body.taskId, { difficulty: sheetCode('difficulty', body.difficulty) })
-        break
-      case 'updateTaskDetails':
-        result = updateTaskFields(body.taskId, {
-          title: body.name,
-          description: body.description || '',
-          project_id: body.projectId,
-          department: sheetValue('department', body.department),
-          category: body.category,
-          skills: (body.skills || []).join(','),
-          difficulty: sheetCode('difficulty', body.difficulty),
-          priority: sheetCode('priority', body.priority),
-          visibility: sheetCode('visibility', body.visibility),
-          importance: sheetCode('importance', body.importance),
-          required_skill_levels_json: JSON.stringify(body.requiredSkillLevels || {}),
-        })
-        break
-      case 'updateProgress':
-        // TSK-010: progressPercent単独更新(スライダー操作)にも相乗りさせる。
-        // body.text/body.progressHistoryが無い場合はその列に触れない
-        // (updateTaskFields/updateRowFieldsは渡されたキーのみ部分更新する)
-        var progressFields = { last_activity: todayStr() }
-        if (body.text !== undefined) progressFields.progress_note = body.text
-        if (body.progressHistory !== undefined) progressFields.progress_history_json = JSON.stringify(body.progressHistory)
-        if (body.progressPercent !== undefined) progressFields.progress_percent = body.progressPercent
-        result = updateTaskFields(body.taskId, progressFields)
-        break
-      case 'translateText':
-        result = translateTexts(body.texts, body.targetLang)
-        break
-      case 'updateWill':
-        result = updateMemberFields(body.memberId, { will_tags: (body.will || []).join(',') })
-        try {
-          var willMember = findRow(SHEET_MEMBERS, body.memberId)
-          var willName = willMember ? (willMember.display_name || willMember.name || '不明') : '不明'
-          var willTags = (body.will || []).join('、') || '（タグなし）'
-          var willSubject = '[Ohsumi] Will タグが更新されました'
-          var willBody = willName + 'さんのWillタグが更新されました。\n\n' +
-            '【設定されたWillタグ】\n' + willTags + '\n\n' +
-            'Ohsumiの人材画面で確認してください。'
-          notifyAdmins(willSubject, willBody)
-          notifyChat('💡 ' + willName + 'さんのWillタグが更新されました：' + willTags)
-        } catch (err) {
-          console.error('updateWillの通知送信に失敗しました: ' + err)
-        }
-        break
-      case 'updateTimezone':
-        result = updateMemberFields(body.memberId, { timezone: body.timezone || '' })
-        break
-      case 'updateLocale':
-        result = updateMemberFields(body.memberId, { locale: body.locale || '' })
-        break
-      case 'updateJudgment':
-        result = updateMemberFields(body.memberId, {
-          judgment_tags: (body.judgment || []).join(','),
-        })
-        break
-      case 'approveTask':
-        result = updateTaskFields(body.taskId, { approval_status: sheetCode('approval', 'approved') })
-        break
-      case 'notifyTaskRejected':
-        // body.taskId は authorizeAction() のスコープチェックで使用済み
-        notifyTaskRejected(body.creatorId, body.taskName, body.reason)
-        result = { ok: true }
-        break
-      case 'removeTask':
-        result = removeTask(body.taskId)
-        break
-      case 'createProject':
-        result = createProject(body.name, body.description, body.type)
-        break
-      case 'removeProject':
-        result = removeProject(body.projectId)
-        break
-      case 'removeMember':
-        assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { removed: true }; return m })() })
-        result = removeMember(body.memberId)
-        break
-      case 'updateNotify':
-        result = updateMemberFields(body.memberId, {
-          notify_new_task: body.notify ? 'TRUE' : 'FALSE',
-        })
-        break
-      case 'updateNotifySettings':
-        result = updateMemberFields(body.memberId, {
-          notify_settings: JSON.stringify(body.settings),
-        })
-        break
-      case 'updateRole':
-        requireKnownRole(body.role)
-        assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { role: body.role }; return m })() })
-        result = updateMemberFields(body.memberId, { role: sheetRoleRef(body.role) })
-        break
-      case 'updateRoles':
-        result = updateRoles(actingMember, body.roles)
-        break
-      case 'deleteRole':
-        result = deleteRole(actingMember, body.roleId, body.moveToRoleId)
-        break
-      case 'updateDepartments':
-        result = updateDepartments(body.departments)
-        break
-      case 'deleteDepartment':
-        result = deleteDepartment(body.departmentId)
-        break
-      case 'moveDepartmentTasks':
-        result = moveDepartmentTasks(body.fromDepartmentId, body.toDepartmentId || '')
-        break
-      case 'updatePermissionOverrides':
-        result = updateMemberFields(body.memberId, {
-          permission_overrides_json: JSON.stringify(mapOverrideCodes(body.overrides || [], sheetValue)),
-        })
-        break
-      case 'updateReportsTo':
-        result = updateMemberFields(body.memberId, { reports_to_id: body.reportsToId || '' })
-        break
-      case 'updateMentor':
-        result = updateMemberFields(body.memberId, { mentor_id: body.mentorId || '' })
-        break
-      case 'updateDisplayName':
-        result = updateMemberFields(body.memberId, { display_name: body.displayName || '' })
-        break
-      case 'updateJoinedAt':
-        result = updateMemberFields(body.memberId, { joined_at: body.joinedAt || '' })
-        break
-      case 'updateUnavailableDates':
-        result = updateMemberFields(body.memberId, {
-          unavailable_dates: (body.dates || []).join(','),
-        })
-        break
-      case 'updateAvailableHours':
-        result = updateMemberFields(body.memberId, {
-          available_hours_json: body.hours ? JSON.stringify(body.hours) : '',
-        })
-        break
-      case 'updateSchedule':
-        result = updateTaskFields(body.taskId, {
-          start_date: body.startDate || '',
-          due_date: body.deadline || '',
-        })
-        notifyScheduleChange(body.taskId)
-        break
-      case 'updateDependsOn':
-        result = updateTaskFields(body.taskId, {
-          depends_on_ids: (body.dependsOnIds || []).join(','),
-        })
-        break
-      case 'updateVisibility':
-        result = updateTaskFields(body.taskId, {
-          visibility: sheetCode('visibility', body.visibility),
-        })
-        break
-      case 'updateReviewer':
-        result = updateTaskFields(body.taskId, { reviewer_id: body.reviewerId || '' })
-        break
-      case 'updateReviewers':
-        result = updateTaskFields(body.taskId, {
-          reviewer_ids: (body.reviewerIds || []).join(','),
-          reviewer_id: (body.reviewerIds && body.reviewerIds[0]) || '',
-          required_approvals: body.requiredApprovals != null ? String(body.requiredApprovals) : '',
-        })
-        break
-      case 'approveTaskReview':
-        result = approveTaskReview(body.taskId, actingMember.id, body.comment)
-        break
-      case 'setBlocker':
-        result = updateTaskFields(body.taskId, {
-          blocker_note: body.note || '',
-          blocker_since: body.note ? body.since || todayStr() : '',
-        })
-        break
-      case 'setHoldReason':
-        result = updateTaskFields(body.taskId, {
-          hold_reason_note: body.note || '',
-          hold_reason_since: body.note ? body.since || todayStr() : '',
-        })
-        break
-      case 'updateDeliverables':
-        // F5: javascript:等の危険なURLを保存させない
-        ;(body.deliverables || []).forEach(function (d) {
-          if (d && d.url && !isSafeHttpUrl(d.url)) {
-            throw userError('成果物のURLは http または https で始まるURLのみ登録できます。')
-          }
-        })
-        result = updateTaskFields(body.taskId, {
-          deliverables_json: JSON.stringify(body.deliverables || []),
-        })
-        break
-      case 'updateHistory':
-        result = updateTaskFields(body.taskId, {
-          history_json: JSON.stringify((body.history || []).map(sheetHistoryEntry)),
-        })
-        break
-      case 'updateComments':
-        result = updateTaskFields(body.taskId, {
-          comments_json: JSON.stringify(body.comments || []),
-        })
-        break
-      case 'notifyMention':
-        notifyMention(body.taskId, body.commentText, body.memberIds || [])
-        result = { ok: true }
-        break
-      case 'updateEstimatedHours':
-        result = updateTaskFields(body.taskId, {
-          estimated_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
-        })
-        break
-      case 'updateActualHours':
-        result = updateTaskFields(body.taskId, {
-          actual_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
-        })
-        break
-      case 'updateRetrospective':
-        result = updateTaskFields(body.taskId, {
-          retrospective_json: body.retrospective ? JSON.stringify(body.retrospective) : '',
-        })
-        break
-      case 'updateTaskSchedule':
-        result = updateTaskFields(body.taskId, {
-          schedule_json: body.schedule ? JSON.stringify(mapScheduleCodes(body.schedule, sheetCode)) : '',
-        })
-        break
-      case 'notifyScheduleResult':
-        notifyScheduleResult(body.taskId)
-        result = { ok: true }
-        break
-      case 'updateTaskForm':
-        result = updateTaskFields(body.taskId, {
-          form_json: body.form ? JSON.stringify(body.form) : '',
-        })
-        break
-      case 'notifyFormResult':
-        notifyFormResult(body.taskId)
-        result = { ok: true }
-        break
-      case 'updateProjectMembers':
-        result = updateProjectFields(body.projectId, {
-          member_ids: (body.memberIds || []).join(','),
-        })
-        break
-      case 'updateProjectOwner':
-        result = updateProjectFields(body.projectId, { owner_id: body.ownerId || '' })
-        break
-      case 'updateProjectParent':
-        result = updateProjectFields(body.projectId, { parent_id: body.parentId || '' })
-        break
-      case 'updateProjectDetails':
-        result = updateProjectFields(body.projectId, {
-          name: body.name || '',
-          description: body.description || '',
-          type: body.type || '',
-          goal: body.goal || '',
-          start_date: body.startDate || '',
-          end_date: body.endDate || '',
-        })
-        break
-      case 'updateProjectArchived':
-        result = updateProjectFields(body.projectId, {
-          archived: body.archived ? 'TRUE' : 'FALSE',
-        })
-        break
-      case 'updateProjectHealth':
-        result = updateProjectHealthOverride(body.projectId, body.healthOverride)
-        break
-      case 'notifyProjectHealth':
-        result = notifyProjectHealth(body.projectId, body.health)
-        break
-      case 'reportProjectHealth':
-        // 自動判定の結果を複数プロジェクト分まとめて受け取り、記録の更新と
-        // 通知(1通にまとめる)をサーバー側で判断する
-        result = reportProjectHealth(body.items)
-        break
-      case 'updateProjectHealthRecord':
-        // item 26(追補): 通知なしでlast_notified_health列だけを更新する
-        // （attentionから回復した際、次回の再悪化を確実に再通知するため）
-        result = updateProjectFields(body.projectId, { last_notified_health: body.health })
-        break
-      case 'updateAvatar':
-        // choosing a color+initials avatar supersedes any uploaded picture
-        result = updateMemberFields(body.memberId, {
-          avatar_color: body.avatarColor || '',
-          avatar_initials: body.initials || '',
-          avatar_url: '',
-        })
-        break
-      case 'uploadAvatar':
-        result = uploadAvatar(body.memberId, body.dataUrl, body.filename)
-        break
-      case 'addMember':
-        if (body.role) requireKnownRole(body.role)
-        result = addMember(body.name, body.email, body.affiliation, body.role)
-        break
-      case 'addCandidate':
-        result = addCandidate(body.candidate || {})
-        break
-      case 'updateCandidate':
-        result = updateCandidate(body.candidateId, body.fields || {})
-        break
-      case 'removeCandidate':
-        result = removeCandidate(body.candidateId)
-        break
-      case 'convertCandidateToMember':
-        if (body.role) requireKnownRole(body.role)
-        result = convertCandidateToMember(body.candidateId, body.role)
-        break
-      case 'updateEducationInfo':
-        result = updateMemberFields(body.memberId, {
-          university: body.university || '',
-          faculty: body.faculty || '',
-          department_name: body.departmentName || '',
-          grade_year: body.gradeYear || '',
-        })
-        break
-      case 'updateCustomFields':
-        // フロント側（store.tsx）で既存値とマージ済みの完全なオブジェクトを送ってくる
-        result = updateMemberFields(body.memberId, {
-          custom_fields_json: JSON.stringify(body.customFields || {}),
-        })
-        break
-      case 'updateEmail':
-        setMemberEmail(body.memberId, body.email || '')
-        result = { updated: true }
-        break
-      case 'revokeMySessions':
-        // 全端末でログアウト(自分): 世代番号を上げ、発行済みのセッションをすべて無効にする
-        bumpSessionGeneration(actingMember.id)
-        result = { revoked: true }
-        break
-      case 'revokeMemberSessions':
-        // 全端末でログアウト(管理者が他のメンバーに対して)
-        if (!findRow(SHEET_MEMBERS, String(body.memberId || ''))) throw userError('メンバーが見つかりません。')
-        bumpSessionGeneration(String(body.memberId))
-        result = { revoked: true }
-        break
-      case 'getMyEmails':
-        // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
-        // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
-        // 覗く抜け道にならない)
-        result = { email: getMemberEmailValue(actingMember.id) }
-        break
-      case 'updateSetting':
-        // 役職の設定は updateRoles・deleteRole で変える(最上位の役職の確認があるため)。
-        // 移行前の古いタブが今までの設定を書く場合だけ、以前と同じく受け付ける
-        if (body.key === 'roles' || (hasRolesSetting() && ROLE_SETTING_KEYS.indexOf(body.key) >= 0)) {
-          throw userError('役職の設定は、管理画面の役職の編集から変更してください。')
-        }
-        if (body.key === 'departments') throw userError('部門の設定は、管理画面の部門の編集から変更してください。')
-        result = updateSetting(body.key, sheetSettingValue(body.key, body.value))
-        if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles()
-        break
-      case 'uploadOrgLogo':
-        result = uploadOrgLogo(body.dataUrl, body.filename)
-        break
-      case 'updateDiscordWebhookUrl':
-        result = updateDiscordWebhookUrl(body.url)
-        break
-      case 'updateSlackWebhookUrl':
-        result = updateSlackWebhookUrl(body.url)
-        break
-      case 'testDiscordWebhook':
-        result = testDiscordWebhook()
-        break
-      case 'getWebhookStatus':
-        result = getWebhookStatus()
-        break
-      case 'testSlackWebhook':
-        result = testSlackWebhook()
-        break
-      case 'updateMemberProjects':
-        result = updateMemberFields(body.memberId, {
-          project_ids: (body.projectIds || []).join(','),
-        })
-        break
-      case 'updateMemberInactive':
-        if (body.inactive) assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { inactive: true }; return m })() })
-        result = updateMemberFields(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
-        break
-      case 'updateMemberDepartmentPath':
-        result = updateMemberFields(body.memberId, { department_path: body.departmentPath || '' })
-        break
-      // ---- タレントマネジメント ----
-      case 'updateSearchProfile':
-        // 経験年数はjoinedAtからの自動計算に統一したため、years_of_experience
-        // 列への書き込みは廃止(列自体は既存データ保持のためシートに残す)
-        result = updateMemberFields(body.memberId, {
-          has_management_experience: body.hasManagementExperience ? 'TRUE' : 'FALSE',
-          desired_areas: (body.desiredAreas || []).join(','),
-          desired_skills: (body.desiredSkills || []).join(','), // DEV-002
-        })
-        break
-      case 'updateCareerHistory':
-        result = updateMemberFields(body.memberId, {
-          career_history_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'updateQualifications':
-        result = updateMemberFields(body.memberId, {
-          qualifications_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'updateEvaluationHistory':
-        result = updateMemberFields(body.memberId, {
-          evaluation_history_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'updateTransferHistory':
-        result = updateMemberFields(body.memberId, {
-          transfer_history_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'updateSkillLevels':
-        result = updateMemberFields(body.memberId, {
-          skill_levels_json: JSON.stringify(body.levels || []),
-        })
-        break
-      case 'updateCompetencies':
-        result = updateMemberFields(body.memberId, {
-          competencies_json: JSON.stringify(body.competencies || []),
-        })
-        break
-      case 'updateCareerGoals':
-        result = updateMemberFields(body.memberId, {
-          career_aspiration: body.careerAspiration || '',
-          desired_future_role: body.desiredFutureRole || '',
-          career_plan: body.careerPlan || '',
-        })
-        break
-      case 'updateTrainingHistory':
-        result = updateMemberFields(body.memberId, {
-          training_history_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'notifyTrainingRequest':
-        notifyTrainingRequest(body.memberId, body.trainingName)
-        result = { ok: true }
-        break
-      case 'notifyTrainingDecision':
-        notifyTrainingDecision(body.memberId, body.trainingName, body.approved)
-        result = { ok: true }
-        break
-      case 'updateDevelopmentPlan':
-        result = updateMemberFields(body.memberId, {
-          development_plan_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'updateOneOnOnes':
-        result = updateMemberFields(body.memberId, {
-          one_on_ones_json: JSON.stringify(body.entries || []),
-        })
-        break
-      case 'awardSkillPoints':
-        result = awardSkillPoints(body.taskId, body.memberId, body.points || {})
-        break
-      case 'importPortableRecord':
-        result = importPortableRecord(body.memberId, body.skillPoints || {}, body.qualifications || [])
-        break
-      case 'submitQuizResult':
-        result = submitQuizResult(body.quizId, body.memberId, body.answers || [], actingMember)
-        break
-      case 'submitExpenseApplication':
-        result = saveExpenseApplication(body.application, actingMember)
-        break
-      case 'approveExpenseStep':
-        // actingMember.id を使うことでクライアントの自己申告値(body.actorId)による偽装を防ぐ
-        result = processExpenseStep(body.applicationId, body.stepId, actingMember.id, 'approved', body.comment)
-        break
-      case 'rejectExpense':
-        result = setExpenseStatus(body.applicationId, 'rejected', body.reason)
-        break
-      case 'withdrawExpense':
-        result = setExpenseStatus(body.applicationId, 'withdrawn', null, actingMember.id)
-        break
-      case 'returnExpense':
-        result = setExpenseStatus(body.applicationId, 'returned', body.reason)
-        break
-      case 'resubmitExpense':
-        // actingMember.id を使うことでクライアントの自己申告値による偽装を防ぐ
-        result = resubmitExpense(body.applicationId, body.fields, actingMember.id)
-        break
-      case 'uploadExpenseReceipt':
-        result = uploadExpenseReceipt(body.dataUrl, body.filename)
-        break
-      case 'uploadSurveyImage':
-        result = uploadSurveyImage(body.dataUrl, body.filename)
-        break
-      case 'submitCustomForm':
-        result = saveCustomFormSubmission(body.submission, actingMember)
-        break
-      case 'approveFormStep':
-        // actingMember.id を使うことでクライアントの自己申告値(body.actorId)による偽装を防ぐ
-        result = processFormStep(body.submissionId, body.stepId, actingMember.id, 'approved', body.comment)
-        break
-      case 'rejectFormSubmission':
-        result = setFormSubmissionStatus(body.submissionId, 'rejected', body.reason)
-        break
-      case 'submitDailyReport':
-        result = saveDailyReport(body.report, actingMember)
-        break
-      case 'getBackgroundData':
-        result = getBackgroundData(actingMember, body)
-        break
-      case 'getExpenses':
-        result = getExpenses(actingMember)
-        break
-      case 'getCandidates':
-        result = getCandidates(actingMember)
-        break
-      case 'getFormSubmissions':
-        result = getFormSubmissions(actingMember)
-        break
-      case 'getFiles':
-        result = getFiles(actingMember, body.fileIds)
-        break
-      case 'fetchDailyReports':
-        result = fetchDailyReports()
-        break
-      case 'bulkUpdateSkills':
-        result = bulkUpdateSkillLevels(body.updates || [])
-        break
-      case 'updateAbsentDates':
-        result = updateMemberFields(body.memberId, { absent_dates: (body.dates || []).join(',') })
-        break
-      case 'updateLastLogin':
-        result = updateMemberFields(body.memberId, { last_login: new Date().toISOString() })
-        break
-      case 'submitSurveyResponse':
-        // actingMember.id を使うことでクライアントの自己申告値(body.memberId)による偽装を防ぐ
-        result = saveSurveyResponse(actingMember.id, body.answers || {})
-        break
-      case 'checkAndGenerateRecurringTasks':
-        // item 2/TSK-051: クライアント側(誰かがOhsumiを開いた時)とサーバー側
-        // 日次トリガー(dailyMaintenance)の両方からこの同じロック付き関数を
-        // 呼ぶことで、定期タスクの二重生成を防ぐ
-        result = generateRecurringTasksLocked()
-        break
-      case 'triggerOverdueReminders':
-        // NTF-005: 日次トリガー任せだった期限超過リマインドを、管理者が
-        // 任意タイミングで手動発火できるようにする
-        notifyOverdueTasksToAssignees()
-        result = { ok: true }
-        break
-      default:
-        throw userError('Unknown action: ' + body.action)
+    var actionStart = beginActionTiming()
+    try {
+      result = body.action === 'batch'
+        ? { results: runBatch(body.ops, actingMember, batchDenied) }
+        : runWriteAction(body, actingMember)
+    } finally {
+      endActionTiming(actionStart)
     }
-    return respondAndRemember(replayKey, { ok: true, result: result, session: renewedSession || undefined })
+    return remember(replayKey, { ok: true, result: result, session: renewedSession || undefined })
   } catch (err) {
     // F14: userError()で作られた業務上のエラー(目印つき)はそのメッセージを
     // フロントに返す。目印の無い例外(SpreadsheetApp等のApps Scriptサービス
     // が投げるものや、コード内の想定外のバグ)は詳細をLoggerに記録し、
     // フロントには定型メッセージだけを返す(スタックトレース等の内部情報や
     // リクエストの中身・トークンは返さない/ログにも出さない)。
-    return respondAndRemember(replayKey, { ok: false, error: toErrorMessage(err) })
+    return remember(replayKey, { ok: false, error: toErrorMessage(err) })
+  }
+}
+
+function doPost(e) {
+  var state = { lock: null, actions: [] }
+  var out
+  try {
+    out = handlePost(e, state)
   } finally {
-    // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを
-    // 無効にするためデータの版を新しくする(失敗した書き込みでも無害)
-    if (lock) {
-      // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
-      // 次にロックを取った実行が更新前の値を読むことがある)
+    finishWrite(state)
+  }
+  return jsonOutput(out)
+}
+
+// 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを無効にするため、
+// 書いたかもしれない表の版を新しくする(失敗した書き込みでも無害)。応答を作る前に行い、
+// かかった時間を内訳(flushMs・versionBumpMs)に入れる
+function finishWrite(state) {
+  if (!state || !state.lock) return
+  try {
+    // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
+    // 次にロックを取った実行が更新前の値を読むことがある)
+    timed('flushMs', function () {
       try { SpreadsheetApp.flush() } catch (flushErr) { /* 書き込みは実行の終了時にも確定する */ }
-      bumpVersionsAfterWrite(body && body.action)
-      lock.releaseLock()
+    })
+    timed('versionBumpMs', function () { bumpVersionsAfterWrite(state.actions) })
+  } finally {
+    state.lock.releaseLock()
+  }
+}
+
+// 送り直された時のために結果を覚えてから、応答(オブジェクト)を返す
+function remember(key, obj) {
+  if (key) {
+    var t = Date.now()
+    try { CacheService.getScriptCache().put(key, requestReplayValue(obj), REQUEST_REPLAY_TTL_SEC) } catch (e) { /* 覚えられなくても応答は返す */ }
+    addTiming('replayMs', Date.now() - t)
+  }
+  return obj
+}
+
+// ---- まとめて送られた書き込み(batch) -------------------------------------------
+//
+// 画面の1回の操作から続けて送られる書き込み(例: 日程の変更と変更の記録)を、1回の通信で受け取る。
+//   { action: 'batch', ops: [{ action, ... }, ...], requestId, sessionToken, clientVersion }
+// 中の操作は、1本ずつ送った時と同じ権限の確認をし、順番に実行する。1つが断られても・失敗しても、
+// ほかの操作はそのまま実行する(1本ずつ送った時と同じ)。ロック・送り直しの記録は、まとめて1回。
+// 結果は { results: [{ ok, result } | { ok: false, error, forbidden? }, ...] }(ops と同じ順番)
+var BATCH_MAX_OPS = 20
+// まとめて送れない操作(ログイン・読み取り・ロックを取らない操作)
+var BATCH_EXCLUDED_ACTIONS = ['batch', 'ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData']
+
+function validateBatch(body) {
+  var ops = body && body.ops
+  if (!Array.isArray(ops) || ops.length === 0) return 'まとめて送る操作がありません。'
+  if (ops.length > BATCH_MAX_OPS) return 'まとめて送れる操作は' + BATCH_MAX_OPS + '件までです。'
+  for (var i = 0; i < ops.length; i++) {
+    var op = ops[i]
+    if (!op || typeof op !== 'object' || typeof op.action !== 'string') return 'まとめて送る操作の形式が不正です。'
+    if (BATCH_EXCLUDED_ACTIONS.indexOf(op.action) >= 0 || LOCK_EXEMPT_ACTIONS.indexOf(op.action) >= 0) {
+      return 'この操作はまとめて送れません: ' + op.action
     }
   }
+  return null
+}
+
+// 操作ごとの権限の確認。断られた操作は理由、許可された操作は null
+function authorizeBatch(acting, ops) {
+  return ops.map(function (op) {
+    try {
+      authorizeAction(acting, op.action, op)
+      return null
+    } catch (err) {
+      return toErrorMessage(err)
+    }
+  })
+}
+
+function runBatch(ops, acting, denied) {
+  noteTiming('batchOps', ops.length)
+  return ops.map(function (op, i) {
+    if (denied && denied[i]) return { ok: false, error: denied[i], forbidden: true }
+    try {
+      return { ok: true, result: runWriteAction(op, acting) }
+    } catch (err) {
+      return { ok: false, error: toErrorMessage(err) }
+    }
+  })
+}
+
+// 1つの書き込みの操作を実行する(権限の確認・ロック・送り直しの確認は済んでいること)
+function runWriteAction(body, actingMember) {
+  var result
+  switch (body.action) {
+    case 'createTasks':
+      // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
+      result = createTasks(body.tasks, actingMember.id)
+      break
+    case 'updateTaskStatus':
+      // body.status は入口でコードにそろえている(normalizeRequestCodes)
+      result = updateTaskFields(body.taskId, {
+        status: sheetCode('status', body.status),
+        last_activity: todayStr(),
+        completed_date: body.status === 'done' ? todayStr() : '',
+      })
+      // the assignee's "I'm done" signal — email the admins so they know
+      // to go confirm it (they already see it in their 確認待ち panel)
+      if (body.status === 'review') notifyReview(body.taskId)
+      break
+    case 'assignTask':
+      result = updateTaskFields(body.taskId, {
+        assignee_id: (body.assigneeIds || []).join(','),
+      })
+      syncCalendarForTask(body.taskId)
+      break
+    case 'applyToOpenBid':
+      // TSK-027: 公募タスクへの応募(承認制)。担当者(assignee_id)には
+      // 触れず、応募者リストのみ更新する
+      result = updateTaskFields(body.taskId, {
+        open_bid_applicant_ids: (body.applicantIds || []).join(','),
+      })
+      break
+    case 'updatePriority':
+      result = updateTaskFields(body.taskId, { priority: sheetCode('priority', body.priority) })
+      break
+    case 'updateDifficulty':
+      result = updateTaskFields(body.taskId, { difficulty: sheetCode('difficulty', body.difficulty) })
+      break
+    case 'updateTaskDetails':
+      result = updateTaskFields(body.taskId, {
+        title: body.name,
+        description: body.description || '',
+        project_id: body.projectId,
+        department: sheetValue('department', body.department),
+        category: body.category,
+        skills: (body.skills || []).join(','),
+        difficulty: sheetCode('difficulty', body.difficulty),
+        priority: sheetCode('priority', body.priority),
+        visibility: sheetCode('visibility', body.visibility),
+        importance: sheetCode('importance', body.importance),
+        required_skill_levels_json: JSON.stringify(body.requiredSkillLevels || {}),
+      })
+      break
+    case 'updateProgress':
+      // TSK-010: progressPercent単独更新(スライダー操作)にも相乗りさせる。
+      // body.text/body.progressHistoryが無い場合はその列に触れない
+      // (updateTaskFields/updateRowFieldsは渡されたキーのみ部分更新する)
+      var progressFields = { last_activity: todayStr() }
+      if (body.text !== undefined) progressFields.progress_note = body.text
+      if (body.progressHistory !== undefined) progressFields.progress_history_json = JSON.stringify(body.progressHistory)
+      if (body.progressPercent !== undefined) progressFields.progress_percent = body.progressPercent
+      result = updateTaskFields(body.taskId, progressFields)
+      break
+    case 'translateText':
+      result = translateTexts(body.texts, body.targetLang)
+      break
+    case 'updateWill':
+      result = updateMemberFields(body.memberId, { will_tags: (body.will || []).join(',') })
+      try {
+        var willMember = findRow(SHEET_MEMBERS, body.memberId)
+        var willName = willMember ? (willMember.display_name || willMember.name || '不明') : '不明'
+        var willTags = (body.will || []).join('、') || '（タグなし）'
+        var willSubject = '[Ohsumi] Will タグが更新されました'
+        var willBody = willName + 'さんのWillタグが更新されました。\n\n' +
+          '【設定されたWillタグ】\n' + willTags + '\n\n' +
+          'Ohsumiの人材画面で確認してください。'
+        notifyAdmins(willSubject, willBody)
+        notifyChat('💡 ' + willName + 'さんのWillタグが更新されました：' + willTags)
+      } catch (err) {
+        console.error('updateWillの通知送信に失敗しました: ' + err)
+      }
+      break
+    case 'updateTimezone':
+      result = updateMemberFields(body.memberId, { timezone: body.timezone || '' })
+      break
+    case 'updateLocale':
+      result = updateMemberFields(body.memberId, { locale: body.locale || '' })
+      break
+    case 'updateJudgment':
+      result = updateMemberFields(body.memberId, {
+        judgment_tags: (body.judgment || []).join(','),
+      })
+      break
+    case 'approveTask':
+      result = updateTaskFields(body.taskId, { approval_status: sheetCode('approval', 'approved') })
+      break
+    case 'notifyTaskRejected':
+      // body.taskId は authorizeAction() のスコープチェックで使用済み
+      notifyTaskRejected(body.creatorId, body.taskName, body.reason)
+      result = { ok: true }
+      break
+    case 'removeTask':
+      result = removeTask(body.taskId)
+      break
+    case 'createProject':
+      result = createProject(body.name, body.description, body.type)
+      break
+    case 'removeProject':
+      result = removeProject(body.projectId)
+      break
+    case 'removeMember':
+      assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { removed: true }; return m })() })
+      result = removeMember(body.memberId)
+      break
+    case 'updateNotify':
+      result = updateMemberFields(body.memberId, {
+        notify_new_task: body.notify ? 'TRUE' : 'FALSE',
+      })
+      break
+    case 'updateNotifySettings':
+      result = updateMemberFields(body.memberId, {
+        notify_settings: JSON.stringify(body.settings),
+      })
+      break
+    case 'updateRole':
+      requireKnownRole(body.role)
+      assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { role: body.role }; return m })() })
+      result = updateMemberFields(body.memberId, { role: sheetRoleRef(body.role) })
+      break
+    case 'updateRoles':
+      result = updateRoles(actingMember, body.roles)
+      break
+    case 'deleteRole':
+      result = deleteRole(actingMember, body.roleId, body.moveToRoleId)
+      break
+    case 'updateDepartments':
+      result = updateDepartments(body.departments)
+      break
+    case 'deleteDepartment':
+      result = deleteDepartment(body.departmentId)
+      break
+    case 'moveDepartmentTasks':
+      result = moveDepartmentTasks(body.fromDepartmentId, body.toDepartmentId || '')
+      break
+    case 'updatePermissionOverrides':
+      result = updateMemberFields(body.memberId, {
+        permission_overrides_json: JSON.stringify(mapOverrideCodes(body.overrides || [], sheetValue)),
+      })
+      break
+    case 'updateReportsTo':
+      result = updateMemberFields(body.memberId, { reports_to_id: body.reportsToId || '' })
+      break
+    case 'updateMentor':
+      result = updateMemberFields(body.memberId, { mentor_id: body.mentorId || '' })
+      break
+    case 'updateDisplayName':
+      result = updateMemberFields(body.memberId, { display_name: body.displayName || '' })
+      break
+    case 'updateJoinedAt':
+      result = updateMemberFields(body.memberId, { joined_at: body.joinedAt || '' })
+      break
+    case 'updateUnavailableDates':
+      result = updateMemberFields(body.memberId, {
+        unavailable_dates: (body.dates || []).join(','),
+      })
+      break
+    case 'updateAvailableHours':
+      result = updateMemberFields(body.memberId, {
+        available_hours_json: body.hours ? JSON.stringify(body.hours) : '',
+      })
+      break
+    case 'updateSchedule':
+      result = updateTaskFields(body.taskId, {
+        start_date: body.startDate || '',
+        due_date: body.deadline || '',
+      })
+      notifyScheduleChange(body.taskId)
+      break
+    case 'updateDependsOn':
+      result = updateTaskFields(body.taskId, {
+        depends_on_ids: (body.dependsOnIds || []).join(','),
+      })
+      break
+    case 'updateVisibility':
+      result = updateTaskFields(body.taskId, {
+        visibility: sheetCode('visibility', body.visibility),
+      })
+      break
+    case 'updateReviewer':
+      result = updateTaskFields(body.taskId, { reviewer_id: body.reviewerId || '' })
+      break
+    case 'updateReviewers':
+      result = updateTaskFields(body.taskId, {
+        reviewer_ids: (body.reviewerIds || []).join(','),
+        reviewer_id: (body.reviewerIds && body.reviewerIds[0]) || '',
+        required_approvals: body.requiredApprovals != null ? String(body.requiredApprovals) : '',
+      })
+      break
+    case 'approveTaskReview':
+      result = approveTaskReview(body.taskId, actingMember.id, body.comment)
+      break
+    case 'setBlocker':
+      result = updateTaskFields(body.taskId, {
+        blocker_note: body.note || '',
+        blocker_since: body.note ? body.since || todayStr() : '',
+      })
+      break
+    case 'setHoldReason':
+      result = updateTaskFields(body.taskId, {
+        hold_reason_note: body.note || '',
+        hold_reason_since: body.note ? body.since || todayStr() : '',
+      })
+      break
+    case 'updateDeliverables':
+      // F5: javascript:等の危険なURLを保存させない
+      ;(body.deliverables || []).forEach(function (d) {
+        if (d && d.url && !isSafeHttpUrl(d.url)) {
+          throw userError('成果物のURLは http または https で始まるURLのみ登録できます。')
+        }
+      })
+      result = updateTaskFields(body.taskId, {
+        deliverables_json: JSON.stringify(body.deliverables || []),
+      })
+      break
+    case 'updateHistory':
+      result = updateTaskFields(body.taskId, {
+        history_json: JSON.stringify((body.history || []).map(sheetHistoryEntry)),
+      })
+      break
+    case 'updateComments':
+      result = updateTaskFields(body.taskId, {
+        comments_json: JSON.stringify(body.comments || []),
+      })
+      break
+    case 'notifyMention':
+      notifyMention(body.taskId, body.commentText, body.memberIds || [])
+      result = { ok: true }
+      break
+    case 'updateEstimatedHours':
+      result = updateTaskFields(body.taskId, {
+        estimated_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
+      })
+      break
+    case 'updateActualHours':
+      result = updateTaskFields(body.taskId, {
+        actual_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
+      })
+      break
+    case 'updateRetrospective':
+      result = updateTaskFields(body.taskId, {
+        retrospective_json: body.retrospective ? JSON.stringify(body.retrospective) : '',
+      })
+      break
+    case 'updateTaskSchedule':
+      result = updateTaskFields(body.taskId, {
+        schedule_json: body.schedule ? JSON.stringify(mapScheduleCodes(body.schedule, sheetCode)) : '',
+      })
+      break
+    case 'notifyScheduleResult':
+      notifyScheduleResult(body.taskId)
+      result = { ok: true }
+      break
+    case 'updateTaskForm':
+      result = updateTaskFields(body.taskId, {
+        form_json: body.form ? JSON.stringify(body.form) : '',
+      })
+      break
+    case 'notifyFormResult':
+      notifyFormResult(body.taskId)
+      result = { ok: true }
+      break
+    case 'updateProjectMembers':
+      result = updateProjectFields(body.projectId, {
+        member_ids: (body.memberIds || []).join(','),
+      })
+      break
+    case 'updateProjectOwner':
+      result = updateProjectFields(body.projectId, { owner_id: body.ownerId || '' })
+      break
+    case 'updateProjectParent':
+      result = updateProjectFields(body.projectId, { parent_id: body.parentId || '' })
+      break
+    case 'updateProjectDetails':
+      result = updateProjectFields(body.projectId, {
+        name: body.name || '',
+        description: body.description || '',
+        type: body.type || '',
+        goal: body.goal || '',
+        start_date: body.startDate || '',
+        end_date: body.endDate || '',
+      })
+      break
+    case 'updateProjectArchived':
+      result = updateProjectFields(body.projectId, {
+        archived: body.archived ? 'TRUE' : 'FALSE',
+      })
+      break
+    case 'updateProjectHealth':
+      result = updateProjectHealthOverride(body.projectId, body.healthOverride)
+      break
+    case 'notifyProjectHealth':
+      result = notifyProjectHealth(body.projectId, body.health)
+      break
+    case 'reportProjectHealth':
+      // 自動判定の結果を複数プロジェクト分まとめて受け取り、記録の更新と
+      // 通知(1通にまとめる)をサーバー側で判断する
+      result = reportProjectHealth(body.items)
+      break
+    case 'updateProjectHealthRecord':
+      // item 26(追補): 通知なしでlast_notified_health列だけを更新する
+      // （attentionから回復した際、次回の再悪化を確実に再通知するため）
+      result = updateProjectFields(body.projectId, { last_notified_health: body.health })
+      break
+    case 'updateAvatar':
+      // choosing a color+initials avatar supersedes any uploaded picture
+      result = updateMemberFields(body.memberId, {
+        avatar_color: body.avatarColor || '',
+        avatar_initials: body.initials || '',
+        avatar_url: '',
+      })
+      break
+    case 'uploadAvatar':
+      result = uploadAvatar(body.memberId, body.dataUrl, body.filename)
+      break
+    case 'addMember':
+      if (body.role) requireKnownRole(body.role)
+      result = addMember(body.name, body.email, body.affiliation, body.role)
+      break
+    case 'addCandidate':
+      result = addCandidate(body.candidate || {})
+      break
+    case 'updateCandidate':
+      result = updateCandidate(body.candidateId, body.fields || {})
+      break
+    case 'removeCandidate':
+      result = removeCandidate(body.candidateId)
+      break
+    case 'convertCandidateToMember':
+      if (body.role) requireKnownRole(body.role)
+      result = convertCandidateToMember(body.candidateId, body.role)
+      break
+    case 'updateEducationInfo':
+      result = updateMemberFields(body.memberId, {
+        university: body.university || '',
+        faculty: body.faculty || '',
+        department_name: body.departmentName || '',
+        grade_year: body.gradeYear || '',
+      })
+      break
+    case 'updateCustomFields':
+      // フロント側（store.tsx）で既存値とマージ済みの完全なオブジェクトを送ってくる
+      result = updateMemberFields(body.memberId, {
+        custom_fields_json: JSON.stringify(body.customFields || {}),
+      })
+      break
+    case 'updateEmail':
+      setMemberEmail(body.memberId, body.email || '')
+      result = { updated: true }
+      break
+    case 'revokeMySessions':
+      // 全端末でログアウト(自分): 世代番号を上げ、発行済みのセッションをすべて無効にする
+      bumpSessionGeneration(actingMember.id)
+      result = { revoked: true }
+      break
+    case 'revokeMemberSessions':
+      // 全端末でログアウト(管理者が他のメンバーに対して)
+      if (!findRow(SHEET_MEMBERS, String(body.memberId || ''))) throw userError('メンバーが見つかりません。')
+      bumpSessionGeneration(String(body.memberId))
+      result = { revoked: true }
+      break
+    case 'getMyEmails':
+      // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
+      // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
+      // 覗く抜け道にならない)
+      result = { email: getMemberEmailValue(actingMember.id) }
+      break
+    case 'updateSetting':
+      // 役職の設定は updateRoles・deleteRole で変える(最上位の役職の確認があるため)。
+      // 移行前の古いタブが今までの設定を書く場合だけ、以前と同じく受け付ける
+      if (body.key === 'roles' || (hasRolesSetting() && ROLE_SETTING_KEYS.indexOf(body.key) >= 0)) {
+        throw userError('役職の設定は、管理画面の役職の編集から変更してください。')
+      }
+      if (body.key === 'departments') throw userError('部門の設定は、管理画面の部門の編集から変更してください。')
+      result = updateSetting(body.key, sheetSettingValue(body.key, body.value))
+      if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles()
+      break
+    case 'uploadOrgLogo':
+      result = uploadOrgLogo(body.dataUrl, body.filename)
+      break
+    case 'updateDiscordWebhookUrl':
+      result = updateDiscordWebhookUrl(body.url)
+      break
+    case 'updateSlackWebhookUrl':
+      result = updateSlackWebhookUrl(body.url)
+      break
+    case 'testDiscordWebhook':
+      result = testDiscordWebhook()
+      break
+    case 'getWebhookStatus':
+      result = getWebhookStatus()
+      break
+    case 'testSlackWebhook':
+      result = testSlackWebhook()
+      break
+    case 'updateMemberProjects':
+      result = updateMemberFields(body.memberId, {
+        project_ids: (body.projectIds || []).join(','),
+      })
+      break
+    case 'updateMemberInactive':
+      if (body.inactive) assertTopRemains({ members: (function () { var m = {}; m[String(body.memberId)] = { inactive: true }; return m })() })
+      result = updateMemberFields(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
+      break
+    case 'updateMemberDepartmentPath':
+      result = updateMemberFields(body.memberId, { department_path: body.departmentPath || '' })
+      break
+    // ---- タレントマネジメント ----
+    case 'updateSearchProfile':
+      // 経験年数はjoinedAtからの自動計算に統一したため、years_of_experience
+      // 列への書き込みは廃止(列自体は既存データ保持のためシートに残す)
+      result = updateMemberFields(body.memberId, {
+        has_management_experience: body.hasManagementExperience ? 'TRUE' : 'FALSE',
+        desired_areas: (body.desiredAreas || []).join(','),
+        desired_skills: (body.desiredSkills || []).join(','), // DEV-002
+      })
+      break
+    case 'updateCareerHistory':
+      result = updateMemberFields(body.memberId, {
+        career_history_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'updateQualifications':
+      result = updateMemberFields(body.memberId, {
+        qualifications_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'updateEvaluationHistory':
+      result = updateMemberFields(body.memberId, {
+        evaluation_history_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'updateTransferHistory':
+      result = updateMemberFields(body.memberId, {
+        transfer_history_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'updateSkillLevels':
+      result = updateMemberFields(body.memberId, {
+        skill_levels_json: JSON.stringify(body.levels || []),
+      })
+      break
+    case 'updateCompetencies':
+      result = updateMemberFields(body.memberId, {
+        competencies_json: JSON.stringify(body.competencies || []),
+      })
+      break
+    case 'updateCareerGoals':
+      result = updateMemberFields(body.memberId, {
+        career_aspiration: body.careerAspiration || '',
+        desired_future_role: body.desiredFutureRole || '',
+        career_plan: body.careerPlan || '',
+      })
+      break
+    case 'updateTrainingHistory':
+      result = updateMemberFields(body.memberId, {
+        training_history_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'notifyTrainingRequest':
+      notifyTrainingRequest(body.memberId, body.trainingName)
+      result = { ok: true }
+      break
+    case 'notifyTrainingDecision':
+      notifyTrainingDecision(body.memberId, body.trainingName, body.approved)
+      result = { ok: true }
+      break
+    case 'updateDevelopmentPlan':
+      result = updateMemberFields(body.memberId, {
+        development_plan_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'updateOneOnOnes':
+      result = updateMemberFields(body.memberId, {
+        one_on_ones_json: JSON.stringify(body.entries || []),
+      })
+      break
+    case 'awardSkillPoints':
+      result = awardSkillPoints(body.taskId, body.memberId, body.points || {})
+      break
+    case 'importPortableRecord':
+      result = importPortableRecord(body.memberId, body.skillPoints || {}, body.qualifications || [])
+      break
+    case 'submitQuizResult':
+      result = submitQuizResult(body.quizId, body.memberId, body.answers || [], actingMember)
+      break
+    case 'submitExpenseApplication':
+      result = saveExpenseApplication(body.application, actingMember)
+      break
+    case 'approveExpenseStep':
+      // actingMember.id を使うことでクライアントの自己申告値(body.actorId)による偽装を防ぐ
+      result = processExpenseStep(body.applicationId, body.stepId, actingMember.id, 'approved', body.comment)
+      break
+    case 'rejectExpense':
+      result = setExpenseStatus(body.applicationId, 'rejected', body.reason)
+      break
+    case 'withdrawExpense':
+      result = setExpenseStatus(body.applicationId, 'withdrawn', null, actingMember.id)
+      break
+    case 'returnExpense':
+      result = setExpenseStatus(body.applicationId, 'returned', body.reason)
+      break
+    case 'resubmitExpense':
+      // actingMember.id を使うことでクライアントの自己申告値による偽装を防ぐ
+      result = resubmitExpense(body.applicationId, body.fields, actingMember.id)
+      break
+    case 'uploadExpenseReceipt':
+      result = uploadExpenseReceipt(body.dataUrl, body.filename)
+      break
+    case 'uploadSurveyImage':
+      result = uploadSurveyImage(body.dataUrl, body.filename)
+      break
+    case 'submitCustomForm':
+      result = saveCustomFormSubmission(body.submission, actingMember)
+      break
+    case 'approveFormStep':
+      // actingMember.id を使うことでクライアントの自己申告値(body.actorId)による偽装を防ぐ
+      result = processFormStep(body.submissionId, body.stepId, actingMember.id, 'approved', body.comment)
+      break
+    case 'rejectFormSubmission':
+      result = setFormSubmissionStatus(body.submissionId, 'rejected', body.reason)
+      break
+    case 'submitDailyReport':
+      result = saveDailyReport(body.report, actingMember)
+      break
+    case 'getBackgroundData':
+      result = getBackgroundData(actingMember, body)
+      break
+    case 'getExpenses':
+      result = getExpenses(actingMember)
+      break
+    case 'getCandidates':
+      result = getCandidates(actingMember)
+      break
+    case 'getFormSubmissions':
+      result = getFormSubmissions(actingMember)
+      break
+    case 'getFiles':
+      result = getFiles(actingMember, body.fileIds)
+      break
+    case 'fetchDailyReports':
+      result = fetchDailyReports()
+      break
+    case 'bulkUpdateSkills':
+      result = bulkUpdateSkillLevels(body.updates || [])
+      break
+    case 'updateAbsentDates':
+      result = updateMemberFields(body.memberId, { absent_dates: (body.dates || []).join(',') })
+      break
+    case 'updateLastLogin':
+      result = updateMemberFields(body.memberId, { last_login: new Date().toISOString() })
+      break
+    case 'submitSurveyResponse':
+      // actingMember.id を使うことでクライアントの自己申告値(body.memberId)による偽装を防ぐ
+      result = saveSurveyResponse(actingMember.id, body.answers || {})
+      break
+    case 'checkAndGenerateRecurringTasks':
+      // item 2/TSK-051: クライアント側(誰かがOhsumiを開いた時)とサーバー側
+      // 日次トリガー(dailyMaintenance)の両方からこの同じロック付き関数を
+      // 呼ぶことで、定期タスクの二重生成を防ぐ
+      result = generateRecurringTasksLocked()
+      break
+    case 'triggerOverdueReminders':
+      // NTF-005: 日次トリガー任せだった期限超過リマインドを、管理者が
+      // 任意タイミングで手動発火できるようにする
+      notifyOverdueTasksToAssignees()
+      result = { ok: true }
+      break
+    default:
+      throw userError('Unknown action: ' + body.action)
+  }
+  return result
 }
 
 // ---- Tasks ----------------------------------------------------------------
@@ -4024,6 +4225,11 @@ function isTestEnvironment() {
 }
 
 function sendMail(options) {
+  countAction('mailCount')
+  return measureAction('mailMs', function () { return sendMailUnmeasured(options) })
+}
+
+function sendMailUnmeasured(options) {
   if (!isTestEnvironment()) {
     MailApp.sendEmail(options)
     return
@@ -4056,6 +4262,10 @@ function sendMail(options) {
 // 第1引数がオブジェクトかどうかで判別する。宛先解決ロジック(opted/reps/
 // orgEmailsのフォールバック)自体はどちらのパターンでも共通。
 function notifyAdmins(subject, body, preferredEmails) {
+  return measureAction('notifyMs', function () { return notifyAdminsUnmeasured(subject, body, preferredEmails) })
+}
+
+function notifyAdminsUnmeasured(subject, body, preferredEmails) {
   try {
     var templates
     if (subject && typeof subject === 'object') {
@@ -4520,6 +4730,10 @@ function notifyScheduleChange(taskId) {
 // calendar) for a task's assignees, inviting them by email if known.
 // Best-effort — never throws back to the caller.
 function syncCalendarForTask(taskId) {
+  return measureAction('calendarMs', function () { return syncCalendarForTaskUnmeasured(taskId) })
+}
+
+function syncCalendarForTaskUnmeasured(taskId) {
   try {
     var task = findRow(SHEET_TASKS, taskId)
     if (!task || !task.due_date) return
@@ -4754,12 +4968,14 @@ function getMemberEmailValue(memberId) {
 // 版はメールの登録・変更・メンバーの削除・直接の編集で変わる(findMemberIdByEmailCached と同じ)
 function getMemberEmailValueCached(memberId) {
   var cache = CacheService.getScriptCache()
-  var key = 'memberEmailById:' + getMemberEmailsVersion()
-  var map = null
-  try {
-    var raw = cache.get(key)
-    if (raw) map = JSON.parse(raw)
-  } catch (e) { map = null }
+  var key = memberEmailMapKey()
+  var map = _requestEmailMap && _requestEmailMap.key === key ? _requestEmailMap.map : null
+  if (!map) {
+    try {
+      var raw = cache.get(key)
+      if (raw) map = JSON.parse(raw)
+    } catch (e) { map = null }
+  }
   if (map) {
     noteTiming('myEmailCache', 'hit')
   } else {
@@ -5065,6 +5281,10 @@ function nextIntId(sheet, headers) {
 
 // Reads a whole row (by its "id" column) into a {headerName: value} object.
 function findRow(sheetName, rowId) {
+  return measureAction('sheetReadMs', function () { return findRowUnmeasured(sheetName, rowId) })
+}
+
+function findRowUnmeasured(sheetName, rowId) {
   var sheet = getSheet(sheetName)
   var headers = headerRow(sheet)
   var idCol = headers.indexOf('id')
@@ -5245,6 +5465,10 @@ function auditFormulaInjectionRisks(fix) {
 }
 
 function updateRowFields(sheetName, rowId, fields) {
+  return measureAction('sheetWriteMs', function () { return updateRowFieldsUnmeasured(sheetName, rowId, fields) })
+}
+
+function updateRowFieldsUnmeasured(sheetName, rowId, fields) {
   var sheet = getSheet(sheetName)
   var headers = headerRow(sheet)
   var idCol = headers.indexOf('id') + 1
@@ -5345,12 +5569,6 @@ function requestReplayValue(obj) {
   })
 }
 
-function respondAndRemember(key, obj) {
-  if (key) {
-    try { CacheService.getScriptCache().put(key, requestReplayValue(obj), REQUEST_REPLAY_TTL_SEC) } catch (e) { /* 覚えられなくても応答は返す */ }
-  }
-  return jsonOutput(obj)
-}
 
 // ---- 処理時間の内訳 ----------------------------------------------------------
 //
@@ -5378,6 +5596,10 @@ function startRequestTiming() {
   _requestRows = {}
   _timingDepth = 0
   _timingNested = {}
+  _actionTiming = null
+  _authSnapshotVersion = null
+  _prefetchedSheets = {}
+  _requestEmailMap = null
 }
 
 function noteTiming(key, value) {
@@ -5412,6 +5634,59 @@ function timed(key, fn) {
   } finally {
     endTiming(key, t)
   }
+}
+
+// ---- 書き込みの処理(runWriteAction)の内訳 ----
+// 処理の間だけ、シートの読み込み・書き込み・通知などの時間を種類ごとに足していく。入れ子になった時
+// (通知の中でシートを読むなど)は、内側の時間を外側から引く(同じ時間を2回数えない)。
+//   actionMs       処理の全体
+//   sheetReadMs    行を探す読み込み(findRow)
+//   sheetWriteMs   行への書き込み(updateRowFields。書く行を探す読み込みを含む。確定は flushMs)
+//   notifyMs       管理者への通知の準備(宛先・言語を調べる)
+//   mailMs         メールの送信(mailCount 件)
+//   chatMs         Discord・Slack への送信
+//   calendarMs     Google カレンダーの予定の更新
+//   actionOtherMs  処理のうち、上のどれにも入らない時間
+var _actionTiming = null
+
+function beginActionTiming() {
+  _actionTiming = { stack: [], sums: {}, counts: {} }
+  return beginTiming()
+}
+
+function endActionTiming(started) {
+  var at = _actionTiming || { sums: {}, counts: {} }
+  _actionTiming = null
+  endTiming('actionMs', started)
+  if (!_requestTiming) return
+  var inner = 0
+  Object.keys(at.sums).forEach(function (k) {
+    _requestTiming[k] = at.sums[k]
+    _timingNested[k] = true
+    inner += at.sums[k]
+  })
+  Object.keys(at.counts).forEach(function (k) { _requestTiming[k] = at.counts[k] })
+  _requestTiming.actionOtherMs = Math.max(0, (_requestTiming.actionMs || 0) - inner)
+  _timingNested.actionOtherMs = true
+}
+
+function measureAction(key, fn) {
+  var at = _actionTiming
+  if (!at) return fn()
+  var start = Date.now()
+  at.stack.push(0)
+  try {
+    return fn()
+  } finally {
+    var elapsed = Date.now() - start
+    var children = at.stack.pop()
+    at.sums[key] = (at.sums[key] || 0) + Math.max(0, elapsed - children)
+    if (at.stack.length) at.stack[at.stack.length - 1] += elapsed
+  }
+}
+
+function countAction(key) {
+  if (_actionTiming) _actionTiming.counts[key] = (_actionTiming.counts[key] || 0) + 1
 }
 
 function jsonOutput(obj) {
@@ -5483,6 +5758,8 @@ function getBackgroundData(acting, body) {
     noteTiming('filesKB', Math.round(chars / 1024))
     noteTiming('filesCount', out.files.length)
   }
+  // キャッシュに無い表(経費・フォームの回答・候補者・メール)を、まとめて1回で読んでおく
+  prefetchBackgroundSheets(acting, body)
   BACKGROUND_DATA_PARTS.forEach(function (part) {
     // 区間として計る(中のシートの読み込みの時間は、この中に含まれる)
     var t = beginTiming()
@@ -5897,6 +6174,10 @@ function sendSlackMessage(content) {
 }
 
 function notifyChat(content) {
+  return measureAction('chatMs', function () { return notifyChatUnmeasured(content) })
+}
+
+function notifyChatUnmeasured(content) {
   sendDiscordMessage(content)
   sendSlackMessage(content)
 }
@@ -6792,12 +7073,14 @@ var TABLE_WRITE_ACTIONS = {
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
 var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
 
-function bumpVersionsAfterWrite(action) {
-  action = String(action || '')
+// actions は操作の名前、または名前の配列(まとめて送られた書き込み)。表ごとに1回だけ新しくする
+function bumpVersionsAfterWrite(actions) {
+  var list = (Array.isArray(actions) ? actions : [actions]).map(function (a) { return String(a || '') })
+  if (list.length === 0) list = ['']
   VERSIONED_TABLES.forEach(function (t) {
-    if (TABLE_WRITE_ACTIONS[t].indexOf(action) >= 0) bumpTableVersion(t)
+    if (list.some(function (a) { return TABLE_WRITE_ACTIONS[t].indexOf(a) >= 0 })) bumpTableVersion(t)
   })
-  if (SNAPSHOT_UNTOUCHED_ACTIONS.indexOf(action) < 0) bumpSnapshotVersion()
+  if (list.some(function (a) { return SNAPSHOT_UNTOUCHED_ACTIONS.indexOf(a) < 0 })) bumpSnapshotVersion()
 }
 
 // シートの名前 → 版を新しくする処理(スプレッドシートの直接の編集で使う)
@@ -8329,6 +8612,14 @@ var INITIAL_FILES_MAX_CHARS = 1500000
 // 呼び出しごとに待ち時間がかかっていた。timing に <prefix>SheetMs(読み込みの時間)・<prefix>Rows・<prefix>Cols を記録する。
 // 返り値は { headers, rows }(見出しは前後の空白を除く)。シートが無ければ null
 function readWholeSheet(name, prefix) {
+  var pre = takePrefetchedSheet(name)
+  if (pre) {
+    // prefetchBackgroundSheets で、ほかの表とまとめて読んだもの(時間は batchReadMs に入っている)
+    noteTiming(prefix + 'Rows', Math.max(pre.length - 1, 0))
+    noteTiming(prefix + 'Cols', pre.length ? pre[0].length : 0)
+    if (!pre.length) return { headers: [], rows: [] }
+    return { headers: pre[0].map(function (h) { return String(h).trim() }), rows: pre.slice(1) }
+  }
   var t = Date.now()
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
   if (!sheet) return null
@@ -8350,6 +8641,206 @@ function readAllExpenses() {
   var table = readWholeSheet(SHEET_EXPENSES, 'expenses')
   if (!table) return []
   return table.rows.map(function (row) { return expenseRowToApplication(table.headers, row) })
+}
+
+// ---- 裏での読み込みで、キャッシュに無い表をまとめて読む(Sheets API) --------------------------
+//
+// 経費・フォームの回答・候補者・メールアドレス表のうち、キャッシュに無いものが2つ以上ある時は、
+// Sheets API を1回だけ呼んで読む(SpreadsheetApp で1枚ずつ読むと、呼び出しのたびに待ち時間がかかる)。
+// values.batchGet は日付を数(シリアル値)で返し、日付と数を区別できないため、セルの値と表示形式の種類を
+// 一緒に返す spreadsheets.get(includeGridData)を使う。値は SpreadsheetApp の getValues と同じ形
+// (日付・時刻の表示形式のセルは Date、数は number、文字は string、空は '')にそろえる。
+// 失敗した時は、これまでどおり1枚ずつ SpreadsheetApp で読む(readWholeSheet)。
+// timing: batchReadMs(読み込み)・batchReadSheets(枚数)・batchRead(api / spreadsheetApp)・batchReadError
+var _prefetchedSheets = {}
+var _requestEmailMap = null
+
+function takePrefetchedSheet(name) {
+  var values = _prefetchedSheets[name]
+  if (!values) return null
+  delete _prefetchedSheets[name]
+  return values
+}
+
+function prefetchBackgroundSheets(acting, body) {
+  var wanted = []
+  try {
+    var parts = [
+      { prefix: 'expenses', action: 'getExpenses', sheet: SHEET_EXPENSES },
+      { prefix: 'formSubmissions', action: 'getFormSubmissions', sheet: SHEET_FORM_SUBMISSIONS },
+      { prefix: 'candidates', action: 'getCandidates', sheet: SHEET_CANDIDATES, recruiting: true },
+    ]
+    parts.forEach(function (p) {
+      if (!isActionAllowed(acting, p.action, body)) return
+      // 候補者は採用の権限を持つ人にだけ読む(getCandidates と同じ基準)
+      if (p.recruiting && !canViewRecruiting(acting, getRoles())) return
+      if (versionedRowsCached(p.prefix)) return
+      wanted.push(p.sheet)
+    })
+    if (isActionAllowed(acting, 'getMyEmails', body) && !memberEmailMapCached()) wanted.push(SHEET_MEMBER_EMAILS)
+  } catch (e) {
+    return
+  }
+  if (wanted.length < 2) return
+  var t = Date.now()
+  var res
+  try {
+    res = readSheetValuesViaApi(wanted)
+  } catch (e) {
+    res = { error: '通信エラー: ' + ((e && e.message) || e) }
+  }
+  noteTiming('batchReadMs', Date.now() - t)
+  noteTiming('batchReadSheets', wanted.length)
+  if (res.values) {
+    noteTiming('batchRead', 'api')
+    Object.keys(res.values).forEach(function (name) { _prefetchedSheets[name] = res.values[name] })
+  } else {
+    noteTiming('batchRead', 'spreadsheetApp')
+    noteTiming('batchReadError', String(res.error).slice(0, 200))
+    console.warn('prefetchBackgroundSheets: Sheets API で読めなかったため、1枚ずつ読みます。理由: ' + res.error)
+  }
+}
+
+function isActionAllowed(acting, action, body) {
+  try {
+    authorizeAction(acting, action, body)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+// 版ごとのキャッシュがあるか。あれば、このリクエストの中で使い回す(loadVersionedRows が同じものを使う)
+function versionedRowsCached(prefix) {
+  var version = getTableVersion(prefix)
+  var memoKey = prefix + ':' + version
+  if (_requestRows[memoKey]) return true
+  var rows = readChunkedCache(prefix, version)
+  if (!Array.isArray(rows)) return false
+  _requestRows[memoKey] = rows
+  noteTiming(prefix + 'Cache', 'hit')
+  return true
+}
+
+function memberEmailMapKey() {
+  return 'memberEmailById:' + getMemberEmailsVersion()
+}
+
+function memberEmailMapCached() {
+  var key = memberEmailMapKey()
+  try {
+    var raw = CacheService.getScriptCache().get(key)
+    if (!raw) return false
+    _requestEmailMap = { key: key, map: JSON.parse(raw) }
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+function sheetsApiGridUrl(spreadsheetId, names) {
+  var fields = 'properties.timeZone,sheets(properties.title,data(rowData.values(effectiveValue,effectiveFormat.numberFormat.type)))'
+  return 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) + '?includeGridData=true&' +
+    names.map(function (name) { return 'ranges=' + encodeURIComponent(sheetsApiRangeName(name)) }).join('&') +
+    '&fields=' + encodeURIComponent(fields)
+}
+
+// 成功したら { values: { シート名: 2次元配列(getValues と同じ形) } }、失敗したら { error }
+function readSheetValuesViaApi(names) {
+  var id = SpreadsheetApp.getActiveSpreadsheet().getId()
+  var response = UrlFetchApp.fetch(sheetsApiGridUrl(id, names), {
+    method: 'get',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  })
+  var code = response.getResponseCode()
+  var text = response.getContentText()
+  if (code !== 200) return { error: describeSheetsApiError(code, text) }
+  var body
+  try {
+    body = JSON.parse(text)
+  } catch (e) {
+    return { error: '応答を JSON として読めませんでした' }
+  }
+  return sheetValuesFromGridResponse(body, names)
+}
+
+// spreadsheets.get の応答を、シートごとの getValues と同じ形の2次元配列にする(Google のサービスを使わない
+// 部分。日付の変換だけ Utilities.formatDate を使う)
+function sheetValuesFromGridResponse(body, names) {
+  var timeZone = (body && body.properties && body.properties.timeZone) || Session.getScriptTimeZone()
+  var byTitle = {}
+  ;((body && body.sheets) || []).forEach(function (sheet) {
+    var title = sheet && sheet.properties ? String(sheet.properties.title) : ''
+    byTitle[title] = (sheet.data && sheet.data[0]) || {}
+  })
+  var values = {}
+  for (var i = 0; i < names.length; i++) {
+    if (!byTitle.hasOwnProperty(names[i])) return { error: '応答にシートがありません(' + names[i] + ')' }
+    values[names[i]] = gridDataToValues(byTitle[names[i]], timeZone)
+  }
+  return { values: values }
+}
+
+// getDataRange().getValues() と同じ長方形(値のある最後の行・列まで)にする。空のシートは [['']]
+function gridDataToValues(grid, timeZone) {
+  var rowData = (grid && grid.rowData) || []
+  var height = 0
+  var width = 0
+  var raw = rowData.map(function (r, i) {
+    return ((r && r.values) || []).map(function (cell, c) {
+      var v = cellValueFromApi(cell, timeZone)
+      if (v !== '') {
+        if (c + 1 > width) width = c + 1
+        if (i + 1 > height) height = i + 1
+      }
+      return v
+    })
+  })
+  if (height === 0) return [['']]
+  var out = []
+  for (var i = 0; i < height; i++) {
+    var row = raw[i].slice(0, width)
+    while (row.length < width) row.push('')
+    out.push(row)
+  }
+  return out
+}
+
+// エラーのセルは、getValues と同じくエラーの表示(#N/A など)にする
+var SHEETS_API_ERROR_TEXT = {
+  ERROR: '#ERROR!', NULL_VALUE: '#NULL!', DIVIDE_BY_ZERO: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!',
+  NAME: '#NAME?', NUM: '#NUM!', N_A: '#N/A', LOADING: 'Loading...',
+}
+var SHEETS_API_DATE_TYPES = ['DATE', 'TIME', 'DATE_TIME']
+
+function cellValueFromApi(cell, timeZone) {
+  var ev = cell && cell.effectiveValue
+  if (!ev) return ''
+  if (typeof ev.numberValue === 'number') {
+    var fmt = cell.effectiveFormat && cell.effectiveFormat.numberFormat
+    if (fmt && SHEETS_API_DATE_TYPES.indexOf(fmt.type) >= 0) return sheetSerialToDate(ev.numberValue, timeZone)
+    return ev.numberValue
+  }
+  if (typeof ev.stringValue === 'string') return ev.stringValue
+  if (typeof ev.boolValue === 'boolean') return ev.boolValue
+  if (ev.errorValue) return SHEETS_API_ERROR_TEXT[ev.errorValue.type] || '#ERROR!'
+  return ''
+}
+
+// スプレッドシートのシリアル値(1899-12-30 からの日数。スプレッドシートのタイムゾーンでの日時)を Date にする
+// (SpreadsheetApp の getValues が返す Date と同じ時刻)
+function sheetSerialToDate(serial, timeZone) {
+  var wallMs = Math.round((serial - 25569) * 86400000)
+  var offset = timeZoneOffsetMs(new Date(wallMs), timeZone)
+  var d = new Date(wallMs - offset)
+  var offset2 = timeZoneOffsetMs(d, timeZone)
+  return offset2 === offset ? d : new Date(wallMs - offset2)
+}
+
+function timeZoneOffsetMs(date, timeZone) {
+  var wall = Utilities.formatDate(date, timeZone, "yyyy-MM-dd'T'HH:mm:ss.SSS")
+  return Date.parse(wall + 'Z') - date.getTime()
 }
 
 // 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
