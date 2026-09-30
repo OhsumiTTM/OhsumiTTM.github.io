@@ -6,7 +6,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { sendToGas, setGasTransportDepsForTest } from './gas-transport'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
 
@@ -225,7 +226,7 @@ describe('書き込みの認証', () => {
 describe('まとめて送られた書き込み(batch)', () => {
   const history = [{ id: 'h1', at: '2026-10-01', byId: 'm-lead', field: 'deadline', from: '', to: '2026-10-10' }]
 
-  it('日程の変更と変更の記録を1回で受け取り、順番に実行する。ロック・版の更新は1回だけ', () => {
+  it('日程の変更と変更の記録を1回で受け取り、両方を実行する', () => {
     const t = setup()
     t.warm()
     t.propWrites.length = 0
@@ -240,7 +241,8 @@ describe('まとめて送られた書き込み(batch)', () => {
     })
     expect(res.ok, JSON.stringify(res)).toBe(true)
     expect(res.result.results.map((r: { ok: boolean }) => r.ok)).toEqual([true, true])
-    expect(t.writes.map((w) => Object.keys(w.fields)[0])).toEqual(['history_json', 'start_date'])
+    // 記録は、変更そのもの(日程)の後に書く
+    expect(t.writes.map((w) => Object.keys(w.fields)[0])).toEqual(['start_date', 'history_json'])
   })
 
   it('ロックは batch 全体で1回、データの版は1回だけ新しくする', () => {
@@ -377,5 +379,229 @@ describe('書き込みの内訳', () => {
     // 内訳の合計と、内訳に無い時間(otherMs)で合計になる(処理の中の内訳を2回数えない)
     expect(res.timing.totalMs).toBe(1550)
     expect(res.timing.otherMs).toBe(0)
+  })
+})
+
+describe('片方だけ成功すると困る組み合わせ(batch)', () => {
+  const h = (id: string, field: string, byId = 'm-lead') => ({ id, at: '2026-10-01', byId, field, from: '', to: 'x' })
+  // 期限(due_date)の書き込みだけ失敗させる
+  const failSchedule = (t: ReturnType<typeof setup>) => {
+    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+      if ('due_date' in fields) throw new Error('シートに書けませんでした')
+      t.writes.push({ sheet: name, id, fields })
+      return {}
+    }
+  }
+  const written = (t: ReturnType<typeof setup>) => t.writes.map((w) => Object.keys(w.fields)[0])
+
+  it('変更の記録は、変更そのものの後に実行する(画面は記録を先に送る)', () => {
+    const t = setup()
+    t.warm()
+    const res = t.post({ action: 'batch', sessionToken: 'm-lead', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'deadline'), h('h2', 'startDate')] },
+      { action: 'updateSchedule', taskId: 't1', startDate: '2026-10-01', deadline: '2026-10-10' },
+    ] })
+    expect(res.result.results.map((r: { ok: boolean }) => r.ok)).toEqual([true, true])
+    expect(written(t)).toEqual(['start_date', 'history_json'])
+  })
+
+  it('変更そのものが断られたら、その記録も書かない', () => {
+    const t = setup()
+    t.warm()
+    // 一般のメンバーは日程を変えられない(記録だけなら担当者として書ける)
+    const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'deadline', 'm-base')] },
+      { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
+    ] })
+    expect(res.result.results[1]).toMatchObject({ ok: false, forbidden: true })
+    expect(res.result.results[0]).toMatchObject({ ok: false, skipped: true })
+    expect(t.writes).toEqual([])
+  })
+
+  it('変更そのものが失敗したら、その記録も書かない', () => {
+    const t = setup()
+    t.warm()
+    failSchedule(t)
+    const res = t.post({ action: 'batch', sessionToken: 'm-lead', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'deadline')] },
+      { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
+    ] })
+    expect(res.result.results[1].ok).toBe(false)
+    expect(res.result.results[0]).toMatchObject({ ok: false, skipped: true })
+    expect(written(t)).toEqual([])
+  })
+
+  it('記録は、記録した項目を変える操作だけを前提にする(別の項目の変更が失敗しても書く)', () => {
+    const t = setup()
+    t.warm()
+    failSchedule(t)
+    const res = t.post({ action: 'batch', sessionToken: 'm-lead', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'priority')] },
+      { action: 'updatePriority', taskId: 't1', priority: 'high' },
+      { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
+    ] })
+    expect(res.result.results.map((r: { ok: boolean }) => r.ok)).toEqual([true, true, false])
+    expect(written(t)).toEqual(['priority', 'history_json'])
+  })
+
+  it('同じ batch に変更が無い記録・別のタスクの記録は、これまでどおり書く', () => {
+    const t = setup()
+    t.warm()
+    failSchedule(t)
+    const res = t.post({ action: 'batch', sessionToken: 'm-lead', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'deadline')] },
+      { action: 'updateSchedule', taskId: 't-other', startDate: '', deadline: '2026-10-10' },
+    ] })
+    expect(res.result.results[0].ok).toBe(true)
+    expect(written(t)).toEqual(['history_json'])
+  })
+
+  it('コメントの保存が失敗したら、メンションの通知を送らない', () => {
+    const t = setup()
+    t.warm()
+    const sent: string[] = []
+    t.c.notifyMention = () => { sent.push('mention') }
+    t.c.updateRowFieldsUnmeasured = () => { throw new Error('シートに書けませんでした') }
+    const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
+      { action: 'updateComments', taskId: 't1', comments: [{ id: 'c1', byId: 'm-base', text: 'hi' }] },
+      { action: 'notifyMention', taskId: 't1', commentText: 'hi', memberIds: ['m-lead'] },
+    ] })
+    expect(res.result.results[1]).toMatchObject({ ok: false, skipped: true })
+    expect(sent).toEqual([])
+  })
+
+  it('確認待ちへの変更が失敗したら、確認タスクを作らない(画面は確認タスクを先に送る)', () => {
+    const t = setup()
+    t.warm()
+    const created: unknown[] = []
+    t.c.createTasks = (tasks: unknown[]) => { created.push(...tasks); return [] }
+    t.c.notifyReview = () => {}
+    t.c.updateRowFieldsUnmeasured = () => { throw new Error('シートに書けませんでした') }
+    const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
+      { action: 'createTasks', tasks: [{ tempId: 'tmp', title: '確認: タスク', relatedReviewTaskId: 't1', assigneeIds: ['m-lead'] }] },
+      { action: 'updateTaskStatus', taskId: 't1', status: 'review' },
+    ] })
+    expect(res.result.results[1].ok).toBe(false)
+    expect(res.result.results[0]).toMatchObject({ ok: false, skipped: true })
+    expect(created).toEqual([])
+  })
+
+  it('担当者の変更が失敗したら、その担当者をプロジェクトに加えない', () => {
+    const t = setup()
+    t.warm()
+    t.c.syncCalendarForTask = () => {}
+    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+      if ('assignee_id' in fields) throw new Error('シートに書けませんでした')
+      t.writes.push({ sheet: name, id, fields })
+      return {}
+    }
+    const res = t.post({ action: 'batch', sessionToken: 'm-lead', ops: [
+      { action: 'assignTask', taskId: 't1', assigneeIds: ['m-lead'] },
+      { action: 'updateProjectMembers', projectId: 'p1', memberIds: ['m-base', 'm-lead'] },
+    ] })
+    expect(res.result.results[1]).toMatchObject({ ok: false, skipped: true })
+    expect(t.writes).toEqual([])
+  })
+
+  it('完了への変更が失敗したら、完了で付くスキルを書かない', () => {
+    const t = setup()
+    t.warm()
+    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+      if ('status' in fields) throw new Error('シートに書けませんでした')
+      t.writes.push({ sheet: name, id, fields })
+      return {}
+    }
+    const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
+      { action: 'updateSkillLevels', memberId: 'm-base', levels: [{ skill: 'a', level: 2 }] },
+      { action: 'updateTaskStatus', taskId: 't1', status: 'done' },
+    ] })
+    expect(res.result.results[0]).toMatchObject({ ok: false, skipped: true })
+    expect(t.writes).toEqual([])
+  })
+
+  it('送り直した batch でも、前回と同じ結果(記録を書かなかったことを含む)を返す', () => {
+    const t = setup()
+    t.warm()
+    failSchedule(t)
+    const body = { action: 'batch', sessionToken: 'm-lead', requestId: 'batch-skip-1', ops: [
+      { action: 'updateHistory', taskId: 't1', history: [h('h1', 'deadline')] },
+      { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
+    ] }
+    const first = t.post(body)
+    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => { t.writes.push({ sheet: name, id, fields }); return {} }
+    const second = t.post(body)
+    expect(second.replayed).toBe(true)
+    expect(second.result).toEqual(first.result)
+    expect(t.writes).toEqual([])
+  })
+})
+
+describe('まとめた書き込みの重複防止(requestId。PR #28)', () => {
+  afterEach(() => setGasTransportDepsForTest(null))
+
+  // 画面の送り方(gas-transport.ts)と GAS(doPost)をつなぐ。responses の順に、GAS の応答を届けるか・失うかを決める
+  const connect = (t: ReturnType<typeof setup>, deliver: boolean[]) => {
+    const sent: Record<string, unknown>[] = []
+    let n = 0
+    setGasTransportDepsForTest({
+      fetch: async (_url, init) => {
+        const body = String(init.body)
+        sent.push(JSON.parse(body))
+        const out = t.gas.doPost({ postData: { contents: body } }).text
+        const ok = deliver[n++] ?? true
+        // 処理は済んだが、結果の受け渡し(echo)が 404 になった
+        return ok ? { status: 200, text: async () => out } : { status: 404, text: async () => '<html>Sorry, unable to open the file at this time.</html>' }
+      },
+      resourceTimings: () => [],
+      sleep: async () => {},
+      log: { info() {}, warn() {}, error() {} },
+      newId: (() => { let i = 0; return () => `req-${String(++i).padStart(4, '0')}` })(),
+    })
+    return sent
+  }
+  const URL = 'https://script.google.com/macros/s/TEST/exec'
+
+  it('まとめた1本の応答を受け取れず送り直しても、中の操作は1回だけ実行する(2回目は前回の結果を受け取る)', async () => {
+    const t = setup()
+    t.warm()
+    const sent = connect(t, [false, true])
+    const history = [{ id: 'h1', at: '2026-10-01', byId: 'm-lead', field: 'deadline', from: '', to: '2026-10-10' }]
+    const [a, b] = await Promise.all([
+      sendToGas(URL, { action: 'updateHistory', sessionToken: 'm-lead', taskId: 't1', history }),
+      sendToGas(URL, { action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '', deadline: '2026-10-10' }),
+    ])
+    // 同じ batch(同じ requestId)を2回送った
+    expect(sent).toHaveLength(2)
+    expect(sent[0].action).toBe('batch')
+    expect(sent[1]).toEqual(sent[0])
+    // 書き込みは1回ずつだけ
+    expect(t.writes.map((w) => Object.keys(w.fields)[0])).toEqual(['start_date', 'history_json'])
+    expect(a).toMatchObject({ ok: true, replayed: true })
+    expect(b).toMatchObject({ ok: true, replayed: true })
+  })
+
+  it('2回とも応答を失っても、3回目まで同じ batch を送り、書き込みは1回だけ', async () => {
+    const t = setup()
+    t.warm()
+    const sent = connect(t, [false, false, true])
+    await Promise.all([
+      sendToGas(URL, { action: 'updateProgress', sessionToken: 'm-lead', taskId: 't1', progressPercent: 40 }),
+      sendToGas(URL, { action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '', deadline: '2026-10-10' }),
+    ])
+    expect(sent).toHaveLength(3)
+    expect(new Set(sent.map((b) => b.requestId)).size).toBe(1)
+    expect(t.writes).toHaveLength(2)
+  })
+
+  it('別の操作から送った batch には、別の requestId を付ける(前の結果を受け取らない)', async () => {
+    const t = setup()
+    t.warm()
+    const sent = connect(t, [true, true])
+    const op = (p: number) => sendToGas(URL, { action: 'updateProgress', sessionToken: 'm-lead', taskId: 't1', progressPercent: p })
+    await Promise.all([op(10), op(20)])
+    await Promise.all([op(30), op(40)])
+    expect(sent.map((b) => b.action)).toEqual(['batch', 'batch'])
+    expect(sent[0].requestId).not.toBe(sent[1].requestId)
+    expect(t.writes).toHaveLength(4)
   })
 })

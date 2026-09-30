@@ -3065,16 +3065,170 @@ function authorizeBatch(acting, ops) {
   })
 }
 
+// ---- 片方だけ成功すると困る組み合わせ ----
+//
+// 同じ batch の中で、ある操作(記録・通知など)が別の操作(変更そのもの)を前提にしている時は、
+// 前提の操作を先に実行し、前提がすべて成功した時だけ実行する(断られた・失敗した時は実行せず、
+// skipped: true で返す)。画面は記録・確認タスクなどを変更より先に送ることがあるので、順番もここで入れ替える。
+//   updateHistory(変更の記録)       ← 記録した項目を変える操作(同じタスク)
+//   notifyScheduleResult・notifyFormResult(回答がそろった通知) ← 回答の保存と完了への変更(同じタスク)
+//   notifyMention(メンションの通知)  ← コメントの保存(同じタスク)
+//   notifyTaskRejected(却下の通知)   ← タスクの削除(同じタスク)
+//   updateProjectMembers(担当者をプロジェクトに加える) ← 担当者の変更(そのプロジェクトのタスク)
+//   updateSkillLevels・updateJudgment(完了で付くスキル・認定) ← 完了への変更(そのメンバーが担当のタスク)
+//   createTasks(確認タスクの作成)      ← 確認待ちへの変更(確認タスクの元のタスク)
+// 前提の操作が同じ batch に無い時は、これまでどおり実行する(1本ずつ送った時と同じ)
+
+// 変更の記録の項目 → その項目を変える操作
+var HISTORY_FIELD_ACTIONS = {
+  status: ['updateTaskStatus'],
+  assignee: ['assignTask'],
+  deadline: ['updateSchedule'],
+  startDate: ['updateSchedule'],
+  reviewer: ['updateReviewer', 'updateReviewers'],
+  priority: ['updatePriority', 'updateTaskDetails'],
+  difficulty: ['updateDifficulty', 'updateTaskDetails'],
+  visibility: ['updateVisibility', 'updateTaskDetails'],
+  title: ['updateTaskDetails'],
+  description: ['updateTaskDetails'],
+  project: ['updateTaskDetails'],
+  department: ['updateTaskDetails'],
+  category: ['updateTaskDetails'],
+  skills: ['updateTaskDetails'],
+  importance: ['updateTaskDetails'],
+}
+// 記録の項目が分からない時は、タスクの項目を変える操作すべてを前提にする
+var HISTORY_ANY_FIELD_ACTIONS = (function () {
+  var all = []
+  Object.keys(HISTORY_FIELD_ACTIONS).forEach(function (f) {
+    HISTORY_FIELD_ACTIONS[f].forEach(function (a) { if (all.indexOf(a) < 0) all.push(a) })
+  })
+  return all
+})()
+
+function sameId(a, b) {
+  return a != null && b != null && String(a) !== '' && String(a) === String(b)
+}
+
+// 変更の記録のうち、今回足された項目(シートの記録に無い ID の項目)。分からなければ null
+function addedHistoryFields(op) {
+  if (!Array.isArray(op.history)) return null
+  var task = null
+  try { task = authFindRow(SHEET_TASKS, String(op.taskId || '')) } catch (e) { task = null }
+  if (!task) return null
+  var old = []
+  try { old = JSON.parse(task.history_json || '[]') } catch (e) { old = [] }
+  var oldIds = {}
+  ;(Array.isArray(old) ? old : []).forEach(function (h) { if (h && h.id) oldIds[h.id] = true })
+  var fields = []
+  op.history.forEach(function (h) {
+    if (h && h.id && !oldIds[h.id] && fields.indexOf(h.field) < 0) fields.push(h.field)
+  })
+  return fields
+}
+
+function batchTaskRow(taskId) {
+  try { return authFindRow(SHEET_TASKS, String(taskId || '')) } catch (e) { return null }
+}
+
+// op(ops[i])が前提にする操作の番号
+function batchPrerequisites(ops, i) {
+  var op = ops[i]
+  var out = []
+  var memo = {}
+  var fieldsOnce = function () {
+    if (!('fields' in memo)) memo.fields = addedHistoryFields(op)
+    return memo.fields
+  }
+  ops.forEach(function (other, j) {
+    if (j === i || !other) return
+    var a = other.action
+    var needs = false
+    switch (op.action) {
+      case 'updateHistory':
+        if (sameId(other.taskId, op.taskId) && HISTORY_ANY_FIELD_ACTIONS.indexOf(a) >= 0) {
+          var fields = fieldsOnce()
+          needs = fields === null
+            ? true
+            : fields.some(function (f) { return (HISTORY_FIELD_ACTIONS[f] || HISTORY_ANY_FIELD_ACTIONS).indexOf(a) >= 0 })
+        }
+        break
+      case 'notifyScheduleResult':
+        needs = sameId(other.taskId, op.taskId) && (a === 'updateTaskStatus' || a === 'updateTaskSchedule')
+        break
+      case 'notifyFormResult':
+        needs = sameId(other.taskId, op.taskId) && (a === 'updateTaskStatus' || a === 'updateTaskForm')
+        break
+      case 'notifyMention':
+        needs = sameId(other.taskId, op.taskId) && a === 'updateComments'
+        break
+      case 'notifyTaskRejected':
+        needs = sameId(other.taskId, op.taskId) && a === 'removeTask'
+        break
+      case 'updateProjectMembers':
+        if (a === 'assignTask') {
+          var assigned = batchTaskRow(other.taskId)
+          needs = !!assigned && sameId(assigned.project_id, op.projectId)
+        }
+        break
+      case 'updateSkillLevels':
+      case 'updateJudgment':
+        if (a === 'updateTaskStatus' && other.status === 'done') {
+          var doneTask = batchTaskRow(other.taskId)
+          var assignees = doneTask ? String(doneTask.assignee_id || '').split(',').map(function (s) { return s.trim() }) : []
+          needs = assignees.indexOf(String(op.memberId)) >= 0
+        }
+        break
+      case 'createTasks':
+        needs = a === 'updateTaskStatus' && other.status === 'review' &&
+          (op.tasks || []).some(function (t) { return t && sameId(t.relatedReviewTaskId, other.taskId) })
+        break
+    }
+    if (needs) out.push(j)
+  })
+  return out
+}
+
+var BATCH_SKIPPED_ERROR = '一緒に送った変更が保存されなかったため、この操作は行いませんでした。'
+
 function runBatch(ops, acting, denied) {
   noteTiming('batchOps', ops.length)
-  return ops.map(function (op, i) {
-    if (denied && denied[i]) return { ok: false, error: denied[i], forbidden: true }
-    try {
-      return { ok: true, result: runWriteAction(op, acting) }
-    } catch (err) {
-      return { ok: false, error: toErrorMessage(err) }
+  var results = ops.map(function () { return null })
+  var prereqs = ops.map(function (op, i) { return batchPrerequisites(ops, i) })
+  var remaining = ops.length
+  // 前提の操作が済んだものから、元の順番で実行する(前提が済んでいない操作は後に回す)
+  while (remaining > 0) {
+    var progressed = false
+    for (var i = 0; i < ops.length; i++) {
+      if (results[i]) continue
+      var waiting = prereqs[i].some(function (j) { return !results[j] })
+      if (waiting) continue
+      progressed = true
+      remaining--
+      if (denied && denied[i]) {
+        results[i] = { ok: false, error: denied[i], forbidden: true }
+        continue
+      }
+      if (prereqs[i].some(function (j) { return !results[j].ok })) {
+        results[i] = { ok: false, error: BATCH_SKIPPED_ERROR, skipped: true }
+        continue
+      }
+      try {
+        results[i] = { ok: true, result: runWriteAction(ops[i], acting) }
+      } catch (err) {
+        results[i] = { ok: false, error: toErrorMessage(err) }
+      }
+      break
     }
-  })
+    if (!progressed) {
+      // 前提が互いを待っている(起きないはず)。安全側に、残りは実行しない
+      for (var k = 0; k < ops.length; k++) {
+        if (!results[k]) results[k] = { ok: false, error: BATCH_SKIPPED_ERROR, skipped: true }
+      }
+      remaining = 0
+    }
+  }
+  return results
 }
 
 // 1つの書き込みの操作を実行する(権限の確認・ロック・送り直しの確認は済んでいること)

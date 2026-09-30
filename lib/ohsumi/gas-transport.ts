@@ -38,6 +38,8 @@ export interface GasResponse<T = unknown> {
   retryLater?: boolean
   // 同じ requestId の前回の結果を返した(処理はやり直していない)
   replayed?: boolean
+  // まとめて送った書き込みで、前提の操作(変更そのものなど)が保存されなかったため、行わなかった
+  skipped?: boolean
   // GAS の doGet が応答した(POST の本文が失われて GET で届いた。何も処理していない)
   getReceived?: boolean
   // doGet の応答(結果の受け渡しの途中で GET に送り返された)
