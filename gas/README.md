@@ -76,7 +76,7 @@ Google スプレッドシート（データの保存場所）
 | permission_overrides_json | 個別権限オーバーライド定義（JSON文字列、任意）。代表のみが設定できます |
 | skill_points_json | スキルごとの累計ポイント（JSON文字列、例: `{"デザイン":120}`）。自動で更新されます |
 | notify_settings | 通知頻度の個別設定（JSON文字列、任意）。個人ページの「アカウント設定」から設定できます |
-| inactive | `TRUE` なら休止中メンバー（一覧から非表示）。Admin → Members から設定できます |
+| inactive | `TRUE` なら休止中メンバー（一覧から非表示）。Admin → Members から設定できます。休止中のメンバーはログインできず、休止にした時点でそのメンバーのログイン(全端末)を無効にします。シートを直接書き換えて休止にした時も、次の操作で断ります。休止を解除すれば、またログインできます |
 | absent_dates | 不在日リスト（カンマ区切り、`YYYY-MM-DD`）。個人ページから本人が編集できます |
 | last_login | 最終ログイン日時（ISO datetime）。ログイン時に自動更新されます |
 | last_inactive_notified | 未アクセス通知を最後に送った日（`YYYY-MM-DD`）。重複通知防止に使われます |
@@ -507,7 +507,6 @@ GAS の処理は成功しているのに、この転送先が 404 になり、�
     (`skipped: true`。`BATCH_SKIPPED_ERROR` の文言を返します)。画面は記録などを変更より先に送るので、実行の順番も入れ替えます(`batchPrerequisites_`)
     - 変更の記録(`updateHistory`) ← 記録した項目を変える操作(同じタスク。期限・開始日なら `updateSchedule`、優先度なら `updatePriority`・`updateTaskDetails` など)
     - 回答がそろった通知(`notifyScheduleResult`・`notifyFormResult`) ← 回答の保存と完了への変更(同じタスク)
-    - メンションの通知(`notifyMention`) ← コメントの保存 / 却下の通知(`notifyTaskRejected`) ← タスクの削除
     - 担当者をプロジェクトに加える(`updateProjectMembers`) ← 担当者の変更(そのプロジェクトのタスク)
     - 完了で付くスキル・認定(`updateSkillLevels`・`updateJudgment`) ← 完了への変更(そのメンバーが担当のタスク)
     - 確認タスクの作成(`createTasks`) ← 確認待ちへの変更(元のタスク)
@@ -870,6 +869,26 @@ Webhook URLは Settings シート（ログイン済みの全員に返る）に�
 - 画面には、スマホで開いた後に「ホーム画面に追加」をすると次からすぐ開けることを、短く出します
 - **反映の順番:** レジストリ → 団体の GAS → 画面。団体の GAS が古い間は、画面のメールのボタンは押せません(確かめられないため)
 
+
+## 4.10. 画面に頼らずに GAS が守ること(通知・タスクの書き換え・回数の上限)
+
+- **通知の宛先と本文は、保存したデータから GAS が決めます。** 画面から宛先や本文を受け取って送る操作はありません
+  - メンション: `updateComments` の中で、保存したコメントの「@表示名」「@名前」から宛先を決め、保存した文で知らせます。
+    新しいコメントの投稿者は、どの役職でも操作した本人にそろえます。幹部限定のタスクは、幹部限定のタスクを見られる役職の人にだけ知らせます
+  - 却下: `rejectTask` が、シートのタスクの作成者に、シートのタスク名で知らせます。画面から受け取る文は、却下の理由(500字まで)だけです
+    (`NOTIFY_QUOTED_FIELDS`)
+  - 研修・日程調整・フォームの結果: 保存した記録・回答から決めます
+- **タスクを書き換える操作は、担当者などに限る(`TASK_OWNER_SCOPED_ACTIONS`)か、誰でもよい理由がある(`TASK_ANY_MEMBER_ACTIONS`。理由を書く)か、
+  役職で限る(代表・管理者だけ)かのどれかです。**
+- **通知・翻訳の回数の上限(1人1時間):** 通知(メール・Discord/Slack・通知のキュー)60件、メンションの宛先30人、
+  日程調整・フォームの結果と研修の通知10回、翻訳500件(`RATE_LIMITS`)。通知は、上限を超えた分を送らずに操作を成功させ、
+  応答に `notifyLimited: true` を付けます(画面は「一部の通知を送りませんでした」と知らせます)。時間主導トリガーの通知は数えません
+- `lib/ohsumi/gas-notify-guard.test.ts` で、**全部の操作**(新しく足した操作も自動で)を、意地の悪い値で実際に送って確かめます。
+  守る処理を外した Code.gs でテストが失敗することも確かめています
+- **反映の順番:** GAS → 画面。画面だけ先に反映すると、以前の GAS は `rejectTask` を知らないため、却下が失敗します。
+  GAS だけ先に反映すると、以前の画面が送る `notifyMention`・`notifyTaskRejected` は断られます(コメントは保存され、メンションは GAS が知らせます。
+  却下はタスクの削除までは済み、作成者への通知は届きません。画面を読み込み直してください)
+
 ## 5. 承認・通知フローの説明
 
 ### タスク登録時の承認フロー
@@ -976,11 +995,16 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 |---|---|
 | updateRole, removeMember, removeProject, uploadOrgLogo, addMember, updateEmail, updateJoinedAt, updateReportsTo, updateMentor, notifyTrainingDecision, updatePermissionOverrides, updateMemberProjects | 最上位の役職（既定は代表）のみ |
 | updateSetting, updateRoles, deleteRole, updateDepartments, deleteDepartment, moveDepartmentTasks, updateDiscordWebhookUrl, updateSlackWebhookUrl, testDiscordWebhook, testSlackWebhook, getWebhookStatus, updateProjectHealth | 最上位の役職 または 全権管理者（制限の無い管理者の役職。団体ごとにAdmin → Tagsで調整可能）。ただし updateRoles で最上位の役職を増やす・減らす変更と、deleteRole でメンバーを別の役職に移す削除は、最上位の役職のみ |
-| approveTask, assignTask, updateTaskDetails, setBlocker, createProject, updateProject, updatePriority, updateReviewer(s), removeTask, bulkUpdateSkills, updateExpenseStatus, addExpenseApplication, manageCustomForm, updateEvaluationHistory, updateTransferHistory, updateOneOnOnes, updateCompetencies, notifyProjectHealth, updateProjectHealthRecord, approveTaskReview 等 | 任意の管理者ロール（代表 または 班長以上） |
+| approveTask, assignTask, updateTaskDetails, setBlocker, createProject, updateProject, updatePriority, updateReviewer(s), removeTask, rejectTask(却下。タスクを消し、シートのタスクの作成者に知らせる), bulkUpdateSkills, updateExpenseStatus, addExpenseApplication, manageCustomForm, updateEvaluationHistory, updateTransferHistory, updateOneOnOnes, updateCompetencies, notifyProjectHealth, updateProjectHealthRecord, approveTaskReview 等 | 任意の管理者ロール（代表 または 班長以上） |
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |
-| createTasks, updateProgress, updateTaskStatus（担当者のみ）, submitSurveyResponse 等 | ログイン済みなら誰でも |
-| updateDeliverables, updateHistory, updateEstimatedHours, updateActualHours, updateRetrospective, updateTaskSchedule, updateTaskForm | そのタスクの担当者・確認者・作成者・全権管理者のみ(updateHistoryはさらに、他人が記録した既存データの書き換え・削除を拒否) |
+| createTasks, updateTaskStatus（担当者のみ。完了は確認者のみ）, submitSurveyResponse 等 | ログイン済みなら誰でも |
+| applyToOpenBid(公募) | ログイン済みなら誰でも。ただし、応募者の一覧で変えられるのは自分の応募・取り下げだけ(幹部限定タスクは一般以外の役職のみ) |
+| translateText | ログイン済みなら誰でも。1人1時間に500件まで(`RATE_LIMITS.translate`) |
+| updateDeliverables, updateHistory, updateEstimatedHours, updateActualHours, updateRetrospective, updateTaskSchedule, updateTaskForm, updateProgress, setHoldReason | そのタスクの担当者・確認者・作成者・全権管理者のみ(`TASK_OWNER_SCOPED_ACTIONS`。updateHistory・updateProgress の記録はさらに、他人が書いた既存の記録の書き換え・削除を拒否) |
+| notifyTrainingRequest・notifyTrainingDecision | 研修の名前・状態は、保存した研修の記録(`trainingId`)から読む(画面が送る名前は使わない)。申請中・承認済み/却下の記録の時だけ送る |
+| notifyScheduleResult・notifyFormResult | 保存した回答が揃った時に1回だけ、シートのタスクの作成者に知らせる |
+| notifyMention・notifyTaskRejected | 廃止(どの役職でも断る)。メンションは updateComments の中で、却下は rejectTask の中で、GAS が保存したデータから宛先と本文を決めて知らせる |
 | updateComments(新規コメント追加) | そのタスクを閲覧できるメンバーなら誰でも(幹部限定タスクは一般以外の役職のメンバーのみ)。投稿者ID( `byId` )はクライアント値を信用せず認証済み本人IDで固定する |
 | updateComments(既存コメントの編集・削除) | 投稿者本人 または 全権管理者のみ |
 | getInitialData(読み取り) | ログイン済みなら誰でも。ただし `Code.gs` の `READ_POLICY` に従い、閲覧権限のない行・列・設定キーを取り除いて返す。`withBackground: true` の時(exchangeIdToken も同じ)は、getBackgroundData と同じもの(同じ確認と絞り込み)も返す |
