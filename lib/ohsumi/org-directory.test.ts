@@ -81,11 +81,19 @@ describe('招待リンク(?org=)', () => {
     for (const bad of ['?org=', '?org=org_short', '?org=' + ORG_A + '%2F', '?org=abc']) expect(d.readInviteOrgId(bad), bad).toBe('invalid')
   })
 
-  it('開いた後は、アドレスバーから ?org= を消す(ほかのパラメーターは残す)', async () => {
-    setUrl('?org=' + ORG_A + '&lang=en')
+  it('アドレスバーの ?org= を今の団体にそろえる(ほかのパラメーターは残す。消す時は ?org= だけ消す)', async () => {
+    setUrl('?lang=en')
     const d = await load()
-    d.stripInviteParam()
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/?lang=en')
+    d.syncOrgParam(ORG_A)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?lang=en&org=' + ORG_A)
+    setUrl('?org=' + ORG_A + '&lang=en')
+    d.syncOrgParam(null)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?lang=en')
+    // 同じなら書き換えない
+    replaceState.mockClear()
+    setUrl('?org=' + ORG_A)
+    d.syncOrgParam(ORG_A)
+    expect(replaceState).not.toHaveBeenCalled()
   })
 
   it('招待リンクの形', async () => {
@@ -132,9 +140,35 @@ describe('ページを開いた時(startOrg)', () => {
     expect(first).toMatchObject({ kind: 'use', org: { orgId: ORG_B } })
     expect(d.getActiveOrg()).toEqual({ orgId: ORG_B, gasUrl: URL_B })
     expect(local.getItem('ohsumi-current-org')).toBe(ORG_B)
-    expect(replaceState).toHaveBeenCalled()
+    // アドレスバーの ?org= は、今の団体のまま残す(ブックマーク・ホーム画面に団体が残る)
+    expect(replaceState).not.toHaveBeenCalled()
     setUrl('?org=' + ORG_A)
     expect(d.startOrg()).toBe(first)
+  })
+
+  it('?org= の無い URL で今の団体を開いた時は、アドレスバーを /?org=<団体ID> にする(ホーム画面に追加しても団体が残る)', async () => {
+    local.setItem('ohsumi-orgs', JSON.stringify([saved(ORG_A, URL_A)]))
+    local.setItem('ohsumi-current-org', ORG_A)
+    setUrl('')
+    const d = await load()
+    expect(d.startOrg()).toMatchObject({ kind: 'use', org: { orgId: ORG_A } })
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?org=' + ORG_A)
+  })
+
+  it('ほかの団体に切り替える時は、読み込み直す前にアドレスバーを新しい団体にする', async () => {
+    setUrl('?org=' + ORG_A)
+    const d = await load()
+    const reload = vi.fn()
+    d.switchToOrg(ORG_B, reload)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?org=' + ORG_B)
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('形の違う ?org= は消す', async () => {
+    setUrl('?org=bad')
+    const d = await load()
+    expect(d.startOrg()).toEqual({ kind: 'invalidInvite' })
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/')
   })
 
   it('以前の保存は使わない: 既定の団体(source が default)の項目・R1-d より前の団体ID(ohsumi-login-config)', async () => {

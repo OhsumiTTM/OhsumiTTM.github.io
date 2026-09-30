@@ -3,7 +3,8 @@
 // - この端末の「所属する団体の一覧」(localStorage の ohsumi-orgs)に、団体ID・接続先・団体名・確かめた時刻を保存する。
 //   今使っている団体は ohsumi-current-org
 // - 招待リンク(<サイトの URL>/?org=<団体ID>)で開いた時: 一覧に無ければ、レジストリ(resolveOrg)に問い合わせて待つ
-//   (初めての端末だけ)。開いた後は、アドレスバーから ?org= を消す
+//   (初めての端末だけ)。アドレスバーは、いつも今の団体の /?org=<団体ID> にしておく(ブックマーク・ホーム画面に
+//   追加したアイコンに団体が残るように。保存が消えた時・サイトのドメインが変わった時もそのまま開ける)
 // - 一覧にある団体は、問い合わせずにすぐ使う。確かめてから maxAgeSec(24時間)を過ぎていれば、ログイン・再開と
 //   並べて裏で問い合わせ、答えが違った時(接続先が変わった・停止・見つからない)だけ、ログインし直してもらう
 // - レジストリが止まっている時: 一覧にあればそのまま使う。初めての端末では「接続先を確認できません」と再試行を出す
@@ -139,12 +140,21 @@ export function readInviteOrgId(search: string): string | 'invalid' | null {
   return ORG_ID_PATTERN.test(v) ? v : 'invalid'
 }
 
-/** アドレスバーから ?org= を消す(ブックマーク・共有に残さない。ページは読み込み直さない) */
-export function stripInviteParam(): void {
+/**
+ * アドレスバーの ?org= を、今の団体にそろえる(orgId が null なら消す。ページは読み込み直さない)。
+ * ブックマーク・ホーム画面に追加したアイコン・共有したリンクに団体が残るので、この端末の保存が消えた時
+ * (Safari は7日使わないサイトの保存を消す)や、サイトのドメインが変わった時も、そのまま団体を開ける
+ */
+export function syncOrgParam(orgId: string | null): void {
   try {
     const url = new URL(window.location.href)
-    if (!url.searchParams.has('org')) return
-    url.searchParams.delete('org')
+    if (orgId) {
+      if (url.searchParams.get('org') === orgId) return
+      url.searchParams.set('org', orgId)
+    } else {
+      if (!url.searchParams.has('org')) return
+      url.searchParams.delete('org')
+    }
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
   } catch {
     /* ignore */
@@ -284,6 +294,8 @@ export function activateOrg(org: SavedOrg): void {
   activeOrgId = org.orgId
   upsertSavedOrg(org)
   setCurrentOrgId(org.orgId)
+  // アドレスバーを、この団体の /?org=<団体ID> にする
+  if (typeof window !== 'undefined') syncOrgParam(org.orgId)
 }
 
 /**
@@ -294,9 +306,10 @@ export function startOrg(): StartDecision {
   if (startDecision) return startDecision
   if (typeof window === 'undefined') return { kind: 'none' }
   const invite = readInviteOrgId(window.location?.search ?? '')
-  stripInviteParam()
   const decision = decideStartOrg({ invite, saved: loadSavedOrgs(), currentId: getCurrentOrgId(), now: Date.now() })
   startDecision = decision
+  // 形の違う ?org= は消す。招待リンクの団体を調べる間(resolve)は、そのまま残す(もう一度試せるように)
+  if (decision.kind === 'invalidInvite') syncOrgParam(null)
   if (decision.kind === 'use') {
     activateOrg(decision.org)
     if (decision.refresh) void refreshInBackground(decision.org)
@@ -349,6 +362,8 @@ export const ORG_SCOPED_STORAGE_KEYS = [
 /** ほかの団体に切り替える: 今の団体にし、団体ごとの保存を消して、ページを読み込み直す */
 export function switchToOrg(orgId: string, reload: () => void = () => window.location.reload()): void {
   setCurrentOrgId(orgId)
+  // 読み込み直したページが、アドレスバーの前の団体(?org=)を開かないように、先に切り替える
+  syncOrgParam(orgId)
   const s = storage()
   for (const key of ORG_SCOPED_STORAGE_KEYS) {
     try { s?.removeItem(key) } catch { /* ignore */ }
