@@ -1653,9 +1653,271 @@ function verifyGoogleIdToken(idToken, nonceSecret) {
 }
 
 // exchangeIdToken: IDトークンをセッショントークンに交換し、初期データもまとめて返す
+// ---- レジストリへの登録と、最初の代表(R1-c) -------------------------------------------
+//
+// 団体のスプレッドシートの「Ohsumi」メニューから行う(エディタの実行ログに、コード・鍵を残さないため)。
+//   - 「レジストリに登録する…」: FSIF から受け取った登録コード(または再登録コード)を入力欄に入れる
+//     (スクリプトプロパティにもログにも残さない)。レジストリに1回の通信で登録し、共有鍵を受け取って
+//     スクリプトプロパティ REGISTRY_SHARED_KEY に保存する(値は表示しない)。
+//     代表がまだいなければ、初期設定コードを作り、その場のダイアログにだけ1回表示する
+//   - 「初期設定コードを作り直す」: 代表がまだいない時だけ。前のコードは使えなくなる
+// 通信が途中で失われた時は、同じ requestId で最大3回送る(レジストリは同じ結果を返し、二重に登録しない)。
+// 別の時にメニューからやり直した時も、同じ登録コードなら同じ requestId を使う(REGISTRY_PENDING に
+// requestId とコードの SHA-256 だけを覚える)
+//
+// 初期設定コード: 16文字(読み間違えない31種類の文字)。有効期限72時間・1回限り。スクリプトプロパティには
+// SHA-256 だけを保存する。最初の代表は、ログイン画面の「初期設定コード」の欄に入れて Google でログインする
+// (exchangeIdToken に setupCode を付ける。1回の通信)。間違いが INITIAL_SETUP_FAIL_LIMIT 回続いたら、
+// そのコードは使えなくなる(メニューで作り直す)
+var REGISTRY_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
+var REGISTRY_FETCH_ATTEMPTS = 3
+var INITIAL_SETUP_TTL_HOURS = 72
+var INITIAL_SETUP_FAIL_LIMIT = 10
+var SETUP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+var SETUP_CODE_LENGTH = 16
+// レジストリに伝える、この GAS の版(Orgs の gas_version)
+var OHSUMI_GAS_VERSION = 'r1c-1'
+
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('Ohsumi')
+      .addItem('レジストリに登録する…', 'registerWithRegistryFromMenu')
+      .addItem('初期設定コードを作り直す', 'regenerateInitialSetupCodeFromMenu')
+      .addToUi()
+  } catch (e) {
+    // スプレッドシートを開いた時以外(エディタからの実行など)は何もしない
+  }
+}
+
+function sha256HexOf(text) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
+    .map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2) }).join('')
+}
+
+// 入力のゆれ(小文字・区切り・空白)をそろえる
+function normalizeOneTimeCode(input) {
+  return String(input || '').toUpperCase().replace(/[\s\-_]/g, '')
+}
+
+function oneTimeCodeHash(input) {
+  return 'sha256:' + sha256HexOf(normalizeOneTimeCode(input))
+}
+
+// 推測できない16文字(偏りが出ないよう、アルファベットの数の倍数を超えるバイトは捨てる)
+function generateOneTimeCode() {
+  var n = SETUP_CODE_ALPHABET.length
+  var limit = Math.floor(256 / n) * n
+  var code = ''
+  var round = 0
+  while (code.length < SETUP_CODE_LENGTH) {
+    var seed = [Utilities.getUuid(), Utilities.getUuid(), Utilities.getUuid(), String(Date.now()), String(round++)].join(':')
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, seed, Utilities.Charset.UTF_8).forEach(function (b) {
+      var v = b & 0xff
+      if (code.length < SETUP_CODE_LENGTH && v < limit) code += SETUP_CODE_ALPHABET.charAt(v % n)
+    })
+  }
+  return code
+}
+
+function formatOneTimeCode(code) {
+  return code.match(/.{1,4}/g).join('-')
+}
+
+function topRoleRef() {
+  var roles = getRoles()
+  for (var i = 0; i < roles.length; i++) if (roles[i].tier === 'top') return roles[i].id
+  return DEFAULT_TOP_ROLE_NAME
+}
+
+// 代表(最上位の役職)のメンバーがいるか(シートから読む)
+function hasTopMember() {
+  var sheet = getSheet(SHEET_MEMBERS)
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var roleCol = headers.indexOf('role')
+  var idCol = headers.indexOf('id')
+  if (roleCol < 0 || idCol < 0) return false
+  var roles = getRoles()
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][idCol]) && isTopRoleRef(roles, values[i][roleCol])) return true
+  }
+  return false
+}
+
+// 初期設定コードを作る(前のコードは使えなくなる)。元のコードを返す(保存するのは SHA-256 だけ)
+function createInitialSetupCode(nowMs) {
+  var code = generateOneTimeCode()
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty('INITIAL_SETUP_HASH', oneTimeCodeHash(code))
+  props.setProperty('INITIAL_SETUP_EXPIRES', String(nowMs + INITIAL_SETUP_TTL_HOURS * 3600 * 1000))
+  props.deleteProperty('INITIAL_SETUP_FAILS')
+  resetRequestProps()
+  return { code: formatOneTimeCode(code), expiresAt: new Date(nowMs + INITIAL_SETUP_TTL_HOURS * 3600 * 1000).toISOString() }
+}
+
+function clearInitialSetupCode(props) {
+  props.deleteProperty('INITIAL_SETUP_HASH')
+  props.deleteProperty('INITIAL_SETUP_EXPIRES')
+  props.deleteProperty('INITIAL_SETUP_FAILS')
+  resetRequestProps()
+}
+
+var INITIAL_SETUP_INVALID = '初期設定コードが正しくないか、使えなくなっています(期限切れ・使用済み)。団体の担当者に、スプレッドシートの「Ohsumi」メニューで作り直してもらってください。'
+
+// 最初の代表を団体に入れる(exchangeIdToken から。Google の IDトークンは確認済み)。メンバーID を返す
+function claimInitialSetup(email, code, nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    var props = PropertiesService.getScriptProperties()
+    var hash = props.getProperty('INITIAL_SETUP_HASH') || ''
+    var expires = Number(props.getProperty('INITIAL_SETUP_EXPIRES') || 0)
+    if (!hash) throw userError(INITIAL_SETUP_INVALID)
+    if (!constantTimeEquals(hash, oneTimeCodeHash(code))) {
+      var fails = Number(props.getProperty('INITIAL_SETUP_FAILS') || 0) + 1
+      if (fails >= INITIAL_SETUP_FAIL_LIMIT) {
+        clearInitialSetupCode(props)
+        throw userError('初期設定コードの間違いが続いたため、このコードは使えなくなりました。団体の担当者に、スプレッドシートの「Ohsumi」メニューで作り直してもらってください。')
+      }
+      props.setProperty('INITIAL_SETUP_FAILS', String(fails))
+      throw userError(INITIAL_SETUP_INVALID)
+    }
+    if (!(expires > nowMs)) {
+      clearInitialSetupCode(props)
+      throw userError(INITIAL_SETUP_INVALID)
+    }
+    // 1回限り: 使う前に消す(代表が既にいる時も使えなくする)
+    clearInitialSetupCode(props)
+    if (hasTopMember()) throw userError('この団体には既に代表がいます。代表に、メンバーとして追加してもらってください。')
+    var added = addMember(String(email).split('@')[0], email, '', topRoleRef())
+    // メンバーが増えたので、読み取りのキャッシュ(スナップショット)を作り直させる
+    bumpSnapshotVersion()
+    console.log('初期設定コードで、最初の代表を登録しました(メンバーID: ' + added.id + ')')
+    return added.id
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+// レジストリに登録する(メニューから。テストでは fetch を差し替える)。
+// 返り値: { displayName, keyGen, kind, setupCode?, setupExpiresAt? }(共有鍵は返さない)
+function registerWithRegistry(code, deps) {
+  deps = deps || {}
+  var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
+  var now = deps.now || Date.now
+  if (!normalizeOneTimeCode(code)) throw userError('登録コードを入れてください。')
+  ensureSessionSecrets()
+  var props = PropertiesService.getScriptProperties()
+  var all = props.getProperties() || {}
+  var registryUrl = String(all.REGISTRY_URL || '').trim()
+  if (!REGISTRY_URL_PATTERN.test(registryUrl)) {
+    throw userError('スクリプトプロパティ REGISTRY_URL に、FSIF から伝えられたレジストリの URL(https://script.google.com/macros/s/…/exec)を入れてください。')
+  }
+  var gasUrl = String(all.OHSUMI_WEBAPP_URL || '').trim()
+  if (!gasUrl) {
+    try { gasUrl = String(ScriptApp.getService().getUrl() || '') } catch (e) { gasUrl = '' }
+  }
+  if (!REGISTRY_URL_PATTERN.test(gasUrl)) {
+    throw userError('この GAS のウェブアプリの URL が分かりません。先にウェブアプリとしてデプロイし、デプロイの画面に出る URL(https://script.google.com/macros/s/…/exec)をスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。')
+  }
+  // 同じ登録コードでやり直す時は、同じ requestId を使う(レジストリが送り直しと分かるように)
+  var codeHash = oneTimeCodeHash(code)
+  var pending = {}
+  try { pending = JSON.parse(all.REGISTRY_PENDING || '{}') || {} } catch (e) { pending = {} }
+  if (pending.codeHash !== codeHash || !pending.requestId) {
+    pending = { requestId: generateSecret().slice(0, 32), codeHash: codeHash }
+    props.setProperty('REGISTRY_PENDING', JSON.stringify(pending))
+  }
+  var payload = JSON.stringify({
+    action: 'registerOrg',
+    code: normalizeOneTimeCode(code),
+    orgId: props.getProperty('ORG_ID'),
+    gasUrl: gasUrl,
+    gasVersion: OHSUMI_GAS_VERSION,
+    requestId: pending.requestId,
+  })
+  var res = null
+  var lastProblem = ''
+  for (var attempt = 1; attempt <= REGISTRY_FETCH_ATTEMPTS && !res; attempt++) {
+    try {
+      var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
+      var json = JSON.parse(r.getContentText())
+      if (json && json.retryLater) { lastProblem = String(json.error || '混み合っています'); continue }
+      if (json && json.getReceived) { lastProblem = 'レジストリに GET で届きました'; continue }
+      res = json
+    } catch (e) {
+      lastProblem = '通信エラー・JSON ではない応答'
+    }
+  }
+  if (!res) throw userError('レジストリから応答を受け取れませんでした(' + lastProblem + ')。少し待ってから、同じ登録コードでもう一度お試しください(二重には登録されません)。')
+  if (!res.ok || !res.result || !res.result.registryKey) {
+    throw userError(String(res.error || 'レジストリに登録できませんでした。'))
+  }
+  var out = res.result
+  props.setProperty('REGISTRY_SHARED_KEY', String(out.registryKey))
+  props.setProperty('REGISTRY_KEY_GEN', String(out.keyGen || ''))
+  props.setProperty('REGISTRY_REGISTERED_AT', String(out.registeredAt || ''))
+  props.deleteProperty('REGISTRY_PENDING')
+  resetRequestProps()
+  // ログには共有鍵もコードも出さない
+  console.log('レジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました(団体名: ' + out.displayName + '・鍵の世代: ' + out.keyGen + (res.replayed ? '・送り直しに対する前回の結果' : '') + ')')
+  var result = { displayName: String(out.displayName || ''), keyGen: out.keyGen, kind: out.kind }
+  if (!hasTopMember()) {
+    var setup = createInitialSetupCode(now())
+    result.setupCode = setup.code
+    result.setupExpiresAt = setup.expiresAt
+  }
+  return result
+}
+
+function formatJaDateTime(iso) {
+  return Utilities.formatDate(new Date(iso), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm')
+}
+
+function setupCodeMessage(setupCode, expiresAt) {
+  return '最初の代表の「初期設定コード」(この画面でだけ表示します。控えて、最初の代表に伝えてください):\n\n' +
+    setupCode + '\n\n有効期限: ' + formatJaDateTime(expiresAt) + '(72時間・1回限り)\n' +
+    '最初の代表は、Ohsumi のログイン画面の「初期設定コード」の欄にこのコードを入れてから、Google でログインします。'
+}
+
+function registerWithRegistryFromMenu() {
+  var ui = SpreadsheetApp.getUi()
+  var input = ui.prompt('レジストリに登録', 'FSIF から受け取った登録コード(または再登録コード)を入れてください。', ui.ButtonSet.OK_CANCEL)
+  if (input.getSelectedButton() !== ui.Button.OK) return
+  var out
+  try {
+    out = registerWithRegistry(input.getResponseText())
+  } catch (e) {
+    ui.alert('登録できませんでした', toErrorMessage(e), ui.ButtonSet.OK)
+    return
+  }
+  var msg = '団体「' + out.displayName + '」をレジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました。'
+  if (out.setupCode) msg += '\n\n' + setupCodeMessage(out.setupCode, out.setupExpiresAt)
+  ui.alert('登録しました', msg, ui.ButtonSet.OK)
+}
+
+function regenerateInitialSetupCodeFromMenu() {
+  var ui = SpreadsheetApp.getUi()
+  if (!PropertiesService.getScriptProperties().getProperty('REGISTRY_SHARED_KEY')) {
+    ui.alert('初期設定コード', '先に「レジストリに登録する…」で、団体を登録してください。', ui.ButtonSet.OK)
+    return
+  }
+  if (hasTopMember()) {
+    ui.alert('初期設定コード', 'この団体には既に代表がいます。メンバーは、代表が Ohsumi の画面から追加してください。', ui.ButtonSet.OK)
+    return
+  }
+  var setup = createInitialSetupCode(Date.now())
+  ui.alert('初期設定コードを作り直しました', '前のコードは使えなくなりました。\n\n' + setupCodeMessage(setup.code, setup.expiresAt), ui.ButtonSet.OK)
+}
+
 function exchangeIdToken(body) {
   var google = timed('verifyMs', function () { return verifyGoogleIdToken(body.idToken, body.nonceSecret) })
   var memberId = timed('emailLookupMs', function () { return findMemberIdByEmailCached(google.email) })
+  // 最初の代表: 未登録のアカウントが初期設定コードを付けて来た時は、代表として団体に入れる(同じ1回の通信で)
+  if (!memberId && body.setupCode) {
+    memberId = timed('setupMs', function () { return claimInitialSetup(google.email, body.setupCode, Date.now()) })
+  }
   // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
   if (!memberId) return { memberId: null, email: google.email }
   var data = getInitialDataForMember(memberId, null)
