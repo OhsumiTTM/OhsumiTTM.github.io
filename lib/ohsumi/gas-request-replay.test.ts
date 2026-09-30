@@ -23,13 +23,13 @@ function setup(opts: { lockBusy?: boolean } = {}) {
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
   // 認証は sessionToken をそのままメンバーID として扱う
-  c.authenticateRequest = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: { token: 'renewed', exp: 1 } })
-  c.getActingMemberById = (id: string) => ({ id })
-  c.authorizeAction = () => {}
+  c.authenticateRequest_ = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: { token: 'renewed', exp: 1 } })
+  c.getActingMemberById_ = (id: string) => ({ id })
+  c.authorizeAction_ = () => {}
   c.bumpDataVersion = () => {}
-  c.notifyReview = () => {}
+  c.notifyReview_ = () => {}
   const writes: string[] = []
-  c.updateTaskFields = (taskId: string) => { writes.push(taskId); return { ok: true, n: writes.length } }
+  c.updateTaskFields_ = (taskId: string) => { writes.push(taskId); return { ok: true, n: writes.length } }
   const post = (body: Record<string, unknown>) => {
     const out = (ctx as unknown as { doPost: (e: object) => { text: string } }).doPost({ postData: { contents: JSON.stringify(body) } })
     // 処理時間の内訳(timing)は別のテストで確かめる
@@ -55,11 +55,11 @@ describe('書き込みの送り直し(requestId)', () => {
 
   it('前回がエラーだった時も、同じエラーを返す(やり直さない)', () => {
     const t = setup()
-    t.ctx.updateTaskFields = () => { throw (t.ctx.userError as (m: string) => Error)('タスクが見つかりません') }
+    t.ctx.updateTaskFields_ = () => { throw (t.ctx.userError_ as (m: string) => Error)('タスクが見つかりません') }
     const first = t.post(write({ requestId: 'req-00000002' }))
     expect(first).toMatchObject({ ok: false, error: 'タスクが見つかりません' })
     let called = 0
-    t.ctx.updateTaskFields = () => { called++; return {} }
+    t.ctx.updateTaskFields_ = () => { called++; return {} }
     expect(t.post(write({ requestId: 'req-00000002' }))).toEqual({ ok: false, replayed: true, error: 'タスクが見つかりません' })
     expect(called).toBe(0)
   })
@@ -100,7 +100,7 @@ describe('書き込みの送り直し(requestId)', () => {
 
   it('結果が大きすぎて覚えられない時は、完了したことだけを返す(やり直さない)', () => {
     const t = setup()
-    t.ctx.updateTaskFields = () => ({ big: 'x'.repeat(100000) })
+    t.ctx.updateTaskFields_ = () => ({ big: 'x'.repeat(100000) })
     t.post(write({ requestId: 'req-00000008' }))
     const again = t.post(write({ requestId: 'req-00000008' }))
     expect(again).toMatchObject({ ok: false, replayed: true })

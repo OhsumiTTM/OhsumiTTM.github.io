@@ -252,25 +252,25 @@ describe("読み込み方式の計測", () => {
 describe('メールアドレス表のキャッシュの版', () => {
   it('メールに関係のない書き込み(データの版の更新)ではキャッシュを使い続ける', () => {
     const { gas, calls } = setup()
-    expect(gas.findMemberIdByEmailCached('B@example.com ')).toBe('2')
+    expect(gas.findMemberIdByEmailCached_('B@example.com ')).toBe('2')
     expect(calls.emailSheetReads).toBe(1)
     gas.bumpDataVersion()
-    expect(gas.findMemberIdByEmailCached('boss@example.com')).toBe('1')
+    expect(gas.findMemberIdByEmailCached_('boss@example.com')).toBe('1')
     expect(calls.emailSheetReads).toBe(1)
   })
 
-  it('メールの変更(setMemberEmail)で版が変わり、新しいメールでログインできる', () => {
+  it('メールの変更(setMemberEmail_)で版が変わり、新しいメールでログインできる', () => {
     const { gas, props, calls } = setup()
-    expect(gas.findMemberIdByEmailCached('new@example.com')).toBeNull()
+    expect(gas.findMemberIdByEmailCached_('new@example.com')).toBeNull()
     const before = props.MEMBER_EMAILS_VERSION
-    gas.setMemberEmail('2', 'new@example.com')
+    gas.setMemberEmail_('2', 'new@example.com')
     expect(props.MEMBER_EMAILS_VERSION).not.toBe(before)
-    expect(gas.findMemberIdByEmailCached('new@example.com')).toBe('2')
-    expect(gas.findMemberIdByEmailCached('a@example.com')).toBeNull()
+    expect(gas.findMemberIdByEmailCached_('new@example.com')).toBe('2')
+    expect(gas.findMemberIdByEmailCached_('a@example.com')).toBeNull()
     expect(calls.emailSheetReads).toBeGreaterThanOrEqual(2)
     // 新しいメンバーの行を追加した場合も同じ
-    gas.setMemberEmail('3', 'third@example.com')
-    expect(gas.findMemberIdByEmailCached('third@example.com')).toBe('3')
+    gas.setMemberEmail_('3', 'third@example.com')
+    expect(gas.findMemberIdByEmailCached_('third@example.com')).toBe('3')
   })
 
   it('書き込みに失敗しても版は新しくする', () => {
@@ -278,13 +278,13 @@ describe('メールアドレス表のキャッシュの版', () => {
     sheets.MemberEmails.appendRow = () => {
       throw new Error('write failed')
     }
-    expect(() => gas.setMemberEmail('9', 'x@example.com')).toThrow(/write failed/)
+    expect(() => gas.setMemberEmail_('9', 'x@example.com')).toThrow(/write failed/)
     expect(props.MEMBER_EMAILS_VERSION).toBeDefined()
   })
 
   it('メンバーの削除と、スプレッドシートの手動編集でも版が変わる', () => {
     const { gas, props } = setup()
-    gas.removeMember('2')
+    gas.removeMember_('2')
     const afterRemove = props.MEMBER_EMAILS_VERSION
     expect(afterRemove).toBeDefined()
     gas.onSpreadsheetChange({})

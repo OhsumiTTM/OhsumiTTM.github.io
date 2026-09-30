@@ -27,11 +27,11 @@ function setup() {
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.authenticateRequest = () => ({ memberId: 'm1', renewed: null })
-  c.getActingMember = () => ({ id: 'm1', role: 'top', project_ids: [], permission_overrides: [] })
-  c.authorizeAction = () => {}
+  c.authenticateRequest_ = () => ({ memberId: 'm1', renewed: null })
+  c.getActingMember_ = () => ({ id: 'm1', role: 'top', project_ids: [], permission_overrides: [] })
+  c.authorizeAction_ = () => {}
   // 書き込みの中身は呼ばない(版の変わり方だけを見る)
-  for (const f of ['updateTaskFields', 'submitExpenseApplication', 'updateMemberFields', 'addCandidate', 'setMemberEmail', 'notifyReview', 'requireKnownRole', 'assertTopRemains', 'sheetRoleRef', 'removeMember', 'rejectFormSubmission']) {
+  for (const f of ['updateTaskFields_', 'updateMemberFields_', 'addCandidate_', 'setMemberEmail_', 'notifyReview_', 'requireKnownRole_', 'assertTopRemains_', 'sheetRoleRef_', 'removeMember_']) {
     c[f] = () => ({ ok: true })
   }
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & { LOCK_EXEMPT_ACTIONS: string[]; TABLE_WRITE_ACTIONS: Record<string, string[]>; SNAPSHOT_UNTOUCHED_ACTIONS: string[] }

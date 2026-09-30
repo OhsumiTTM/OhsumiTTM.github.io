@@ -71,13 +71,13 @@ function keysOfArgument(body: string, argStart: number): string[] {
   return keys
 }
 
-const WRITER_SHEET: Record<string, string> = { updateTaskFields: 'Tasks', updateProjectFields: 'Projects', updateMemberFields: 'Members' }
+const WRITER_SHEET: Record<string, string> = { updateTaskFields_: 'Tasks', updateProjectFields_: 'Projects', updateMemberFields_: 'Members' }
 const ENSURE_SHEET: Record<string, string> = {
-  ensureExpensesSheet: 'Expenses',
-  ensureFormSubmissionsSheet: 'FormSubmissions',
-  ensureDailyReportsSheet: 'DailyReports',
-  ensureCandidatesSheet: 'Candidates',
-  getMemberEmailsSheet: 'MemberEmails',
+  ensureExpensesSheet_: 'Expenses',
+  ensureFormSubmissionsSheet_: 'FormSubmissions',
+  ensureDailyReportsSheet_: 'DailyReports',
+  ensureCandidatesSheet_: 'Candidates',
+  getMemberEmailsSheet_: 'MemberEmails',
 }
 
 function collectWrites(): Record<string, Map<string, Set<string>>> {
@@ -88,20 +88,20 @@ function collectWrites(): Record<string, Map<string, Set<string>>> {
     bySheet.get(key)!.add(where)
   }
   for (const f of functions) {
-    if (['updateTaskFields', 'updateProjectFields', 'updateMemberFields', 'updateRowFields', 'appendRowByHeaders'].includes(f.name)) continue
+    if (['updateTaskFields_', 'updateProjectFields_', 'updateMemberFields_', 'updateRowFields_', 'appendRowByHeaders_'].includes(f.name)) continue
     // updateTaskFields(id, {...}) など
-    for (const m of f.body.matchAll(/\b(updateTaskFields|updateProjectFields|updateMemberFields)\([^,]+,\s*/g)) {
+    for (const m of f.body.matchAll(/\b(updateTaskFields_|updateProjectFields_|updateMemberFields_)\([^,]+,\s*/g)) {
       keysOfArgument(f.body, m.index! + m[0].length).forEach((k) => add(WRITER_SHEET[m[1]], k, f.name))
     }
     // updateRowFields(SHEET_X, id, {...}) / appendRowByHeaders(sheet, SHEET_X, {...})
-    for (const m of f.body.matchAll(/\b(?:updateRowFields\((SHEET_\w+),[^,]+,|appendRowByHeaders\(\w+,\s*(SHEET_\w+),)\s*/g)) {
+    for (const m of f.body.matchAll(/\b(?:updateRowFields_\((SHEET_\w+),[^,]+,|appendRowByHeaders_\(\w+,\s*(SHEET_\w+),)\s*/g)) {
       keysOfArgument(f.body, m.index! + m[0].length).forEach((k) => add(SHEET_BY_CONST[m[1] || m[2]], k, f.name))
     }
     // 1つのシートだけを扱う関数の、列の位置の探し方(headers.indexOf('列'))と、
     // 見出しに合わせて行を組み立てる処理(headers.map の case 'x' / h === 'x')
     const touched = new Set<string>()
-    for (const m of f.body.matchAll(/getSheet(?:ByName)?\((SHEET_\w+)\)/g)) touched.add(SHEET_BY_CONST[m[1]])
-    for (const m of f.body.matchAll(/\b(ensure\w+Sheet|getMemberEmailsSheet)\(\)/g)) if (ENSURE_SHEET[m[1]]) touched.add(ENSURE_SHEET[m[1]])
+    for (const m of f.body.matchAll(/(?:getSheet_|getSheetByName)\((SHEET_\w+)\)/g)) touched.add(SHEET_BY_CONST[m[1]])
+    for (const m of f.body.matchAll(/\b(ensure\w+Sheet_|getMemberEmailsSheet_)\(\)/g)) if (ENSURE_SHEET[m[1]]) touched.add(ENSURE_SHEET[m[1]])
     if (touched.size === 1) {
       const sheet = [...touched][0]
       for (const m of f.body.matchAll(/headers\.indexOf\('([a-z_][a-z0-9_]*)'\)/g)) add(sheet, m[1], `${f.name}(indexOf)`)
@@ -184,7 +184,7 @@ describe('シートの列の一覧(SHEET_HEADERS)', () => {
   })
 })
 
-describe('appendRowByHeaders', () => {
+describe('appendRowByHeaders_', () => {
   function fakeSheet(headers: string[]) {
     const rows: unknown[][] = [headers]
     return {
@@ -202,7 +202,7 @@ describe('appendRowByHeaders', () => {
   it('シートの実際の列の順番に合わせて並べる(列が後から足された古いシートでもずれない)', () => {
     const g = loadGas()
     const sheet = fakeSheet(['id', 'member_id', 'created_at', 'type', 'report_date', 'done_text', 'todo_text', 'issues_text'])
-    ;(g.appendRowByHeaders as (s: unknown, n: string, o: Record<string, unknown>) => void)(sheet, 'DailyReports', {
+    ;(g.appendRowByHeaders_ as (s: unknown, n: string, o: Record<string, unknown>) => void)(sheet, 'DailyReports', {
       id: 'r1', member_id: 'm1', type: 'daily', report_date: '2026-09-28', done_text: 'd', todo_text: 't', issues_text: 'i', created_at: 'now',
     })
     expect(sheet.rows[1]).toEqual(['r1', 'm1', 'now', 'daily', '2026-09-28', 'd', 't', 'i'])
@@ -212,7 +212,7 @@ describe('appendRowByHeaders', () => {
     const g = loadGas()
     const sheet = fakeSheet(['id', 'email'])
     expect(() =>
-      (g.appendRowByHeaders as (s: unknown, n: string, o: Record<string, unknown>) => void)(sheet, 'MemberEmails', { id: 'm1', mail: 'x' }),
+      (g.appendRowByHeaders_ as (s: unknown, n: string, o: Record<string, unknown>) => void)(sheet, 'MemberEmails', { id: 'm1', mail: 'x' }),
     ).toThrow(/列が見つかりません: mail/)
     expect(sheet.rows).toHaveLength(1)
   })

@@ -88,9 +88,9 @@ function setup(opts: { orgId?: string; props?: Record<string, string> } = {}) {
   vm.runInContext(CODE_GS, context)
   const gas = context as unknown as Record<string, (...a: unknown[]) => unknown>
   // 初期データの読み込み(シートの読み込み)はこのテストの対象外
-  ;(context as Record<string, unknown>).getInitialDataForMember = (id: string) => ({ memberId: id, version: 'v1', sheets: {} })
+  ;(context as Record<string, unknown>).getInitialDataForMember_ = (id: string) => ({ memberId: id, version: 'v1', sheets: {} })
   if (opts.orgId !== undefined) props.ORG_ID = opts.orgId
-  gas.ensureSessionSecrets()
+  gas.ensureSessionSecrets_()
 
   const post = (body: Record<string, unknown>) => {
     const out = gas.doPost({ postData: { contents: JSON.stringify(body) } }) as { text: string }
@@ -279,16 +279,16 @@ describe('セッショントークンの確認', () => {
   it('登録していたメールアドレスを外すと、そのメンバーのトークンは無効になる(追加だけなら有効のまま)', () => {
     const t = setup()
     const token = t.login('member@example.com')
-    t.gas.setMemberEmail('m2', 'member@example.com, alt@example.com, new@example.com')
+    t.gas.setMemberEmail_('m2', 'member@example.com, alt@example.com, new@example.com')
     expect(t.post({ action: 'getMyEmails', sessionToken: token }).ok).toBe(true)
-    t.gas.setMemberEmail('m2', 'member@example.com')
+    t.gas.setMemberEmail_('m2', 'member@example.com')
     expect(t.post({ action: 'getMyEmails', sessionToken: token }).ok).toBe(false)
   })
 
   it('メンバーを削除すると、そのメンバーのトークンは無効になる', () => {
     const t = setup()
     const token = t.login('member@example.com')
-    t.gas.removeMember('m2')
+    t.gas.removeMember_('m2')
     expect(t.post({ action: 'getMyEmails', sessionToken: token }).ok).toBe(false)
   })
 })
@@ -349,7 +349,7 @@ describe('setupOhsumi の準備', () => {
     const before = { ...t.props }
     expect(before.ORG_ID).toMatch(/^org_[\w-]{20}$/)
     expect(before.SESSION_SIGNING_KEY.length).toBeGreaterThanOrEqual(40)
-    expect(t.gas.ensureSessionSecrets()).toEqual([])
+    expect(t.gas.ensureSessionSecrets_()).toEqual([])
     expect(t.props.ORG_ID).toBe(before.ORG_ID)
     expect(t.props.SESSION_SIGNING_KEY).toBe(before.SESSION_SIGNING_KEY)
   })

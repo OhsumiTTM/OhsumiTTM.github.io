@@ -107,7 +107,7 @@ function setup(opts: { props?: Record<string, string>; noExpenses?: boolean; set
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.updateSetting = (key: string, value: string) => {
+  c.updateSetting_ = (key: string, value: string) => {
     const row = sheets.Settings.rows.find((r, i) => i > 0 && r[0] === key)
     if (row) row[1] = value
     else sheets.Settings.rows.push([key, value])

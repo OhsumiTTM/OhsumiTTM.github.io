@@ -1,18 +1,18 @@
 // gas/Code.gs を読み、doPost の操作ごとに「書き込むかもしれない表」を調べる(テストで使う)。
 //
 // 調べ方(多めに見積もる。見落とすよりは、関係の無い表のキャッシュを捨てる方が安全なため):
-//   1. 関数ごとに、表を指す名前(SHEET_EXPENSES・ensureExpensesSheet() など)と、書き込みの呼び出し
-//      (setValue・appendRow・deleteRow・updateRowFields など)を持つかを見る
+//   1. 関数ごとに、表を指す名前(SHEET_EXPENSES・ensureExpensesSheet_() など)と、書き込みの呼び出し
+//      (setValue・appendRow・deleteRow・updateRowFields_ など)を持つかを見る
 //   2. 表を指す名前を持ち、自分で書き込むか、書き込みの関数を呼ぶ関数を「その表に書く関数」とする
-//   3. runWriteAction(doPost が呼ぶ)の case の中から呼ばれる関数を、呼び出しをたどって集め、書く表を合わせる
+//   3. runWriteAction_(doPost が呼ぶ)の case の中から呼ばれる関数を、呼び出しをたどって集め、書く表を合わせる
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const TABLE_IDENTIFIERS = {
-  expenses: ['SHEET_EXPENSES', 'ensureExpensesSheet'],
-  formSubmissions: ['SHEET_FORM_SUBMISSIONS', 'ensureFormSubmissionsSheet'],
-  candidates: ['SHEET_CANDIDATES', 'ensureCandidatesSheet'],
-  snapshot: ['SHEET_MEMBERS', 'SHEET_PROJECTS', 'SHEET_TASKS', 'SHEET_SETTINGS', 'updateSetting', 'updateMemberFields', 'updateTaskFields', 'getSettingsSheet'],
+  expenses: ['SHEET_EXPENSES', 'ensureExpensesSheet_'],
+  formSubmissions: ['SHEET_FORM_SUBMISSIONS', 'ensureFormSubmissionsSheet_'],
+  candidates: ['SHEET_CANDIDATES', 'ensureCandidatesSheet_'],
+  snapshot: ['SHEET_MEMBERS', 'SHEET_PROJECTS', 'SHEET_TASKS', 'SHEET_SETTINGS', 'updateSetting_', 'updateMemberFields_', 'updateTaskFields_', 'getSettingsSheet_'],
 }
 const WRITE_CALL = /\.(setValue|setValues|appendRow|deleteRow|deleteRows|insertRowAfter|insertRowBefore|insertRows|clearContent|setFormula|setNumberFormat)\(/
 
@@ -63,7 +63,7 @@ export function analyze(code) {
     return out
   }
   // doPost が呼ぶ runWriteAction の case ごと
-  const runner = fns.runWriteAction
+  const runner = fns.runWriteAction_
   const sw = runner.slice(runner.indexOf('switch (body.action)'))
   const caseRe = /case '(\w+)':/g
   const cases = [...sw.matchAll(caseRe)]

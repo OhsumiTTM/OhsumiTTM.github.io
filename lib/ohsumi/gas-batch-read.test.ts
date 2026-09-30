@@ -144,8 +144,8 @@ function setup(opts: { apiFails?: boolean } = {}) {
   vm.runInContext(CODE_GS, ctx)
   VmDate = vm.runInContext('Date', ctx) as DateConstructor
   const c = ctx as unknown as Record<string, unknown>
-  c.authenticateRequest = (body: { sessionToken?: string }) => ({ memberId: body.sessionToken, renewed: null })
-  c.readSheetTables = () => ({
+  c.authenticateRequest_ = (body: { sessionToken?: string }) => ({ memberId: body.sessionToken, renewed: null })
+  c.readSheetTables_ = () => ({
     Members: { headers: ['id', 'name', 'role', 'project_ids', 'permission_overrides_json'], rows: [['m-top', '代表', 'top', '', '[]']] },
     Settings: { headers: ['key', 'value'], rows: [['roles', ROLES]] },
   })
@@ -160,7 +160,7 @@ describe('Sheets API の値を getValues と同じ形にする', () => {
   it('日付は Date、数・文字・真偽はそのまま、空は ""。値のある範囲(getDataRange と同じ)に切る', () => {
     const t = setup()
     for (const name of BACKGROUND_SHEETS) {
-      const res = t.gas.sheetValuesFromGridResponse({ properties: { timeZone: TZ }, sheets: [{ properties: { title: name }, data: [gridOf(SHEETS[name])] }] }, [name]) as { values: Record<string, Cell[][]> }
+      const res = t.gas.sheetValuesFromGridResponse_({ properties: { timeZone: TZ }, sheets: [{ properties: { title: name }, data: [gridOf(SHEETS[name])] }] }, [name]) as { values: Record<string, Cell[][]> }
       const got = res.values[name]
       const want = SHEETS[name]
       expect(got.length, name).toBe(want.length)
@@ -182,23 +182,23 @@ describe('Sheets API の値を getValues と同じ形にする', () => {
 
   it('エラーのセルは getValues と同じくエラーの表示にする。空のシートは [[""]]', () => {
     const t = setup()
-    expect(t.gas.cellValueFromApi({ effectiveValue: { errorValue: { type: 'N_A', message: 'x' } } }, TZ)).toBe('#N/A')
-    expect(t.gas.cellValueFromApi({ effectiveValue: { numberValue: 0 } }, TZ)).toBe(0)
-    expect(t.gas.gridDataToValues({ rowData: [{}, { values: [{ effectiveFormat: {} }] }] }, TZ)).toEqual([['']])
+    expect(t.gas.cellValueFromApi_({ effectiveValue: { errorValue: { type: 'N_A', message: 'x' } } }, TZ)).toBe('#N/A')
+    expect(t.gas.cellValueFromApi_({ effectiveValue: { numberValue: 0 } }, TZ)).toBe(0)
+    expect(t.gas.gridDataToValues_({ rowData: [{}, { values: [{ effectiveFormat: {} }] }] }, TZ)).toEqual([['']])
   })
 
   it('夏時間のあるタイムゾーンでも、壁時計の時刻をそのまま Date にする', () => {
     const t = setup()
     for (const iso of ['2026-07-01T12:00:00', '2026-01-15T08:30:00', '2026-03-08T03:30:00', '2026-11-01T01:30:00']) {
       const d = wall(iso, 'America/New_York')
-      const got = t.gas.sheetSerialToDate(serialOf(d, 'America/New_York'), 'America/New_York') as Date
+      const got = t.gas.sheetSerialToDate_(serialOf(d, 'America/New_York'), 'America/New_York') as Date
       expect(formatInTz(got, 'America/New_York'), iso).toBe(formatInTz(d, 'America/New_York'))
     }
   })
 
   it('応答にシートが無ければ失敗にする(1枚ずつ読み直す)', () => {
     const t = setup()
-    const res = t.gas.sheetValuesFromGridResponse({ sheets: [] }, ['Expenses']) as { error?: string }
+    const res = t.gas.sheetValuesFromGridResponse_({ sheets: [] }, ['Expenses']) as { error?: string }
     expect(res.error).toContain('Expenses')
   })
 })
@@ -245,7 +245,7 @@ describe('裏での読み込み(キャッシュが無い時)', () => {
     expect(second.timing).toMatchObject({ expensesCache: 'hit', formSubmissionsCache: 'hit', candidatesCache: 'hit', myEmailCache: 'hit' })
     expect(second.timing.batchReadMs).toBeUndefined()
     // 経費だけ変わった
-    ;(t.gas.bumpTableVersion as (x: string) => void)('expenses')
+    ;(t.gas.bumpTableVersion_ as (x: string) => void)('expenses')
     t.calls.length = 0
     const third = t.post({ action: 'getBackgroundData', sessionToken: 'm-top' })
     expect(t.calls.filter((c) => c === 'api' || BACKGROUND_SHEETS.some((n) => c === 'sheet:' + n))).toEqual(['sheet:Expenses'])

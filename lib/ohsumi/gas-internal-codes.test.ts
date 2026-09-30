@@ -23,7 +23,7 @@ function loadGas(props: Record<string, string> = {}): Gas {
   })
   vm.runInContext(CODE_GS, ctx)
   // 役職の設定はシートから読まず、既定(今までの設定が空)にする
-  ;(ctx as unknown as { readRoleSettings: () => object }).readRoleSettings = () => ({})
+  ;(ctx as unknown as { readRoleSettings_: () => object }).readRoleSettings_ = () => ({})
   return ctx as unknown as Gas
 }
 
@@ -35,45 +35,45 @@ const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 
 describe('書く時の形式(sheetCode)', () => {
   it('移行前は、コード・日本語のどちらを受け取っても日本語で書く', () => {
-    expect(legacy.sheetCode('status', 'done')).toBe('完了')
-    expect(legacy.sheetCode('status', '完了')).toBe('完了')
-    expect(legacy.sheetCode('importance', 'external')).toBe('対外公開')
-    expect(legacy.sheetCode('visibility', undefined)).toBe('全員')
-    expect(legacy.sheetCode('department', '')).toBe('未分類')
-    expect(legacy.sheetCode('department', '独自の部門')).toBe('独自の部門')
+    expect(legacy.sheetCode_('status', 'done')).toBe('完了')
+    expect(legacy.sheetCode_('status', '完了')).toBe('完了')
+    expect(legacy.sheetCode_('importance', 'external')).toBe('対外公開')
+    expect(legacy.sheetCode_('visibility', undefined)).toBe('全員')
+    expect(legacy.sheetCode_('department', '')).toBe('未分類')
+    expect(legacy.sheetCode_('department', '独自の部門')).toBe('独自の部門')
   })
 
   it('移行後(VALUE_FORMAT=codes)は、どちらを受け取ってもコードで書く', () => {
-    expect(coded.sheetCode('status', '完了')).toBe('done')
-    expect(coded.sheetCode('priority', '高')).toBe('high')
-    expect(coded.sheetCode('department', '未分類')).toBe('')
-    expect(coded.sheetCode('scheduleAnswer', '○')).toBe('yes')
+    expect(coded.sheetCode_('status', '完了')).toBe('done')
+    expect(coded.sheetCode_('priority', '高')).toBe('high')
+    expect(coded.sheetCode_('department', '未分類')).toBe('')
+    expect(coded.sheetCode_('scheduleAnswer', '○')).toBe('yes')
   })
 
   it('設定の JSON(テンプレート・定期タスク・スキルの閾値)も、同じ規則で書く', () => {
     const templates = JSON.stringify({ イベント: [{ id: 'a', name: '会場', department: 'event', difficulty: 'beginner', priority: 'high', skills: [] }] })
-    expect(JSON.parse(legacy.sheetSettingValue('project_templates', templates) as string)).toEqual({
+    expect(JSON.parse(legacy.sheetSettingValue_('project_templates', templates) as string)).toEqual({
       イベント: [{ id: 'a', name: '会場', department: 'イベント', difficulty: '新人歓迎', priority: '高', skills: [] }],
     })
     const rules = JSON.stringify([{ id: 'r', department: '運営', difficulty: '誰でも可', priority: '中', triggerOnStatus: 'done', active: true }])
-    expect(JSON.parse(coded.sheetSettingValue('recurring_rules', rules) as string)).toEqual([
+    expect(JSON.parse(coded.sheetSettingValue_('recurring_rules', rules) as string)).toEqual([
       { id: 'r', department: 'ops', difficulty: 'anyone', priority: 'medium', triggerOnStatus: 'done', active: true },
     ])
     const sets = JSON.stringify([{ id: 's', name: 'セット', items: [{ id: 'i', department: '', difficulty: 'advanced', priority: 'low' }] }])
-    expect(JSON.parse(legacy.sheetSettingValue('task_set_templates', sets) as string)).toEqual([
+    expect(JSON.parse(legacy.sheetSettingValue_('task_set_templates', sets) as string)).toEqual([
       { id: 's', name: 'セット', items: [{ id: 'i', department: '未分類', difficulty: '上級者向け', priority: '低' }] },
     ])
-    expect(JSON.parse(legacy.sheetSettingValue('skill_level_thresholds', '{"_default":120,"デザイン":150}') as string)).toEqual({ デフォルト: 120, デザイン: 150 })
-    expect(JSON.parse(coded.sheetSettingValue('skill_level_thresholds', '{"デフォルト":120}') as string)).toEqual({ _default: 120 })
+    expect(JSON.parse(legacy.sheetSettingValue_('skill_level_thresholds', '{"_default":120,"デザイン":150}') as string)).toEqual({ デフォルト: 120, デザイン: 150 })
+    expect(JSON.parse(coded.sheetSettingValue_('skill_level_thresholds', '{"デフォルト":120}') as string)).toEqual({ _default: 120 })
     // 対象外の設定・壊れた JSON はそのまま
-    expect(legacy.sheetSettingValue('org_name', 'テスト')).toBe('テスト')
-    expect(legacy.sheetSettingValue('project_templates', '{壊れた')).toBe('{壊れた')
+    expect(legacy.sheetSettingValue_('org_name', 'テスト')).toBe('テスト')
+    expect(legacy.sheetSettingValue_('project_templates', '{壊れた')).toBe('{壊れた')
   })
 
   it('スキルの閾値の既定値は、「デフォルト」・_default のどちらでも読む', () => {
-    expect(legacy.defaultSkillThreshold({ デフォルト: 150 })).toBe(150)
-    expect(legacy.defaultSkillThreshold({ _default: 80 })).toBe(80)
-    expect(legacy.defaultSkillThreshold({})).toBe(100)
+    expect(legacy.defaultSkillThreshold_({ デフォルト: 150 })).toBe(150)
+    expect(legacy.defaultSkillThreshold_({ _default: 80 })).toBe(80)
+    expect(legacy.defaultSkillThreshold_({})).toBe(100)
   })
 })
 
@@ -83,17 +83,17 @@ describe('リクエストの値をコードにそろえる(normalizeRequestCodes
       { action: 'updateTaskDetails', department: 'デザイン', difficulty: '経験者向け', priority: '低', visibility: '幹部', importance: '重要' },
       { action: 'updateTaskDetails', department: 'design', difficulty: 'experienced', priority: 'low', visibility: 'leaders', importance: 'important' },
     ]) {
-      legacy.normalizeRequestCodes(body)
+      legacy.normalizeRequestCodes_(body)
       expect(body).toMatchObject({ department: 'design', difficulty: 'experienced', priority: 'low', visibility: 'leaders', importance: 'important' })
     }
     const status = { action: 'updateTaskStatus', status: '確認待ち' }
-    legacy.normalizeRequestCodes(status)
+    legacy.normalizeRequestCodes_(status)
     expect(status.status).toBe('review')
   })
 
   it('ほかのアクションの同じ名前の値(候補者の状態など)には触れない', () => {
     const body = { action: 'updateCandidate', status: 'interview', priority: '高' }
-    legacy.normalizeRequestCodes(body)
+    legacy.normalizeRequestCodes_(body)
     expect(body).toEqual({ action: 'updateCandidate', status: 'interview', priority: '高' })
   })
 
@@ -105,16 +105,16 @@ describe('リクエストの値をコードにそろえる(normalizeRequestCodes
         { id: 'h2', field: 'title', from: '高', to: '低' },
       ],
     }
-    legacy.normalizeRequestCodes(body)
+    legacy.normalizeRequestCodes_(body)
     expect(plain(body.history)).toEqual([
       { id: 'h1', field: 'status', from: 'todo', to: 'progress' },
       { id: 'h2', field: 'title', from: '高', to: '低' },
     ])
     const schedule = { action: 'updateTaskSchedule', schedule: { candidates: [], responses: { m1: { c1: '○', c2: '×' } } } }
-    legacy.normalizeRequestCodes(schedule)
+    legacy.normalizeRequestCodes_(schedule)
     expect(plain(schedule.schedule.responses)).toEqual({ m1: { c1: 'yes', c2: 'no' } })
     const overrides = { action: 'updatePermissionOverrides', overrides: [{ targetType: 'department', targetId: '広報', access: 'edit' }, { targetType: 'task', targetId: '広報', access: 'edit' }] }
-    legacy.normalizeRequestCodes(overrides)
+    legacy.normalizeRequestCodes_(overrides)
     expect(plain(overrides.overrides)).toEqual([
       { targetType: 'department', targetId: 'pr', access: 'edit' },
       { targetType: 'task', targetId: '広報', access: 'edit' },
@@ -124,14 +124,14 @@ describe('リクエストの値をコードにそろえる(normalizeRequestCodes
 
 describe('古いタブの拒否(clientVersion)', () => {
   it('移行前は、版の無いリクエストも受け付ける', () => {
-    expect(legacy.checkClientVersion({ action: 'getInitialData' })).toBeNull()
+    expect(legacy.checkClientVersion_({ action: 'getInitialData' })).toBeNull()
   })
 
   it('移行後は、版の無い(古い)リクエストを、再読み込みを促して断る', () => {
     const coded2 = loadGas({ VALUE_FORMAT: 'codes' })
-    expect(coded2.checkClientVersion({ action: 'getInitialData' })).toMatch(/再読み込み/)
-    expect(coded2.checkClientVersion({ action: 'getInitialData', clientVersion: 0 })).toMatch(/再読み込み/)
-    expect(coded2.checkClientVersion({ action: 'getInitialData', clientVersion: coded2.MIN_CLIENT_VERSION })).toBeNull()
+    expect(coded2.checkClientVersion_({ action: 'getInitialData' })).toMatch(/再読み込み/)
+    expect(coded2.checkClientVersion_({ action: 'getInitialData', clientVersion: 0 })).toMatch(/再読み込み/)
+    expect(coded2.checkClientVersion_({ action: 'getInitialData', clientVersion: coded2.MIN_CLIENT_VERSION })).toBeNull()
     // doPost の入口で、認証より前に断る(ログインは消さない)
     const out = coded2.doPost({ postData: { contents: JSON.stringify({ action: 'updateTaskStatus', sessionToken: 'x', status: '完了' }) } }) as { text: string }
     const res = JSON.parse(out.text)
@@ -154,16 +154,16 @@ describe('権限の判定は、どちらの形式の行でも同じ', () => {
     ]
     for (const [oldRow, newRow] of rows) {
       for (const v of [viewer, admin]) {
-        expect(legacy.canViewTaskRow(v, newRow), JSON.stringify(newRow)).toBe(legacy.canViewTaskRow(v, oldRow))
+        expect(legacy.canViewTaskRow_(v, newRow), JSON.stringify(newRow)).toBe(legacy.canViewTaskRow_(v, oldRow))
       }
     }
-    expect(legacy.canViewTaskRow(viewer, { visibility: 'leaders' })).toBe(false)
-    expect(legacy.canViewTaskRow(viewer, { approval_status: 'pending', creator_id: 'x' })).toBe(false)
+    expect(legacy.canViewTaskRow_(viewer, { visibility: 'leaders' })).toBe(false)
+    expect(legacy.canViewTaskRow_(viewer, { approval_status: 'pending', creator_id: 'x' })).toBe(false)
   })
 
   it('部門を対象にした権限の例外は、部門名・部門IDのどちらでも同じ部門として扱う', () => {
     const grant = (targetId: string, department: string) =>
-      legacy.overridesGrant([{ targetType: 'department', targetId, access: 'edit' }], { department }, 1)
+      legacy.overridesGrant_([{ targetType: 'department', targetId, access: 'edit' }], { department }, 1)
     expect(grant('広報', '広報')).toBe(true)
     expect(grant('pr', '広報')).toBe(true)
     expect(grant('広報', 'pr')).toBe(true)
@@ -181,23 +181,23 @@ describe('権限の判定は、どちらの形式の行でも同じ', () => {
         { id: 'h1', at: '2026-09-01', byId: 'm2', field: 'status', from: 'todo', to: 'progress' },
       ],
     }
-    legacy.normalizeRequestCodes(body)
+    legacy.normalizeRequestCodes_(body)
     const gas = loadGas({})
     ;(gas as unknown as { SpreadsheetApp: unknown }).SpreadsheetApp = { getActiveSpreadsheet: () => ({ getSheetByName: () => null }) }
-    expect(() => gas.validateHistoryUpdate(task, body.history, acting)).not.toThrow()
+    expect(() => gas.validateHistoryUpdate_(task, body.history, acting)).not.toThrow()
     // 他の人の記録を書き換えたら拒否する(従来どおり)
     const tampered = [body.history[0], { ...body.history[1], to: 'done' }]
-    expect(() => gas.validateHistoryUpdate(task, tampered, acting)).toThrow(/変更・削除/)
+    expect(() => gas.validateHistoryUpdate_(task, tampered, acting)).toThrow(/変更・削除/)
     // シートに書く時は移行前の形式にする
-    expect(plain(legacy.sheetHistoryEntry(body.history[0]))).toMatchObject({ from: '進行中', to: '確認待ち' })
+    expect(plain(legacy.sheetHistoryEntry_(body.history[0]))).toMatchObject({ from: '進行中', to: '確認待ち' })
   })
 })
 
 describe('通知の文面', () => {
   it('日程調整の回答は、記号・コードのどちらでも同じ表示名にする', () => {
-    expect(legacy.notifyLabel('scheduleAnswer', 'ja', '○')).toBe('○')
-    expect(legacy.notifyLabel('scheduleAnswer', 'ja', 'yes')).toBe('○')
-    expect(legacy.notifyLabel('scheduleAnswer', 'en', 'maybe')).toBe('△')
+    expect(legacy.notifyLabel_('scheduleAnswer', 'ja', '○')).toBe('○')
+    expect(legacy.notifyLabel_('scheduleAnswer', 'ja', 'yes')).toBe('○')
+    expect(legacy.notifyLabel_('scheduleAnswer', 'en', 'maybe')).toBe('△')
   })
 })
 
@@ -205,9 +205,9 @@ describe('サンプルのデータ(seedSampleData)', () => {
   it('タスクの行は、今のシートの形式で書く', () => {
     const row = { id: 'sample-t-1', status: '確認待ち', priority: '高', visibility: '幹部', approval_status: '承認待ち', department: 'デザイン', title: '高',
       history_json: JSON.stringify([{ id: 'h', field: 'status', from: '未着手', to: '進行中' }]) }
-    expect(plain(coded.sheetSampleTaskRow(row))).toMatchObject({ status: 'review', priority: 'high', visibility: 'leaders', approval_status: 'pending', department: 'design', title: '高',
+    expect(plain(coded.sheetSampleTaskRow_(row))).toMatchObject({ status: 'review', priority: 'high', visibility: 'leaders', approval_status: 'pending', department: 'design', title: '高',
       history_json: JSON.stringify([{ id: 'h', field: 'status', from: 'todo', to: 'progress' }]) })
-    expect(plain(legacy.sheetSampleTaskRow(row))).toEqual(row)
+    expect(plain(legacy.sheetSampleTaskRow_(row))).toEqual(row)
   })
 })
 
@@ -250,11 +250,11 @@ describe('setupOhsumi での値の形式(setupValueFormat)', () => {
     const { gas, props } = loadGasWithProps()
     // setupOhsumi が作る Settings の初期キー(団体名など)はデータに数えない
     const ss = spreadsheet(gas, { Settings: [['org_name', ''], ['org_logo_url', '']] })
-    expect(gas.setupValueFormat(ss)).toBe('set')
+    expect(gas.setupValueFormat_(ss)).toBe('set')
     expect(props.VALUE_FORMAT).toBe('codes')
-    expect(gas.sheetCode('status', '完了')).toBe('done')
+    expect(gas.sheetCode_('status', '完了')).toBe('done')
     // もう一度実行しても変わらない
-    expect(gas.setupValueFormat(ss)).toBe('already')
+    expect(gas.setupValueFormat_(ss)).toBe('already')
   })
 
   it('データ行が既にある場合は VALUE_FORMAT を変えない(日本語のまま書く)', () => {
@@ -265,21 +265,21 @@ describe('setupOhsumi での値の形式(setupValueFormat)', () => {
       { Settings: [['project_templates', '{"T":[]}']] },
     ]) {
       const { gas, props } = loadGasWithProps()
-      expect(gas.setupValueFormat(spreadsheet(gas, extra)), JSON.stringify(extra)).toBe('hasData')
+      expect(gas.setupValueFormat_(spreadsheet(gas, extra)), JSON.stringify(extra)).toBe('hasData')
       expect(props.VALUE_FORMAT, JSON.stringify(extra)).toBeUndefined()
-      expect(gas.sheetCode('status', 'done')).toBe('完了')
+      expect(gas.sheetCode_('status', 'done')).toBe('完了')
     }
   })
 
   it('既に codes の団体は、データがあってもそのまま', () => {
     const { gas, props } = loadGasWithProps({ VALUE_FORMAT: 'codes' })
-    expect(gas.setupValueFormat(spreadsheet(gas, { Tasks: [['1']] }))).toBe('already')
+    expect(gas.setupValueFormat_(spreadsheet(gas, { Tasks: [['1']] }))).toBe('already')
     expect(props.VALUE_FORMAT).toBe('codes')
   })
 
   it('setupOhsumi から呼ぶ', () => {
     const body = CODE_GS.slice(CODE_GS.indexOf('function setupOhsumi()'))
-    expect(body.slice(0, body.indexOf('\nfunction '))).toMatch(/setupValueFormat\(ss\)/)
+    expect(body.slice(0, body.indexOf('\nfunction '))).toMatch(/setupValueFormat_\(ss\)/)
   })
 })
 
@@ -293,14 +293,14 @@ describe('VALUE_FORMAT とシートの実際の値が食い違っていても壊
   for (const [label, gas] of [['VALUE_FORMAT=codes', coded], ['VALUE_FORMAT 未設定', legacy]] as const) {
     it(`${label}: どちらの形式の行も同じように読む`, () => {
       for (const rows of [OLD_ROWS, NEW_ROWS]) {
-        expect(gas.canViewTaskRow(viewer, rows.leaders)).toBe(false)
-        expect(gas.canViewTaskRow(viewer, rows.pending)).toBe(false)
-        expect(gas.canViewTaskRow(viewer, rows.open)).toBe(true)
+        expect(gas.canViewTaskRow_(viewer, rows.leaders)).toBe(false)
+        expect(gas.canViewTaskRow_(viewer, rows.pending)).toBe(false)
+        expect(gas.canViewTaskRow_(viewer, rows.open)).toBe(true)
       }
-      expect(gas.overridesGrant([{ targetType: 'department', targetId: '広報', access: 'edit' }], { department: 'pr' }, 1)).toBe(true)
-      expect(gas.overridesGrant([{ targetType: 'department', targetId: 'pr', access: 'edit' }], { department: '広報' }, 1)).toBe(true)
-      expect(gas.defaultSkillThreshold({ デフォルト: 150 })).toBe(150)
-      expect(gas.defaultSkillThreshold({ _default: 150 })).toBe(150)
+      expect(gas.overridesGrant_([{ targetType: 'department', targetId: '広報', access: 'edit' }], { department: 'pr' }, 1)).toBe(true)
+      expect(gas.overridesGrant_([{ targetType: 'department', targetId: 'pr', access: 'edit' }], { department: '広報' }, 1)).toBe(true)
+      expect(gas.defaultSkillThreshold_({ デフォルト: 150 })).toBe(150)
+      expect(gas.defaultSkillThreshold_({ _default: 150 })).toBe(150)
     })
 
     it(`${label}: 変更の記録は、シートがどちらの形式でも本人の追記を受け付ける`, () => {
@@ -311,8 +311,8 @@ describe('VALUE_FORMAT とシートの実際の値が食い違っていても壊
           { id: 'h2', at: '2026-09-02', byId: 'm1', field: 'status', from: 'progress', to: 'review' },
           { id: 'h1', at: '2026-09-01', byId: 'm2', field: 'status', from: 'todo', to: 'progress' },
         ] }
-        gas.normalizeRequestCodes(body)
-        expect(() => gas.validateHistoryUpdate(task, body.history, acting)).not.toThrow()
+        gas.normalizeRequestCodes_(body)
+        expect(() => gas.validateHistoryUpdate_(task, body.history, acting)).not.toThrow()
       }
     })
   }

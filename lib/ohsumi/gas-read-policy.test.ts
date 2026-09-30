@@ -65,7 +65,7 @@ const settings = table(['key', 'value'], [
 const snapshot = { Members: members, Projects: projects, Tasks: tasks, Settings: settings }
 
 function viewAs(memberId: string): ViewerData {
-  return gas.buildViewerData(JSON.parse(JSON.stringify(snapshot)), memberId) as ViewerData
+  return gas.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), memberId) as ViewerData
 }
 
 function cell(t: Table, rowId: string, column: string): string | undefined {
@@ -178,7 +178,7 @@ describe('getInitialData の絞り込み: 設定', () => {
   })
 
   it('登録されていないメンバーには何も返さない', () => {
-    expect(gas.buildViewerData(JSON.parse(JSON.stringify(snapshot)), 'nobody')).toBeNull()
+    expect(gas.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), 'nobody')).toBeNull()
   })
 })
 
@@ -219,7 +219,7 @@ describe('READ_POLICY の網羅性', () => {
   })
 })
 
-describe('getExpenses の絞り込み(canViewExpense)', () => {
+describe('getExpenses の絞り込み(canViewExpense_)', () => {
   const app = {
     id: 'e1',
     applicantId: 'a',
@@ -231,7 +231,7 @@ describe('getExpenses の絞り込み(canViewExpense)', () => {
   const viewer = (over: Record<string, unknown>) => ({
     id: 'x', role: '一般', isFullAdmin: false, canOpenExpensesSection: false, ...over,
   })
-  const can = (v: Record<string, unknown>) => gas.canViewExpense(viewer(v), app) as boolean
+  const can = (v: Record<string, unknown>) => gas.canViewExpense_(viewer(v), app) as boolean
 
   it('申請者本人と承認ステップの担当者は見える', () => {
     expect(can({ id: 'a' })).toBe(true)
@@ -250,54 +250,54 @@ describe('getExpenses の絞り込み(canViewExpense)', () => {
   })
 })
 
-describe('getFiles の閲覧可否(canViewUploadedFile)', () => {
+describe('getFiles の閲覧可否(canViewUploadedFile_)', () => {
   const viewer = { id: 'b', role: '一般', isFullAdmin: false, canOpenExpensesSection: false }
   const receiptApp = { id: 'e1', applicantId: 'a', approvalSteps: [{ id: 's1', type: 'member', memberId: 'lead' }] }
 
   it('ファイル名の先頭で種類を判定する', () => {
-    expect(gas.uploadKindFromName('expense_receipt_1700000000000')).toBe('receipt')
-    expect(gas.uploadKindFromName('avatar_12_1700000000000')).toBe('avatar')
-    expect(gas.uploadKindFromName('org_logo_1')).toBe('orgLogo')
-    expect(gas.uploadKindFromName('survey_image_1')).toBe('surveyImage')
-    expect(gas.uploadKindFromName('memo.pdf')).toBe('')
+    expect(gas.uploadKindFromName_('expense_receipt_1700000000000')).toBe('receipt')
+    expect(gas.uploadKindFromName_('avatar_12_1700000000000')).toBe('avatar')
+    expect(gas.uploadKindFromName_('org_logo_1')).toBe('orgLogo')
+    expect(gas.uploadKindFromName_('survey_image_1')).toBe('surveyImage')
+    expect(gas.uploadKindFromName_('memo.pdf')).toBe('')
   })
 
   it('プロフィール画像・団体ロゴ・アンケート画像はログイン済みの全員が見られる', () => {
     for (const kind of ['avatar', 'orgLogo', 'surveyImage']) {
-      expect(gas.canViewUploadedFile(kind, null, [])).toBe(true)
+      expect(gas.canViewUploadedFile_(kind, null, [])).toBe(true)
     }
   })
 
   it('領収書は、その経費申請を閲覧できる人だけが見られる', () => {
-    expect(gas.canViewUploadedFile('receipt', { ...viewer, id: 'a' }, [receiptApp])).toBe(true)
-    expect(gas.canViewUploadedFile('receipt', { ...viewer, id: 'lead', role: '班長' }, [receiptApp])).toBe(true)
-    expect(gas.canViewUploadedFile('receipt', { ...viewer, isFullAdmin: true }, [receiptApp])).toBe(true)
-    expect(gas.canViewUploadedFile('receipt', viewer, [receiptApp])).toBe(false)
+    expect(gas.canViewUploadedFile_('receipt', { ...viewer, id: 'a' }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile_('receipt', { ...viewer, id: 'lead', role: '班長' }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile_('receipt', { ...viewer, isFullAdmin: true }, [receiptApp])).toBe(true)
+    expect(gas.canViewUploadedFile_('receipt', viewer, [receiptApp])).toBe(false)
     // どの経費申請にも紐づかない領収書は誰も見られない
-    expect(gas.canViewUploadedFile('receipt', { ...viewer, isFullAdmin: true }, [])).toBe(false)
+    expect(gas.canViewUploadedFile_('receipt', { ...viewer, isFullAdmin: true }, [])).toBe(false)
   })
 
   it('種類が分からないファイルは誰も見られない', () => {
-    expect(gas.canViewUploadedFile('', { ...viewer, isFullAdmin: true }, [])).toBe(false)
+    expect(gas.canViewUploadedFile_('', { ...viewer, isFullAdmin: true }, [])).toBe(false)
   })
 })
 
-describe('領収書の種類とサイズの確認(validateReceiptFile)', () => {
+describe('領収書の種類とサイズの確認(validateReceiptFile_)', () => {
   const MB = 1024 * 1024
   it('画像とPDFは5MBまで受け付ける', () => {
-    expect(gas.validateReceiptFile('image/jpeg', 'a.jpg', 5 * MB)).toBe('image/jpeg')
-    expect(gas.validateReceiptFile('application/pdf', 'a.pdf', 100)).toBe('application/pdf')
-    expect(gas.validateReceiptFile('image/heic', 'a.heic', 100)).toBe('image/heic')
+    expect(gas.validateReceiptFile_('image/jpeg', 'a.jpg', 5 * MB)).toBe('image/jpeg')
+    expect(gas.validateReceiptFile_('application/pdf', 'a.pdf', 100)).toBe('application/pdf')
+    expect(gas.validateReceiptFile_('image/heic', 'a.heic', 100)).toBe('image/heic')
   })
   it('種類が空で届いた HEIC は拡張子で判定する', () => {
-    expect(gas.validateReceiptFile('', 'IMG_0001.HEIC', 100)).toBe('image/heic')
-    expect(gas.validateReceiptFile('application/octet-stream', 'scan.pdf', 100)).toBe('application/pdf')
+    expect(gas.validateReceiptFile_('', 'IMG_0001.HEIC', 100)).toBe('image/heic')
+    expect(gas.validateReceiptFile_('application/octet-stream', 'scan.pdf', 100)).toBe('application/pdf')
   })
   it('5MBを超えるもの、画像・PDF以外は受け付けない', () => {
-    expect(() => gas.validateReceiptFile('image/png', 'a.png', 5 * MB + 1)).toThrow()
-    expect(() => gas.validateReceiptFile('text/html', 'a.html', 100)).toThrow()
-    expect(() => gas.validateReceiptFile('application/octet-stream', 'a.exe', 100)).toThrow()
-    expect(() => gas.validateReceiptFile('application/zip', 'a.pdf', 100)).toThrow()
+    expect(() => gas.validateReceiptFile_('image/png', 'a.png', 5 * MB + 1)).toThrow()
+    expect(() => gas.validateReceiptFile_('text/html', 'a.html', 100)).toThrow()
+    expect(() => gas.validateReceiptFile_('application/octet-stream', 'a.exe', 100)).toThrow()
+    expect(() => gas.validateReceiptFile_('application/zip', 'a.pdf', 100)).toThrow()
   })
 })
 
@@ -306,6 +306,6 @@ describe('getFiles の要求件数の上限', () => {
     const ids = Array.from({ length: 31 }, (_, i) => `file_id_${String(i).padStart(4, '0')}`)
     // Google のサービスは読み込んでいないので、上限の確認より先に Drive や
     // キャッシュを呼ぶとこのテストは ReferenceError で落ちる
-    expect(() => gas.getFiles({ id: 'a', role: '一般' }, ids)).toThrow(/30件まで/)
+    expect(() => gas.getFiles_({ id: 'a', role: '一般' }, ids)).toThrow(/30件まで/)
   })
 })

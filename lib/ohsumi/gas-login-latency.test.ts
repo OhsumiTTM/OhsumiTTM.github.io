@@ -117,11 +117,11 @@ function setup() {
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.authenticateRequest = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: null })
-  c.readRoleSettings = () => ({ roles: ROLES })
+  c.authenticateRequest_ = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: null })
+  c.readRoleSettings_ = () => ({ roles: ROLES })
   c.bumpDataVersion = () => { props.DATA_VERSION = 'v' + (Number(props.DATA_VERSION.slice(1)) + 1) }
   // スナップショット(Members・Settings)
-  c.readSheetTables = () => ({
+  c.readSheetTables_ = () => ({
     Members: { headers: sheets.Members.rows[0].map(String), rows: sheets.Members.rows.slice(1).map((r) => r.map(String)) },
     Settings: { headers: ['key', 'value'], rows: [['roles', ROLES], ['org_logo_url', 'https://lh3.googleusercontent.com/d/AVATAR_M2_xxxxx=w64']] },
   })
@@ -135,27 +135,27 @@ describe('最終ログイン日時', () => {
   it('シートには書かず、書き込み待ち(スクリプトプロパティ)に入れる。1時間以内の2回目は何もしない', () => {
     const t = setup()
     const now = Date.parse('2026-10-01T09:00:00Z')
-    expect(t.gas.recordLastLogin('m2', now)).toBe(true)
+    expect(t.gas.recordLastLogin_('m2', now)).toBe(true)
     expect(t.sheets.Members.writes).toBe(0)
     expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-01T09:00:00.000Z'])
-    expect(t.gas.recordLastLogin('m2', now + 30 * 60 * 1000)).toBe(true)
+    expect(t.gas.recordLastLogin_('m2', now + 30 * 60 * 1000)).toBe(true)
     expect(t.pendingOf('m2')).toHaveLength(1)
   })
 
   it('このリクエストで読んだスナップショットの last_login が1時間以内なら、書き込み待ちにも入れない', () => {
     const t = setup()
     t.sheets.Members.rows[2][4] = '2026-10-01T08:30:00.000Z'
-    t.gas.startRequestTiming()
-    t.gas.loadSnapshot()
-    expect(t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
+    t.gas.startRequestTiming_()
+    t.gas.loadSnapshot_()
+    expect(t.gas.recordLastLogin_('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
     expect(t.pendingOf('m2')).toEqual([])
   })
 
   it('ログインの応答: 最終ログイン日時の記録はシートを読み書きしない(内訳に queued / recent)', () => {
     const t = setup()
-    t.c.verifyGoogleIdToken = (x: string) => ({ email: x })
-    t.c.findMemberIdByEmailCached = (x: string) => x
-    t.c.issueSessionToken = () => ({ token: 's', exp: 1 })
+    t.c.verifyGoogleIdToken_ = (x: string) => ({ email: x })
+    t.c.findMemberIdByEmailCached_ = (x: string) => x
+    t.c.issueSessionToken_ = () => ({ token: 's', exp: 1 })
     const first = t.post({ action: 'exchangeIdToken', idToken: 'm2', nonceSecret: 'n', withBackground: true })
     expect(first.result.lastLoginRecorded).toBe(true)
     expect(first.timing.lastLogin).toBe('queued')
@@ -168,13 +168,13 @@ describe('最終ログイン日時', () => {
     const t = setup()
     const now = Date.parse('2026-10-01T09:00:00Z')
     // 同じ時刻に2人がログイン(キャッシュの確認とプロパティの保存が重なっても、キーが別なので両方残る)
-    t.gas.recordLastLogin('m1', now)
-    t.gas.recordLastLogin('m2', now)
+    t.gas.recordLastLogin_('m1', now)
+    t.gas.recordLastLogin_('m2', now)
     expect(t.pendingOf('m1')).toHaveLength(1)
     expect(t.pendingOf('m2')).toHaveLength(1)
     // 同じメンバーが2か所から同時にログイン(1時間の印が付く前)しても、キーは別
     t.cache.clear()
-    t.gas.recordLastLogin('m1', now)
+    t.gas.recordLastLogin_('m1', now)
     expect(t.pendingOf('m1')).toHaveLength(2)
     expect(new Set(t.pendingOf('m1')).size).toBe(2)
   })
@@ -185,8 +185,8 @@ describe('最終ログイン日時', () => {
     const login = (ms: number) => {
       // 別のリクエスト(CacheService の印は消えている場合も)
       t.cache.clear()
-      t.gas.resetRequestProps()
-      t.gas.recordLastLogin('m2', ms)
+      t.gas.resetRequestProps_()
+      t.gas.recordLastLogin_('m2', ms)
     }
     login(now)
     login(now + 30 * 60 * 1000) // 印が消えていても、書き込み待ちの日時が1時間以内なので入れない
@@ -199,12 +199,12 @@ describe('最終ログイン日時', () => {
     const t = setup()
     for (let i = 0; i < 200; i++) t.props[`LAST_LOGIN_PENDING_other${i}_1_1`] = '2026-10-01T00:00:00.000Z'
     t.props.LAST_LOGIN_PENDING_m1_1_1 = '2026-09-30T00:00:00.000Z'
-    t.gas.resetRequestProps()
-    t.gas.startRequestTiming()
-    expect(t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
+    t.gas.resetRequestProps_()
+    t.gas.startRequestTiming_()
+    expect(t.gas.recordLastLogin_('m2', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
     expect(t.pendingOf('m2')).toEqual([])
     expect((t.gas as unknown as { _requestTiming: { lastLogin: string } })._requestTiming.lastLogin).toBe('dropped')
-    expect(t.gas.recordLastLogin('m1', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
+    expect(t.gas.recordLastLogin_('m1', Date.parse('2026-10-01T09:00:00Z'))).toBe(true)
     expect(t.pendingOf('m1').map((k) => t.props[k])).toEqual(['2026-10-01T09:00:00.000Z'])
     expect(Object.keys(t.props).filter((k) => k.startsWith('LAST_LOGIN_PENDING_'))).toHaveLength(201)
     expect(t.gas.LAST_LOGIN_PENDING_MAX).toBe(200)
@@ -212,7 +212,7 @@ describe('最終ログイン日時', () => {
 
   it('シートに書いている間に新しくログインした分は消さない(消すのは、このとき読んだキーだけ)', () => {
     const t = setup()
-    t.gas.recordLastLogin('m2', Date.parse('2026-10-01T09:00:00Z'))
+    t.gas.recordLastLogin_('m2', Date.parse('2026-10-01T09:00:00Z'))
     const sheet = t.sheets.Members
     const origGetRange = sheet.getRange.bind(sheet)
     sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
@@ -222,15 +222,15 @@ describe('最終ログイン日時', () => {
         setValues(v)
         // 書いている最中に m2 がまたログインした
         t.cache.clear()
-        t.gas.recordLastLogin('m2', Date.parse('2026-10-01T10:30:00Z'))
+        t.gas.recordLastLogin_('m2', Date.parse('2026-10-01T10:30:00Z'))
       }
       return r
     }
-    expect(t.gas.flushPendingLastLogins()).toBe(1)
+    expect(t.gas.flushPendingLastLogins_()).toBe(1)
     expect(sheet.rows[2][4]).toBe('2026-10-01T09:00:00.000Z')
     expect(t.pendingOf('m2').map((k) => t.props[k])).toEqual(['2026-10-01T10:30:00.000Z'])
     sheet.getRange = origGetRange
-    expect(t.gas.flushPendingLastLogins()).toBe(1)
+    expect(t.gas.flushPendingLastLogins_()).toBe(1)
     expect(sheet.rows[2][4]).toBe('2026-10-01T10:30:00.000Z')
     expect(t.pendingOf('m2')).toEqual([])
   })
@@ -241,15 +241,15 @@ describe('最終ログイン日時', () => {
     t.props.LAST_LOGIN_PENDING_m2_1_1 = '2026-10-01T08:00:00.000Z'
     t.props.LAST_LOGIN_PENDING_m2_2_2 = '2026-10-01T09:05:00.000Z'
     t.props.LAST_LOGIN_PENDING_gone_3_3 = '2026-10-01T09:06:00.000Z' // 行の無いメンバー
-    expect(t.gas.flushPendingLastLogins()).toBe(2)
+    expect(t.gas.flushPendingLastLogins_()).toBe(2)
     expect(t.sheets.Members.writes).toBe(1)
     expect(t.sheets.Members.rows[1][4]).toBe('2026-10-01T09:00:00.000Z')
     expect(t.sheets.Members.rows[2][4]).toBe('2026-10-01T09:05:00.000Z')
     expect(Object.keys(t.props).filter((k) => k.startsWith('LAST_LOGIN_PENDING_'))).toEqual([])
-    expect(t.gas.flushPendingLastLogins()).toBe(0)
+    expect(t.gas.flushPendingLastLogins_()).toBe(0)
     // 毎時・毎日のトリガーから呼ぶ
-    expect(CODE_GS).toMatch(/function sendBatchNotifications\(\) \{\n\s+\/\/.*\n\s+try \{ flushPendingLastLogins\(\) \}/)
-    expect(CODE_GS).toMatch(/try \{ flushPendingLastLogins\(\) \} catch \(err\) \{ \}\n\s+try \{ notifyInactiveMembers\(\) \}/)
+    expect(CODE_GS).toMatch(/function sendBatchNotifications\(\) \{\n\s+\/\/.*\n\s+try \{ flushPendingLastLogins_\(\) \}/)
+    expect(CODE_GS).toMatch(/try \{ flushPendingLastLogins_\(\) \} catch \(err\) \{ \}\n\s+try \{ notifyInactiveMembers_\(\) \}/)
   })
 })
 
@@ -267,7 +267,7 @@ describe('裏での読み込みのキャッシュ', () => {
     // スナップショット(Members など)の版が変わっても、経費のキャッシュは使い続ける(表ごとの版)
     ;(t.c.bumpDataVersion as () => void)()
     expect(t.post({ action: 'getBackgroundData', sessionToken: 'm1' }).timing.expensesCache).toBe('hit')
-    ;(t.gas.bumpTableVersion as (x: string) => void)('expenses')
+    ;(t.gas.bumpTableVersion_ as (x: string) => void)('expenses')
     const c = t.post({ action: 'getBackgroundData', sessionToken: 'm1' })
     expect(c.timing.expensesCache).toBe('miss')
   })
@@ -347,7 +347,7 @@ describe('ログインの応答に入れる画像', () => {
   it('団体ロゴ → 本人 → ほかのメンバーの順に、キャッシュにある画像だけ入れる(Drive は開かない)', () => {
     const t = setup()
     const snap = { Members: { headers: ['id', 'avatar_url'], rows: [['m1', 'https://lh3.googleusercontent.com/d/AVATAR_M1_xxxxx=w1'], ['m2', 'https://lh3.googleusercontent.com/d/AVATAR_M2_xxxxx=w1']] }, Settings: { headers: ['key', 'value'], rows: [['org_logo_url', 'https://drive.google.com/open?id=LOGO_xxxxxxxxxx']] } }
-    expect(t.gas.initialImageFileIds(snap, 'm2')).toEqual(['LOGO_xxxxxxxxxx', 'AVATAR_M2_xxxxx', 'AVATAR_M1_xxxxx'])
+    expect(t.gas.initialImageFileIds_(snap, 'm2')).toEqual(['LOGO_xxxxxxxxxx', 'AVATAR_M2_xxxxx', 'AVATAR_M1_xxxxx'])
 
     const cold = t.post({ action: 'getBackgroundData', sessionToken: 'm2' })
     expect(cold.result.files).toEqual([])

@@ -103,10 +103,10 @@ function setup(sheets: FakeSheet[], fetch?: Fetch) {
   })
   vm.runInContext(CODE_GS, context)
   const gas = context as unknown as {
-    readSheetTables: (names: string[]) => Record<string, { headers: string[]; rows: string[][] }>
-    readSheetTablesViaSpreadsheetApp: (names: string[]) => Record<string, { headers: string[]; rows: string[][] }>
+    readSheetTables_: (names: string[]) => Record<string, { headers: string[]; rows: string[][] }>
+    readSheetTablesViaSpreadsheetApp_: (names: string[]) => Record<string, { headers: string[]; rows: string[][] }>
     readSheetTable: (name: string) => { headers: string[]; rows: string[][] }
-    loadSnapshot: () => { data: Record<string, unknown> }
+    loadSnapshot_: () => { data: Record<string, unknown> }
     measureReadD: () => string
     SNAPSHOT_SHEETS: string[]
   }
@@ -144,18 +144,18 @@ const sampleSheets = () => [
   ]),
 ]
 
-describe('readSheetTables(Sheets API で読む)', () => {
+describe('readSheetTables_(Sheets API で読む)', () => {
   it('batchGet を1回だけ呼び、getDisplayValues と同じ見え方で読める', () => {
     const { gas, fetchUrls, logs, warns } = setup(sampleSheets())
     const names = ['Members', 'Projects', 'Tasks', 'Settings']
-    const viaApi = gas.readSheetTables(names)
+    const viaApi = gas.readSheetTables_(names)
     expect(fetchUrls).toHaveLength(1)
     expect(fetchUrls[0]).toContain('/spreadsheets/sheet-id/values:batchGet?')
     expect(fetchUrls[0]).toContain('valueRenderOption=FORMATTED_VALUE')
     expect(logs.some((m) => /Sheets API\(batchGet\)で読み込み/.test(m))).toBe(true)
     expect(warns).toHaveLength(0)
     // 予備の読み方 (b) と完全に同じ(見出し・行の幅・値)
-    expect(JSON.parse(JSON.stringify(viaApi))).toEqual(JSON.parse(JSON.stringify(gas.readSheetTablesViaSpreadsheetApp(names))))
+    expect(JSON.parse(JSON.stringify(viaApi))).toEqual(JSON.parse(JSON.stringify(gas.readSheetTablesViaSpreadsheetApp_(names))))
     expect(viaApi.Members.headers).toEqual(['id', 'name', 'joined_at', 'inactive', 'years_of_experience'])
     expect(viaApi.Members.rows).toEqual([
       ['1', '代表さん', '2026/01/05', 'FALSE', '3'],
@@ -173,7 +173,7 @@ describe('readSheetTables(Sheets API で読む)', () => {
 
   it('スナップショットは4シートを1回の batchGet で読む', () => {
     const { gas, fetchUrls } = setup(sampleSheets())
-    const snap = gas.loadSnapshot()
+    const snap = gas.loadSnapshot_()
     expect(fetchUrls).toHaveLength(1)
     expect(Object.keys(snap.data)).toEqual(['Members', 'Projects', 'Tasks', 'Settings'])
   })
@@ -182,14 +182,14 @@ describe('readSheetTables(Sheets API で読む)', () => {
     const sheets = sampleSheets()
     sheets[3] = new FakeSheet('Settings', [])
     const { gas } = setup(sheets)
-    expect(gas.readSheetTable('Settings')).toEqual({ headers: [], rows: [] })
-    expect(JSON.parse(JSON.stringify(gas.readSheetTablesViaSpreadsheetApp(['Settings'])))).toEqual({
+    expect(JSON.parse(JSON.stringify(gas.readSheetTables_(['Settings'])))).toEqual({ Settings: { headers: [], rows: [] } })
+    expect(JSON.parse(JSON.stringify(gas.readSheetTablesViaSpreadsheetApp_(['Settings'])))).toEqual({
       Settings: { headers: [], rows: [] },
     })
   })
 })
 
-describe('readSheetTables(Sheets API が失敗した場合)', () => {
+describe('readSheetTables_(Sheets API が失敗した場合)', () => {
   const failures: [string, Fetch | 'throw', RegExp][] = [
     ['403 Sheets API が無効', () => ({
       code: 403,
@@ -215,9 +215,9 @@ describe('readSheetTables(Sheets API が失敗した場合)', () => {
       const fetch: Fetch = behavior === 'throw'
         ? () => { throw new Error('Address unavailable: https://sheets.googleapis.com/...') }
         : behavior
-      const expected = setup(sampleSheets()).gas.readSheetTablesViaSpreadsheetApp(['Members', 'Projects', 'Tasks', 'Settings'])
+      const expected = setup(sampleSheets()).gas.readSheetTablesViaSpreadsheetApp_(['Members', 'Projects', 'Tasks', 'Settings'])
       const { gas, warns } = setup(sampleSheets(), fetch)
-      const tables = gas.readSheetTables(['Members', 'Projects', 'Tasks', 'Settings'])
+      const tables = gas.readSheetTables_(['Members', 'Projects', 'Tasks', 'Settings'])
       expect(JSON.parse(JSON.stringify(tables))).toEqual(JSON.parse(JSON.stringify(expected)))
       expect(warns).toHaveLength(1)
       expect(warns[0]).toMatch(/SpreadsheetApp\(getDisplayValues\)で読み込み \d+ms。理由: /)
@@ -228,7 +228,7 @@ describe('readSheetTables(Sheets API が失敗した場合)', () => {
   it('シートが無い(400 Unable to parse range)場合も読み直し、無いシートは空で返す', () => {
     const sheets = sampleSheets().slice(0, 3)
     const { gas, warns } = setup(sheets)
-    const tables = gas.readSheetTables(['Members', 'Projects', 'Tasks', 'Settings'])
+    const tables = gas.readSheetTables_(['Members', 'Projects', 'Tasks', 'Settings'])
     expect(tables.Settings).toEqual({ headers: [], rows: [] })
     expect(tables.Members.rows).toHaveLength(3)
     expect(warns[0]).toMatch(/HTTP 400 INVALID_ARGUMENT \/ Unable to parse range/)

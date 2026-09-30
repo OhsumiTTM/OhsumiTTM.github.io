@@ -73,7 +73,7 @@ describe('管理者のログイン', () => {
     const session = t.login('a2').result.session.token
     expect(t.post({ action: 'adminOverview', session }).ok).toBe(true)
     const now = Date.now()
-    expect(() => t.gas.adminOverview({ session }, now + 31 * 60 * 1000)).toThrow(/有効期限/)
+    expect(() => t.gas.adminOverview_({ session }, now + 31 * 60 * 1000)).toThrow(/有効期限/)
     t.props.ADMIN_EMAILS = 'admin.one@example.com'
     expect(t.post({ action: 'adminOverview', session })).toMatchObject({ ok: false, authError: true })
     // 署名を書き換えたトークン・鍵を作り直した後のトークンは使えない
@@ -121,28 +121,37 @@ describe('登録コード', () => {
     const session = t.login('a1').result.session.token
     const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, orgName }).result
     const now = Date.now()
+    // 団体の登録(registerOrg)でコードを使う
+    let n = 0
+    const use = (code: string, at: number) => {
+      n++
+      return (t.gas.registerOrg_ as (b: object, at: number) => { ok: boolean })({
+        code, orgId: 'org_' + String(n).padStart(20, 'A'), gasUrl: `https://script.google.com/macros/s/ORG${n}/exec`,
+        registerNonce: `register-nonce-${n}-abcdefghijklmnopqrstuvwxyz0123456789`,
+      }, at)
+    }
     const a = issue('団体A')
     expect(Date.parse(a.expiresAt) - now).toBeGreaterThan(14 * DAY - 60_000)
     expect(Date.parse(a.expiresAt) - now).toBeLessThanOrEqual(14 * DAY + 1000)
 
     // 1回だけ(小文字・区切りなしでも同じコード)
-    expect(t.gas.consumeRegistrationCode(a.code.toLowerCase().replace(/-/g, ''), 'org_a', now)).toBeTruthy()
-    expect(() => t.gas.consumeRegistrationCode(a.code, 'org_b', now)).toThrow(/使えなくなっています/)
+    expect(use(a.code.toLowerCase().replace(/-/g, ''), now).ok).toBe(true)
+    expect(() => use(a.code, now)).toThrow(/使えなくなっています/)
 
     // 14日を過ぎたら使えない(14日ちょうどの直前までは使える)
     const b = issue('団体B')
     const bExp = Date.parse(b.expiresAt)
-    expect(() => t.gas.consumeRegistrationCode(b.code, 'org_b', bExp)).toThrow(/使えなくなっています/)
-    expect(t.gas.consumeRegistrationCode(b.code, 'org_b', bExp - 1)).toBeTruthy()
+    expect(() => use(b.code, bExp)).toThrow(/使えなくなっています/)
+    expect(use(b.code, bExp - 1).ok).toBe(true)
 
     // 取り消したら使えない
     const c = issue('団体C')
     const revoked = t.post({ action: 'revokeRegistrationCode', session, codeId: c.codeId, reason: '契約の取りやめ' })
     expect(revoked.ok).toBe(true)
-    expect(() => t.gas.consumeRegistrationCode(c.code, 'org_c', now)).toThrow(/使えなくなっています/)
+    expect(() => use(c.code, now)).toThrow(/使えなくなっています/)
 
     // 無いコードも同じエラー
-    expect(() => t.gas.consumeRegistrationCode('AAAA-BBBB-CCCC-DDDD', 'org_d', now)).toThrow(/使えなくなっています/)
+    expect(() => use('AAAA-BBBB-CCCC-DDDD', now)).toThrow(/使えなくなっています/)
   })
 
   it('一覧には状態(未使用・使用済み・期限切れ・取り消し済み)が出て、ハッシュは出ない。未使用のものだけ取り消せる', () => {
@@ -151,7 +160,7 @@ describe('登録コード', () => {
     const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, orgName }).result
     const now = Date.now()
     const used = issue('使用済みの団体')
-    t.gas.consumeRegistrationCode(used.code, 'org_used', now)
+    ;(t.gas.registerOrg_ as (b: object, at: number) => unknown)({ code: used.code, orgId: 'org_USEDUSEDUSEDUSEDUSED', gasUrl: 'https://script.google.com/macros/s/USED/exec', registerNonce: 'register-nonce-used-abcdefghijklmnopqrstuvwxyz0123456789' }, now)
     const toRevoke = issue('取り消す団体')
     t.post({ action: 'revokeRegistrationCode', session, codeId: toRevoke.codeId })
     const unused = issue('未使用の団体')
@@ -179,7 +188,7 @@ describe('登録コード', () => {
     const session = t.login('a1').result.session.token
     expect(t.post({ action: 'issueRegistrationCode', session, orgName: '  ' }).error).toMatch(/団体名/)
     expect(t.post({ action: 'issueRegistrationCode', session, orgName: 'A', contactEmail: 'not-an-email' }).error).toMatch(/メールアドレス/)
-    expect(() => t.gas.issueRegistrationCode({ session, orgName: 'A' }, Date.now() + 6 * 60 * 1000)).toThrow(/もう一度 Google でログイン/)
+    expect(() => t.gas.issueRegistrationCode_({ session, orgName: 'A' }, Date.now() + 6 * 60 * 1000)).toThrow(/もう一度 Google でログイン/)
     expect(t.codesSheet().rows).toHaveLength(1) // 見出しだけ
   })
 
@@ -197,7 +206,7 @@ describe('団体の一覧', () => {
   it('状態(有効・停止予定・停止)と、確認が7日以上無い印を分けて出す', () => {
     const t = ready()
     const now = Date.parse('2026-10-01T00:00:00Z')
-    const s = (values: Record<string, string>) => t.gas.orgDisplayState(values, now)
+    const s = (values: Record<string, string>) => t.gas.orgDisplayState_(values, now)
     expect(s({ status: 'active', last_check_at: '2026-09-30T00:00:00Z' })).toEqual({ state: 'active', checkState: 'ok' })
     expect(s({ status: 'active', suspend_at: '2026-10-14T00:00:00Z', last_check_at: '2026-09-20T00:00:00Z' })).toEqual({ state: 'scheduled', checkState: 'stale' })
     expect(s({ status: 'active', suspend_at: '2026-09-30T00:00:00Z' })).toEqual({ state: 'suspended', checkState: 'never' })

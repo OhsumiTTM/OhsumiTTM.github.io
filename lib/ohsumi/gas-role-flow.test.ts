@@ -75,28 +75,28 @@ function setup() {
   const advance = (ms: number) => { now += ms }
 
   // セッショントークン = メンバーID。IDトークンのメール = メンバーID
-  c.authenticateRequest = (body: { sessionToken?: string }) => {
-    if (!body.sessionToken) throw (c.userError as (m: string) => Error)('ログインしていません。再ログインしてください。')
+  c.authenticateRequest_ = (body: { sessionToken?: string }) => {
+    if (!body.sessionToken) throw (c.userError_ as (m: string) => Error)('ログインしていません。再ログインしてください。')
     return { memberId: body.sessionToken, renewed: null }
   }
-  c.verifyGoogleIdToken = (idToken: string) => ({ email: idToken })
-  c.findMemberIdByEmailCached = (email: string) => email
-  c.issueSessionToken = (id: string) => ({ token: 'session-' + id, exp: 1 })
-  c.recordLastLogin = () => true
-  const originalReadSheetTables = c.readSheetTables
-  c.readSheetTables = () => JSON.parse(JSON.stringify(sheet))
-  c.readRoleSettings = () => ({ roles: ROLES })
-  c.getActingMemberById = (id: string) => {
+  c.verifyGoogleIdToken_ = (idToken: string) => ({ email: idToken })
+  c.findMemberIdByEmailCached_ = (email: string) => email
+  c.issueSessionToken_ = (id: string) => ({ token: 'session-' + id, exp: 1 })
+  c.recordLastLogin_ = () => true
+  const originalReadSheetTables = c.readSheetTables_
+  c.readSheetTables_ = () => JSON.parse(JSON.stringify(sheet))
+  c.readRoleSettings_ = () => ({ roles: ROLES })
+  c.getActingMemberById_ = (id: string) => {
     const row = sheet.Members.rows.find((r) => r[0] === id)
-    if (!row) throw (c.userError as (m: string) => Error)('メンバー登録が見つかりません。')
+    if (!row) throw (c.userError_ as (m: string) => Error)('メンバー登録が見つかりません。')
     return { id, role: row[2], project_ids: [], permission_overrides: [] }
   }
-  c.buildViewerData = (data: Record<string, Table>) => data
-  c.getExpenses = () => [{ id: 'e1' }]
-  c.getFormSubmissions = () => []
-  c.getCandidates = () => []
-  c.getMemberEmailValue = (id: string) => id + '@example.com'
-  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
+  c.buildViewerData_ = (data: Record<string, Table>) => data
+  c.getExpenses_ = () => [{ id: 'e1' }]
+  c.getFormSubmissions_ = () => []
+  c.getCandidates_ = () => []
+  c.getMemberEmailValue_ = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached_ = (id: string) => id + '@example.com'
   c.bumpDataVersion = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } }
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
@@ -157,9 +157,9 @@ describe('権限が足りない時と、セッションが無効な時の違い'
 
   it('裏での読み込みのうち、権限の無い部分は失敗ではなく空で返す', () => {
     const t = setup()
-    const real = t.c.authorizeAction as (a: unknown, action: string, b: unknown) => void
-    t.c.authorizeAction = (a: unknown, action: string, b: unknown) => {
-      if (action === 'getCandidates' || action === 'getExpenses') throw (t.c.userError as (m: string) => Error)('権限がありません')
+    const real = t.c.authorizeAction_ as (a: unknown, action: string, b: unknown) => void
+    t.c.authorizeAction_ = (a: unknown, action: string, b: unknown) => {
+      if (action === 'getCandidates' || action === 'getExpenses') throw (t.c.userError_ as (m: string) => Error)('権限がありません')
       real(a, action, b)
     }
     const res = t.post({ action: 'getBackgroundData', sessionToken: 'm-base' })
@@ -169,11 +169,11 @@ describe('権限が足りない時と、セッションが無効な時の違い'
 })
 
 describe('権限の一覧への登録漏れ', () => {
-  it('doPost で扱うすべての操作(runWriteAction)が、authorizeAction のどれかの一覧に入っている(既定の「管理者のみ」に落ちない)', () => {
-    const start = CODE_GS.indexOf('function runWriteAction(')
+  it('doPost で扱うすべての操作(runWriteAction_)が、authorizeAction_ のどれかの一覧に入っている(既定の「管理者のみ」に落ちない)', () => {
+    const start = CODE_GS.indexOf('function runWriteAction_(')
     const doPost = CODE_GS.slice(start, CODE_GS.indexOf('\nfunction ', start + 10))
     const cases = new Set([...doPost.matchAll(/case '(\w+)':/g)].map((m) => m[1]))
-    const aStart = CODE_GS.indexOf('function authorizeAction(')
+    const aStart = CODE_GS.indexOf('function authorizeAction_(')
     const auth = CODE_GS.slice(aStart, CODE_GS.indexOf('\nfunction ', aStart + 10))
     const listed = new Set([...auth.matchAll(/'(\w+)'/g)].map((m) => m[1]))
     expect([...cases].filter((a) => !listed.has(a))).toEqual([])
@@ -184,10 +184,10 @@ describe('権限の一覧への登録漏れ', () => {
 describe('処理時間の内訳(otherMs)', () => {
   it('ログイン: IDトークン確認・メールの照合・セッションの発行・最終ログイン日時も内訳に出し、残りを otherMs にする', () => {
     const t = setup()
-    t.c.verifyGoogleIdToken = (idToken: string) => { t.advance(400); return { email: idToken } }
-    t.c.findMemberIdByEmailCached = (email: string) => { t.advance(100); return email }
-    t.c.issueSessionToken = () => { t.advance(50); return { token: 's', exp: 1 } }
-    t.c.recordLastLogin = () => { t.advance(900); return true }
+    t.c.verifyGoogleIdToken_ = (idToken: string) => { t.advance(400); return { email: idToken } }
+    t.c.findMemberIdByEmailCached_ = (email: string) => { t.advance(100); return email }
+    t.c.issueSessionToken_ = () => { t.advance(50); return { token: 's', exp: 1 } }
+    t.c.recordLastLogin_ = () => { t.advance(900); return true }
     const res = t.post({ action: 'exchangeIdToken', idToken: 'm-base', nonceSecret: 'x', withBackground: true })
     expect(res.timing).toMatchObject({ verifyMs: 400, emailLookupMs: 100, sessionMs: 50, lastLoginMs: 900, otherMs: 0 })
     expect(res.timing.totalMs).toBe(1450)
@@ -197,13 +197,13 @@ describe('処理時間の内訳(otherMs)', () => {
   it('区間の中で記録した時間(認証の中のシートの読み込み)は、外側と重ねて数えない', () => {
     const t = setup()
     // シートの読み込み(readSheetTables の中で readMs を記録する)に300ms
-    t.c.readSheetTables = t.originalReadSheetTables
-    t.c.readSheetTablesViaApi = () => {
+    t.c.readSheetTables_ = t.originalReadSheetTables
+    t.c.readSheetTablesViaApi_ = () => {
       t.advance(300)
       return { tables: { Members: { headers: ['id', 'role'], rows: [['m-base', 'base']] }, Settings: { headers: ['key', 'value'], rows: [['roles', ROLES]] } } }
     }
-    const normalize = t.c.normalizeRequestCodes as (b: object) => void
-    t.c.normalizeRequestCodes = (b: object) => { t.advance(70); normalize(b) } // 内訳に無い処理
+    const normalize = t.c.normalizeRequestCodes_ as (b: object) => void
+    t.c.normalizeRequestCodes_ = (b: object) => { t.advance(70); normalize(b) } // 内訳に無い処理
     const res = t.post({ action: 'getBackgroundData', sessionToken: 'm-base' })
     expect(res.timing.authMs).toBe(300)
     expect(res.timing.readMs).toBe(300)
