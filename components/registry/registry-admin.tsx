@@ -68,6 +68,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   cancelSuspension: '停止の予定の取り消し',
   liftSuspension: '停止の解除',
   sendSuspensionNotice: '停止の予告を担当者に送った',
+  testSuspendNow: '(テスト)今すぐ停止',
+  testScheduleSuspension: '(テスト)停止の予定',
+  testLiftSuspension: '(テスト)停止の解除',
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },

@@ -220,3 +220,54 @@ describe('担当者への予告(毎日の処理)', () => {
     expect(t.props.LAST_BACKUP_AT).toBeTruthy()
   })
 })
+
+describe('テスト環境で、14日待たずに確かめる(エディタから実行する関数)', () => {
+  const call = (t: ReturnType<typeof ready>, name: string) => (t.gas[name] as () => unknown)()
+
+  it('REGISTRY_TEST_MODE が true のレジストリでだけ動く(本番では何も変えない)', () => {
+    const t = ready()
+    t.props.TEST_ORG_ID = ORG_A
+    for (const name of ['testSuspendNow', 'testScheduleSuspension', 'testLiftSuspension']) {
+      expect(() => call(t, name), name).toThrow(/テスト環境のレジストリだけ/)
+    }
+    expect(t.org().state).toBe('active')
+  })
+
+  it('今すぐ停止する(種類を選べる)。団体の GAS の checkIn にもすぐ出る。解除で元に戻る。操作の記録に残る', () => {
+    const t = ready()
+    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'restrict' })
+    call(t, 'testSuspendNow')
+    expect(t.org()).toMatchObject({ state: 'restricted', suspendKind: 'restrict' })
+    expect(t.checkIn().result).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
+    t.props.TEST_SUSPEND_KIND = 'suspend'
+    call(t, 'testSuspendNow')
+    expect(t.org().state).toBe('suspended')
+    expect(t.post({ action: 'resolveOrg', orgId: ORG_A }).result).toMatchObject({ status: 'suspended', gasUrl: '' })
+    call(t, 'testLiftSuspension')
+    expect(t.org().state).toBe('active')
+    expect(t.checkIn().result).toMatchObject({ phase: 'none' })
+    expect(t.audit().map((a) => a.action)).toEqual(expect.arrayContaining(['testSuspendNow', 'testLiftSuspension']))
+    // 記録の無い直接の編集には数えない
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([])
+    t.props.TEST_SUSPEND_KIND = 'other'
+    expect(() => call(t, 'testSuspendNow')).toThrow(/TEST_SUSPEND_KIND/)
+  })
+
+  it('TEST_SUSPEND_DAYS 日後に予定を入れ(14日より前でもよい)、その時期の予告を担当者にすぐ送る', () => {
+    const t = ready()
+    Object.assign(t.props, { REGISTRY_TEST_MODE: 'true', TEST_ORG_ID: ORG_A, TEST_SUSPEND_KIND: 'suspend' })
+    for (const [days, notice] of [['13.9', 14], ['6.9', 7], ['0.9', 1]] as const) {
+      t.props.TEST_SUSPEND_DAYS = days
+      call(t, 'testScheduleSuspension')
+      expect(t.org()).toMatchObject({ state: 'scheduled', noticesSent: [notice] })
+      expect(t.mails.at(-1)!.subject).toContain(`あと${notice}日`)
+      expect(t.mails.at(-1)!.to).toBe('yamada@example.org')
+    }
+    // 予告の時期より前なら送らない
+    t.props.TEST_SUSPEND_DAYS = '20'
+    call(t, 'testScheduleSuspension')
+    expect(t.mails).toHaveLength(3)
+    t.props.TEST_SUSPEND_DAYS = ''
+    expect(() => call(t, 'testScheduleSuspension')).toThrow(/TEST_SUSPEND_DAYS/)
+  })
+})

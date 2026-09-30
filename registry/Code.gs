@@ -2,6 +2,9 @@
 //   setupRegistry           最初の設定・コードを貼り替えた後に実行する(シート・保護・鍵・毎日のバックアップのトリガーを
 //                           用意する。今のコードに無い関数を指すトリガーを消す)
 //   rotateAdminSessionKey   管理画面のセッションの鍵を作り直す(ログイン中の管理者は全員ログアウトになる)
+//   testSuspendNow          (テスト環境だけ)TEST_ORG_ID の団体を、今すぐ停止する(種類は TEST_SUSPEND_KIND)
+//   testScheduleSuspension  (テスト環境だけ)TEST_SUSPEND_DAYS 日後に停止の予定を入れ、その時期の予告をすぐ送る
+//   testLiftSuspension      (テスト環境だけ)TEST_ORG_ID の団体の停止の予定・停止を解除する
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost           ウェブアプリの入口
 //   dailyRegistryBackup     毎日のバックアップ(トリガーから呼ばれる)
@@ -105,6 +108,27 @@ function rotateAdminSessionKey() {
   props.setProperty('ADMIN_SESSION_KID', generateSecret_().slice(0, 8))
   appendAudit_({ actor: 'editor', action: 'rotateAdminSessionKey' })
   console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
+}
+
+// (テスト環境だけ)停止の動きを、14日待たずに確かめる。スクリプトプロパティ REGISTRY_TEST_MODE が true の
+// レジストリでだけ動く(本番のレジストリには入れない。管理画面からはできない)。
+// 対象はスクリプトプロパティ TEST_ORG_ID の団体、種類は TEST_SUSPEND_KIND(suspend・restrict。無ければ restrict)。
+// 手順は registry/README.md の「1.9.1」
+
+// 今すぐ停止する(予定の日時を今にする。予告は送らない)
+function testSuspendNow() {
+  testSetSuspension_('now', Date.now())
+}
+
+// TEST_SUSPEND_DAYS 日後(例: 13.9・6.9・0.9)に停止の予定を入れ、その時期の予告(14日前・7日前・1日前)を担当者にすぐ送る。
+// 14日より前の日時も入れられる(管理画面は14日より後だけ)
+function testScheduleSuspension() {
+  testSetSuspension_('schedule', Date.now())
+}
+
+// 停止の予定・停止を解除する
+function testLiftSuspension() {
+  testSetSuspension_('lift', Date.now())
 }
 
 // ============================================================================
@@ -1091,6 +1115,47 @@ function sendSuspensionNotices_(nowMs) {
   })
   if (sent.length) console.log('停止の予告を送りました: ' + sent.join(', '))
   return sent
+}
+
+// テスト環境の停止の操作(testSuspendNow・testScheduleSuspension・testLiftSuspension)。mode: now / schedule / lift
+function testSetSuspension_(mode, nowMs) {
+  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  if (String(props.REGISTRY_TEST_MODE || '') !== 'true') {
+    throw new Error('テスト環境のレジストリだけで使えます(スクリプトプロパティ REGISTRY_TEST_MODE を true にしたレジストリ)。本番では、管理画面で停止の予定を入れてください。')
+  }
+  var orgId = String(props.TEST_ORG_ID || '').trim()
+  var kind = String(props.TEST_SUSPEND_KIND || 'restrict').trim()
+  if (SUSPEND_KINDS.indexOf(kind) < 0) throw new Error('TEST_SUSPEND_KIND は suspend(提供停止)か restrict(機能停止)にしてください。')
+  var days = Number(props.TEST_SUSPEND_DAYS)
+  if (mode === 'schedule' && !(days > 0)) throw new Error('TEST_SUSPEND_DAYS に、停止までの日数(例: 13.9・6.9・0.9)を入れてください。')
+  var result = withRegistryLock_(function () {
+    var row = findOrgRow_(orgId)
+    if (!row) throw new Error('TEST_ORG_ID の団体(' + orgId + ')が Orgs にありません。')
+    var before = contractState_(row.values, nowMs)
+    var fields = mode === 'lift'
+      ? { status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '' }
+      : {
+          suspend_at: new Date(mode === 'now' ? nowMs : nowMs + days * 24 * 3600 * 1000).toISOString(), suspend_kind: kind,
+          suspend_reason: '(テスト)' + (kind === 'restrict' ? '機能停止' : '提供停止') + 'の確かめ', suspend_scheduled_by: 'editor(test)',
+          suspend_notices_json: '[]',
+        }
+    fields.updated_at = new Date(nowMs).toISOString()
+    setRowFields_('Orgs', row.row, fields)
+    var after = merged_(row.values, fields)
+    rememberOrgFingerprint_(orgId, after)
+    forgetResolvedOrg_(orgId)
+    appendAudit_({ actor: 'editor(test)', action: mode === 'lift' ? 'testLiftSuspension' : mode === 'now' ? 'testSuspendNow' : 'testScheduleSuspension', target: orgId,
+      before: before.phase === 'none' ? undefined : { kind: before.kind, suspendAt: before.suspendAt, phase: before.phase },
+      after: mode === 'lift' ? { phase: 'none' } : { kind: kind, suspendAt: fields.suspend_at } })
+    return contractState_(after, nowMs)
+  })
+  // 予定を入れた時は、その時期の予告をすぐ送る(毎日の処理を待たない)
+  var noticed = mode === 'schedule' ? sendSuspensionNotices_(nowMs).indexOf(orgId) >= 0 : false
+  console.log('(テスト)' + orgId + ': ' + ({ none: '停止の予定なし', scheduled: '停止の予定あり', inEffect: '停止中' })[result.phase] +
+    (result.phase === 'none' ? '' : '(' + (result.kind === 'restrict' ? '② 機能停止' : '① 提供停止') + '・' + result.suspendAt + ')') +
+    (mode === 'schedule' ? (noticed ? '。担当者に予告を送りました' : '。予告の時期ではないため、予告は送っていません') : '') +
+    '。団体の GAS には、団体のエディタで checkContractStatus を実行すると、すぐ伝わります。')
+  return result
 }
 
 function requireAdminReauth_(session, nowMs, what) {
