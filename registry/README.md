@@ -226,7 +226,7 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 | `contract_status`・`contract_until`・`contract_note` | 契約の状態(`active` 契約中 / `ending` 終了予定 / `ended` 終了)・終了日・メモ | R1-e |
 | `updated_at` | 最後に変えた時刻 | R1-c〜 |
 
-管理画面の一覧の「状態」は、次のように出します(`orgDisplayState`)。
+管理画面の一覧の「状態」は、次のように出します(`orgDisplayState_`)。
 
 - **停止:** `status` が `suspended`、または停止の予定日時を過ぎた
 - **停止予定:** 停止の予定日時が入っていて、まだその前
@@ -239,7 +239,7 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 `target_org_id`・`org_name`・`contact_name`・`contact_email`・`note`・`expires_at`・`issued_by`・`issued_at`・
 `used_at`・`used_org_id`・`revoked_at`・`revoked_by`。
 
-コードを使う処理(`consumeRegistrationCode`)は R1-b で用意し、R1-c の団体の登録から呼びます。
+コードは、団体の登録(`registerOrg`。R1-c)で使います。
 無いコード・使用済み・期限切れ・取り消し済みは、区別せず同じエラーを返します(当てずっぽうの手がかりにしないため)。
 
 ## 1.7. 接続先の解決(R1-d)
@@ -281,6 +281,15 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
   - ログイン画面で、一覧から団体を選べます(一覧に2つ以上ある時)。
   - ログインの情報は、団体ごとに分けて保存します。ある団体の GAS に、別の団体のトークンを送ることはありません。
   - 団体を切り替えると、団体ごとの表示の保存(団体名・ロゴ・テーマ色など)を消して、ページを読み込み直します。
+
+## 1.8. コードを貼り替える時
+
+- **レジストリ(`registry/Code.gs`):** 貼り替えて保存し、エディタで `setupRegistry` を実行してから、「デプロイを管理」で
+  今のウェブアプリを「新バージョン」にします(URL は変わりません)。
+- **監視(`registry/monitor/Monitor.gs`):** 貼り替えて保存し、エディタで `setupMonitor` を実行します(知らせる先に試しの通知が届きます)。
+- どちらの `setup…` も、最初に、今のコードに無い関数を指すトリガー(以前の版の名前のまま残ったもの)を消します。
+- エディタの関数の一覧に出るのは、エディタから実行する関数と、入口・トリガーから呼ばれる関数だけです。
+  中で使うだけの関数は、名前の最後に `_` を付けています。一覧と説明は、それぞれのファイルの先頭のコメントにあります。
 
 ## 2. 安全のための決まり
 
