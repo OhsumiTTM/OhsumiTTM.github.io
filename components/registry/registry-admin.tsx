@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { waitForGIS } from '@/lib/ohsumi/google-sheet-sync'
+import { inviteLink } from '@/lib/ohsumi/org-directory'
 import {
   REGISTRY_CLIENT_ID,
   RegistryError,
@@ -288,7 +289,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function OrgList({ orgs }: { orgs: OrgSummary[] }) {
-  if (!orgs.length) return <p className="text-sm text-muted-foreground">登録された団体はまだありません(団体の登録は R1-c で作ります)。</p>
+  if (!orgs.length) return <p className="text-sm text-muted-foreground">登録された団体はまだありません。</p>
   return (
     <ul className="space-y-3">
       {orgs.map((o) => (
@@ -305,6 +306,8 @@ function OrgList({ orgs }: { orgs: OrgSummary[] }) {
             {o.suspendAt && <Field label="停止の予定">{fmt(o.suspendAt)}{o.suspendReason ? `(${o.suspendReason})` : ''}</Field>}
             <Field label="団体ID">{o.orgId}</Field>
             <Field label="接続先">{o.gasUrl || '—'}</Field>
+            {/* 団体の担当者に伝える。メンバーは初めての端末でこのリンクから開く(R1-d) */}
+            {typeof window !== 'undefined' && <Field label="招待リンク">{inviteLink(window.location.origin, '', o.orgId)}</Field>}
             {o.contractNote && <Field label="契約のメモ">{o.contractNote}</Field>}
           </dl>
         </li>
