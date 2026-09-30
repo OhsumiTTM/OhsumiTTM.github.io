@@ -1,6 +1,6 @@
 // ログイン(IDトークン方式)とセッショントークンの扱い。
 //
-// 1. getLoginConfig で団体ID(orgId)を取得する(このブラウザにも覚えておく)
+// 1. 使う団体(団体ID・接続先)は org-directory.ts が決める(招待リンク・この端末の団体の一覧)
 // 2. 乱数 secret を作り、nonce = orgId + "." + base64url(SHA-256(secret)) を指定して
 //    Google Identity Services(google.accounts.id)から IDトークンを受け取る
 // 3. exchangeIdToken に IDトークンと secret を送ると、団体の GAS がセッショントークンを返す
@@ -14,7 +14,7 @@
 'use client'
 
 import { CLIENT_ID, waitForGIS } from './google-sheet-sync'
-import { getActiveOrg, rememberDefaultOrg, startOrg } from './org-directory'
+import { getActiveOrg, startOrg } from './org-directory'
 
 export interface LoginConfig {
   orgId: string
@@ -48,11 +48,6 @@ export function loadCachedLoginConfig(): LoginConfig | null {
   startOrg()
   const { orgId } = getActiveOrg()
   return orgId ? { orgId } : null
-}
-
-/** 既定の団体の団体ID が getLoginConfig で分かった時に、この端末の団体の一覧に入れる */
-export function saveLoginConfig(config: LoginConfig): void {
-  rememberDefaultOrg(config.orgId)
 }
 
 // ---- 「この端末にログイン情報を保存する」の前回の選択(初期値はチェックあり) --------

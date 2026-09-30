@@ -23,7 +23,6 @@ import {
   loadRememberPreference,
   prepareGoogleSignIn,
   resetGoogleSignIn,
-  saveLoginConfig,
   saveRememberPreference,
 } from '@/lib/ohsumi/session'
 import { LegalLinks } from './legal-links'
@@ -32,17 +31,15 @@ import { LegalLinks } from './legal-links'
 //   checking      団体の設定(団体ID)を確認中
 //   id            Googleでログイン(IDトークン)→ 団体の GAS がセッショントークンを発行する。
 //                 「この端末にログイン情報を保存する」がチェックありなら、再読み込み後もログインしたまま
-//   gasOutdated   団体の設定を取得できない(GAS が古い・接続できない)。管理者に GAS の更新を促す
 //   notConfigured GAS の URL・OAuth クライアントIDが設定されていない
 //   demo          開発環境(pnpm dev)で GAS を設定していない場合: ローカルのモックデータのメンバーを選んでログインする
 //   resolving     招待リンクの団体の接続先を、レジストリに問い合わせ中(初めての端末だけ。lib/ohsumi/org-directory.ts)
 //   orgNotFound・orgSuspended・orgUnavailable・orgMismatch  招待リンクの団体を使えない(見つからない・停止中・
 //                 レジストリに確認できない(再試行できる)・接続先の団体ID が違う)
-//   noOrg         つなぐ団体が無い(既定の団体が無く、招待リンクからも開いていない)
+//   noOrg         つなぐ団体が決まらない(招待リンクから開いておらず、今の団体も無い)。この端末の団体の一覧があれば選べる
 type LoginMode =
   | 'checking'
   | 'id'
-  | 'gasOutdated'
   | 'notConfigured'
   | 'demo'
   | 'resolving'
@@ -128,7 +125,7 @@ export function LoginScreen() {
 
   // 使う団体を決め、団体ID を確認する(lib/ohsumi/org-directory.ts)。
   // 一覧にある団体は、前回の団体ID をすぐに使い、裏で確認し直す。
-  // 既定の団体の団体ID を取得できない(GAS が古い・接続できない)場合は、管理者に GAS の更新を促す
+  // 招待リンクも今の団体も無い時は、招待リンクを開くよう知らせる(この端末の団体の一覧があれば選べる)
   useEffect(() => {
     if (mode !== 'checking') return
     setNotice(takeLoginNotice())
@@ -149,12 +146,11 @@ export function LoginScreen() {
       if (!mountedRef.current) return
       if (config) {
         // レジストリで調べた団体の GAS が、別の団体ID を返した(接続先の設定の誤り): ログインしない
-        if (decision.kind === 'use' && decision.org.source === 'registry' && config.orgId !== decision.org.orgId) {
+        if (decision.kind === 'use' && config.orgId !== decision.org.orgId) {
           setOrgId(null)
           setMode('orgMismatch')
           return
         }
-        saveLoginConfig({ orgId: config.orgId })
         setOrgId(config.orgId)
         setSavedOrgs(loadSavedOrgs())
         // 提供停止中(R1-e): ログインできないことを知らせる(ほかの団体があれば選べる)
@@ -164,8 +160,6 @@ export function LoginScreen() {
           return
         }
         setMode('id')
-      } else if (!cached) {
-        setMode('gasOutdated')
       }
     })
     // 最初の1回だけ確認する
@@ -320,10 +314,10 @@ export function LoginScreen() {
                 </button>
               )}
             </div>
-          ) : mode === 'gasOutdated' || mode === 'notConfigured' ? (
+          ) : mode === 'notConfigured' ? (
             <div role="alert" className="flex items-start gap-2 text-left text-sm text-muted-foreground">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
-              <span>{mode === 'gasOutdated' ? t('login.gasOutdated') : t('login.notConfigured')}</span>
+              <span>{t('login.notConfigured')}</span>
             </div>
           ) : mode === 'demo' && DemoLogin ? (
             <DemoLogin />

@@ -7,22 +7,19 @@
 // - 一覧にある団体は、問い合わせずにすぐ使う。確かめてから maxAgeSec(24時間)を過ぎていれば、ログイン・再開と
 //   並べて裏で問い合わせ、答えが違った時(接続先が変わった・停止・見つからない)だけ、ログインし直してもらう
 // - レジストリが止まっている時: 一覧にあればそのまま使う。初めての端末では「接続先を確認できません」と再試行を出す
-// - ビルド時の NEXT_PUBLIC_GAS_URL(GitHub Secrets の CSV_GAS)は「既定の団体」。招待リンクも一覧の団体も無い端末は、
-//   今までどおりここにつながる(R1-f まで)。団体ID は、その GAS の getLoginConfig で分かった時に一覧に入れる
+// - 招待リンクも今の団体も無い端末は、「団体から届いた招待リンクを開いてください」を出す(一覧に団体があれば選べる)。
+//   ビルド時に決まる「既定の団体」は無い(R1-f 後半で、GitHub Secrets の CSV_GAS とともに消した)
 // - レジストリから分かった接続先は、初めて使う前に、その GAS の getLoginConfig の団体ID が同じか確かめる
 // - ログインの情報(セッション)は団体ごとに分けて保存する(session.ts の ohsumi-session-<団体ID>)。
 //   団体を切り替える時は、ページを読み込み直す(Google のログインの準備は1ページに1回のため)
 import { FETCH_INIT } from './gas-transport'
 import { CANONICAL_GAS_URL } from './gas-url'
 
-export const DEFAULT_GAS_URL = process.env.NEXT_PUBLIC_GAS_URL || ''
 export const REGISTRY_URL = process.env.NEXT_PUBLIC_REGISTRY_URL || ''
 
 export const ORG_ID_PATTERN = /^org_[A-Za-z0-9_-]{16,64}$/
 export const ORGS_STORAGE_KEY = 'ohsumi-orgs'
 export const CURRENT_ORG_STORAGE_KEY = 'ohsumi-current-org'
-// R1-d より前の、既定の団体の団体ID(session.ts が保存していた)
-export const LEGACY_LOGIN_CONFIG_KEY = 'ohsumi-login-config'
 // 読み込み直した後のログイン画面に出す知らせ(このタブだけ)
 export const LOGIN_NOTICE_KEY = 'ohsumi-login-notice'
 // 接続先が変わった・停止した時に window に送るイベント(store.tsx がログイン画面に戻す)
@@ -35,8 +32,8 @@ export interface SavedOrg {
   gasUrl: string
   // 団体名(ログインの後に分かる。ログイン画面の一覧に出す)
   name?: string
-  // registry: 招待リンクからレジストリで調べた / default: ビルド時の既定の団体
-  source: 'registry' | 'default'
+  // 招待リンクからレジストリで調べた(ビルド時の既定の団体は R1-f 後半で消した。source が 'default' の保存は読まない)
+  source: 'registry'
   checkedAt: number // ミリ秒
   maxAgeSec?: number
 }
@@ -56,7 +53,7 @@ function storage(kind: 'local' | 'session' = 'local'): Storage | null {
 function isSavedOrg(v: unknown): v is SavedOrg {
   const o = v as Partial<SavedOrg> | null
   return !!o && typeof o.orgId === 'string' && ORG_ID_PATTERN.test(o.orgId) && typeof o.gasUrl === 'string' &&
-    CANONICAL_GAS_URL.test(o.gasUrl) && (o.source === 'registry' || o.source === 'default') && typeof o.checkedAt === 'number'
+    CANONICAL_GAS_URL.test(o.gasUrl) && o.source === 'registry' && typeof o.checkedAt === 'number'
 }
 
 /** この端末の、所属する団体の一覧(最後に使った順) */
@@ -112,23 +109,6 @@ export function getCurrentOrgId(): string | null {
 export function setCurrentOrgId(orgId: string): void {
   try {
     storage()?.setItem(CURRENT_ORG_STORAGE_KEY, orgId)
-  } catch {
-    /* ignore */
-  }
-}
-
-/** R1-d より前の端末: 既定の団体の団体ID(ohsumi-login-config)を、一覧に移す(ログインしたままにするため) */
-export function migrateLegacyLoginConfig(now = Date.now()): void {
-  const s = storage()
-  if (!s || !DEFAULT_GAS_URL || !CANONICAL_GAS_URL.test(DEFAULT_GAS_URL)) return
-  try {
-    const raw = s.getItem(LEGACY_LOGIN_CONFIG_KEY)
-    if (!raw) return
-    const orgId = (JSON.parse(raw) as { orgId?: unknown }).orgId
-    s.removeItem(LEGACY_LOGIN_CONFIG_KEY)
-    if (typeof orgId !== 'string' || !ORG_ID_PATTERN.test(orgId) || loadSavedOrgs().some((o) => o.orgId === orgId)) return
-    upsertSavedOrg({ orgId, gasUrl: DEFAULT_GAS_URL, source: 'default', checkedAt: now })
-    if (!getCurrentOrgId()) setCurrentOrgId(orgId)
   } catch {
     /* ignore */
   }
@@ -242,15 +222,13 @@ export type StartDecision =
   | { kind: 'use'; org: SavedOrg; refresh: boolean }
   // 招待リンクの団体が一覧に無い: レジストリの答えを待つ
   | { kind: 'resolve'; orgId: string }
-  // 既定の団体(団体ID は getLoginConfig で分かる)
-  | { kind: 'default' }
   // 招待リンクの形が違う
   | { kind: 'invalidInvite' }
-  // つなぐ先が無い(招待リンクから開いてもらう)
+  // つなぐ先が決まらない(招待リンクから開いてもらう。一覧に団体があれば選べる)
   | { kind: 'none' }
 
 export function isStale(org: SavedOrg, now: number): boolean {
-  return org.source === 'registry' && now - org.checkedAt > (org.maxAgeSec ?? DEFAULT_MAX_AGE_SEC) * 1000
+  return now - org.checkedAt > (org.maxAgeSec ?? DEFAULT_MAX_AGE_SEC) * 1000
 }
 
 /** 使う団体を決める(純粋な関数) */
@@ -258,10 +236,9 @@ export function decideStartOrg(input: {
   invite: string | 'invalid' | null
   saved: SavedOrg[]
   currentId: string | null
-  defaultGasUrl: string
   now: number
 }): StartDecision {
-  const { invite, saved, currentId, defaultGasUrl, now } = input
+  const { invite, saved, currentId, now } = input
   if (invite === 'invalid') return { kind: 'invalidInvite' }
   if (invite) {
     const org = saved.find((o) => o.orgId === invite)
@@ -269,11 +246,7 @@ export function decideStartOrg(input: {
   }
   const current = currentId ? saved.find((o) => o.orgId === currentId) : undefined
   if (current) return { kind: 'use', org: current, refresh: isStale(current, now) }
-  if (defaultGasUrl) {
-    const def = saved.find((o) => o.source === 'default' && o.gasUrl === defaultGasUrl)
-    return def ? { kind: 'use', org: def, refresh: false } : { kind: 'default' }
-  }
-  if (saved.length) return { kind: 'use', org: saved[0], refresh: isStale(saved[0], now) }
+  // 今の団体が無い時は、選んでもらう(一覧は、ログイン画面が出す)
   return { kind: 'none' }
 }
 
@@ -291,11 +264,11 @@ export function compareResolved(org: SavedOrg, answer: ResolveAnswer): { outcome
 
 // ---- このページで使う接続先 ------------------------------------------------------
 
-let activeGasUrl = DEFAULT_GAS_URL
+let activeGasUrl = ''
 let activeOrgId: string | null = null
 let startDecision: StartDecision | null = null
 
-/** このページで GAS に送る先。既定は NEXT_PUBLIC_GAS_URL */
+/** このページで GAS に送る先(団体が決まるまでは空) */
 export function getActiveGasUrl(): string {
   return activeGasUrl
 }
@@ -313,25 +286,16 @@ export function activateOrg(org: SavedOrg): void {
   setCurrentOrgId(org.orgId)
 }
 
-/** 既定の団体の団体ID が getLoginConfig で分かった時 */
-export function rememberDefaultOrg(orgId: string, now = Date.now()): void {
-  if (!DEFAULT_GAS_URL || activeGasUrl !== DEFAULT_GAS_URL || !ORG_ID_PATTERN.test(orgId)) return
-  // 既定の団体の団体ID が変わった(GAS を作り直した)時は、前の団体ID の項目を消す(同じ接続先が2つ並ばないように)
-  writeSavedOrgs(loadSavedOrgs().filter((o) => !(o.source === 'default' && o.gasUrl === DEFAULT_GAS_URL && o.orgId !== orgId)))
-  activateOrg({ orgId, gasUrl: DEFAULT_GAS_URL, source: 'default', checkedAt: now })
-}
-
 /**
  * このページで使う団体を決める(ページごとに1回。何度呼んでも同じ答え)。
  * 一覧にある団体なら、すぐに接続先を切り替え、必要なら裏でレジストリに確かめ直す
  */
 export function startOrg(): StartDecision {
   if (startDecision) return startDecision
-  if (typeof window === 'undefined') return { kind: DEFAULT_GAS_URL ? 'default' : 'none' }
-  migrateLegacyLoginConfig()
+  if (typeof window === 'undefined') return { kind: 'none' }
   const invite = readInviteOrgId(window.location?.search ?? '')
   stripInviteParam()
-  const decision = decideStartOrg({ invite, saved: loadSavedOrgs(), currentId: getCurrentOrgId(), defaultGasUrl: DEFAULT_GAS_URL, now: Date.now() })
+  const decision = decideStartOrg({ invite, saved: loadSavedOrgs(), currentId: getCurrentOrgId(), now: Date.now() })
   startDecision = decision
   if (decision.kind === 'use') {
     activateOrg(decision.org)
@@ -394,7 +358,7 @@ export function switchToOrg(orgId: string, reload: () => void = () => window.loc
 
 // テスト用: ページを読み込み直した状態に戻す
 export function resetOrgDirectoryForTest(): void {
-  activeGasUrl = DEFAULT_GAS_URL
+  activeGasUrl = ''
   activeOrgId = null
   startDecision = null
 }
