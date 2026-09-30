@@ -103,17 +103,17 @@ describe('リクエストの受け付け', () => {
     for (let i = 0; i < limit; i++) expect(t.post({ action: 'health' }).ok).toBe(true)
     const over = t.post({ action: 'health' })
     expect(over).toMatchObject({ ok: false, retryLater: true })
-    expect(t.gas.rejectedCount(Date.now())).toBe(1)
+    expect(t.gas.rejectedCount_(Date.now())).toBe(1)
   })
 
   it('レジストリ全体の上限', () => {
     const t = setup()
     const all = (t.gas.RATE_LIMITS as unknown as { all: number }).all
     const now = Date.parse('2026-10-01T00:00:10Z')
-    for (let i = 0; i < all; i++) expect(t.gas.rateLimitExceeded('all', all, now)).toBe(false)
-    expect(t.gas.rateLimitExceeded('all', all, now)).toBe(true)
+    for (let i = 0; i < all; i++) expect(t.gas.rateLimitExceeded_('all', all, now)).toBe(false)
+    expect(t.gas.rateLimitExceeded_('all', all, now)).toBe(true)
     // 次の1分は数え直す
-    expect(t.gas.rateLimitExceeded('all', all, now + 60000)).toBe(false)
+    expect(t.gas.rateLimitExceeded_('all', all, now + 60000)).toBe(false)
   })
 })
 
@@ -121,13 +121,13 @@ describe('操作の記録と、記録の無い直接の編集', () => {
   it('AuditLog に追記する。数式として扱われる文字列は、文字列のまま書く', () => {
     const t = setup()
     t.gas.setupRegistry()
-    t.gas.appendAudit({ actor: 'a@example.com', action: 'setStatus', target: 'org_1', before: { status: 'active' }, after: { status: 'suspended' }, reason: '=HYPERLINK("x")' })
+    t.gas.appendAudit_({ actor: 'a@example.com', action: 'setStatus', target: 'org_1', before: { status: 'active' }, after: { status: 'suspended' }, reason: '=HYPERLINK("x")' })
     const [headers, row] = t.sheets.get('AuditLog')!.rows as string[][]
     const rec = Object.fromEntries(headers.map((h, i) => [h, row[i]]))
     expect(rec).toMatchObject({ actor: 'a@example.com', action: 'setStatus', target: 'org_1', before: '{"status":"active"}', after: '{"status":"suspended"}', reason: '\'=HYPERLINK("x")' })
     expect(rec.at).toMatch(/^\d{4}-/)
-    for (const v of ['+1', '-1', '@x']) expect(t.gas.safeCell(v)).toBe(`'${v}`)
-    expect(t.gas.safeCell('ok')).toBe('ok')
+    for (const v of ['+1', '-1', '@x']) expect(t.gas.safeCell_(v)).toBe(`'${v}`)
+    expect(t.gas.safeCell_('ok')).toBe('ok')
   })
 
   it('記録を伴う変更の後に覚えた指紋と違う行・覚えていない行・消えた行を見つける', () => {
@@ -138,17 +138,17 @@ describe('操作の記録と、記録の無い直接の編集', () => {
     orgs.appendRow(row('org_a', 'active'))
     orgs.appendRow(row('org_b', 'active'))
     const values = (r: unknown[]) => Object.fromEntries((orgs.rows[0] as string[]).map((h, i) => [h, r[i] ?? '']))
-    t.gas.rememberOrgFingerprint('org_a', values(orgs.rows[1]))
-    t.gas.rememberOrgFingerprint('org_b', values(orgs.rows[2]))
-    expect(t.gas.findUnrecordedOrgEdits()).toEqual([])
+    t.gas.rememberOrgFingerprint_('org_a', values(orgs.rows[1]))
+    t.gas.rememberOrgFingerprint_('org_b', values(orgs.rows[2]))
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([])
     // 最後の確認の時刻・表示名は、記録なしで変わってよい
     ;(orgs.rows[1] as unknown[])[4] = '表示名'
-    expect(t.gas.findUnrecordedOrgEdits()).toEqual([])
+    expect(t.gas.findUnrecordedOrgEdits_()).toEqual([])
     // 状態を直接書き換えた・覚えていない行を足した・行を消した
     ;(orgs.rows[1] as unknown[])[2] = 'suspended'
     orgs.appendRow(row('org_c', 'active'))
     orgs.rows.splice(2, 1)
-    expect([...(t.gas.findUnrecordedOrgEdits() as string[])].sort()).toEqual(['org_a', 'org_b', 'org_c'])
+    expect([...(t.gas.findUnrecordedOrgEdits_() as string[])].sort()).toEqual(['org_a', 'org_b', 'org_c'])
   })
 })
 

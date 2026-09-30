@@ -80,37 +80,37 @@ function setup() {
   DateInCtx.now = () => now
   const advance = (ms: number) => { now += ms }
 
-  const userError = (m: string) => (c.userError as (m: string) => Error)(m)
-  c.authenticateRequest = (body: { sessionToken?: string }) => {
+  const userError = (m: string) => (c.userError_ as (m: string) => Error)(m)
+  c.authenticateRequest_ = (body: { sessionToken?: string }) => {
     if (!body.sessionToken) throw userError('ログインしていません。再ログインしてください。')
     return { memberId: body.sessionToken, renewed: null }
   }
   // スナップショットの作り直し(Sheets API)= シート全体を読む
-  c.readSheetTables = () => { calls.push('sheet:snapshot'); return JSON.parse(JSON.stringify(sheet)) }
-  c.readRoleSettings = () => { calls.push('sheet:Settings'); return { roles: ROLES } }
-  c.getActingMemberById = (id: string) => {
+  c.readSheetTables_ = () => { calls.push('sheet:snapshot'); return JSON.parse(JSON.stringify(sheet)) }
+  c.readRoleSettings_ = () => { calls.push('sheet:Settings'); return { roles: ROLES } }
+  c.getActingMemberById_ = (id: string) => {
     calls.push('sheet:Members')
     const row = sheet.Members.rows.find((r) => r[0] === id)
     if (!row) throw userError('メンバー登録が見つかりません。')
     return { id, role: row[2], project_ids: [], permission_overrides: [] }
   }
-  c.findRowUnmeasured = (name: string, id: string) => {
+  c.findRowUnmeasured_ = (name: string, id: string) => {
     calls.push('sheet:' + name)
     const t = sheet[name]
     const row = t?.rows.find((r) => r[0] === id)
     return row ? Object.fromEntries(t.headers.map((h, i) => [h, row[i]])) : null
   }
-  c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+  c.updateRowFieldsUnmeasured_ = (name: string, id: string, fields: Record<string, unknown>) => {
     writes.push({ sheet: name, id, fields })
     return { id, updated: Object.keys(fields) }
   }
-  c.notifyScheduleChange = () => {}
+  c.notifyScheduleChange_ = () => {}
   c.updateRole = (memberId: string, role: string) => {
     writes.push({ sheet: 'Members', id: memberId, fields: { role } })
     return { ok: true }
   }
-  c.assertTopRemains = () => {}
-  c.requireKnownRole = () => {}
+  c.assertTopRemains_ = () => {}
+  c.requireKnownRole_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } } & Record<string, unknown>
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
   // スナップショットのキャッシュを作っておく(読み取り・ログインの後の状態)
@@ -211,10 +211,10 @@ describe('書き込みの認証', () => {
     const t = setup()
     const sheetAuth = new Set(t.gas.SHEET_AUTH_ACTIONS as string[])
     const snapshotAuth = new Set(t.gas.SNAPSHOT_AUTH_ACTIONS as string[])
-    const aStart = CODE_GS.indexOf('function authorizeAction(')
+    const aStart = CODE_GS.indexOf('function authorizeAction_(')
     const auth = CODE_GS.slice(aStart, CODE_GS.indexOf('\nfunction ', aStart + 10))
     const daihyoOnly = auth.slice(auth.indexOf('var daihyoOnly = ['), auth.indexOf('if (daihyoOnly.indexOf(action)'))
-    const fullAdmin = auth.slice(auth.indexOf("if (action === 'updateSetting'"), auth.indexOf('if (isActingFullAdmin(acting)) return'))
+    const fullAdmin = auth.slice(auth.indexOf("if (action === 'updateSetting'"), auth.indexOf('if (isActingFullAdmin_(acting)) return'))
     const actions = [...daihyoOnly.matchAll(/^\s*'(\w+)'/gm), ...fullAdmin.matchAll(/action === '(\w+)'/g)].map((m) => m[1])
     expect(actions.length).toBeGreaterThan(25)
     // 読み取り(getWebhookStatus など)は、#31 からスナップショットで判定する
@@ -347,19 +347,19 @@ describe('書き込みの内訳', () => {
   it('処理(シートの読み書き・通知の準備・メール)と、書き込みの確定・版の更新・送り直しの記録を分けて出す', () => {
     const t = setup()
     t.warm()
-    t.c.updateRowFieldsUnmeasured = () => { t.advance(300); return {} }
+    t.c.updateRowFieldsUnmeasured_ = () => { t.advance(300); return {} }
     // 日程の変更の通知: タスクを読み(100)、宛先を調べ(50)、メールを2通(200ずつ)
-    t.c.notifyScheduleChange = () => {
-      ;(t.c.findRow as (s: string, id: string) => unknown)('Tasks', 't1')
-      ;(t.c.notifyAdmins as (s: string, b: string) => void)('件名', '本文')
+    t.c.notifyScheduleChange_ = () => {
+      ;(t.c.findRow_ as (s: string, id: string) => unknown)('Tasks', 't1')
+      ;(t.c.notifyAdmins_ as (s: string, b: string) => void)('件名', '本文')
     }
-    t.c.findRowUnmeasured = () => { t.advance(100); return {} }
-    t.c.notifyAdminsUnmeasured = () => {
+    t.c.findRowUnmeasured_ = () => { t.advance(100); return {} }
+    t.c.notifyAdminsUnmeasured_ = () => {
       t.advance(50)
-      ;(t.c.sendMail as (o: object) => void)({})
-      ;(t.c.sendMail as (o: object) => void)({})
+      ;(t.c.sendMail_ as (o: object) => void)({})
+      ;(t.c.sendMail_ as (o: object) => void)({})
     }
-    t.c.sendMailUnmeasured = () => { t.advance(200) }
+    t.c.sendMailUnmeasured_ = () => { t.advance(200) }
     const flush = (t.c.SpreadsheetApp as { flush: () => void })
     flush.flush = () => { t.advance(700) }
     const res = t.post({ action: 'updateSchedule', sessionToken: 'm-lead', requestId: 'req-timing-1', taskId: 't1', startDate: '', deadline: '2026-10-10' })
@@ -386,7 +386,7 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
   const h = (id: string, field: string, byId = 'm-lead') => ({ id, at: '2026-10-01', byId, field, from: '', to: 'x' })
   // 期限(due_date)の書き込みだけ失敗させる
   const failSchedule = (t: ReturnType<typeof setup>) => {
-    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+    t.c.updateRowFieldsUnmeasured_ = (name: string, id: string, fields: Record<string, unknown>) => {
       if ('due_date' in fields) throw new Error('シートに書けませんでした')
       t.writes.push({ sheet: name, id, fields })
       return {}
@@ -460,8 +460,8 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
     const t = setup()
     t.warm()
     const sent: string[] = []
-    t.c.notifyMention = () => { sent.push('mention') }
-    t.c.updateRowFieldsUnmeasured = () => { throw new Error('シートに書けませんでした') }
+    t.c.notifyMention_ = () => { sent.push('mention') }
+    t.c.updateRowFieldsUnmeasured_ = () => { throw new Error('シートに書けませんでした') }
     const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
       { action: 'updateComments', taskId: 't1', comments: [{ id: 'c1', byId: 'm-base', text: 'hi' }] },
       { action: 'notifyMention', taskId: 't1', commentText: 'hi', memberIds: ['m-lead'] },
@@ -474,9 +474,9 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
     const t = setup()
     t.warm()
     const created: unknown[] = []
-    t.c.createTasks = (tasks: unknown[]) => { created.push(...tasks); return [] }
-    t.c.notifyReview = () => {}
-    t.c.updateRowFieldsUnmeasured = () => { throw new Error('シートに書けませんでした') }
+    t.c.createTasks_ = (tasks: unknown[]) => { created.push(...tasks); return [] }
+    t.c.notifyReview_ = () => {}
+    t.c.updateRowFieldsUnmeasured_ = () => { throw new Error('シートに書けませんでした') }
     const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
       { action: 'createTasks', tasks: [{ tempId: 'tmp', title: '確認: タスク', relatedReviewTaskId: 't1', assigneeIds: ['m-lead'] }] },
       { action: 'updateTaskStatus', taskId: 't1', status: 'review' },
@@ -489,8 +489,8 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
   it('担当者の変更が失敗したら、その担当者をプロジェクトに加えない', () => {
     const t = setup()
     t.warm()
-    t.c.syncCalendarForTask = () => {}
-    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+    t.c.syncCalendarForTask_ = () => {}
+    t.c.updateRowFieldsUnmeasured_ = (name: string, id: string, fields: Record<string, unknown>) => {
       if ('assignee_id' in fields) throw new Error('シートに書けませんでした')
       t.writes.push({ sheet: name, id, fields })
       return {}
@@ -506,7 +506,7 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
   it('完了への変更が失敗したら、完了で付くスキルを書かない', () => {
     const t = setup()
     t.warm()
-    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => {
+    t.c.updateRowFieldsUnmeasured_ = (name: string, id: string, fields: Record<string, unknown>) => {
       if ('status' in fields) throw new Error('シートに書けませんでした')
       t.writes.push({ sheet: name, id, fields })
       return {}
@@ -528,7 +528,7 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
       { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
     ] }
     const first = t.post(body)
-    t.c.updateRowFieldsUnmeasured = (name: string, id: string, fields: Record<string, unknown>) => { t.writes.push({ sheet: name, id, fields }); return {} }
+    t.c.updateRowFieldsUnmeasured_ = (name: string, id: string, fields: Record<string, unknown>) => { t.writes.push({ sheet: name, id, fields }); return {} }
     const second = t.post(body)
     expect(second.replayed).toBe(true)
     expect(second.result).toEqual(first.result)

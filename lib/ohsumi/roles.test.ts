@@ -35,7 +35,7 @@ const CODED: R.RoleDef[] = [
 describe('GAS と同じ結果になる', () => {
   it('今までの設定から組み立てた役職の一覧', () => {
     for (const settings of LEGACY_CASES) {
-      expect(plain(gas.rolesFromLegacy(settings)), JSON.stringify(settings)).toEqual(R.rolesFromLegacy(settings))
+      expect(plain(gas.rolesFromLegacy_(settings)), JSON.stringify(settings)).toEqual(R.rolesFromLegacy(settings))
     }
   })
 
@@ -49,8 +49,8 @@ describe('GAS と同じ結果になる', () => {
       '',
     ]
     for (const raw of cases) {
-      expect(plain(gas.parseRolesSetting(raw)), raw).toEqual(R.parseRolesSetting(raw))
-      expect(plain(gas.rolesFromSettings({ roles: raw, restricted_roles: '班長' })), raw).toEqual(
+      expect(plain(gas.parseRolesSetting_(raw)), raw).toEqual(R.parseRolesSetting(raw))
+      expect(plain(gas.rolesFromSettings_({ roles: raw, restricted_roles: '班長' })), raw).toEqual(
         R.rolesFromSettings({ roles: raw, restricted_roles: '班長' }),
       )
     }
@@ -63,22 +63,21 @@ describe('GAS と同じ結果になる', () => {
     for (const roles of lists) {
       for (const ref of refs) {
         const label = `${JSON.stringify(ref)} in ${roles[0].id}`
-        expect(gas.roleTier(roles, ref), label).toBe(R.roleTier(roles, ref))
-        expect(gas.isTopRoleRef(roles, ref), label).toBe(R.isTopRoleRef(roles, ref))
-        expect(gas.isAdminRoleRef(roles, ref), label).toBe(R.isAdminRoleRef(roles, ref))
-        expect(gas.isFullAdminRoleRef(roles, ref), label).toBe(R.isFullAdminRoleRef(roles, ref))
-        expect(plain(gas.restrictedSections(roles, ref)), label).toEqual(R.restrictedSections(roles, ref))
-        for (const other of refs) expect(gas.sameRole(roles, ref, other), `${label} vs ${other}`).toBe(R.sameRole(roles, ref, other))
+        expect(gas.roleTier_(roles, ref), label).toBe(R.roleTier(roles, ref))
+        expect(gas.isTopRoleRef_(roles, ref), label).toBe(R.isTopRoleRef(roles, ref))
+        expect(gas.isAdminRoleRef_(roles, ref), label).toBe(R.isAdminRoleRef(roles, ref))
+        expect(gas.isFullAdminRoleRef_(roles, ref), label).toBe(R.isFullAdminRoleRef(roles, ref))
+        for (const other of refs) expect(gas.sameRole_(roles, ref, other), `${label} vs ${other}`).toBe(R.sameRole(roles, ref, other))
       }
     }
   })
 
   it('今までの設定に戻す値・決まりごと・既定の役職', () => {
     for (const roles of [CODED, R.rolesFromLegacy(LEGACY_CASES[4])]) {
-      expect(plain(gas.rolesToLegacySettings(roles))).toEqual(R.rolesToLegacySettings(roles))
+      expect(plain(gas.rolesToLegacySettings_(roles))).toEqual(R.rolesToLegacySettings(roles))
     }
-    expect(plain(gas.validateRoles([CODED[0], CODED[0]]))).toEqual(R.validateRoles([CODED[0], CODED[0]]))
-    expect(plain(gas.defaultRoles())).toEqual(R.defaultRoles())
+    expect(plain(gas.validateRoles_([CODED[0], CODED[0]]))).toEqual(R.validateRoles([CODED[0], CODED[0]]))
+    expect(plain(gas.defaultRoles_())).toEqual(R.defaultRoles())
     expect(gas.DEFAULT_NON_TOP_SECTIONS).toBeDefined()
     expect([...(gas.DEFAULT_NON_TOP_SECTIONS as unknown as string[])]).toEqual(R.restrictedSections([], 'x'))
   })

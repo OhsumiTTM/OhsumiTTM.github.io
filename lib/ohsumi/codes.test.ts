@@ -21,7 +21,7 @@ function loadGas() {
     VALUE_CODES: unknown
     NOTIFY_LABELS: Record<string, Record<string, Record<string, string>>>
     MIN_CLIENT_VERSION: number
-    normalizeCode: (kind: string, v: unknown) => string
+    normalizeCode_: (kind: string, v: unknown) => string
   }
 }
 
@@ -116,7 +116,7 @@ describe('GAS との一致', () => {
   it('GAS の normalizeCode は、どの値でもフロントと同じ結果になる', () => {
     for (const kind of KINDS) {
       for (const v of samplesOf(kind)) {
-        expect(gas.normalizeCode(kind, v), `${kind}:${String(v)}`).toBe(normalizeCode(kind, v))
+        expect(gas.normalizeCode_(kind, v), `${kind}:${String(v)}`).toBe(normalizeCode(kind, v))
       }
     }
   })

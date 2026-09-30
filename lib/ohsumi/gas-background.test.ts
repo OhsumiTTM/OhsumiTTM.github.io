@@ -24,7 +24,7 @@ function setup(opts: { lockBusy?: boolean } = {}) {
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
   const calls: string[] = []
-  c.authenticateRequest = () => ({ memberId: 'm1', renewed: null })
+  c.authenticateRequest_ = () => ({ memberId: 'm1', renewed: null })
   c.bumpDataVersion = () => {}
   // スナップショット: m1 は制限付きの管理者(roles の設定を使う)
   const roles = JSON.stringify([{ id: 'base', name: '一般', tier: 'base' }, { id: 'r-lead', name: '班長', tier: 'admin', restricted: true, sections: ['expenses'] }, { id: 'top', name: '代表', tier: 'top' }])
@@ -32,18 +32,18 @@ function setup(opts: { lockBusy?: boolean } = {}) {
     Members: { headers: ['id', 'name', 'role', 'project_ids', 'permission_overrides_json'], rows: [['m1', 'A', 'r-lead', 'p1, p2', '[]']] },
     Settings: { headers: ['key', 'value'], rows: [['roles', roles]] },
   }
-  c.loadSnapshot = () => { calls.push('loadSnapshot'); return { version: 'v1', data: snapshot, cacheHit: true } }
-  c.getActingMemberById = () => { calls.push('sheet:Members'); return { id: 'm1', role: 'top', project_ids: [], permission_overrides: [] } }
-  c.readRoleSettings = () => { calls.push('sheet:Settings'); return { roles } }
-  c.getExpenses = (acting: { id: string; role: string; project_ids: string[] }) => { calls.push('getExpenses:' + acting.role + ':' + acting.project_ids.join('|')); return [{ id: 'e1' }] }
-  c.getFormSubmissions = () => { throw (c.userError as (m: string) => Error)('フォームを読めません') }
-  c.getCandidates = () => []
-  c.getMemberEmailValue = (id: string) => id + '@example.com'
-  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
-  c.updateTaskFields = () => ({ ok: true })
+  c.loadSnapshot_ = () => { calls.push('loadSnapshot'); return { version: 'v1', data: snapshot, cacheHit: true } }
+  c.getActingMemberById_ = () => { calls.push('sheet:Members'); return { id: 'm1', role: 'top', project_ids: [], permission_overrides: [] } }
+  c.readRoleSettings_ = () => { calls.push('sheet:Settings'); return { roles } }
+  c.getExpenses_ = (acting: { id: string; role: string; project_ids: string[] }) => { calls.push('getExpenses:' + acting.role + ':' + acting.project_ids.join('|')); return [{ id: 'e1' }] }
+  c.getFormSubmissions_ = () => { throw (c.userError_ as (m: string) => Error)('フォームを読めません') }
+  c.getCandidates_ = () => []
+  c.getMemberEmailValue_ = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached_ = (id: string) => id + '@example.com'
+  c.updateTaskFields_ = () => ({ ok: true })
   const lastLogins: string[] = []
-  c.updateMemberFields = (id: string, fields: { last_login: string }) => { lastLogins.push(id + ':' + fields.last_login); return {} }
-  const gas = ctx as unknown as { doPost: (e: object) => { text: string }; doGet: (e: object) => { text: string }; recordLastLogin: (id: string) => boolean }
+  c.updateMemberFields_ = (id: string, fields: { last_login: string }) => { lastLogins.push(id + ':' + fields.last_login); return {} }
+  const gas = ctx as unknown as { doPost: (e: object) => { text: string }; doGet: (e: object) => { text: string }; recordLastLogin_: (id: string) => boolean }
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
   return { gas, post, calls, logs, lastLogins }
 }
@@ -92,7 +92,7 @@ describe('読み取りの認証', () => {
 describe('ログインの中での最終ログイン日時', () => {
   // 記録のしかた(1時間以内は書かない・書き込み待ち・まとめて書く)は gas-login-latency.test.ts
   it('exchangeIdToken は結果に lastLoginRecorded を付ける', () => {
-    expect(CODE_GS).toMatch(/data\.lastLoginRecorded = .*recordLastLogin\(memberId\)/)
+    expect(CODE_GS).toMatch(/data\.lastLoginRecorded = .*recordLastLogin_\(memberId\)/)
   })
 })
 

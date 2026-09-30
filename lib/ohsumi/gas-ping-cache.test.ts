@@ -69,37 +69,37 @@ function setup() {
   let now = Date.parse('2026-10-01T00:00:00Z')
   DateInCtx.now = () => now
   const calls: string[] = []
-  c.authenticateRequest = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: null })
-  c.authorizeAction = () => {}
-  c.assertTopRemains = () => {}
-  c.requireKnownRole = () => {}
-  c.sheetRoleRef = (r: string) => r
-  c.readSheetTables = () => { calls.push('readSheets'); return clone() }
-  c.buildViewerData = (data: Record<string, Table>) => data
+  c.authenticateRequest_ = (body: { sessionToken: string }) => ({ memberId: body.sessionToken, renewed: null })
+  c.authorizeAction_ = () => {}
+  c.assertTopRemains_ = () => {}
+  c.requireKnownRole_ = () => {}
+  c.sheetRoleRef_ = (r: string) => r
+  c.readSheetTables_ = () => { calls.push('readSheets'); return clone() }
+  c.buildViewerData_ = (data: Record<string, Table>) => data
   // シートから引く(書き込みの認証・スナップショットに見つからない時)
-  c.getActingMemberById = (id: string) => {
+  c.getActingMemberById_ = (id: string) => {
     calls.push('sheet:Members')
     const row = sheet.Members.rows.find((r) => r[0] === id)
-    if (!row) throw (c.userError as (m: string) => Error)('メンバー登録が見つかりません。管理者にお問い合わせください。')
+    if (!row) throw (c.userError_ as (m: string) => Error)('メンバー登録が見つかりません。管理者にお問い合わせください。')
     return { id, role: row[2], project_ids: [], permission_overrides: [] }
   }
   const col = (name: string) => sheet.Members.headers.indexOf(name)
-  c.updateMemberFields = (id: string, fields: Record<string, string>) => {
+  c.updateMemberFields_ = (id: string, fields: Record<string, string>) => {
     const row = sheet.Members.rows.find((r) => r[0] === id)!
     for (const [k, v] of Object.entries(fields)) if (col(k) >= 0) row[col(k)] = v
     return { ok: true }
   }
-  c.removeMember = (id: string) => { sheet.Members.rows = sheet.Members.rows.filter((r) => r[0] !== id); return { ok: true } }
-  c.getExpenses = (acting: { id: string; role: string }) => { calls.push('getExpenses:' + acting.id + ':' + acting.role); return [{ id: 'e1' }] }
-  c.getFormSubmissions = () => []
-  c.getCandidates = () => []
-  c.getMemberEmailValue = (id: string) => id + '@example.com'
-  c.getMemberEmailValueCached = (id: string) => id + '@example.com'
+  c.removeMember_ = (id: string) => { sheet.Members.rows = sheet.Members.rows.filter((r) => r[0] !== id); return { ok: true } }
+  c.getExpenses_ = (acting: { id: string; role: string }) => { calls.push('getExpenses:' + acting.id + ':' + acting.role); return [{ id: 'e1' }] }
+  c.getFormSubmissions_ = () => []
+  c.getCandidates_ = () => []
+  c.getMemberEmailValue_ = (id: string) => id + '@example.com'
+  c.getMemberEmailValueCached_ = (id: string) => id + '@example.com'
   const gas = ctx as unknown as {
     doPost: (e: object) => { text: string }
     doGet: (e: object) => { text: string }
     onSpreadsheetChange: (e: object) => void
-    loadSnapshot: () => { data: Record<string, Table> }
+    loadSnapshot_: () => { data: Record<string, Table> }
     LOCK_EXEMPT_ACTIONS: string[]
     SNAPSHOT_MAX_AGE_MS: number
   }
@@ -114,7 +114,7 @@ function setup() {
 describe('ping(切り分け用)', () => {
   it('認証・スクリプトプロパティ・シートを読まずに、すぐ pong と GAS の中の時間を返す', () => {
     const t = setup()
-    t.c.authenticateRequest = () => { throw new Error('認証してはいけない') }
+    t.c.authenticateRequest_ = () => { throw new Error('認証してはいけない') }
     const before = t.propsReads()
     const res = t.post({ action: 'ping' })
     expect(res).toMatchObject({ ok: true, result: { pong: true } })
@@ -160,7 +160,7 @@ describe('初期データと裏での読み込みを1回で返す(withBackground
 
   it('裏での読み込みが失敗しても、初期データは返す(backgroundError)', () => {
     const t = setup()
-    t.c.getBackgroundData = () => { throw new Error('boom') }
+    t.c.getBackgroundData_ = () => { throw new Error('boom') }
     const res = t.post({ action: 'getInitialData', sessionToken: 'm1', withBackground: true })
     expect(res.ok).toBe(true)
     expect(res.result.sheets).toBeDefined()
@@ -170,10 +170,10 @@ describe('初期データと裏での読み込みを1回で返す(withBackground
 
   it('exchangeIdToken: ログインの応答にも background が入る', () => {
     const t = setup()
-    t.c.verifyGoogleIdToken = () => ({ email: 'm1@example.com' })
-    t.c.findMemberIdByEmailCached = () => 'm1'
-    t.c.issueSessionToken = () => 'session'
-    t.c.recordLastLogin = () => true
+    t.c.verifyGoogleIdToken_ = () => ({ email: 'm1@example.com' })
+    t.c.findMemberIdByEmailCached_ = () => 'm1'
+    t.c.issueSessionToken_ = () => 'session'
+    t.c.recordLastLogin_ = () => true
     const res = t.post({ action: 'exchangeIdToken', idToken: 'x', nonceSecret: 'y', withBackground: true })
     expect(res.ok).toBe(true)
     expect(res.result.session).toBe('session')
@@ -207,7 +207,7 @@ describe('読み取りの認証に使うスナップショットの作り直し'
     const before = t.props.DATA_VERSION
     t.post({ action: 'updateMemberDepartmentPath', sessionToken: 'm1', memberId: 'm2', departmentPath: '総務' })
     expect(t.props.DATA_VERSION).not.toBe(before)
-    const members = t.gas.loadSnapshot().data.Members
+    const members = t.gas.loadSnapshot_().data.Members
     expect(members.rows.find((r) => r[0] === 'm2')![members.headers.indexOf('department_path')]).toBe('総務')
   })
 

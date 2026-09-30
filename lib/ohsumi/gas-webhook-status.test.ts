@@ -41,7 +41,7 @@ function loadGas(props: Record<string, string>, responseCode = 204) {
 describe('getWebhookStatus', () => {
   it('設定済みかどうかだけを返し、Webhook URL は返さない', () => {
     const { gas } = loadGas({ discord_webhook_url: DISCORD_URL })
-    const status = gas.getWebhookStatus()
+    const status = gas.getWebhookStatus_()
     expect(status).toEqual({
       discord: { configured: true, lastTest: null },
       slack: { configured: false, lastTest: null },
@@ -51,18 +51,18 @@ describe('getWebhookStatus', () => {
 
   it('テスト送信の結果と日時をスクリプトプロパティに保存し、状態として返す', () => {
     const { gas, store } = loadGas({ discord_webhook_url: DISCORD_URL, slack_webhook_url: SLACK_URL })
-    gas.testDiscordWebhook()
-    const status = gas.getWebhookStatus() as { discord: { lastTest: { ok: boolean; at: string } } }
+    gas.testDiscordWebhook_()
+    const status = gas.getWebhookStatus_() as { discord: { lastTest: { ok: boolean; at: string } } }
     expect(status.discord.lastTest.ok).toBe(true)
     expect(Number.isNaN(Date.parse(status.discord.lastTest.at))).toBe(false)
     expect(store.discord_webhook_last_test).toBeDefined()
-    expect(JSON.stringify(gas.getWebhookStatus())).not.toContain('secret-token')
+    expect(JSON.stringify(gas.getWebhookStatus_())).not.toContain('secret-token')
   })
 
   it('テスト送信に失敗した場合も結果を保存する', () => {
     const { gas } = loadGas({ slack_webhook_url: SLACK_URL }, 404)
-    expect(() => gas.testSlackWebhook()).toThrow()
-    const status = gas.getWebhookStatus() as { slack: { lastTest: { ok: boolean; error: string } } }
+    expect(() => gas.testSlackWebhook_()).toThrow()
+    const status = gas.getWebhookStatus_() as { slack: { lastTest: { ok: boolean; error: string } } }
     expect(status.slack.lastTest).toMatchObject({ ok: false, error: 'HTTP 404' })
   })
 })
@@ -72,21 +72,21 @@ describe('テスト環境の Discord・Slack', () => {
 
   it('テスト環境では投稿せず、ログだけにする(接続テストもしない)', () => {
     const { gas, fetched } = loadGas({ ...hooks, TEST_ENVIRONMENT: 'true' })
-    gas.notifyChat('期限切れのタスクがあります')
+    gas.notifyChat_('期限切れのタスクがあります')
     expect(fetched).toEqual([])
-    expect(() => gas.testDiscordWebhook()).toThrow(/TEST_ALLOW_CHAT/)
+    expect(() => gas.testDiscordWebhook_()).toThrow(/TEST_ALLOW_CHAT/)
     expect(fetched).toEqual([])
   })
 
   it('TEST_ALLOW_CHAT が true なら、テスト環境でも投稿する', () => {
     const { gas, fetched } = loadGas({ ...hooks, TEST_ENVIRONMENT: 'true', TEST_ALLOW_CHAT: 'true' })
-    gas.notifyChat('x')
+    gas.notifyChat_('x')
     expect(fetched).toEqual([DISCORD_URL, SLACK_URL])
   })
 
   it('本番(テスト環境ではない)は、これまでどおり投稿する', () => {
     const { gas, fetched } = loadGas(hooks)
-    gas.notifyChat('x')
+    gas.notifyChat_('x')
     expect(fetched).toEqual([DISCORD_URL, SLACK_URL])
   })
 })

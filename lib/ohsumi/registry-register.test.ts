@@ -30,7 +30,7 @@ function ready() {
   type RegisterResult = { ok: boolean; result?: Record<string, unknown>; replayed?: boolean; error?: string }
   const register = (body: Record<string, unknown>, now = Date.now()): RegisterResult => {
     try {
-      return (t.gas.registerOrg as (b: object, n: number) => RegisterResult)(body, now)
+      return (t.gas.registerOrg_ as (b: object, n: number) => RegisterResult)(body, now)
     } catch (e) {
       return { ok: false, error: (e as Error).message }
     }
@@ -59,7 +59,7 @@ describe('団体の登録(registerOrg)', () => {
     expect(overview.result.orgs).toContainEqual(expect.objectContaining({ orgId: ORG_A, displayName: 'テスト団体A', gasUrl: URL_A, state: 'active', checkState: 'never' }))
     expect(JSON.stringify(overview)).not.toContain(res.result.registryKey)
     // 記録の無い変更として監視に知らされない(指紋を覚えている)
-    expect((t.gas.findUnrecordedOrgEdits as () => string[])()).toEqual([])
+    expect((t.gas.findUnrecordedOrgEdits_ as () => string[])()).toEqual([])
   })
 
   it('登録コードは1回だけ使える。ほかの団体・別の登録(別の registerNonce)では使えない', () => {
@@ -196,7 +196,7 @@ describe('再登録コード(共有鍵が漏れた時の作り直し・接続先
     expect(t.rows('Secrets').slice(1).map((r) => [r[0], String(r[1]).replace(/^'/, ''), r[2]])).toEqual([[ORG_A, second.result!.registryKey, 2]])
     expect(t.rows('Orgs').slice(1).map((r) => r[1])).toEqual([URL_A2])
     expect(t.audit()).toContainEqual(expect.objectContaining({ action: 'reregisterOrg', target: ORG_A }))
-    expect((t.gas.findUnrecordedOrgEdits as () => string[])()).toEqual([])
+    expect((t.gas.findUnrecordedOrgEdits_ as () => string[])()).toEqual([])
   })
 
   it('登録されていない団体向けの再登録コードは発行できない', () => {
@@ -219,7 +219,7 @@ describe('登録コードの総当たりの対策', () => {
     expect(blocked.ok).toBe(false)
     expect(blocked.error).toMatch(/しばらく登録を受け付けていません/)
     // 監視の「断ったリクエスト」にも数える
-    expect((t.gas.rejectedCount as (n: number) => number)(now)).toBeGreaterThan(0)
+    expect((t.gas.rejectedCount_ as (n: number) => number)(now)).toBeGreaterThan(0)
     // 次の1時間には登録できる
     expect(t.register({ code: good, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 3600 * 1000).ok).toBe(true)
   })

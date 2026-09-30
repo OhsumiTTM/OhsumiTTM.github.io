@@ -109,9 +109,9 @@ function setup() {
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.authenticateRequest = (body: { sessionToken?: string }) => ({ memberId: body.sessionToken, renewed: null })
+  c.authenticateRequest_ = (body: { sessionToken?: string }) => ({ memberId: body.sessionToken, renewed: null })
   // スナップショットの作り直し(Sheets API)は、シートを1回で読んだことにする
-  c.readSheetTablesViaApi = (names: string[]) => {
+  c.readSheetTablesViaApi_ = (names: string[]) => {
     calls.push('api:snapshot')
     const tables: Record<string, { headers: string[]; rows: string[][] }> = {}
     for (const n of names) {
@@ -120,8 +120,8 @@ function setup() {
     }
     return { tables }
   }
-  c.isTestEnvironment = () => false
-  c.syncCalendarForTask = () => {}
+  c.isTestEnvironment_ = () => false
+  c.syncCalendarForTask_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } } & Record<string, (...a: unknown[]) => unknown>
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
   // 読み取り(ログイン後の状態): スナップショットとメールアドレスのキャッシュができる
@@ -155,19 +155,19 @@ describe('行への書き込み', () => {
   it('離れた列は、間のセルを書き換えないよう別々に書く', () => {
     const t = setup()
     t.sheets.Tasks.rows[1][3] = '=A1' // 間の列(creator_id)に数式が入っていても消さない
-    ;(t.gas.updateRowFields as (s: string, id: string, f: object) => unknown)('Tasks', 't1', { title: '新', project_id: 'p2' })
+    ;(t.gas.updateRowFields_ as (s: string, id: string, f: object) => unknown)('Tasks', 't1', { title: '新', project_id: 'p2' })
     expect(t.calls.filter((x) => x.startsWith('Tasks.write'))).toEqual(['Tasks.write(2,2x1)', 'Tasks.write(2,5x1)'])
     expect(t.sheets.Tasks.rows[1][3]).toBe('=A1')
-    expect(t.gas.contiguousColumnRuns([{ col: 7, value: 'b' }, { col: 6, value: 'a' }, { col: 9, value: 'c' }, { col: 6, value: 'a2' }]))
+    expect(t.gas.contiguousColumnRuns_([{ col: 7, value: 'b' }, { col: 6, value: 'a' }, { col: 9, value: 'c' }, { col: 6, value: 'a2' }]))
       .toEqual([[{ col: 6, value: 'a2' }, { col: 7, value: 'b' }], [{ col: 9, value: 'c' }]])
   })
 
   it('行を削除した後は読み直す(行番号がずれるため)。追加した行は、見つからない時に読み直して見つける', () => {
     const t = setup()
-    const update = t.gas.updateRowFields as (s: string, id: string, f: object) => unknown
+    const update = t.gas.updateRowFields_ as (s: string, id: string, f: object) => unknown
     update('Tasks', 't2', { title: 'A' })
     // 行の削除(removeTask と同じく deleteRow の後に忘れる)
-    ;(t.gas.removeTask as (id: string) => unknown)('t1')
+    ;(t.gas.removeTask_ as (id: string) => unknown)('t1')
     update('Tasks', 't2', { title: 'B' })
     expect(t.sheets.Tasks.rows.find((r) => r[0] === 't2')![1]).toBe('B')
     expect(t.sheets.Tasks.rows.find((r) => r[0] === 't1')).toBeUndefined()
@@ -179,7 +179,7 @@ describe('行への書き込み', () => {
 
   it('シートに無い列だけの時は、これまでどおりエラーにする', () => {
     const t = setup()
-    expect(() => (t.gas.updateRowFields as (s: string, id: string, f: object) => unknown)('Tasks', 't1', { no_such_column: 1 })).toThrow(/列が見つかりません/)
+    expect(() => (t.gas.updateRowFields_ as (s: string, id: string, f: object) => unknown)('Tasks', 't1', { no_such_column: 1 })).toThrow(/列が見つかりません/)
   })
 })
 
@@ -213,7 +213,7 @@ describe('日程の変更の通知', () => {
     const t = setup()
     t.warm()
     const bodies: string[] = []
-    t.c.sendMail = (m: { body: string }) => { bodies.push(m.body) }
+    t.c.sendMail_ = (m: { body: string }) => { bodies.push(m.body) }
     t.post({ action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '2026-10-01', deadline: '2026-10-10' })
     expect(bodies.length).toBeGreaterThan(0)
     for (const b of bodies) expect(b).toMatch(/2026-10-01[\s\S]*2026-10-10/)

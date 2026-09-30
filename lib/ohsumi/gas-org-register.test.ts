@@ -95,22 +95,22 @@ function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Re
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.readRoleSettings = () => ({ roles: ROLES })
-  c.addMember = (name: string, email: string, _aff: string, role: string) => {
+  c.readRoleSettings_ = () => ({ roles: ROLES })
+  c.addMember_ = (name: string, email: string, _aff: string, role: string) => {
     const id = String(100 + added.length)
     added.push({ id, name, email, role })
     members.push([id, name, role])
     return { id }
   }
   // ログインの確認(IDトークン = メールアドレス)と、その後の初期データ
-  c.verifyGoogleIdToken = (idToken: string) => ({ email: idToken })
-  c.findMemberIdByEmailCached = (email: string) => opts.emails?.[email] ?? added.find((a) => a.email === email)?.id ?? null
-  c.getInitialDataForMember = (id: string) => ({ memberId: id })
-  c.issueSessionToken = (id: string) => ({ token: 'session-' + id, exp: 1 })
-  c.recordLastLogin = () => true
+  c.verifyGoogleIdToken_ = (idToken: string) => ({ email: idToken })
+  c.findMemberIdByEmailCached_ = (email: string) => opts.emails?.[email] ?? added.find((a) => a.email === email)?.id ?? null
+  c.getInitialDataForMember_ = (id: string) => ({ memberId: id })
+  c.issueSessionToken_ = (id: string) => ({ token: 'session-' + id, exp: 1 })
+  c.recordLastLogin_ = () => true
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown>
   const post = (body: object) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: JSON.stringify(body) } }).text)
-  const register = (code: string, now?: number) => (gas.registerWithRegistry as (c: string, d?: object) => Record<string, unknown>)(code, now ? { now: () => now } : undefined)
+  const register = (code: string, now?: number) => (gas.registerWithRegistry_ as (c: string, d?: object) => Record<string, unknown>)(code, now ? { now: () => now } : undefined)
   const login = (email: string, setupCode?: string) => post({ action: 'exchangeIdToken', idToken: email, nonceSecret: 'n', setupCode })
   const menu = (answer: string) => { promptAnswer = answer; (gas.registerWithRegistryFromMenu as () => void)() }
   return { gas, c, props, logs, sent, added, members, dialogs, post, register, login, menu, fetches: () => fetches }

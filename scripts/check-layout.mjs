@@ -1,7 +1,7 @@
 // スマホの幅(375px)で主な画面を開き、横にはみ出す箇所が無いことを確かめる(CI で実行する)。
 //
 //   1. テスト用の設定(GAS の URL など)でビルドする(--no-build で省略)
-//   2. gas/Code.gs のサンプルのデータ(buildSampleData)を、GAS の読み取りの絞り込み
+//   2. gas/Code.gs のサンプルのデータ(buildSampleData_)を、GAS の読み取りの絞り込み
 //      (buildViewerData)に通して、そのメンバーが受け取るデータを作る。
 //      一般のメンバー(OUTPUT・タスク詳細・個人ページ)と、代表(管理画面のすべてのセクション)の2回開く
 //   3. out/ を配信し、ヘッドレスの Chrome で開く。GAS・Google への通信は偽の応答を返す
@@ -129,8 +129,8 @@ export function viewerData(memberId = MEMBER) {
   const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } })
   vm.runInContext(code, ctx)
   const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
-  const data = ctx.buildSampleData(today, {})
-  const settings = ctx.mergeSampleSettings({}, data.settings).values
+  const data = ctx.buildSampleData_(today, {})
+  const settings = ctx.mergeSampleSettings_({}, data.settings).values
   const table = (name, rows) => {
     const headers = ctx.SHEET_HEADERS[name]
     return { headers, rows: rows.map((r) => headers.map((h) => (r[h] == null ? '' : String(r[h])))) }
@@ -141,7 +141,7 @@ export function viewerData(memberId = MEMBER) {
     Tasks: table('Tasks', data.sheets.Tasks),
     Settings: { headers: ['key', 'value'], rows: Object.entries(settings).map(([k, v]) => [k, v]) },
   }
-  return ctx.buildViewerData(JSON.parse(JSON.stringify(snapshot)), memberId)
+  return ctx.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), memberId)
 }
 
 // ---- out/ の配信 ----

@@ -28,18 +28,18 @@ function setup(opts: { apiFails?: boolean } = {}) {
   })
   vm.runInContext(CODE_GS, ctx)
   const c = ctx as unknown as Record<string, unknown>
-  c.authenticateRequest = () => ({ memberId: 'm1', renewed: null })
-  c.getActingMemberById = (id: string) => ({ id })
-  c.authorizeAction = () => {}
+  c.authenticateRequest_ = () => ({ memberId: 'm1', renewed: null })
+  c.getActingMemberById_ = (id: string) => ({ id })
+  c.authorizeAction_ = () => {}
   c.bumpDataVersion = () => {}
-  c.updateTaskFields = () => ({ ok: true })
-  c.buildViewerData = () => ({ Members: { headers: [], rows: [] } })
+  c.updateTaskFields_ = () => ({ ok: true })
+  c.buildViewerData_ = () => ({ Members: { headers: [], rows: [] } })
   const tables = { Members: { headers: ['id'], rows: [['m1']] } }
-  c.readSheetTablesViaApi = () => (opts.apiFails ? { error: 'HTTP 403: Sheets API has not been used' } : { tables })
-  c.readSheetTablesViaSpreadsheetApp = () => tables
+  c.readSheetTablesViaApi_ = () => (opts.apiFails ? { error: 'HTTP 403: Sheets API has not been used' } : { tables })
+  c.readSheetTablesViaSpreadsheetApp_ = () => tables
   // キャッシュは JSON のまま持つ(gzip は Apps Script だけのため)
-  c.readSnapshotCache = (v: string) => (cache.has('snap:' + v) ? JSON.parse(cache.get('snap:' + v)!) : null)
-  c.writeSnapshotCache = (v: string, d: unknown) => { cache.set('snap:' + v, JSON.stringify(d)); return true }
+  c.readSnapshotCache_ = (v: string) => (cache.has('snap:' + v) ? JSON.parse(cache.get('snap:' + v)!) : null)
+  c.writeSnapshotCache_ = (v: string, d: unknown) => { cache.set('snap:' + v, JSON.stringify(d)); return true }
   const gas = ctx as unknown as { doPost: (e: object) => { text: string }; doGet: (e?: object) => { text: string } }
   const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
   return { gas, post }

@@ -18,12 +18,12 @@ function loadGas() {
   const context = vm.createContext({ console })
   vm.runInContext(CODE_GS, context)
   // シートを読む関数を差し替える(関数の呼び出しは実行時に context から解決される)
-  context.findRow = (_sheet: string, id: string) => TASKS[id] ?? null
-  context.getSettingValue = (key: string) => (key === 'restricted_roles' ? '班長' : '')
-  context.readRoleSettings = () => ({ restricted_roles: '班長' })
+  context.findRow_ = (_sheet: string, id: string) => TASKS[id] ?? null
+  context.getSettingValue_ = (key: string) => (key === 'restricted_roles' ? '班長' : '')
+  context.readRoleSettings_ = () => ({ restricted_roles: '班長' })
   return context as unknown as {
-    authorizeAction: (acting: unknown, action: string, body: unknown) => void
-    checkPermissionOverride: (acting: unknown, action: string, body: unknown) => boolean
+    authorizeAction_: (acting: unknown, action: string, body: unknown) => void
+    checkPermissionOverride_: (acting: unknown, action: string, body: unknown) => boolean
   }
 }
 
@@ -38,7 +38,7 @@ const member = (overrides: Override[], role = '一般') => ({
 })
 const allowed = (acting: unknown, action: string, body: Record<string, unknown> = {}) => {
   try {
-    gas.authorizeAction(acting, action, body)
+    gas.authorizeAction_(acting, action, body)
     return true
   } catch {
     return false

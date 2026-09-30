@@ -60,7 +60,7 @@ describe('採用の候補者(getCandidates)', () => {
   it('代表・全権管理者には、個人情報を含めて返す', () => {
     const gas = setup(defaultSettings)
     for (const a of [acting('m1', '代表'), acting('m2', '事業責任者')]) {
-      expect(gas.getCandidates(a)).toEqual([
+      expect(gas.getCandidates_(a)).toEqual([
         { id: 'c1', name: '候補 一郎', email: 'ichiro@example.com', phone: '090-0000-0000', resumeText: '履歴書の本文', interviewNotes: '面接のメモ',
           status: 'candidate', createdAt: '2026-09-01', updatedAt: '2026-09-02' },
       ])
@@ -71,7 +71,7 @@ describe('採用の候補者(getCandidates)', () => {
     const gas = setup(defaultSettings)
     for (const access of ['edit', 'approve']) {
       const a = acting('m3', '一般', [{ targetType: 'recruiting', targetId: '', access }])
-      expect((gas.getCandidates(a) as unknown[]).length).toBe(1)
+      expect((gas.getCandidates_(a) as unknown[]).length).toBe(1)
     }
   })
 
@@ -84,12 +84,12 @@ describe('採用の候補者(getCandidates)', () => {
       acting('m7', '一般', [{ targetType: 'project', targetId: 'p1', access: 'approve' }]),
       acting('m8', ''),
     ]
-    for (const a of denied) expect(gas.getCandidates(a), a.id).toEqual([])
+    for (const a of denied) expect(gas.getCandidates_(a), a.id).toEqual([])
   })
 
   it('規則の無い列は、権限があっても返さない(READ_POLICY と同じ考え方)', () => {
     const gas = setup(defaultSettings, true)
-    const [c] = gas.getCandidates(acting('m1', '代表')) as Record<string, unknown>[]
+    const [c] = gas.getCandidates_(acting('m1', '代表')) as Record<string, unknown>[]
     expect(JSON.stringify(c)).not.toContain('誰にも見せないメモ')
     // 規則はシートの列の一覧とちょうど同じ(列を足したら規則も決める)
     const policy = (gas as unknown as { CANDIDATES_READ_POLICY: { columns: Record<string, string> } }).CANDIDATES_READ_POLICY
@@ -99,7 +99,7 @@ describe('採用の候補者(getCandidates)', () => {
 })
 
 describe('フォームの回答(getFormSubmissions)', () => {
-  const ids = (gas: ReturnType<typeof setup>, a: Acting) => (gas.getFormSubmissions(a) as { id: string }[]).map((s) => s.id).sort()
+  const ids = (gas: ReturnType<typeof setup>, a: Acting) => (gas.getFormSubmissions_(a) as { id: string }[]).map((s) => s.id).sort()
 
   it('申請者本人には、自分の回答だけを返す', () => {
     const gas = setup(defaultSettings)
@@ -127,7 +127,7 @@ describe('フォームの回答(getFormSubmissions)', () => {
 
   it('回答の中身を画面の形で返す', () => {
     const gas = setup(defaultSettings)
-    const [s] = gas.getFormSubmissions(acting('m-submitter', '一般')) as Record<string, unknown>[]
+    const [s] = gas.getFormSubmissions_(acting('m-submitter', '一般')) as Record<string, unknown>[]
     expect(s).toEqual({ id: 's1', formId: 'form-a', submitterId: 'm-submitter', answers: { item: 'プロジェクター' }, approvals: [],
       currentStepIndex: 0, status: 'pending', createdAt: '2026-09-01', rejectionReason: undefined })
   })
@@ -137,7 +137,7 @@ describe('読み取りのアクション', () => {
   it('ログインしている人なら呼べる(返す行は関数の中で絞り込む)。書き込みのロックは取らない', () => {
     const gas = setup(defaultSettings)
     for (const action of ['getCandidates', 'getFormSubmissions']) {
-      expect(() => gas.authorizeAction(acting('m4', '一般'), action, {}), action).not.toThrow()
+      expect(() => gas.authorizeAction_(acting('m4', '一般'), action, {}), action).not.toThrow()
       expect((gas as unknown as { LOCK_EXEMPT_ACTIONS: string[] }).LOCK_EXEMPT_ACTIONS).toContain(action)
     }
   })

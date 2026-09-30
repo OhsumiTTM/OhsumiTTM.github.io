@@ -1,3 +1,13 @@
+// ■ エディタから実行する関数(関数の一覧から選んで ▶ 実行)
+//   setupRegistry           最初の設定・コードを貼り替えた後に実行する(シート・保護・鍵・毎日のバックアップのトリガーを
+//                           用意する。今のコードに無い関数を指すトリガーを消す)
+//   rotateAdminSessionKey   管理画面のセッションの鍵を作り直す(ログイン中の管理者は全員ログアウトになる)
+// ■ ほかから呼ばれる関数(名前を変えない)
+//   doGet・doPost           ウェブアプリの入口
+//   dailyRegistryBackup     毎日のバックアップ(トリガーから呼ばれる)
+// ■ そのほかの関数は、中で使うだけ。名前の最後に _ を付けて、エディタの「実行」の一覧に出ないようにしている
+//   (_ を付けずに足すと lib/ohsumi/gas-functions.test.ts で止まる)
+//
 // Ohsumi レジストリ(FSIF が1つだけ運用する、団体の一覧と状態を管理する仕組み)
 //
 // レジストリ専用の Google アカウントのスプレッドシートに置く Apps Script。
@@ -16,7 +26,6 @@
 //     管理者はスクリプトプロパティ ADMIN_EMAILS の許可リストで決める
 //   - 管理画面の一覧(団体・登録コード・操作の記録)
 //   - 登録コードの発行・取り消し(コードは発行した画面で1回だけ表示し、SHA-256 だけを保存する)
-//   - 登録コードを使う処理(consumeRegistrationCode。R1-c の登録から呼ぶ)
 // R1-c で足したもの:
 //   - 団体の登録(registerOrg。団体の GAS が登録コードを使って団体を登録し、共有鍵を受け取る)。
 //     通信が途中で失われて送り直された時は、同じ結果(同じ共有鍵)を返す(二重に登録しない)
@@ -28,6 +37,162 @@
 // 提供停止は、R1-e 以降で足す(データの形は用意してある)。
 //
 // 設定と手順は registry/README.md を参照。
+
+// シートの用意・保護・健康確認の鍵・バックアップのトリガーを作る。何度実行しても同じ結果になる
+function setupRegistry() {
+  // 今のコードに無い関数を指すトリガー(以前の版の名前のまま残ったもの)を消す
+  removeOrphanTriggers_()
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  Object.keys(REGISTRY_SHEETS).forEach(function (name) {
+    var headers = REGISTRY_SHEETS[name]
+    var sheet = ss.getSheetByName(name)
+    if (!sheet) {
+      sheet = ss.insertSheet(name)
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers])
+      sheet.setFrozenRows(1)
+      console.log('シートを作りました: ' + name)
+      return
+    }
+    // 足りない列を右に足す(既にある列は変えない)
+    var width = Math.max(sheet.getLastColumn(), 1)
+    var current = sheet.getRange(1, 1, 1, width).getValues()[0].map(String)
+    var missing = headers.filter(function (h) { return current.indexOf(h) < 0 })
+    if (missing.length) {
+      var start = current.filter(function (h) { return h }).length + 1
+      sheet.getRange(1, start, 1, missing.length).setValues([missing])
+      console.log(name + ' に列を足しました: ' + missing.join(', '))
+    }
+  })
+  REGISTRY_PROTECTED_SHEETS.forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) return
+    var p = sheet.protect().setDescription('Ohsumi レジストリ: ' + name + ' は GAS だけが書き込む')
+    p.getEditors().forEach(function (u) { try { p.removeEditor(u) } catch (e) { /* 自分自身 */ } })
+  })
+
+  var props = PropertiesService.getScriptProperties()
+  if (!props.getProperty('HEALTH_KEY')) {
+    props.setProperty('HEALTH_KEY', generateSecret_())
+    console.log('死活の確認の鍵(HEALTH_KEY)を作りました。監視の GAS のスクリプトプロパティ HEALTH_KEY に、この値を入れてください: ' + props.getProperty('HEALTH_KEY'))
+  } else {
+    console.log('死活の確認の鍵(HEALTH_KEY)は作成済みです(スクリプトプロパティで確認できます)')
+  }
+  backupFolder_()
+  ensureAdminSessionKey_(props)
+  if (!adminEmails_(props.getProperties() || {}).length) {
+    console.log('管理者の許可リスト(スクリプトプロパティ ADMIN_EMAILS)が未設定です。管理者の Google アカウントのメールアドレスをカンマ区切りで入れてください')
+  }
+  if (!props.getProperty('OAUTH_CLIENT_ID')) {
+    console.log('管理画面のログインに使う OAuth クライアントID(スクリプトプロパティ OAUTH_CLIENT_ID)が未設定です。README の手順で設定してください')
+  }
+
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyRegistryBackup') ScriptApp.deleteTrigger(t)
+  })
+  ScriptApp.newTrigger('dailyRegistryBackup').timeBased().everyDays(1).atHour(3).create()
+  console.log('毎日のバックアップ(午前3時台)のトリガーを作りました')
+  console.log('次に、ウェブアプリとしてデプロイしてください(次のユーザーとして実行: 自分、アクセスできるユーザー: 全員)')
+}
+
+// ============================================================================
+// エディタから実行する関数
+// ============================================================================
+
+// エディタから実行する: 管理画面のセッションの鍵を作り直す(ログイン中の管理者は全員ログアウトになる)
+function rotateAdminSessionKey() {
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty('ADMIN_SESSION_KEY', generateSecret_())
+  props.setProperty('ADMIN_SESSION_KID', generateSecret_().slice(0, 8))
+  appendAudit_({ actor: 'editor', action: 'rotateAdminSessionKey' })
+  console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
+}
+
+// ============================================================================
+// ウェブアプリの入口・トリガーから呼ばれる関数
+// ============================================================================
+
+// レジストリには POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、本文が失われた
+// 可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。送った側が原因を記録して送り直せるよう、
+// JSON で返す(何も処理していない)
+function doGet() {
+  return registryJson_({
+    ok: false,
+    getReceived: true,
+    error: 'レジストリに GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
+  })
+}
+
+function doPost(e) {
+  try {
+    var text = e && e.postData ? String(e.postData.contents || '') : ''
+    if (text.length > MAX_BODY_CHARS) return registryJson_({ ok: false, error: 'リクエストが大きすぎます。' })
+    if (rateLimitExceeded_('all', RATE_LIMITS.all)) return registryJson_({ ok: false, error: '混み合っています。少し待ってください。', retryLater: true })
+    var body
+    try { body = JSON.parse(text) } catch (parseErr) { return registryJson_({ ok: false, error: 'リクエストの形が正しくありません。' }) }
+    if (!body || typeof body !== 'object') return registryJson_({ ok: false, error: 'リクエストの形が正しくありません。' })
+    var handler = REGISTRY_ACTIONS[String(body.action)]
+    if (!handler) return registryJson_({ ok: false, error: '知らない操作です。' })
+    var limit = RATE_LIMITS[String(body.action)]
+    if (limit && rateLimitExceeded_(String(body.action), limit)) return registryJson_({ ok: false, error: '混み合っています。少し待ってください。', retryLater: true })
+    return registryJson_(handler(body))
+  } catch (err) {
+    // 利用者に見せてよいエラー(registryError_ で作ったもの)は、そのメッセージを返す。
+    // それ以外は中身を返さない(実行ログにだけ残す)
+    if (err && err.registryUser) {
+      var out = { ok: false, error: err.message }
+      if (err.authError) out.authError = true
+      if (err.reauth) out.reauthRequired = true
+      return registryJson_(out)
+    }
+    Logger.log('doPost failed: ' + (err && err.stack ? err.stack : err))
+    return registryJson_({ ok: false, error: '処理中に問題が発生しました。' })
+  }
+}
+
+// 時間主導のトリガー(毎日)から呼ぶ。記録の無い直接の編集を数えてから、スプレッドシートをコピーする。
+// コピーは Secrets を含むので、編集者・閲覧者を外し、リンクの共有も「制限付き」にする。
+// 30日より古いコピーはゴミ箱へ移す
+function dailyRegistryBackup() {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    var props = PropertiesService.getScriptProperties()
+    var unrecorded = findUnrecordedOrgEdits_()
+    props.setProperty('LAST_UNRECORDED_EDITS', String(unrecorded.length))
+    if (unrecorded.length) console.warn('記録の無い変更がある団体: ' + unrecorded.join(', '))
+
+    var folder = backupFolder_()
+    var ss = SpreadsheetApp.getActiveSpreadsheet()
+    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+    var copy = DriveApp.getFileById(ss.getId()).makeCopy('Ohsumi レジストリ バックアップ ' + stamp, folder)
+    makePrivate_(copy)
+    var removed = trashOldBackups_(folder, Date.now())
+    props.setProperty('LAST_BACKUP_AT', new Date().toISOString())
+    console.log('バックアップを作りました: ' + copy.getName() + '(古いコピーを ' + removed + ' 件ゴミ箱へ移しました)')
+    return { name: copy.getName(), removed: removed, unrecorded: unrecorded }
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+// ============================================================================
+// 中で使うだけの関数(名前の最後に _)
+// ============================================================================
+
+// 今のコードに無い関数を指すトリガーを消す。以前の版で作ったトリガーが、消した・名前を変えた関数を
+// 指したまま残っていると、トリガーが動くたびにエラーになる(setupRegistry の最初に呼ぶ)。消した関数名を返す
+function removeOrphanTriggers_() {
+  var removed = []
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    var name = t.getHandlerFunction()
+    if (typeof globalThis[name] !== 'function') {
+      ScriptApp.deleteTrigger(t)
+      removed.push(name)
+    }
+  })
+  if (removed.length) console.log('🧹 今のコードに無い関数を指すトリガーを消しました: ' + removed.join(', '))
+  return removed
+}
 
 var REGISTRY_VERSION = 'r1d-1'
 
@@ -65,46 +230,8 @@ var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resol
 
 // ---- 入口 ----
 
-// レジストリには POST しか送らない。GET で届いた時は、POST が転送の途中で GET に変わり、本文が失われた
-// 可能性が高い(URL が /exec ではない・/u/1/ を含むなど)。送った側が原因を記録して送り直せるよう、
-// JSON で返す(何も処理していない)
-function doGet() {
-  return registryJson({
-    ok: false,
-    getReceived: true,
-    error: 'レジストリに GET で届きました(POST の本文が転送の途中で失われた可能性があります)。何も処理していません。',
-  })
-}
-
-function doPost(e) {
-  try {
-    var text = e && e.postData ? String(e.postData.contents || '') : ''
-    if (text.length > MAX_BODY_CHARS) return registryJson({ ok: false, error: 'リクエストが大きすぎます。' })
-    if (rateLimitExceeded('all', RATE_LIMITS.all)) return registryJson({ ok: false, error: '混み合っています。少し待ってください。', retryLater: true })
-    var body
-    try { body = JSON.parse(text) } catch (parseErr) { return registryJson({ ok: false, error: 'リクエストの形が正しくありません。' }) }
-    if (!body || typeof body !== 'object') return registryJson({ ok: false, error: 'リクエストの形が正しくありません。' })
-    var handler = REGISTRY_ACTIONS[String(body.action)]
-    if (!handler) return registryJson({ ok: false, error: '知らない操作です。' })
-    var limit = RATE_LIMITS[String(body.action)]
-    if (limit && rateLimitExceeded(String(body.action), limit)) return registryJson({ ok: false, error: '混み合っています。少し待ってください。', retryLater: true })
-    return registryJson(handler(body))
-  } catch (err) {
-    // 利用者に見せてよいエラー(registryError で作ったもの)は、そのメッセージを返す。
-    // それ以外は中身を返さない(実行ログにだけ残す)
-    if (err && err.registryUser) {
-      var out = { ok: false, error: err.message }
-      if (err.authError) out.authError = true
-      if (err.reauth) out.reauthRequired = true
-      return registryJson(out)
-    }
-    Logger.log('doPost failed: ' + (err && err.stack ? err.stack : err))
-    return registryJson({ ok: false, error: '処理中に問題が発生しました。' })
-  }
-}
-
 // 利用者に見せてよいエラー。authError はセッションが無効(管理画面はログイン画面に戻る)
-function registryError(message, flags) {
+function registryError_(message, flags) {
   var e = new Error(message)
   e.registryUser = true
   if (flags && flags.authError) e.authError = true
@@ -114,16 +241,16 @@ function registryError(message, flags) {
 
 // 操作の一覧。R1-c 以降で足す
 var REGISTRY_ACTIONS = {
-  health: function (body) { return healthResponse(body.key) },
-  adminLogin: function (body) { return adminLogin(body, Date.now()) },
-  adminOverview: function (body) { return adminOverview(body, Date.now()) },
-  issueRegistrationCode: function (body) { return issueRegistrationCode(body, Date.now()) },
-  revokeRegistrationCode: function (body) { return revokeRegistrationCode(body, Date.now()) },
-  registerOrg: function (body) { return registerOrg(body, Date.now()) },
-  resolveOrg: function (body) { return resolveOrg(body, Date.now()) },
+  health: function (body) { return healthResponse_(body.key) },
+  adminLogin: function (body) { return adminLogin_(body, Date.now()) },
+  adminOverview: function (body) { return adminOverview_(body, Date.now()) },
+  issueRegistrationCode: function (body) { return issueRegistrationCode_(body, Date.now()) },
+  revokeRegistrationCode: function (body) { return revokeRegistrationCode_(body, Date.now()) },
+  registerOrg: function (body) { return registerOrg_(body, Date.now()) },
+  resolveOrg: function (body) { return resolveOrg_(body, Date.now()) },
 }
 
-function registryJson(obj) {
+function registryJson_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON)
 }
 
@@ -132,48 +259,48 @@ function registryJson(obj) {
 // 鍵(HEALTH_KEY)が無ければ、動いていることだけを返す。監視の GAS は鍵を付けて詳細を受け取る。
 // 鍵を付けて来たのに合わない時は keyValid: false を付ける(監視が「鍵が違う」と分かるように。
 // 鍵を付けない問い合わせには付けない)。団体の情報は返さない
-function healthResponse(key) {
+function healthResponse_(key) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
   var res = { ok: true, version: REGISTRY_VERSION, time: new Date().toISOString() }
   var given = String(key || '')
   if (!given) return res
-  if (!props.HEALTH_KEY || !safeEquals(given, props.HEALTH_KEY)) {
+  if (!props.HEALTH_KEY || !safeEquals_(given, props.HEALTH_KEY)) {
     res.keyValid = false
     return res
   }
   res.keyValid = true
   res.lastBackupAt = props.LAST_BACKUP_AT || null
   res.unrecordedEdits = Number(props.LAST_UNRECORDED_EDITS || 0)
-  res.rejectedLastHour = rejectedCount(Date.now())
+  res.rejectedLastHour = rejectedCount_(Date.now())
   return res
 }
 
 // ---- 回数の上限 ----
 
-function minuteBucket(now) { return Math.floor(now / 60000) }
-function hourBucket(now) { return Math.floor(now / 3600000) }
+function minuteBucket_(now) { return Math.floor(now / 60000) }
+function hourBucket_(now) { return Math.floor(now / 3600000) }
 
 // 1分あたりの回数を数え、上限を超えたら true。断った回数は1時間ごとに数える(監視が見る)
-function rateLimitExceeded(bucket, limit, now) {
+function rateLimitExceeded_(bucket, limit, now) {
   now = now || Date.now()
   var cache = CacheService.getScriptCache()
-  var key = 'rl:' + bucket + ':' + minuteBucket(now)
+  var key = 'rl:' + bucket + ':' + minuteBucket_(now)
   var count = Number(cache.get(key) || 0) + 1
   cache.put(key, String(count), 120)
   if (count <= limit) return false
-  var rk = 'rj:' + hourBucket(now)
+  var rk = 'rj:' + hourBucket_(now)
   cache.put(rk, String(Number(cache.get(rk) || 0) + 1), 7200)
   return true
 }
 
-function rejectedCount(now) {
-  return Number(CacheService.getScriptCache().get('rj:' + hourBucket(now)) || 0)
+function rejectedCount_(now) {
+  return Number(CacheService.getScriptCache().get('rj:' + hourBucket_(now)) || 0)
 }
 
 // ---- 値の扱い ----
 
 // 長さが同じなら、どこで違っても同じ時間で比べる
-function safeEquals(a, b) {
+function safeEquals_(a, b) {
   a = String(a)
   b = String(b)
   var diff = a.length ^ b.length
@@ -182,32 +309,32 @@ function safeEquals(a, b) {
 }
 
 // スプレッドシートに書く文字列が、数式として扱われないようにする
-function safeCell(value) {
+function safeCell_(value) {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'string') return value
   return /^[=+\-@]/.test(value) ? "'" + value : value
 }
 
-function generateSecret() {
+function generateSecret_() {
   return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Utilities.getUuid() + Date.now())).replace(/=+$/, '')
 }
 
-function sha256Hex(text) {
+function sha256Hex_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
     .map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2) }).join('')
 }
 
 // ---- シート ----
 
-function registrySheet(name) {
+function registrySheet_(name) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
   if (!sheet) throw new Error('シート「' + name + '」がありません。setupRegistry() を実行してください。')
   return sheet
 }
 
 // 見出しをキーにした行の一覧({ row: シートの行番号, values: { 見出し: 値 } })
-function readRows(name) {
-  var sheet = registrySheet(name)
+function readRows_(name) {
+  var sheet = registrySheet_(name)
   var last = sheet.getLastRow()
   var width = sheet.getLastColumn()
   if (last < 2 || width < 1) return []
@@ -221,18 +348,18 @@ function readRows(name) {
 }
 
 // 見出しの順に並べた1行を足す
-function appendRowByHeaders(name, values) {
-  var sheet = registrySheet(name)
+function appendRowByHeaders_(name, values) {
+  var sheet = registrySheet_(name)
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
-  sheet.appendRow(headers.map(function (h) { return safeCell(values[h] === undefined ? '' : values[h]) }))
+  sheet.appendRow(headers.map(function (h) { return safeCell_(values[h] === undefined ? '' : values[h]) }))
 }
 
 // ---- 操作の記録 ----
 
 // AuditLog に1行足す(追記だけ。書き換えない)。before / after はオブジェクトなら JSON にする
-function appendAudit(entry) {
+function appendAudit_(entry) {
   var json = function (v) { return v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v) }
-  appendRowByHeaders('AuditLog', {
+  appendRowByHeaders_('AuditLog', {
     at: new Date().toISOString(),
     actor: entry.actor || '',
     action: entry.action || '',
@@ -248,25 +375,25 @@ function appendAudit(entry) {
 var ORG_FINGERPRINT_PREFIX = 'ORG_FP_'
 var ORG_FINGERPRINT_COLUMNS = ['gas_url', 'status', 'channel', 'suspend_at']
 
-function orgFingerprint(values) {
-  return sha256Hex(JSON.stringify(ORG_FINGERPRINT_COLUMNS.map(function (c) { return String(values[c] === undefined ? '' : values[c]) })))
+function orgFingerprint_(values) {
+  return sha256Hex_(JSON.stringify(ORG_FINGERPRINT_COLUMNS.map(function (c) { return String(values[c] === undefined ? '' : values[c]) })))
 }
 
 // 記録を伴う変更の後に呼ぶ(R1-b 以降の操作で使う)
-function rememberOrgFingerprint(orgId, values) {
-  PropertiesService.getScriptProperties().setProperty(ORG_FINGERPRINT_PREFIX + orgId, orgFingerprint(values))
+function rememberOrgFingerprint_(orgId, values) {
+  PropertiesService.getScriptProperties().setProperty(ORG_FINGERPRINT_PREFIX + orgId, orgFingerprint_(values))
 }
 
 // 覚えている指紋と違う行・覚えていない行・消えた行の団体ID
-function findUnrecordedOrgEdits() {
+function findUnrecordedOrgEdits_() {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
   var seen = {}
   var found = []
-  readRows('Orgs').forEach(function (r) {
+  readRows_('Orgs').forEach(function (r) {
     var id = String(r.values.org_id || '')
     if (!id) return
     seen[id] = true
-    if (props[ORG_FINGERPRINT_PREFIX + id] !== orgFingerprint(r.values)) found.push(id)
+    if (props[ORG_FINGERPRINT_PREFIX + id] !== orgFingerprint_(r.values)) found.push(id)
   })
   Object.keys(props).forEach(function (k) {
     if (k.indexOf(ORG_FINGERPRINT_PREFIX) === 0 && !seen[k.slice(ORG_FINGERPRINT_PREFIX.length)]) found.push(k.slice(ORG_FINGERPRINT_PREFIX.length))
@@ -276,51 +403,25 @@ function findUnrecordedOrgEdits() {
 
 // ---- 毎日のバックアップ ----
 
-// 時間主導のトリガー(毎日)から呼ぶ。記録の無い直接の編集を数えてから、スプレッドシートをコピーする。
-// コピーは Secrets を含むので、編集者・閲覧者を外し、リンクの共有も「制限付き」にする。
-// 30日より古いコピーはゴミ箱へ移す
-function dailyRegistryBackup() {
-  var lock = LockService.getScriptLock()
-  lock.waitLock(30000)
-  try {
-    var props = PropertiesService.getScriptProperties()
-    var unrecorded = findUnrecordedOrgEdits()
-    props.setProperty('LAST_UNRECORDED_EDITS', String(unrecorded.length))
-    if (unrecorded.length) console.warn('記録の無い変更がある団体: ' + unrecorded.join(', '))
-
-    var folder = backupFolder()
-    var ss = SpreadsheetApp.getActiveSpreadsheet()
-    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
-    var copy = DriveApp.getFileById(ss.getId()).makeCopy('Ohsumi レジストリ バックアップ ' + stamp, folder)
-    makePrivate(copy)
-    var removed = trashOldBackups(folder, Date.now())
-    props.setProperty('LAST_BACKUP_AT', new Date().toISOString())
-    console.log('バックアップを作りました: ' + copy.getName() + '(古いコピーを ' + removed + ' 件ゴミ箱へ移しました)')
-    return { name: copy.getName(), removed: removed, unrecorded: unrecorded }
-  } finally {
-    lock.releaseLock()
-  }
-}
-
-function makePrivate(file) {
+function makePrivate_(file) {
   file.getEditors().forEach(function (u) { try { file.removeEditor(u) } catch (e) { /* 自分自身など */ } })
   file.getViewers().forEach(function (u) { try { file.removeViewer(u) } catch (e) { /* 自分自身など */ } })
   try { file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE) } catch (e) { /* 変えられない場合 */ }
 }
 
-function backupFolder() {
+function backupFolder_() {
   var props = PropertiesService.getScriptProperties()
   var id = props.getProperty('BACKUP_FOLDER_ID')
   if (id) {
     try { return DriveApp.getFolderById(id) } catch (e) { /* 消された: 作り直す */ }
   }
   var folder = DriveApp.createFolder(BACKUP_FOLDER_NAME)
-  makePrivate(folder)
+  makePrivate_(folder)
   props.setProperty('BACKUP_FOLDER_ID', folder.getId())
   return folder
 }
 
-function trashOldBackups(folder, now) {
+function trashOldBackups_(folder, now) {
   var limit = now - BACKUP_KEEP_DAYS * 24 * 3600 * 1000
   var removed = 0
   var files = folder.getFiles()
@@ -349,104 +450,104 @@ var ADMIN_REAUTH_SEC = 5 * 60
 var ADMIN_NONCE_PREFIX = 'registry-admin.'
 var ADMIN_TOKEN_VERSION = 'ra1'
 
-function nowSecOf(nowMs) { return Math.floor(nowMs / 1000) }
+function nowSecOf_(nowMs) { return Math.floor(nowMs / 1000) }
 
-function b64url(bytesOrString) {
+function b64url_(bytesOrString) {
   return Utilities.base64EncodeWebSafe(bytesOrString).replace(/=+$/, '')
 }
 
-function b64urlDecodeToString(text) {
+function b64urlDecodeToString_(text) {
   var s = String(text)
   while (s.length % 4) s += '='
   return Utilities.newBlob(Utilities.base64DecodeWebSafe(s)).getDataAsString('UTF-8')
 }
 
-function sha256B64url(text) {
-  return b64url(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8))
+function sha256B64url_(text) {
+  return b64url_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8))
 }
 
 // 許可リスト(小文字にそろえる)
-function adminEmails(props) {
+function adminEmails_(props) {
   return String(props.ADMIN_EMAILS || '').split(',').map(function (s) { return s.trim().toLowerCase() }).filter(Boolean)
 }
 
-function isAdminEmail(props, email) {
-  return adminEmails(props).indexOf(String(email || '').trim().toLowerCase()) >= 0
+function isAdminEmail_(props, email) {
+  return adminEmails_(props).indexOf(String(email || '').trim().toLowerCase()) >= 0
 }
 
 // Google の ID トークンを確かめ、{ email, iat } を返す
-function verifyAdminIdToken(idToken, nonceSecret, props, nowMs) {
-  if (!props.OAUTH_CLIENT_ID) throw registryError('レジストリの設定(OAUTH_CLIENT_ID)が未設定です。README の手順で設定してください。')
+function verifyAdminIdToken_(idToken, nonceSecret, props, nowMs) {
+  if (!props.OAUTH_CLIENT_ID) throw registryError_('レジストリの設定(OAUTH_CLIENT_ID)が未設定です。README の手順で設定してください。')
   if (!/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/.test(String(idToken || '')) || String(idToken).length > 4096) {
-    throw registryError('ログインの情報の形式が正しくありません。もう一度ログインしてください。')
+    throw registryError_('ログインの情報の形式が正しくありません。もう一度ログインしてください。')
   }
   if (!nonceSecret || String(nonceSecret).length < 16 || String(nonceSecret).length > 256) {
-    throw registryError('ログインの情報の形式が正しくありません。もう一度ログインしてください。')
+    throw registryError_('ログインの情報の形式が正しくありません。もう一度ログインしてください。')
   }
   var resp = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), { muteHttpExceptions: true })
-  if (resp.getResponseCode() !== 200) throw registryError('Google のログイン情報を確認できませんでした。もう一度ログインしてください。')
+  if (resp.getResponseCode() !== 200) throw registryError_('Google のログイン情報を確認できませんでした。もう一度ログインしてください。')
   var info = JSON.parse(resp.getContentText())
-  if (info.aud !== props.OAUTH_CLIENT_ID) throw registryError('ログイン情報の発行元が、この管理画面と一致しません。')
-  if (info.iss !== 'accounts.google.com' && info.iss !== 'https://accounts.google.com') throw registryError('ログイン情報の発行元が正しくありません。')
-  if (!(Number(info.exp) > nowSecOf(nowMs))) throw registryError('Google のログイン情報の有効期限が切れています。もう一度ログインしてください。')
+  if (info.aud !== props.OAUTH_CLIENT_ID) throw registryError_('ログイン情報の発行元が、この管理画面と一致しません。')
+  if (info.iss !== 'accounts.google.com' && info.iss !== 'https://accounts.google.com') throw registryError_('ログイン情報の発行元が正しくありません。')
+  if (!(Number(info.exp) > nowSecOf_(nowMs))) throw registryError_('Google のログイン情報の有効期限が切れています。もう一度ログインしてください。')
   if (!info.email || (info.email_verified !== true && info.email_verified !== 'true')) {
-    throw registryError('メールアドレスが確認されていない Google アカウントは使えません。')
+    throw registryError_('メールアドレスが確認されていない Google アカウントは使えません。')
   }
-  var expected = ADMIN_NONCE_PREFIX + sha256B64url(nonceSecret)
-  if (!info.nonce || !safeEquals(info.nonce, expected)) throw registryError('ログイン情報がこの画面のものではありません。もう一度ログインしてください。')
+  var expected = ADMIN_NONCE_PREFIX + sha256B64url_(nonceSecret)
+  if (!info.nonce || !safeEquals_(info.nonce, expected)) throw registryError_('ログイン情報がこの画面のものではありません。もう一度ログインしてください。')
   var cache = CacheService.getScriptCache()
-  var nonceKey = 'adminNonce:' + sha256B64url(info.nonce)
-  if (cache.get(nonceKey)) throw registryError('このログイン情報は既に使われています。もう一度ログインしてください。')
+  var nonceKey = 'adminNonce:' + sha256B64url_(info.nonce)
+  if (cache.get(nonceKey)) throw registryError_('このログイン情報は既に使われています。もう一度ログインしてください。')
   cache.put(nonceKey, '1', 3600)
-  return { email: String(info.email).toLowerCase(), iat: Number(info.iat) || nowSecOf(nowMs) }
+  return { email: String(info.email).toLowerCase(), iat: Number(info.iat) || nowSecOf_(nowMs) }
 }
 
-function signAdminPayload(payloadB64, key) {
-  return b64url(Utilities.computeHmacSha256Signature(ADMIN_TOKEN_VERSION + '.' + payloadB64, key))
+function signAdminPayload_(payloadB64, key) {
+  return b64url_(Utilities.computeHmacSha256Signature(ADMIN_TOKEN_VERSION + '.' + payloadB64, key))
 }
 
-function issueAdminSession(email, authSec, props, nowMs) {
-  if (!props.ADMIN_SESSION_KEY || !props.ADMIN_SESSION_KID) throw registryError('レジストリの設定が完了していません。setupRegistry() を実行してください。')
-  var now = nowSecOf(nowMs)
-  var payload = { sub: email, kid: props.ADMIN_SESSION_KID, iat: now, exp: now + ADMIN_SESSION_TTL_SEC, auth: authSec, sid: generateSecret().slice(0, 12) }
-  var payloadB64 = b64url(JSON.stringify(payload))
-  return { token: ADMIN_TOKEN_VERSION + '.' + payloadB64 + '.' + signAdminPayload(payloadB64, props.ADMIN_SESSION_KEY), exp: payload.exp, email: email, authAt: authSec }
+function issueAdminSession_(email, authSec, props, nowMs) {
+  if (!props.ADMIN_SESSION_KEY || !props.ADMIN_SESSION_KID) throw registryError_('レジストリの設定が完了していません。setupRegistry() を実行してください。')
+  var now = nowSecOf_(nowMs)
+  var payload = { sub: email, kid: props.ADMIN_SESSION_KID, iat: now, exp: now + ADMIN_SESSION_TTL_SEC, auth: authSec, sid: generateSecret_().slice(0, 12) }
+  var payloadB64 = b64url_(JSON.stringify(payload))
+  return { token: ADMIN_TOKEN_VERSION + '.' + payloadB64 + '.' + signAdminPayload_(payloadB64, props.ADMIN_SESSION_KEY), exp: payload.exp, email: email, authAt: authSec }
 }
 
 // セッショントークンを確かめ、payload を返す。無効なら authError の例外
-function verifyAdminSession(token, props, nowMs) {
+function verifyAdminSession_(token, props, nowMs) {
   var parts = String(token || '').split('.')
-  var invalid = function (msg) { return registryError(msg || 'ログインの有効期限が切れました。もう一度ログインしてください。', { authError: true }) }
+  var invalid = function (msg) { return registryError_(msg || 'ログインの有効期限が切れました。もう一度ログインしてください。', { authError: true }) }
   if (parts.length !== 3 || parts[0] !== ADMIN_TOKEN_VERSION || !props.ADMIN_SESSION_KEY) throw invalid()
-  if (!safeEquals(signAdminPayload(parts[1], props.ADMIN_SESSION_KEY), parts[2])) throw invalid()
+  if (!safeEquals_(signAdminPayload_(parts[1], props.ADMIN_SESSION_KEY), parts[2])) throw invalid()
   var payload
-  try { payload = JSON.parse(b64urlDecodeToString(parts[1])) } catch (e) { throw invalid() }
+  try { payload = JSON.parse(b64urlDecodeToString_(parts[1])) } catch (e) { throw invalid() }
   if (!payload || payload.kid !== props.ADMIN_SESSION_KID) throw invalid()
-  if (!(Number(payload.exp) > nowSecOf(nowMs))) throw invalid()
-  if (!isAdminEmail(props, payload.sub)) throw invalid('このアカウントは管理者として登録されていません。')
+  if (!(Number(payload.exp) > nowSecOf_(nowMs))) throw invalid()
+  if (!isAdminEmail_(props, payload.sub)) throw invalid('このアカウントは管理者として登録されていません。')
   return payload
 }
 
-function adminLogin(body, nowMs) {
+function adminLogin_(body, nowMs) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
-  var google = verifyAdminIdToken(body.idToken, body.nonceSecret, props, nowMs)
-  if (!isAdminEmail(props, google.email)) {
-    appendAudit({ actor: google.email, action: 'adminLoginDenied', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' })
-    throw registryError('このアカウントは管理者として登録されていません。', { authError: true })
+  var google = verifyAdminIdToken_(body.idToken, body.nonceSecret, props, nowMs)
+  if (!isAdminEmail_(props, google.email)) {
+    appendAudit_({ actor: google.email, action: 'adminLoginDenied', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' })
+    throw registryError_('このアカウントは管理者として登録されていません。', { authError: true })
   }
-  var session = issueAdminSession(google.email, nowSecOf(nowMs), props, nowMs)
-  appendAudit({ actor: google.email, action: 'adminLogin' })
+  var session = issueAdminSession_(google.email, nowSecOf_(nowMs), props, nowMs)
+  appendAudit_({ actor: google.email, action: 'adminLogin' })
   return { ok: true, result: { session: session } }
 }
 
 // ---- 管理画面の一覧 ----
 
-function isoOf(v) {
+function isoOf_(v) {
   if (v instanceof Date) return v.toISOString()
   return v === null || v === undefined ? '' : String(v)
 }
 
-function timeOf(v) {
+function timeOf_(v) {
   if (v instanceof Date) return v.getTime()
   var t = Date.parse(String(v || ''))
   return isNaN(t) ? NaN : t
@@ -457,18 +558,18 @@ var STALE_CHECK_DAYS = 7
 // 団体の表示用の状態(Google のサービスを使わない純粋な関数)。
 //   state: suspended(停止中。status が suspended か、停止の予定日時を過ぎた)/ scheduled(停止の予定あり)/ active(有効)
 //   checkState: never(まだ一度も確認に来ていない)/ stale(最後の確認から7日を超えた)/ ok
-function orgDisplayState(values, nowMs) {
-  var suspendAt = timeOf(values.suspend_at)
+function orgDisplayState_(values, nowMs) {
+  var suspendAt = timeOf_(values.suspend_at)
   var state = 'active'
   if (String(values.status) === 'suspended' || (suspendAt > 0 && suspendAt <= nowMs)) state = 'suspended'
   else if (suspendAt > nowMs) state = 'scheduled'
-  var lastCheck = timeOf(values.last_check_at)
+  var lastCheck = timeOf_(values.last_check_at)
   var checkState = !(lastCheck > 0) ? 'never' : nowMs - lastCheck > STALE_CHECK_DAYS * 24 * 3600 * 1000 ? 'stale' : 'ok'
   return { state: state, checkState: checkState }
 }
 
-function orgSummary(values, nowMs) {
-  var ds = orgDisplayState(values, nowMs)
+function orgSummary_(values, nowMs) {
+  var ds = orgDisplayState_(values, nowMs)
   return {
     orgId: String(values.org_id || ''),
     displayName: String(values.display_name || ''),
@@ -476,11 +577,11 @@ function orgSummary(values, nowMs) {
     state: ds.state,
     checkState: ds.checkState,
     contractStatus: String(values.contract_status || ''),
-    contractUntil: isoOf(values.contract_until),
+    contractUntil: isoOf_(values.contract_until),
     contractNote: String(values.contract_note || ''),
-    lastCheckAt: isoOf(values.last_check_at),
-    createdAt: isoOf(values.created_at),
-    suspendAt: isoOf(values.suspend_at),
+    lastCheckAt: isoOf_(values.last_check_at),
+    createdAt: isoOf_(values.created_at),
+    suspendAt: isoOf_(values.suspend_at),
     suspendReason: String(values.suspend_reason || ''),
     channel: String(values.channel || ''),
     gasUrl: String(values.gas_url || ''),
@@ -489,15 +590,15 @@ function orgSummary(values, nowMs) {
 }
 
 // 登録コードの状態(純粋な関数): revoked / used / expired / unused
-function registrationCodeState(values, nowMs) {
+function registrationCodeState_(values, nowMs) {
   if (String(values.revoked_at || '')) return 'revoked'
   if (String(values.used_at || '')) return 'used'
-  var exp = timeOf(values.expires_at)
+  var exp = timeOf_(values.expires_at)
   if (!(exp > nowMs)) return 'expired'
   return 'unused'
 }
 
-function codeSummary(values, nowMs) {
+function codeSummary_(values, nowMs) {
   return {
     codeId: String(values.code_id || ''),
     kind: String(values.kind || 'new'),
@@ -506,13 +607,13 @@ function codeSummary(values, nowMs) {
     contactName: String(values.contact_name || ''),
     contactEmail: String(values.contact_email || ''),
     note: String(values.note || ''),
-    state: registrationCodeState(values, nowMs),
-    expiresAt: isoOf(values.expires_at),
+    state: registrationCodeState_(values, nowMs),
+    expiresAt: isoOf_(values.expires_at),
     issuedBy: String(values.issued_by || ''),
-    issuedAt: isoOf(values.issued_at),
-    usedAt: isoOf(values.used_at),
+    issuedAt: isoOf_(values.issued_at),
+    usedAt: isoOf_(values.used_at),
     usedOrgId: String(values.used_org_id || ''),
-    revokedAt: isoOf(values.revoked_at),
+    revokedAt: isoOf_(values.revoked_at),
     revokedBy: String(values.revoked_by || ''),
   }
 }
@@ -520,14 +621,14 @@ function codeSummary(values, nowMs) {
 var AUDIT_SHOW_MAX = 200
 
 // 管理画面の一覧を1回で返す(団体・登録コード・最近の操作の記録)。通信の回数を減らすため
-function adminOverview(body, nowMs) {
+function adminOverview_(body, nowMs) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
-  var session = verifyAdminSession(body.session, props, nowMs)
-  var orgs = readRows('Orgs').filter(function (r) { return String(r.values.org_id || '') }).map(function (r) { return orgSummary(r.values, nowMs) })
-  var codes = readRows('RegistrationCodes').filter(function (r) { return String(r.values.code_hash || '') }).map(function (r) { return codeSummary(r.values, nowMs) })
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') }).map(function (r) { return orgSummary_(r.values, nowMs) })
+  var codes = readRows_('RegistrationCodes').filter(function (r) { return String(r.values.code_hash || '') }).map(function (r) { return codeSummary_(r.values, nowMs) })
   codes.sort(function (a, b) { return String(b.issuedAt).localeCompare(String(a.issuedAt)) })
-  var audit = readRows('AuditLog').slice(-AUDIT_SHOW_MAX).reverse().map(function (r) {
-    return { at: isoOf(r.values.at), actor: String(r.values.actor || ''), action: String(r.values.action || ''), target: String(r.values.target || ''),
+  var audit = readRows_('AuditLog').slice(-AUDIT_SHOW_MAX).reverse().map(function (r) {
+    return { at: isoOf_(r.values.at), actor: String(r.values.actor || ''), action: String(r.values.action || ''), target: String(r.values.target || ''),
       before: String(r.values.before || ''), after: String(r.values.after || ''), reason: String(r.values.reason || '') }
   })
   return {
@@ -554,7 +655,7 @@ var REGISTRATION_CODE_TTL_DAYS = 14
 var REGISTRATION_CODE_INVALID = '登録コードが正しくないか、使えなくなっています(使用済み・期限切れ・取り消し済み)。FSIF にお問い合わせください。'
 
 // 推測できない乱数のバイト列(UUID と時刻を SHA-256 でまとめたもの。足りなければ繰り返す)
-function randomBytes(count) {
+function randomBytes_(count) {
   var out = []
   while (out.length < count) {
     var seed = [Utilities.getUuid(), Utilities.getUuid(), Utilities.getUuid(), String(Date.now()), String(out.length)].join(':')
@@ -563,12 +664,12 @@ function randomBytes(count) {
   return out.slice(0, count)
 }
 
-function generateRegistrationCode() {
+function generateRegistrationCode_() {
   var n = REGISTRATION_CODE_ALPHABET.length
   var limit = Math.floor(256 / n) * n // 偏りが出ないよう、これ以上のバイトは捨てる
   var code = ''
   while (code.length < REGISTRATION_CODE_LENGTH) {
-    randomBytes(32).forEach(function (b) {
+    randomBytes_(32).forEach(function (b) {
       if (code.length < REGISTRATION_CODE_LENGTH && b < limit) code += REGISTRATION_CODE_ALPHABET.charAt(b % n)
     })
   }
@@ -576,24 +677,24 @@ function generateRegistrationCode() {
 }
 
 // 入力のゆれ(小文字・区切り・空白)をそろえる
-function normalizeRegistrationCode(input) {
+function normalizeRegistrationCode_(input) {
   return String(input || '').toUpperCase().replace(/[\s\-_]/g, '')
 }
 
-function formatRegistrationCode(code) {
+function formatRegistrationCode_(code) {
   return code.match(/.{1,4}/g).join('-')
 }
 
 // 保存する形は 'sha256:' + 16進数(数字だけの値がスプレッドシートで数として扱われないように、前に文字を付ける)
-function registrationCodeHash(input) {
-  return 'sha256:' + sha256Hex(normalizeRegistrationCode(input))
+function registrationCodeHash_(input) {
+  return 'sha256:' + sha256Hex_(normalizeRegistrationCode_(input))
 }
 
-function cleanText(v, max) {
+function cleanText_(v, max) {
   return String(v === null || v === undefined ? '' : v).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max)
 }
 
-function withRegistryLock(fn) {
+function withRegistryLock_(fn) {
   var lock = LockService.getScriptLock()
   lock.waitLock(10000)
   try {
@@ -603,34 +704,34 @@ function withRegistryLock(fn) {
   }
 }
 
-function issueRegistrationCode(body, nowMs) {
+function issueRegistrationCode_(body, nowMs) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
-  var session = verifyAdminSession(body.session, props, nowMs)
-  if (!(nowSecOf(nowMs) - Number(session.auth) <= ADMIN_REAUTH_SEC)) {
-    throw registryError('登録コードを発行する前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。', { reauth: true })
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  if (!(nowSecOf_(nowMs) - Number(session.auth) <= ADMIN_REAUTH_SEC)) {
+    throw registryError_('登録コードを発行する前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。', { reauth: true })
   }
   var kind = String(body.kind || 'new') === 'reissue' ? 'reissue' : 'new'
-  var targetOrgId = kind === 'reissue' ? cleanText(body.targetOrgId, 80) : ''
-  var orgName = cleanText(body.orgName, 100)
+  var targetOrgId = kind === 'reissue' ? cleanText_(body.targetOrgId, 80) : ''
+  var orgName = cleanText_(body.orgName, 100)
   if (kind === 'reissue') {
     // 再登録コード: 登録済みの団体向け(共有鍵の作り直し・接続先の変更)。団体名は Orgs から
-    var target = findOrgRow(targetOrgId)
-    if (!target) throw registryError('再登録する団体が見つかりません。')
-    orgName = cleanText(target.values.display_name, 100) || targetOrgId
+    var target = findOrgRow_(targetOrgId)
+    if (!target) throw registryError_('再登録する団体が見つかりません。')
+    orgName = cleanText_(target.values.display_name, 100) || targetOrgId
   }
-  if (!orgName) throw registryError('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
-  var contactName = cleanText(body.contactName, 100)
-  var contactEmail = cleanText(body.contactEmail, 200)
-  if (contactEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contactEmail)) throw registryError('担当者のメールアドレスの形が正しくありません。')
-  var note = cleanText(body.note, 500)
-  return withRegistryLock(function () {
-    var code = generateRegistrationCode()
-    var codeId = 'rc_' + generateSecret().slice(0, 10)
+  if (!orgName) throw registryError_('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
+  var contactName = cleanText_(body.contactName, 100)
+  var contactEmail = cleanText_(body.contactEmail, 200)
+  if (contactEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contactEmail)) throw registryError_('担当者のメールアドレスの形が正しくありません。')
+  var note = cleanText_(body.note, 500)
+  return withRegistryLock_(function () {
+    var code = generateRegistrationCode_()
+    var codeId = 'rc_' + generateSecret_().slice(0, 10)
     var issuedAt = new Date(nowMs).toISOString()
     var expiresAt = new Date(nowMs + REGISTRATION_CODE_TTL_DAYS * 24 * 3600 * 1000).toISOString()
-    appendRowByHeaders('RegistrationCodes', {
+    appendRowByHeaders_('RegistrationCodes', {
       code_id: codeId,
-      code_hash: registrationCodeHash(code),
+      code_hash: registrationCodeHash_(code),
       kind: kind,
       target_org_id: targetOrgId,
       org_name: orgName,
@@ -642,56 +743,42 @@ function issueRegistrationCode(body, nowMs) {
       issued_at: issuedAt,
     })
     // 記録にはコードもハッシュも残さない
-    appendAudit({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { kind: kind, targetOrgId: targetOrgId, orgName: orgName, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
-    return { ok: true, result: { code: formatRegistrationCode(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName, kind: kind, targetOrgId: targetOrgId } }
+    appendAudit_({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { kind: kind, targetOrgId: targetOrgId, orgName: orgName, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
+    return { ok: true, result: { code: formatRegistrationCode_(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName, kind: kind, targetOrgId: targetOrgId } }
   })
 }
 
-function findCodeRowById(codeId) {
-  var rows = readRows('RegistrationCodes')
+function findCodeRowById_(codeId) {
+  var rows = readRows_('RegistrationCodes')
   for (var i = 0; i < rows.length; i++) if (String(rows[i].values.code_id) === String(codeId)) return rows[i]
   return null
 }
 
 // 見出しの名前で、1行のいくつかの列を書き換える
-function setRowFields(name, rowNumber, fields) {
-  var sheet = registrySheet(name)
+function setRowFields_(name, rowNumber, fields) {
+  var sheet = registrySheet_(name)
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
   Object.keys(fields).forEach(function (k) {
     var c = headers.indexOf(k)
     if (c < 0) throw new Error('列「' + k + '」がありません。setupRegistry() を実行してください。')
-    sheet.getRange(rowNumber, c + 1, 1, 1).setValues([[safeCell(fields[k])]])
+    sheet.getRange(rowNumber, c + 1, 1, 1).setValues([[safeCell_(fields[k])]])
   })
 }
 
-function revokeRegistrationCode(body, nowMs) {
+function revokeRegistrationCode_(body, nowMs) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
-  var session = verifyAdminSession(body.session, props, nowMs)
-  var reason = cleanText(body.reason, 500)
-  return withRegistryLock(function () {
-    var row = findCodeRowById(body.codeId)
-    if (!row) throw registryError('その登録コードは見つかりません。')
-    var state = registrationCodeState(row.values, nowMs)
-    if (state !== 'unused') throw registryError('未使用のコードだけ取り消せます(このコードは' + ({ used: '使用済み', expired: '期限切れ', revoked: '取り消し済み' })[state] + 'です)。')
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var row = findCodeRowById_(body.codeId)
+    if (!row) throw registryError_('その登録コードは見つかりません。')
+    var state = registrationCodeState_(row.values, nowMs)
+    if (state !== 'unused') throw registryError_('未使用のコードだけ取り消せます(このコードは' + ({ used: '使用済み', expired: '期限切れ', revoked: '取り消し済み' })[state] + 'です)。')
     var revokedAt = new Date(nowMs).toISOString()
-    setRowFields('RegistrationCodes', row.row, { revoked_at: revokedAt, revoked_by: session.sub })
-    appendAudit({ actor: session.sub, action: 'revokeRegistrationCode', target: String(body.codeId), before: { state: 'unused' }, after: { state: 'revoked' }, reason: reason })
+    setRowFields_('RegistrationCodes', row.row, { revoked_at: revokedAt, revoked_by: session.sub })
+    appendAudit_({ actor: session.sub, action: 'revokeRegistrationCode', target: String(body.codeId), before: { state: 'unused' }, after: { state: 'revoked' }, reason: reason })
     return { ok: true, result: { codeId: String(body.codeId), revokedAt: revokedAt } }
   })
-}
-
-// 登録コードを使う(R1-c の団体の登録から、ロックを取った中で呼ぶ)。
-// 使えれば使用済みにして、その行の値を返す。使えない理由(無い・使用済み・期限切れ・取り消し済み)は区別せず、同じエラーにする
-function consumeRegistrationCode(input, orgId, nowMs) {
-  var hash = registrationCodeHash(input)
-  var rows = readRows('RegistrationCodes')
-  for (var i = 0; i < rows.length; i++) {
-    if (!safeEquals(String(rows[i].values.code_hash || ''), hash)) continue
-    if (registrationCodeState(rows[i].values, nowMs) !== 'unused') break
-    setRowFields('RegistrationCodes', rows[i].row, { used_at: new Date(nowMs).toISOString(), used_org_id: String(orgId) })
-    return rows[i].values
-  }
-  throw registryError(REGISTRATION_CODE_INVALID)
 }
 
 // ---- 団体の登録(registerOrg) ----
@@ -718,107 +805,107 @@ var ORG_ID_PATTERN = /^org_[A-Za-z0-9_-]{16,64}$/
 var GAS_EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
 var REGISTER_NONCE_PATTERN = /^[A-Za-z0-9_-]{43,64}$/
 
-function findOrgRow(orgId) {
+function findOrgRow_(orgId) {
   if (!orgId) return null
-  var rows = readRows('Orgs')
+  var rows = readRows_('Orgs')
   for (var i = 0; i < rows.length; i++) if (String(rows[i].values.org_id) === String(orgId)) return rows[i]
   return null
 }
 
-function findSecretRow(orgId) {
-  var rows = readRows('Secrets')
+function findSecretRow_(orgId) {
+  var rows = readRows_('Secrets')
   for (var i = 0; i < rows.length; i++) if (String(rows[i].values.org_id) === String(orgId)) return rows[i]
   return null
 }
 
-function registerFailKey(nowMs) { return 'regfail:' + hourBucket(nowMs) }
+function registerFailKey_(nowMs) { return 'regfail:' + hourBucket_(nowMs) }
 
-function registerFailuresExceeded(nowMs) {
-  return Number(CacheService.getScriptCache().get(registerFailKey(nowMs)) || 0) >= REGISTER_FAIL_LIMIT
+function registerFailuresExceeded_(nowMs) {
+  return Number(CacheService.getScriptCache().get(registerFailKey_(nowMs)) || 0) >= REGISTER_FAIL_LIMIT
 }
 
-function countRegisterFailure(nowMs) {
+function countRegisterFailure_(nowMs) {
   var cache = CacheService.getScriptCache()
-  var key = registerFailKey(nowMs)
+  var key = registerFailKey_(nowMs)
   cache.put(key, String(Number(cache.get(key) || 0) + 1), 7200)
 }
 
 // 断った登録を、監視の「断ったリクエスト」にも数える
-function countRejected(nowMs) {
+function countRejected_(nowMs) {
   var cache = CacheService.getScriptCache()
-  var rk = 'rj:' + hourBucket(nowMs)
+  var rk = 'rj:' + hourBucket_(nowMs)
   cache.put(rk, String(Number(cache.get(rk) || 0) + 1), 7200)
 }
 
-function newRegistryKey() {
-  return generateSecret() + generateSecret()
+function newRegistryKey_() {
+  return generateSecret_() + generateSecret_()
 }
 
-function registerOrg(body, nowMs) {
-  if (registerFailuresExceeded(nowMs)) {
-    countRejected(nowMs)
-    throw registryError('登録の失敗が続いたため、しばらく登録を受け付けていません。1時間ほど待ってから、登録コードを確かめてもう一度お試しください。')
+function registerOrg_(body, nowMs) {
+  if (registerFailuresExceeded_(nowMs)) {
+    countRejected_(nowMs)
+    throw registryError_('登録の失敗が続いたため、しばらく登録を受け付けていません。1時間ほど待ってから、登録コードを確かめてもう一度お試しください。')
   }
   var orgId = String(body.orgId || '')
   var gasUrl = String(body.gasUrl || '')
   var registerNonce = String(body.registerNonce || '')
-  var gasVersion = cleanText(body.gasVersion, 40)
-  if (!ORG_ID_PATTERN.test(orgId)) throw registryError('団体ID の形が正しくありません。団体の GAS で setupOhsumi を実行してから、もう一度お試しください。')
-  if (!GAS_EXEC_URL_PATTERN.test(gasUrl)) throw registryError('団体の GAS のウェブアプリの URL の形が正しくありません(…/macros/s/…/exec)。')
-  if (!REGISTER_NONCE_PATTERN.test(registerNonce)) throw registryError('リクエストの形が正しくありません。団体の GAS を最新の版にしてから、もう一度お試しください。')
-  if (!normalizeRegistrationCode(body.code)) throw registryError(REGISTRATION_CODE_INVALID)
-  var codeHash = registrationCodeHash(body.code)
-  var nonceHash = 'sha256:' + sha256Hex(registerNonce)
-  return withRegistryLock(function () {
+  var gasVersion = cleanText_(body.gasVersion, 40)
+  if (!ORG_ID_PATTERN.test(orgId)) throw registryError_('団体ID の形が正しくありません。団体の GAS で setupOhsumi を実行してから、もう一度お試しください。')
+  if (!GAS_EXEC_URL_PATTERN.test(gasUrl)) throw registryError_('団体の GAS のウェブアプリの URL の形が正しくありません(…/macros/s/…/exec)。')
+  if (!REGISTER_NONCE_PATTERN.test(registerNonce)) throw registryError_('リクエストの形が正しくありません。団体の GAS を最新の版にしてから、もう一度お試しください。')
+  if (!normalizeRegistrationCode_(body.code)) throw registryError_(REGISTRATION_CODE_INVALID)
+  var codeHash = registrationCodeHash_(body.code)
+  var nonceHash = 'sha256:' + sha256Hex_(registerNonce)
+  return withRegistryLock_(function () {
     // 送り直し: この団体の最後の登録と registerNonce・コードが同じで、24時間以内なら、同じ結果を返す。
     // 合わない時は下の通常の登録に進み、使用済みのコードとして(ほかの失敗と同じエラーで)断る
-    var secret = findSecretRow(orgId)
-    if (secret && safeEquals(String(secret.values.register_nonce_hash || ''), nonceHash)) {
+    var secret = findSecretRow_(orgId)
+    if (secret && safeEquals_(String(secret.values.register_nonce_hash || ''), nonceHash)) {
       var usedRow = null
-      readRows('RegistrationCodes').forEach(function (r) {
-        if (safeEquals(String(r.values.code_hash || ''), codeHash) && String(r.values.used_org_id || '') === orgId) usedRow = r
+      readRows_('RegistrationCodes').forEach(function (r) {
+        if (safeEquals_(String(r.values.code_hash || ''), codeHash) && String(r.values.used_org_id || '') === orgId) usedRow = r
       })
-      var registeredAtMs = timeOf(secret.values.updated_at)
+      var registeredAtMs = timeOf_(secret.values.updated_at)
       if (usedRow && registeredAtMs > 0 && nowMs - registeredAtMs <= REGISTER_REPLAY_HOURS * 3600 * 1000) {
-        var org = findOrgRow(orgId)
-        return { ok: true, replayed: true, result: registerResult(orgId, secret.values, org ? org.values : {}, String(usedRow.values.kind || 'new')) }
+        var org = findOrgRow_(orgId)
+        return { ok: true, replayed: true, result: registerResult_(orgId, secret.values, org ? org.values : {}, String(usedRow.values.kind || 'new')) }
       }
     }
 
     // 登録コードを探す(使えない理由は区別しない)
     var codeRow = null
-    var rows = readRows('RegistrationCodes')
+    var rows = readRows_('RegistrationCodes')
     for (var i = 0; i < rows.length; i++) {
-      if (safeEquals(String(rows[i].values.code_hash || ''), codeHash)) { codeRow = rows[i]; break }
+      if (safeEquals_(String(rows[i].values.code_hash || ''), codeHash)) { codeRow = rows[i]; break }
     }
     var kind = codeRow ? (String(codeRow.values.kind || 'new') === 'reissue' ? 'reissue' : 'new') : ''
-    var existing = findOrgRow(orgId)
-    var usable = codeRow && registrationCodeState(codeRow.values, nowMs) === 'unused' &&
+    var existing = findOrgRow_(orgId)
+    var usable = codeRow && registrationCodeState_(codeRow.values, nowMs) === 'unused' &&
       (kind === 'new' ? !existing : !!existing && String(codeRow.values.target_org_id || '') === orgId)
     if (!usable) {
-      countRegisterFailure(nowMs)
+      countRegisterFailure_(nowMs)
       // 新しい団体の登録コードで、登録済みの団体を登録し直そうとした時だけは、分かるように知らせる(コードは使わない)
-      if (codeRow && kind === 'new' && existing && registrationCodeState(codeRow.values, nowMs) === 'unused') {
-        throw registryError('この団体は登録済みです。共有鍵の作り直し・接続先の変更には、FSIF が発行する再登録コードを使ってください。')
+      if (codeRow && kind === 'new' && existing && registrationCodeState_(codeRow.values, nowMs) === 'unused') {
+        throw registryError_('この団体は登録済みです。共有鍵の作り直し・接続先の変更には、FSIF が発行する再登録コードを使ってください。')
       }
-      throw registryError(REGISTRATION_CODE_INVALID)
+      throw registryError_(REGISTRATION_CODE_INVALID)
     }
 
     var at = new Date(nowMs).toISOString()
-    setRowFields('RegistrationCodes', codeRow.row, { used_at: at, used_org_id: orgId })
-    var key = newRegistryKey()
+    setRowFields_('RegistrationCodes', codeRow.row, { used_at: at, used_org_id: orgId })
+    var key = newRegistryKey_()
     var orgValues
     if (kind === 'new') {
       orgValues = {
         org_id: orgId, gas_url: gasUrl, status: 'active', channel: 'standard',
         display_name: String(codeRow.values.org_name || ''), created_at: at, gas_version: gasVersion, updated_at: at,
       }
-      appendRowByHeaders('Orgs', orgValues)
+      appendRowByHeaders_('Orgs', orgValues)
       if (String(codeRow.values.contact_name || '') || String(codeRow.values.contact_email || '')) {
-        appendRowByHeaders('Contacts', { org_id: orgId, name: String(codeRow.values.contact_name || ''), email: String(codeRow.values.contact_email || '') })
+        appendRowByHeaders_('Contacts', { org_id: orgId, name: String(codeRow.values.contact_name || ''), email: String(codeRow.values.contact_email || '') })
       }
     } else {
-      setRowFields('Orgs', existing.row, { gas_url: gasUrl, gas_version: gasVersion, updated_at: at })
+      setRowFields_('Orgs', existing.row, { gas_url: gasUrl, gas_version: gasVersion, updated_at: at })
       orgValues = {}
       Object.keys(existing.values).forEach(function (k) { orgValues[k] = existing.values[k] })
       orgValues.gas_url = gasUrl
@@ -826,30 +913,30 @@ function registerOrg(body, nowMs) {
     }
     var keyGen = secret ? Number(secret.values.key_gen || 0) + 1 : 1
     var secretValues = { org_id: orgId, registry_key: key, key_gen: keyGen, updated_at: at, register_nonce_hash: nonceHash }
-    if (secret) setRowFields('Secrets', secret.row, secretValues)
-    else appendRowByHeaders('Secrets', secretValues)
-    rememberOrgFingerprint(orgId, orgValues)
+    if (secret) setRowFields_('Secrets', secret.row, secretValues)
+    else appendRowByHeaders_('Secrets', secretValues)
+    rememberOrgFingerprint_(orgId, orgValues)
     // 接続先の解決で覚えた答えを消す(新しい接続先をすぐに返す)
-    forgetResolvedOrg(orgId)
+    forgetResolvedOrg_(orgId)
     // 記録には共有鍵もコードも残さない
-    appendAudit({
+    appendAudit_({
       actor: 'org:' + orgId,
       action: kind === 'new' ? 'registerOrg' : 'reregisterOrg',
       target: orgId,
       before: kind === 'reissue' ? { gasUrl: String(existing.values.gas_url || ''), keyGen: keyGen - 1 } : undefined,
       after: { codeId: String(codeRow.values.code_id || ''), displayName: String(orgValues.display_name || ''), gasUrl: gasUrl, gasVersion: gasVersion, keyGen: keyGen },
     })
-    return { ok: true, result: registerResult(orgId, secretValues, orgValues, kind) }
+    return { ok: true, result: registerResult_(orgId, secretValues, orgValues, kind) }
   })
 }
 
-function registerResult(orgId, secretValues, orgValues, kind) {
+function registerResult_(orgId, secretValues, orgValues, kind) {
   return {
     orgId: orgId,
     registryKey: String(secretValues.registry_key || ''),
     keyGen: Number(secretValues.key_gen || 0),
     displayName: String(orgValues.display_name || ''),
-    registeredAt: isoOf(secretValues.updated_at),
+    registeredAt: isoOf_(secretValues.updated_at),
     kind: kind,
   }
 }
@@ -868,29 +955,29 @@ var RESOLVE_CACHE_SEC = 600
 var RESOLVE_MAX_AGE_SEC = 24 * 3600
 var RESOLVE_NOT_FOUND = '団体が見つかりません。招待リンクが正しいか、団体の担当者に確かめてください。'
 
-function resolvedOrgCacheKey(orgId) { return 'ro:' + orgId }
+function resolvedOrgCacheKey_(orgId) { return 'ro:' + orgId }
 
-function forgetResolvedOrg(orgId) {
-  try { CacheService.getScriptCache().remove(resolvedOrgCacheKey(orgId)) } catch (e) { /* 覚えていなければ何もしない */ }
+function forgetResolvedOrg_(orgId) {
+  try { CacheService.getScriptCache().remove(resolvedOrgCacheKey_(orgId)) } catch (e) { /* 覚えていなければ何もしない */ }
 }
 
-function resolveOrg(body, nowMs) {
+function resolveOrg_(body, nowMs) {
   var orgId = String(body.orgId || '')
   if (!ORG_ID_PATTERN.test(orgId)) return { ok: false, notFound: true, error: RESOLVE_NOT_FOUND }
   var cache = CacheService.getScriptCache()
-  var key = resolvedOrgCacheKey(orgId)
+  var key = resolvedOrgCacheKey_(orgId)
   var cached = cache.get(key)
   if (cached) {
     var hit = JSON.parse(cached)
     return hit.notFound ? { ok: false, notFound: true, error: RESOLVE_NOT_FOUND } : { ok: true, result: hit }
   }
-  var row = findOrgRow(orgId)
+  var row = findOrgRow_(orgId)
   var answer
   if (!row || !GAS_EXEC_URL_PATTERN.test(String(row.values.gas_url || ''))) {
     // 無い団体も短く覚える(同じ ID の問い合わせが続いても、シートを読まない)
     answer = { notFound: true }
   } else {
-    var suspended = orgDisplayState(row.values, nowMs).state === 'suspended'
+    var suspended = orgDisplayState_(row.values, nowMs).state === 'suspended'
     answer = {
       orgId: orgId,
       gasUrl: suspended ? '' : String(row.values.gas_url),
@@ -907,75 +994,10 @@ function resolveOrg(body, nowMs) {
 // ---- 管理画面のセッションの鍵 ----
 
 // 管理画面用のセッションの鍵が無ければ作る(setupRegistry から呼ぶ)。本体(団体の GAS)の鍵とは別
-function ensureAdminSessionKey(props) {
+function ensureAdminSessionKey_(props) {
   if (!props.getProperty('ADMIN_SESSION_KEY')) {
-    props.setProperty('ADMIN_SESSION_KEY', generateSecret())
-    props.setProperty('ADMIN_SESSION_KID', generateSecret().slice(0, 8))
+    props.setProperty('ADMIN_SESSION_KEY', generateSecret_())
+    props.setProperty('ADMIN_SESSION_KID', generateSecret_().slice(0, 8))
     console.log('管理画面のセッションの鍵を作りました')
   }
-}
-
-// エディタから実行する: 管理画面のセッションの鍵を作り直す(ログイン中の管理者は全員ログアウトになる)
-function rotateAdminSessionKey() {
-  var props = PropertiesService.getScriptProperties()
-  props.setProperty('ADMIN_SESSION_KEY', generateSecret())
-  props.setProperty('ADMIN_SESSION_KID', generateSecret().slice(0, 8))
-  appendAudit({ actor: 'editor', action: 'rotateAdminSessionKey' })
-  console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
-}
-
-// ---- 最初の設定(エディタから実行する) ----
-
-// シートの用意・保護・健康確認の鍵・バックアップのトリガーを作る。何度実行しても同じ結果になる
-function setupRegistry() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet()
-  Object.keys(REGISTRY_SHEETS).forEach(function (name) {
-    var headers = REGISTRY_SHEETS[name]
-    var sheet = ss.getSheetByName(name)
-    if (!sheet) {
-      sheet = ss.insertSheet(name)
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers])
-      sheet.setFrozenRows(1)
-      console.log('シートを作りました: ' + name)
-      return
-    }
-    // 足りない列を右に足す(既にある列は変えない)
-    var width = Math.max(sheet.getLastColumn(), 1)
-    var current = sheet.getRange(1, 1, 1, width).getValues()[0].map(String)
-    var missing = headers.filter(function (h) { return current.indexOf(h) < 0 })
-    if (missing.length) {
-      var start = current.filter(function (h) { return h }).length + 1
-      sheet.getRange(1, start, 1, missing.length).setValues([missing])
-      console.log(name + ' に列を足しました: ' + missing.join(', '))
-    }
-  })
-  REGISTRY_PROTECTED_SHEETS.forEach(function (name) {
-    var sheet = ss.getSheetByName(name)
-    if (sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) return
-    var p = sheet.protect().setDescription('Ohsumi レジストリ: ' + name + ' は GAS だけが書き込む')
-    p.getEditors().forEach(function (u) { try { p.removeEditor(u) } catch (e) { /* 自分自身 */ } })
-  })
-
-  var props = PropertiesService.getScriptProperties()
-  if (!props.getProperty('HEALTH_KEY')) {
-    props.setProperty('HEALTH_KEY', generateSecret())
-    console.log('死活の確認の鍵(HEALTH_KEY)を作りました。監視の GAS のスクリプトプロパティ HEALTH_KEY に、この値を入れてください: ' + props.getProperty('HEALTH_KEY'))
-  } else {
-    console.log('死活の確認の鍵(HEALTH_KEY)は作成済みです(スクリプトプロパティで確認できます)')
-  }
-  backupFolder()
-  ensureAdminSessionKey(props)
-  if (!adminEmails(props.getProperties() || {}).length) {
-    console.log('管理者の許可リスト(スクリプトプロパティ ADMIN_EMAILS)が未設定です。管理者の Google アカウントのメールアドレスをカンマ区切りで入れてください')
-  }
-  if (!props.getProperty('OAUTH_CLIENT_ID')) {
-    console.log('管理画面のログインに使う OAuth クライアントID(スクリプトプロパティ OAUTH_CLIENT_ID)が未設定です。README の手順で設定してください')
-  }
-
-  ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'dailyRegistryBackup') ScriptApp.deleteTrigger(t)
-  })
-  ScriptApp.newTrigger('dailyRegistryBackup').timeBased().everyDays(1).atHour(3).create()
-  console.log('毎日のバックアップ(午前3時台)のトリガーを作りました')
-  console.log('次に、ウェブアプリとしてデプロイしてください(次のユーザーとして実行: 自分、アクセスできるユーザー: 全員)')
 }

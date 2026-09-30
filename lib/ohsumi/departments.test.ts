@@ -27,22 +27,21 @@ const CUSTOM: D.DepartmentDef[] = [
 
 describe('GAS と同じ結果になる', () => {
   it('既定の部門・設定の読み込み・決まりごと', () => {
-    expect(plain(gas.defaultDepartments())).toEqual(D.defaultDepartments())
+    expect(plain(gas.defaultDepartments_())).toEqual(D.defaultDepartments())
     for (const raw of [JSON.stringify(CUSTOM), '[{"id":"a","name":"未分類"}]', '[{"id":"a","name":"x"},{"id":"a","name":"y"}]', '{', '']) {
-      expect(plain(gas.parseDepartmentsSetting(raw)), raw).toEqual(D.parseDepartmentsSetting(raw))
-      expect(plain(gas.departmentsFromSettings({ departments: raw })), raw).toEqual(D.departmentsFromSettings({ departments: raw }))
+      expect(plain(gas.parseDepartmentsSetting_(raw)), raw).toEqual(D.parseDepartmentsSetting(raw))
+      expect(plain(gas.departmentsFromSettings_({ departments: raw })), raw).toEqual(D.departmentsFromSettings({ departments: raw }))
     }
   })
 
-  it('部門の値のそろえ方・シートに書く値・部門名', () => {
+  it('部門の値のそろえ方・シートに書く値', () => {
     const refs = ['ops', '運営', '総務', 'd_fin', '会計', 'research', 'リサーチ', '', '未分類', ' 広報 ', '昔の部門', undefined, null]
     for (const list of [D.defaultDepartments(), CUSTOM]) {
       for (const ref of refs) {
         const label = `${String(ref)} in ${list[0].name}`
-        expect(gas.normalizeDepartment(list, ref), label).toBe(D.normalizeDepartment(list, ref))
-        expect(gas.departmentNameOf(list, ref), label).toBe(D.departmentNameOf(list, ref))
+        expect(gas.normalizeDepartment_(list, ref), label).toBe(D.normalizeDepartment(list, ref))
         for (const codes of [true, false]) {
-          expect(gas.sheetDepartmentRef(list, ref, codes), `${label} codes=${codes}`).toBe(D.sheetDepartmentRef(list, ref, codes))
+          expect(gas.sheetDepartmentRef_(list, ref, codes), `${label} codes=${codes}`).toBe(D.sheetDepartmentRef(list, ref, codes))
         }
       }
     }

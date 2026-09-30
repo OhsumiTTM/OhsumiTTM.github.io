@@ -50,27 +50,27 @@ const NOW = Date.parse('2026-10-01T09:00:00Z')
 const good = (extra: Record<string, unknown> = {}) => ({ ok: true, version: 'r1a-1', lastBackupAt: '2026-10-01T03:00:00Z', unrecordedEdits: 0, rejectedLastHour: 0, ...extra })
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
 
-describe('応答の判定(evaluateHealth)', () => {
+describe('応答の判定(evaluateHealth_)', () => {
   it('応答なし・版の無い応答は「届かない」', () => {
     const t = setup()
-    expect(plain(t.gas.evaluateHealth(null, NOW))).toMatchObject({ reachable: false })
-    expect(plain(t.gas.evaluateHealth({ ok: true }, NOW))).toMatchObject({ reachable: false })
+    expect(plain(t.gas.evaluateHealth_(null, NOW))).toMatchObject({ reachable: false })
+    expect(plain(t.gas.evaluateHealth_({ ok: true }, NOW))).toMatchObject({ reachable: false })
   })
 
   it('バックアップが26時間を超えた・まだ無い、記録の無い変更、断ったリクエストの急増を問題として挙げる', () => {
     const t = setup()
-    expect(plain(t.gas.evaluateHealth(good(), NOW)).problems).toEqual({})
-    const bad = plain(t.gas.evaluateHealth(good({ lastBackupAt: '2026-09-30T06:00:00Z', unrecordedEdits: 2, rejectedLastHour: 1001 }), NOW)).problems
+    expect(plain(t.gas.evaluateHealth_(good(), NOW)).problems).toEqual({})
+    const bad = plain(t.gas.evaluateHealth_(good({ lastBackupAt: '2026-09-30T06:00:00Z', unrecordedEdits: 2, rejectedLastHour: 1001 }), NOW)).problems
     expect(Object.keys(bad).sort()).toEqual(['backup', 'rejected', 'unrecorded'])
     expect(bad.backup).toContain('27 時間')
-    expect(plain(t.gas.evaluateHealth(good({ lastBackupAt: null }), NOW)).problems.backup).toMatch(/一度も/)
+    expect(plain(t.gas.evaluateHealth_(good({ lastBackupAt: null }), NOW)).problems.backup).toMatch(/一度も/)
   })
 })
 
 describe('鍵(HEALTH_KEY)が違う時', () => {
   it('レジストリが keyValid: false を返したら「状態を確かめられない」とする(🟠 バックアップの誤った通知にしない)', () => {
     const t = setup()
-    const r = plain(t.gas.evaluateHealth({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
+    const r = plain(t.gas.evaluateHealth_({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
     expect(r).toMatchObject({ reachable: false, keyMismatch: true })
     expect(r.reason).toContain('HEALTH_KEY')
     expect(r.problems).toEqual({})
@@ -78,8 +78,8 @@ describe('鍵(HEALTH_KEY)が違う時', () => {
 
   it('2回続いたら1回だけ知らせ、鍵を戻したら確かめられるようになったことを知らせる', () => {
     const t = setup()
-    const step = (state: unknown, r: unknown, at: number) => plain(t.gas.nextMonitorState(state, r, at))
-    const mismatch = plain(t.gas.evaluateHealth({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
+    const step = (state: unknown, r: unknown, at: number) => plain(t.gas.nextMonitorState_(state, r, at))
+    const mismatch = plain(t.gas.evaluateHealth_({ ok: true, version: 'r1b-2', keyValid: false }, NOW))
     let s = step(null, mismatch, NOW)
     expect(s.messages).toEqual([])
     s = step(s.state, mismatch, NOW + 15 * 60000)
@@ -87,7 +87,7 @@ describe('鍵(HEALTH_KEY)が違う時', () => {
     expect(s.messages[0]).toMatch(/^🔴 レジストリの状態を確かめられません\(2回続けて。原因: 鍵\(HEALTH_KEY\)が違います/)
     s = step(s.state, mismatch, NOW + 30 * 60000)
     expect(s.messages).toEqual([])
-    s = step(s.state, plain(t.gas.evaluateHealth(good(), NOW)), NOW + 45 * 60000)
+    s = step(s.state, plain(t.gas.evaluateHealth_(good(), NOW)), NOW + 45 * 60000)
     expect(s.messages).toEqual(['🟢 レジストリの状態を確かめられるようになりました(確かめられなかった時間: 45分)'])
   })
 
@@ -121,13 +121,13 @@ describe('鍵(HEALTH_KEY)が違う時', () => {
   })
 })
 
-describe('知らせる時(nextMonitorState)', () => {
+describe('知らせる時(nextMonitorState_)', () => {
   const down = { reachable: false, reason: '通信エラー', problems: {} }
   const up = { reachable: true, problems: {} }
 
   it('1回の失敗では知らせず、2回続けて失敗した時に1回だけ知らせる。復旧したら止まっていた時間を知らせる', () => {
     const t = setup()
-    const step = (state: unknown, r: unknown, at: number) => plain(t.gas.nextMonitorState(state, r, at))
+    const step = (state: unknown, r: unknown, at: number) => plain(t.gas.nextMonitorState_(state, r, at))
     let s = step(null, down, NOW)
     expect(s.messages).toEqual([])
     s = step(s.state, up, NOW + 15 * 60000)
@@ -143,7 +143,7 @@ describe('知らせる時(nextMonitorState)', () => {
 
   it('問題は起きた時に1回、解消した時に1回だけ知らせる', () => {
     const t = setup()
-    const step = (state: unknown, r: unknown) => plain(t.gas.nextMonitorState(state, r, NOW))
+    const step = (state: unknown, r: unknown) => plain(t.gas.nextMonitorState_(state, r, NOW))
     const withBackup = { reachable: true, problems: { backup: '最後のバックアップから 30 時間たっています' } }
     let s = step(null, withBackup)
     expect(s.messages).toEqual(['🟠 最後のバックアップから 30 時間たっています'])
@@ -174,7 +174,7 @@ describe('実行(checkRegistry)', () => {
 
   it('GET で届いた応答・JSON ではない応答・形の違う URL は、原因が分かる形で「届かない」とする', () => {
     const t = setup()
-    const reasonOf = () => plain(t.gas.evaluateHealth(t.gas.fetchHealth(t.props), NOW)).reason as string
+    const reasonOf = () => plain(t.gas.evaluateHealth_(t.gas.fetchHealth_(t.props), NOW)).reason as string
     t.setHealth({ ok: false, getReceived: true })
     expect(reasonOf()).toMatch(/GET で届きました/)
     t.setHealth({ raw: '<html><head><title>Error</title></head><body><p>Sorry, unable to open the file at this time.</p></body></html>', status: 200 })

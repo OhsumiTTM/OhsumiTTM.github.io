@@ -130,7 +130,7 @@ function setup(props: Record<string, string>, initial: Record<string, unknown[][
 }
 
 const base = setup({})
-const data = base.gas.buildSampleData(TODAY, {
+const data = base.gas.buildSampleData_(TODAY, {
   avatar1: 'https://lh3.googleusercontent.com/d/AVATAR000000001=w256-h256-c',
   org_logo: 'https://lh3.googleusercontent.com/d/LOGO00000000001=w256-h256-c',
   receipt_png: 'https://drive.google.com/file/d/RECEIPT00000001/view',
@@ -202,7 +202,7 @@ describe('サンプルのデータの中身', () => {
 
   it('日付は実行した日を基準にする(期限切れ・今日締切・来月開始・アーカイブ)', () => {
     for (const today of ['2026-09-28', '2027-03-01']) {
-      const tasks = (base.gas.buildSampleData(today, {}) as SampleData).sheets.Tasks
+      const tasks = (base.gas.buildSampleData_(today, {}) as SampleData).sheets.Tasks
       const open = tasks.filter((t) => t.status !== '完了')
       expect(open.some((t) => t.due_date && days(t.due_date, today) < 0), today).toBe(true)
       expect(open.some((t) => t.due_date === today && t.due_time), today).toBe(true)
@@ -277,7 +277,7 @@ describe('サンプルのデータの中身', () => {
     expect(result.members).toHaveLength(20)
     const hold = result.tasks.find((t) => t.status === 'hold' && t.holdReason)
     expect(hold?.holdReason?.note).toBeTruthy()
-    const merged = base.gas.mergeSampleSettings({}, data.settings) as { values: Record<string, string> }
+    const merged = base.gas.mergeSampleSettings_({}, data.settings) as { values: Record<string, string> }
     const settings = parseSettings(Object.entries(merged.values).map(([key, value]) => ({ key, value })))
     expect(settings.roles.map((r) => r.name)).toEqual(expect.arrayContaining(['一般', '代表', '班長', '事業責任者', 'サンプル班長']))
     expect(settings.roles.filter((r) => r.restricted).map((r) => r.name)).toEqual(['サンプル班長'])
@@ -290,10 +290,10 @@ describe('Settings の追加と元に戻す処理', () => {
   const additions = data.settings
 
   it('空の設定に足して、削除すると空に戻る', () => {
-    const merged = base.gas.mergeSampleSettings({}, additions) as { values: Record<string, string>; state: unknown }
+    const merged = base.gas.mergeSampleSettings_({}, additions) as { values: Record<string, string>; state: unknown }
     // 空の一覧は、画面の既定値に足す(既定値が消えないように)
     expect(merged.values.skill_options.split(',')).toEqual([...base.gas.SAMPLE_LIST_DEFAULTS.skill_options, 'データ分析'])
-    const restored = base.gas.restoreSampleSettings(merged.values, merged.state) as Record<string, string>
+    const restored = base.gas.restoreSampleSettings_(merged.values, merged.state) as Record<string, string>
     for (const v of Object.values(restored)) expect(v).toBe('')
   })
 
@@ -306,7 +306,7 @@ describe('Settings の追加と元に戻す処理', () => {
       org_name: '本物の団体',
       theme_color: '',
     }
-    const merged = base.gas.mergeSampleSettings(current, additions) as { values: Record<string, string>; state: unknown }
+    const merged = base.gas.mergeSampleSettings_(current, additions) as { values: Record<string, string>; state: unknown }
     expect(merged.values.skill_options).toBe('デザイン,経理,データ分析')
     expect(JSON.parse(merged.values.recurring_rules)[0].id).toBe('real-1')
     expect(JSON.parse(merged.values.role_permissions).班長).toEqual(['dashboard'])
@@ -315,7 +315,7 @@ describe('Settings の追加と元に戻す処理', () => {
     const after = { ...merged.values }
     after.skill_options += ',新しいスキル'
     after.recurring_rules = JSON.stringify([...JSON.parse(after.recurring_rules), { id: 'real-2', name: '後から足した定期タスク' }])
-    const restored = base.gas.restoreSampleSettings(after, merged.state) as Record<string, string>
+    const restored = base.gas.restoreSampleSettings_(after, merged.state) as Record<string, string>
     expect(restored.skill_options).toBe('デザイン,経理,新しいスキル')
     expect(JSON.parse(restored.recurring_rules).map((r: { id: string }) => r.id)).toEqual(['real-1', 'real-2'])
     expect(JSON.parse(restored.role_permissions)).toEqual({ 班長: ['dashboard'] })
@@ -340,7 +340,7 @@ describe('Settings の追加と元に戻す処理', () => {
 })
 
 describe('テスト用のアカウント(TEST_ACCOUNTS)', () => {
-  const parse = (raw: string) => base.gas.parseSampleTestAccounts(raw)
+  const parse = (raw: string) => base.gas.parseSampleTestAccounts_(raw)
 
   it('枠ごとのアドレスを読む', () => {
     expect(parse('top=A@gmail.com, admin=b@gmail.com\nrestricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com')).toEqual({
@@ -358,8 +358,8 @@ describe('テスト用のアカウント(TEST_ACCOUNTS)', () => {
 
   it('サンプル以外のメンバーに登録されているアドレスはエラー(サンプルのメンバーなら問題ない)', () => {
     const accounts = parse('top=a@gmail.com')
-    expect(() => base.gas.assertSampleAccountsUnregistered(accounts, [['12', 'x@gmail.com, A@gmail.com']])).toThrow(/サンプル以外のメンバー/)
-    expect(() => base.gas.assertSampleAccountsUnregistered(accounts, [['sample-m-01', 'a@gmail.com']])).not.toThrow()
+    expect(() => base.gas.assertSampleAccountsUnregistered_(accounts, [['12', 'x@gmail.com, A@gmail.com']])).toThrow(/サンプル以外のメンバー/)
+    expect(() => base.gas.assertSampleAccountsUnregistered_(accounts, [['sample-m-01', 'a@gmail.com']])).not.toThrow()
   })
 })
 
