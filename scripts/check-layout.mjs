@@ -26,6 +26,10 @@ const MISSING_ORG = 'org_MISSINGMISSINGMISS01'
 const MEMBER = 'sample-m-05' // 一般のメンバー(サンプルのデータの base の枠)
 export const ADMIN_MEMBER = 'sample-m-01' // 代表(サンプルのデータの top の枠)
 
+// ほかの端末で開く の手順で押すボタン・確かめる文(ja.ts にあることを lib/ohsumi/check-layout.test.ts で確かめる)
+export const OTHER_DEVICE_LABELS = ['ほかの端末で開く', '共有', '自分のメールに送る']
+export const OTHER_DEVICE_TEXTS = ['ホーム画面に追加', 'まだメールで送れません', '読み取り専用のため、保存できません']
+
 // 画面を開く手順。ラベルは日本語の画面の表示(lib/ohsumi/i18n/ja.ts)と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で、ja.ts にあることを確かめる)
 export const STEPS = [
@@ -50,6 +54,11 @@ export const STEPS = [
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // ほかの端末で開く(メニュー): 招待リンク・QR コード・コピー・共有・自分のメールに送る。スマホの幅とパソコンの幅の両方で開く
+  // (ラベルは ja.ts の header.menu.otherDevice・otherDevice.*)
+  { name: 'ほかの端末で開く', do: 'otherDevice', labels: OTHER_DEVICE_LABELS },
+  { name: 'ほかの端末で開く(パソコンの幅・共有あり)', do: 'otherDevice', width: 1280, share: true, labels: OTHER_DEVICE_LABELS },
+  { name: 'ほかの端末で開く(レジストリに未確認の団体)', do: 'otherDevice', mail: 'notChecked', labels: OTHER_DEVICE_LABELS },
   // 提供停止・機能停止(R1-e): 画面の上部の知らせ(文は ja.ts の app.contract*)
   { name: 'OUTPUT(機能停止中の知らせ)', do: 'contract', contract: { phase: 'inEffect', kind: 'restrict', suspendAt: '2026-10-01T00:00:00.000Z' }, expect: 'アンケートへの回答をお願いします' },
   { name: 'OUTPUT(提供停止の予告)', do: 'contract', contract: { phase: 'scheduled', kind: 'suspend', days: 6 }, expect: '提供を停止します' },
@@ -78,12 +87,14 @@ export const READ_ONLY_STEPS = [
   { name: '機能停止中: コメントが保存の手前で止まる', do: 'readOnlyComment', view: 'リスト', text: '担当者が多いタスク', labels: ['送信'] },
   { name: '機能停止中: 経費申請が保存の手前で止まる', do: 'readOnlyExpense', labels: ['経費申請', '申請する'] },
   { name: '機能停止中: 承認が保存の手前で止まる', do: 'readOnlyApprove', labels: ['Approvals', '承認する'] },
+  // 書き込みではないので、機能停止中も自分のメールに送れる
+  { name: '機能停止中: ほかの端末で開く(メールも送れる)', do: 'otherDevice', readOnly: true, labels: OTHER_DEVICE_LABELS },
 ]
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
   'getFiles', 'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
-  'revokeMemberSessions', 'updateLastLogin']
+  'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で確かめる)
@@ -286,6 +297,9 @@ async function run({ build = true } = {}) {
     let contract = null
     // 画面が送った書き込み(読み取りの一覧に無い操作)
     let sentWrites = []
+    // ほかの端末で開く: getInviteMailStatus の答え(available / notChecked)と、送った sendInviteLinkToMe の本文
+    let inviteMail = 'available'
+    let inviteBodies = []
     // GAS・Google への通信には偽の応答を返す(外には出さない)
     const gas = (body) => {
       if (!LAYOUT_READ_ACTIONS.includes(body.action)) {
@@ -296,6 +310,8 @@ async function run({ build = true } = {}) {
         case 'getInitialData': return { memberId: member, version: 'layout', sheets: view }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
+        case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
+        case 'sendInviteLinkToMe': inviteBodies.push(body); return { sent: true, count: 1, remaining: 2 }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
         default: return {}
       }
@@ -595,6 +611,44 @@ async function run({ build = true } = {}) {
           const shown = await evaluate(`document.body.textContent.includes('ABCD-EFGH-JKMN-PQRS')`)
           if (!shown) throw new Error('発行した登録コードが表示されません')
         }
+        if (step.do === 'otherDevice') {
+          inviteMail = step.mail || 'available'
+          inviteBodies = []
+          contract = step.readOnly ? pass.contract : null
+          await signIn(); await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          if (step.width) await send('Emulation.setDeviceMetricsOverride', { width: step.width, height: 900, deviceScaleFactor: 1, mobile: false })
+          await sleep(500)
+          // 共有の画面(Web Share API): 使える端末の代わりに記録する関数を置く。使えない端末は無くす
+          await evaluate(step.share
+            ? `(() => { window.__shared = []; Object.defineProperty(navigator, 'share', { configurable: true, value: async (d) => { window.__shared.push(d) } }); return true })()`
+            : `(() => { Object.defineProperty(navigator, 'share', { configurable: true, value: undefined }); return true })()`)
+          await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
+          await sleep(500); await clickText('ほかの端末で開く'); await sleep(1200)
+          const want = base + '/?org=' + ORG
+          const got = await evaluate(`(() => { const d = document.getElementById('other-device-title').closest('[role=dialog]'); return { link: d.querySelector('input').value, qr: !!d.querySelector('svg[data-other-device-qr] path'), share: [...d.querySelectorAll('button')].some((b) => b.textContent.trim() === '共有'), mailDisabled: d.querySelector('[data-other-device-mail]').disabled, note: d.querySelector('[data-other-device-mail-note]').textContent, home: d.textContent.includes('ホーム画面に追加') } })()`)
+          if (got.link !== want) throw new Error('招待リンクが違います: ' + got.link)
+          if (!got.qr) throw new Error('QR コードが表示されません')
+          if (!got.home) throw new Error('ホーム画面に追加の案内がありません')
+          if (got.share !== !!step.share) throw new Error(step.share ? '共有のボタンがありません' : '共有の画面が使えないのに、共有のボタンがあります')
+          if (step.share) {
+            await clickText('共有', '[role=dialog] button'); await sleep(300)
+            const shared = await evaluate('window.__shared')
+            if (shared.length !== 1 || shared[0].url !== want) throw new Error('共有の画面に招待リンクが渡りません')
+          }
+          if (inviteMail === 'available') {
+            if (got.mailDisabled) throw new Error('自分のメールに送るボタンが使えません')
+            await clickText('自分のメールに送る', '[role=dialog] button', true); await sleep(1200)
+            if (inviteBodies.length !== 1) throw new Error('自分のメールに送れません')
+            const sent = inviteBodies[0]
+            if (sent.siteOrigin !== base || 'to' in sent || 'email' in sent || 'link' in sent) throw new Error('メールの依頼に、宛先・リンクが入っています: ' + Object.keys(sent).join(','))
+            if (step.readOnly && (await evaluate(`!!document.getElementById('read-only-notice-title')`))) throw new Error('機能停止中に「読み取り専用のため、保存できません」が出ました')
+          } else {
+            if (!got.mailDisabled) throw new Error('レジストリに未確認の団体なのに、自分のメールに送るボタンが使えます')
+            if (!got.note.includes('まだメールで送れません')) throw new Error('メールで送れない理由が表示されません: ' + got.note)
+          }
+        }
         if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
@@ -608,7 +662,9 @@ async function run({ build = true } = {}) {
         }
         const m = JSON.parse(await evaluate(MEASURE))
         const problems = []
-        if (m.page > WIDTH + 1 || m.window > WIDTH + 1) problems.push(`ページの幅が ${Math.max(m.page, m.window)}px(画面は ${WIDTH}px)`)
+        const width = step.width || WIDTH
+        if (step.width) await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
+        if (m.page > width + 1 || m.window > width + 1) problems.push(`ページの幅が ${Math.max(m.page, m.window)}px(画面は ${width}px)`)
         m.off.forEach((o) => problems.push('はみ出し: ' + o))
         m.squashed.forEach((o) => problems.push('文字が折り返した短いラベル: ' + o))
         if (step.dependencyCards) JSON.parse(await evaluate(MEASURE_CARDS)).forEach((c) => problems.push('中身が切れたカード: ' + c))
