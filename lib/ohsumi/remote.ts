@@ -63,7 +63,7 @@ import {
   normalizeTaskSetTemplates,
   normalizeThresholdKeys,
 } from './code-normalize'
-import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
+import { activateSession, applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
 import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
 import { noteContractResponse } from './contract'
@@ -700,7 +700,7 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
       ...backgroundOptions(),
     })
   } catch (err) {
-    // IDトークンは1回しか使えないため、送り直さない。ログイン画面は新しい試行でボタンを出し直すので、
+    // 同じ requestId で送り直しても応答を受け取れなかった。ログイン画面は新しい試行でボタンを出し直すので、
     // もう一度押せば入れる
     if (err instanceof GasTransportError) {
       throw new Error(`ログインの応答を受け取れませんでした(原因: ${err.reason})。もう一度「Google でログイン」を押してください。`)
@@ -708,9 +708,17 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
     throw err
   }
   if (!json.ok || !json.result) throw new Error(json.error || 'ログインに失敗しました')
-  const res = json.result
+  const res = json.result as InitialDataResponse & { email?: string; session?: StoredSession; reloadInitialData?: boolean; lastLoginRecorded?: boolean }
   if (!res.memberId) return { memberId: null, email: res.email }
-  return { ...toInitialData(res), session: res.session, lastLoginRecorded: (res as { lastLoginRecorded?: boolean }).lastLoginRecorded === true }
+  // 送り直しで受け取った前回の結果(gas/Code.gs の rememberLogin_)には、初期データが入っていない。
+  // 受け取ったセッションで、初期データを読み直す
+  if (res.reloadInitialData && res.session) {
+    const orgId = getActiveOrg().orgId
+    if (orgId) activateSession(orgId, { ...res.session, remember })
+    const data = await fetchInitialData()
+    return { ...data, session: res.session, lastLoginRecorded: res.lastLoginRecorded === true }
+  }
+  return { ...toInitialData(res), session: res.session, lastLoginRecorded: res.lastLoginRecorded === true }
 }
 
 async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {

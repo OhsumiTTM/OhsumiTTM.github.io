@@ -165,6 +165,20 @@ describe('GAS との通信', () => {
     expect(dispatch).not.toHaveBeenCalled()
   })
 
+  it('送り直しで前回のログイン結果(初期データなし)を受け取ったら、そのセッションで初期データを読み直す', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    const session = { token: 'replayed', exp: nowSec() + 1000, remember: true }
+    const bodies = mockGas([
+      { ok: true, replayed: true, result: { memberId: 'm1', email: 'a@example.com', session, lastLoginRecorded: true, reloadInitialData: true } },
+      { ok: true, result: { memberId: 'm1', version: 'v2', unchanged: true } },
+    ])
+    const res = await remote.exchangeIdToken('id.token.x', 'secret', true)
+    expect(res).toMatchObject({ memberId: 'm1', version: 'v2', session: { token: 'replayed' }, lastLoginRecorded: true })
+    expect(bodies[1]).toMatchObject({ action: 'getInitialData', sessionToken: 'replayed' })
+    expect(s.getSessionToken()).toBe('replayed')
+  })
+
   it('ohsumiInitialImages(false) の後は、ログインと初期データに withFiles: false を付ける(元に戻せる)', async () => {
     const remote = await import('./remote')
     const w = window as unknown as { ohsumiInitialImages: (on?: boolean) => string }
@@ -188,7 +202,7 @@ describe('GAS との通信', () => {
       { ok: true, result: { memberId: 'm1', version: 'v1', unchanged: true, session: { token: 't', exp: 1, remember: false } } },
     ])
     expect(await remote.exchangeIdToken('id.token.x', 'secret', true)).toEqual({ memberId: null, email: 'stranger@example.com' })
-    expect(bodies[0]).toEqual({ action: 'exchangeIdToken', idToken: 'id.token.x', nonceSecret: 'secret', remember: true, withBackground: true, clientVersion: CLIENT_VERSION })
+    expect(bodies[0]).toEqual({ action: 'exchangeIdToken', idToken: 'id.token.x', nonceSecret: 'secret', remember: true, withBackground: true, clientVersion: CLIENT_VERSION, requestId: expect.any(String) })
     expect(await remote.exchangeIdToken('id.token.y', 'secret', false)).toMatchObject({ memberId: 'm1', session: { token: 't' } })
   })
 
@@ -293,5 +307,20 @@ describe('Googleでログインの準備(google.accounts.id.initialize)', () => 
     ;(window as unknown as { location: unknown }).location = { reload }
     s.reloadPage()
     expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('ログインに失敗した後は、同じページで initialize を呼び直さず、知らせを残して読み込み直す', async () => {
+    const s = await import('./session')
+    const reload = vi.fn()
+    // まだ initialize していないページでは読み込み直さない(このページで準備する)
+    expect(s.retrySignInOnFreshPage({ error: 'x', setupOpen: false }, reload)).toBe(false)
+    expect(reload).not.toHaveBeenCalled()
+    await prepare(s)
+    expect(s.retrySignInOnFreshPage({ error: 'ログインできませんでした', setupOpen: true }, reload)).toBe(true)
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(id.initialize).toHaveBeenCalledTimes(1)
+    // 読み込み直したページで1回だけ受け取る
+    expect(s.takeLoginRetryNotice()).toEqual({ error: 'ログインできませんでした', setupOpen: true })
+    expect(s.takeLoginRetryNotice()).toBeNull()
   })
 })
