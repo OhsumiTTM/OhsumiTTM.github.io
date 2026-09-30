@@ -605,6 +605,11 @@ GAS の処理は成功しているのに、この転送先が 404 になり、�
 GitHub Secrets の `CSV_GAS`(`NEXT_PUBLIC_GAS_URL`)には、デプロイの「ウェブアプリの URL」
 (`https://script.google.com/macros/s/<ID>/exec`)をそのまま入れてください。
 
+**R1-d から:**
+- `CSV_GAS` は「既定の団体」です。招待リンクも団体の一覧も無い端末だけが、ここにつながります(R1-f まで)。
+- ほかの団体は、招待リンク(`<サイトの URL>/?org=<団体ID>`)から開きます。画面がレジストリ(`REGISTRY_URL`)で、その団体の GAS の URL を調べます。
+- 送り先は、ページを開いた時に団体ごとに決まります(`lib/ohsumi/org-directory.ts`。`registry/README.md` の「1.7. 接続先の解決」)。
+
 - **`/u/1/` などを含む URL は使えません。** 複数の Google アカウントにログインしたブラウザのアドレスバーから
   コピーすると、この形になります。Google が転送し、POST の本文が失われます
 - **`/dev` の URL は使えません**(編集者だけが使えるテスト用です)

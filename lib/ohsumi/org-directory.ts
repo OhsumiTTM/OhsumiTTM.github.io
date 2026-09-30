@@ -315,6 +315,8 @@ export function activateOrg(org: SavedOrg): void {
 /** 既定の団体の団体ID が getLoginConfig で分かった時 */
 export function rememberDefaultOrg(orgId: string, now = Date.now()): void {
   if (!DEFAULT_GAS_URL || activeGasUrl !== DEFAULT_GAS_URL || !ORG_ID_PATTERN.test(orgId)) return
+  // 既定の団体の団体ID が変わった(GAS を作り直した)時は、前の団体ID の項目を消す(同じ接続先が2つ並ばないように)
+  writeSavedOrgs(loadSavedOrgs().filter((o) => !(o.source === 'default' && o.gasUrl === DEFAULT_GAS_URL && o.orgId !== orgId)))
   activateOrg({ orgId, gasUrl: DEFAULT_GAS_URL, source: 'default', checkedAt: now })
 }
 

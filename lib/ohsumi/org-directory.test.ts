@@ -154,6 +154,25 @@ describe('ページを開いた時(startOrg)', () => {
     expect(local.getItem('ohsumi-login-config')).toBeNull()
   })
 
+  it('既定の団体の団体ID が分かったら一覧に入れる。団体ID が変わった時は前の項目を消す', async () => {
+    const d = await load()
+    d.upsertSavedOrg(saved(ORG_B, URL_B))
+    d.rememberDefaultOrg(ORG_A)
+    d.rememberDefaultOrg('org_CCCCCCCCCCCCCCCCCCCC')
+    expect(d.loadSavedOrgs().map((o) => [o.orgId, o.source])).toEqual([['org_CCCCCCCCCCCCCCCCCCCC', 'default'], [ORG_B, 'registry']])
+    expect(d.getActiveOrg()).toEqual({ orgId: 'org_CCCCCCCCCCCCCCCCCCCC', gasUrl: DEFAULT_URL })
+  })
+
+  it('ほかの団体を使っている時は、既定の団体の団体ID を覚えない', async () => {
+    local.setItem('ohsumi-orgs', JSON.stringify([saved(ORG_B, URL_B)]))
+    local.setItem('ohsumi-current-org', ORG_B)
+    const d = await load()
+    d.startOrg()
+    d.rememberDefaultOrg(ORG_A)
+    expect(d.loadSavedOrgs().map((o) => o.orgId)).toEqual([ORG_B])
+    expect(d.getActiveOrg().orgId).toBe(ORG_B)
+  })
+
   it('一覧の壊れた項目(形の違う団体ID・接続先)は使わない', async () => {
     local.setItem('ohsumi-orgs', JSON.stringify([
       saved('org_x', URL_A),
