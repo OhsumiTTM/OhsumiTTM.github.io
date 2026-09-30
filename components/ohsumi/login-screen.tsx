@@ -9,6 +9,15 @@ import { Loader2, TriangleAlert } from 'lucide-react'
 import { isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
 import { fetchLoginConfig, isRemoteConfigured } from '@/lib/ohsumi/remote'
 import {
+  loadSavedOrgs,
+  resolveAndActivate,
+  startOrg,
+  switchToOrg,
+  takeLoginNotice,
+  type LoginNotice,
+  type SavedOrg,
+} from '@/lib/ohsumi/org-directory'
+import {
   hasSavedSession,
   loadCachedLoginConfig,
   loadRememberPreference,
@@ -26,7 +35,32 @@ import { LegalLinks } from './legal-links'
 //   gasOutdated   団体の設定を取得できない(GAS が古い・接続できない)。管理者に GAS の更新を促す
 //   notConfigured GAS の URL・OAuth クライアントIDが設定されていない
 //   demo          開発環境(pnpm dev)で GAS を設定していない場合: ローカルのモックデータのメンバーを選んでログインする
-type LoginMode = 'checking' | 'id' | 'gasOutdated' | 'notConfigured' | 'demo'
+//   resolving     招待リンクの団体の接続先を、レジストリに問い合わせ中(初めての端末だけ。lib/ohsumi/org-directory.ts)
+//   orgNotFound・orgSuspended・orgUnavailable・orgMismatch  招待リンクの団体を使えない(見つからない・停止中・
+//                 レジストリに確認できない(再試行できる)・接続先の団体ID が違う)
+//   noOrg         つなぐ団体が無い(既定の団体が無く、招待リンクからも開いていない)
+type LoginMode =
+  | 'checking'
+  | 'id'
+  | 'gasOutdated'
+  | 'notConfigured'
+  | 'demo'
+  | 'resolving'
+  | 'orgNotFound'
+  | 'orgSuspended'
+  | 'orgUnavailable'
+  | 'orgMismatch'
+  | 'noOrg'
+
+// 団体を使えない画面と、その説明の文
+const ORG_PROBLEM_TEXT = {
+  orgNotFound: 'login.orgNotFound',
+  orgSuspended: 'login.orgSuspended',
+  orgUnavailable: 'login.orgUnavailable',
+  orgMismatch: 'login.orgMismatch',
+  noOrg: 'login.noOrg',
+} as const
+const ORG_PROBLEM_MODES = Object.keys(ORG_PROBLEM_TEXT) as LoginMode[]
 
 // デモ用のログイン画面(メンバーを選ぶだけでログインできる)は開発環境だけで読み込む。
 // 条件はビルド時に決まるため、本番のビルドでは demo-login.tsx ごと取り除かれる
@@ -49,6 +83,12 @@ export function LoginScreen() {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [mode, setMode] = useState<LoginMode>(initialMode)
   const [orgId, setOrgId] = useState<string | null>(null)
+  // この端末の団体の一覧(2つ以上あれば、ログインの前に選べる)
+  const [savedOrgs, setSavedOrgs] = useState<SavedOrg[]>([])
+  // 招待リンクの団体(レジストリに確認できなかった時に、もう一度試す)
+  const [inviteOrgId, setInviteOrgId] = useState<string | null>(null)
+  // 読み込み直す前に決まった知らせ(接続先が変わった・停止した・見つからない)
+  const [notice, setNotice] = useState<LoginNotice | null>(null)
   const [remember, setRemember] = useState(loadRememberPreference)
   const rememberRef = useRef(remember)
   // 初期設定コード(団体を始める最初の代表だけ)。入れてから Google でログインすると、同じ通信で送る
@@ -65,10 +105,38 @@ export function LoginScreen() {
     return () => { mountedRef.current = false }
   }, [])
 
-  // 団体ID を確認する。前回の値があればすぐに使い、裏で確認し直す。
-  // 取得できない(GAS が古い・接続できない)場合は、管理者に GAS の更新を促す
+  // 招待リンクの団体をレジストリで調べ、その GAS の団体ID が同じなら使う(初めての端末だけ。1回待つ)
+  const resolveInvite = useCallback((id: string) => {
+    setInviteOrgId(id)
+    setMode('resolving')
+    resolveAndActivate(id, (gasUrl) => fetchLoginConfig(gasUrl).then((c) => c?.orgId ?? null)).then((res) => {
+      if (!mountedRef.current) return
+      setSavedOrgs(loadSavedOrgs())
+      if (res.status === 'ok') {
+        setOrgId(res.org.orgId)
+        setMode('id')
+        return
+      }
+      setMode(
+        res.status === 'suspended' ? 'orgSuspended'
+          : res.status === 'notFound' ? 'orgNotFound'
+            : res.status === 'mismatch' ? 'orgMismatch'
+              : 'orgUnavailable',
+      )
+    })
+  }, [])
+
+  // 使う団体を決め、団体ID を確認する(lib/ohsumi/org-directory.ts)。
+  // 一覧にある団体は、前回の団体ID をすぐに使い、裏で確認し直す。
+  // 既定の団体の団体ID を取得できない(GAS が古い・接続できない)場合は、管理者に GAS の更新を促す
   useEffect(() => {
     if (mode !== 'checking') return
+    setNotice(takeLoginNotice())
+    const decision = startOrg()
+    setSavedOrgs(loadSavedOrgs())
+    if (decision.kind === 'invalidInvite') return setMode('orgNotFound')
+    if (decision.kind === 'none') return setMode('noOrg')
+    if (decision.kind === 'resolve') return resolveInvite(decision.orgId)
     const cached = loadCachedLoginConfig()
     if (cached) {
       setOrgId(cached.orgId)
@@ -80,8 +148,15 @@ export function LoginScreen() {
     fetchLoginConfig().then((config) => {
       if (!mountedRef.current) return
       if (config) {
+        // レジストリで調べた団体の GAS が、別の団体ID を返した(接続先の設定の誤り): ログインしない
+        if (decision.kind === 'use' && decision.org.source === 'registry' && config.orgId !== decision.org.orgId) {
+          setOrgId(null)
+          setMode('orgMismatch')
+          return
+        }
         saveLoginConfig(config)
         setOrgId(config.orgId)
+        setSavedOrgs(loadSavedOrgs())
         setMode('id')
       } else if (!cached) {
         setMode('gasOutdated')
@@ -90,6 +165,12 @@ export function LoginScreen() {
     // 最初の1回だけ確認する
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const orgLabel = (o: SavedOrg) => o.name || t('login.orgUnnamed', { id: o.orgId.slice(4, 10) })
+  // 団体を選ぶ欄: 一覧に2つ以上ある時(使えない団体の画面では、1つでもほかの団体があれば出す)
+  const pickable = savedOrgs.filter((o) => o.orgId !== orgId || mode === 'id')
+  const showPicker = mode !== 'resolving' && mode !== 'checking' && !loading &&
+    (mode === 'id' ? savedOrgs.length >= 2 : ORG_PROBLEM_MODES.includes(mode) && pickable.length > 0)
 
   const toggleRemember = (value: boolean) => {
     setRemember(value)
@@ -191,7 +272,49 @@ export function LoginScreen() {
         </p>
 
         <div className="mt-9 w-full rounded-2xl border border-border bg-card p-6 shadow-[0_1px_3px_rgba(16,24,40,0.06)]">
-          {mode === 'gasOutdated' || mode === 'notConfigured' ? (
+          {notice && (
+            <div role="status" className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted px-3 py-2 text-left text-xs">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <span>{t(`login.${notice}`)}</span>
+            </div>
+          )}
+          {showPicker && (
+            <label className="mb-4 block text-left text-xs">
+              <span className="font-medium">{t('login.orgLabel')}</span>
+              <select
+                value={mode === 'id' && orgId ? orgId : ''}
+                onChange={(e) => e.target.value && switchToOrg(e.target.value)}
+                className="mt-1 w-full min-w-0 truncate rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+              >
+                {mode !== 'id' && <option value="">—</option>}
+                {(mode === 'id' ? savedOrgs : pickable).map((o) => (
+                  <option key={o.orgId} value={o.orgId}>{orgLabel(o)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {mode === 'resolving' ? (
+            <div className="flex min-h-11 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              {t('login.resolving')}
+            </div>
+          ) : ORG_PROBLEM_MODES.includes(mode) ? (
+            <div role="alert" className="text-left text-sm text-muted-foreground">
+              <div className="flex items-start gap-2">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
+                <span>{t(ORG_PROBLEM_TEXT[mode as keyof typeof ORG_PROBLEM_TEXT])}</span>
+              </div>
+              {mode === 'orgUnavailable' && inviteOrgId && (
+                <button
+                  type="button"
+                  onClick={() => resolveInvite(inviteOrgId)}
+                  className="mt-3 w-full rounded-md border border-border px-3 py-1.5 text-sm font-medium"
+                >
+                  {t('login.retry')}
+                </button>
+              )}
+            </div>
+          ) : mode === 'gasOutdated' || mode === 'notConfigured' ? (
             <div role="alert" className="flex items-start gap-2 text-left text-sm text-muted-foreground">
               <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
               <span>{mode === 'gasOutdated' ? t('login.gasOutdated') : t('login.notConfigured')}</span>

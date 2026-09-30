@@ -10,9 +10,11 @@
 //   「この端末にログイン情報を保存する」あり → localStorage(再読み込み・再起動後もログインしたまま)
 //   なし → sessionStorage(タブを閉じると消える)
 // キーは団体ごとに分ける(ohsumi-session-<orgId>)。
+// どの団体を使うか(団体ID・接続先)は org-directory.ts が決める(R1-d)。
 'use client'
 
 import { CLIENT_ID, waitForGIS } from './google-sheet-sync'
+import { getActiveOrg, rememberDefaultOrg, startOrg } from './org-directory'
 
 export interface LoginConfig {
   orgId: string
@@ -24,7 +26,6 @@ export interface StoredSession {
   remember: boolean
 }
 
-const LOGIN_CONFIG_KEY = 'ohsumi-login-config'
 const REMEMBER_PREF_KEY = 'ohsumi-remember-login'
 const SESSION_KEY_PREFIX = 'ohsumi-session-'
 
@@ -42,22 +43,16 @@ function safeStorage(kind: 'local' | 'session'): Storage | null {
 
 // ---- 団体の設定 ----------------------------------------------------------------
 
+/** このページで使う団体の団体ID(分かっていれば)。最初に呼んだ時に、使う団体を決める(org-directory.ts の startOrg) */
 export function loadCachedLoginConfig(): LoginConfig | null {
-  try {
-    const raw = safeStorage('local')?.getItem(LOGIN_CONFIG_KEY)
-    const v = raw ? (JSON.parse(raw) as Partial<LoginConfig>) : null
-    return v && typeof v.orgId === 'string' && v.orgId ? { orgId: v.orgId } : null
-  } catch {
-    return null
-  }
+  startOrg()
+  const { orgId } = getActiveOrg()
+  return orgId ? { orgId } : null
 }
 
+/** 既定の団体の団体ID が getLoginConfig で分かった時に、この端末の団体の一覧に入れる */
 export function saveLoginConfig(config: LoginConfig): void {
-  try {
-    safeStorage('local')?.setItem(LOGIN_CONFIG_KEY, JSON.stringify(config))
-  } catch {
-    /* ignore */
-  }
+  rememberDefaultOrg(config.orgId)
 }
 
 // ---- 「この端末にログイン情報を保存する」の前回の選択(初期値はチェックあり) --------

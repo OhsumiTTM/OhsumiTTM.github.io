@@ -66,32 +66,34 @@ import {
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
 import { checkGasUrl } from './gas-url'
+import { DEFAULT_GAS_URL, REGISTRY_URL, getActiveGasUrl } from './org-directory'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 
-// NEXT_PUBLIC_ vars are inlined at build time by Next.js. They must be
-// referenced by their literal full name (not a dynamic key) to be inlined.
-const GAS_URL = process.env.NEXT_PUBLIC_GAS_URL
+// 送り先の団体の GAS は、ページを開いた時に決まる(org-directory.ts。招待リンク・この端末の団体の一覧・
+// ビルド時の既定の団体 NEXT_PUBLIC_GAS_URL)。レジストリ(NEXT_PUBLIC_REGISTRY_URL)があれば、既定の団体が
+// 無くても、招待リンクから団体につなげる
 
 // URL の形が違う(/u/1/ を含む・/dev など)と、Google の転送で POST の本文が失われる。
 // ビルドの前にも確かめている(scripts/check-gas-url.mjs)が、画面でもコンソールに出す
-if (typeof window !== 'undefined' && GAS_URL) {
-  const check = checkGasUrl(GAS_URL)
+if (typeof window !== 'undefined' && DEFAULT_GAS_URL) {
+  const check = checkGasUrl(DEFAULT_GAS_URL)
   // eslint-disable-next-line no-console
   if (check.level !== 'ok') (check.level === 'error' ? console.error : console.warn)(`[ohsumi] ${check.message}`)
 }
 
-export const isRemoteConfigured = !!GAS_URL
+export const isRemoteConfigured = !!DEFAULT_GAS_URL || !!REGISTRY_URL
 
 // 切り分け用: ブラウザのコンソールで ohsumiPing() を実行すると、何もしない ping を3回送り、
 // 往復の時間と GAS の中の時間を並べて出す(gas-transport.ts の pingGas)
 export function pingGasServer(count = 3) {
-  if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
-  return pingGas(GAS_URL, count)
+  const url = getActiveGasUrl()
+  if (!url) throw new Error('GAS Web App URL is not configured')
+  return pingGas(url, count)
 }
-if (typeof window !== 'undefined' && GAS_URL) {
+if (typeof window !== 'undefined' && isRemoteConfigured) {
   ;(window as unknown as { ohsumiPing?: (count?: number) => Promise<unknown> }).ohsumiPing = (count?: number) => pingGasServer(count)
   ;(window as unknown as { ohsumiInitialImages?: (on?: boolean) => string }).ohsumiInitialImages = setInitialImages
 }
@@ -638,14 +640,20 @@ export interface CreateTaskPayload {
 
 // 認証なしで GAS を呼ぶ(getLoginConfig・exchangeIdToken)
 async function callGas<T>(body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
-  if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
-  return sendToGas<T>(GAS_URL, { ...body, clientVersion: CLIENT_VERSION })
+  return sendToGasAt<T>(getActiveGasUrl(), body)
 }
 
-/** ログイン前に団体ID(IDトークンの nonce に含める)を取得する。GAS が古い場合などは null */
-export async function fetchLoginConfig(): Promise<{ orgId: string } | null> {
+// 指定した団体の GAS に、認証なしで送る(招待リンクの団体の団体ID を、使う前に確かめる時)
+async function sendToGasAt<T>(url: string, body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
+  if (!url) throw new Error('GAS Web App URL is not configured')
+  return sendToGas<T>(url, { ...body, clientVersion: CLIENT_VERSION })
+}
+
+/** ログイン前に団体ID(IDトークンの nonce に含める)を取得する。GAS が古い場合などは null。gasUrl を省くと今の団体の GAS */
+export async function fetchLoginConfig(gasUrl?: string): Promise<{ orgId: string } | null> {
   try {
-    const json = await callGas<{ orgId: string }>({ action: 'getLoginConfig' })
+    const body = { action: 'getLoginConfig' }
+    const json = gasUrl ? await sendToGasAt<{ orgId: string }>(gasUrl, body) : await callGas<{ orgId: string }>(body)
     return json.ok && json.result?.orgId ? { orgId: json.result.orgId } : null
   } catch {
     return null
@@ -700,14 +708,15 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
 }
 
 async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
-  if (!GAS_URL) throw new Error('GAS Web App URL is not configured')
+  const gasUrl = getActiveGasUrl()
+  if (!gasUrl) throw new Error('GAS Web App URL is not configured')
 
   // セッショントークン(exchangeIdToken で発行されたもの)で認証する
   const sessionToken = getSessionToken()
 
   // 1本ずつ順番に送り、JSON が返らなければ送り直す(書き込みは requestId で二重に処理されない。
   // gas-transport.ts)。何度送っても JSON が返らない場合は GasTransportError を投げる
-  const json = await sendToGas<T>(GAS_URL, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload })
+  const json = await sendToGas<T>(gasUrl, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload })
 
   if (json.session) applyRenewedSession(json.session)
 
