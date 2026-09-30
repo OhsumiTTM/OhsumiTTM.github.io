@@ -3,6 +3,8 @@
 // (gas/Code.gs の contractForClient_)。付いていない成功の応答は、停止の予定が無いことを表す。
 //   phase: scheduled(予定あり。まだ前)/ inEffect(停止中)。kind: suspend(提供停止)/ restrict(機能停止)
 // 画面の上部には、機能停止中はアンケートへの回答のお願いを、停止の予定が14日以内なら予告を出す。
+// 停止中かどうかは、GAS が応答に付けた phase だけで決める(GAS が今その状態で動いている時だけ、画面も停止にする)。
+// 予定の日時を過ぎても、画面は自分で停止中とはしない(GAS は予定の日時を過ぎたら自分で停止中として動き、次の応答で伝える)。
 // 提供停止中は GAS がすべての操作を断る(orgSuspended)ので、画面はログイン画面に戻して知らせる
 
 export type ContractPhase = 'none' | 'scheduled' | 'inEffect'
@@ -50,8 +52,8 @@ export function contractBanner(c: ContractInfo, nowMs: number): ContractBanner |
   if (c.phase === 'inEffect') return c.kind === 'restrict' ? { type: 'restricted' } : null
   if (c.phase !== 'scheduled' || !c.suspendAt || !c.kind) return null
   const at = Date.parse(c.suspendAt)
-  // 予定の日時を過ぎた(次の応答で停止中になる)
-  if (!(at > nowMs)) return c.kind === 'restrict' ? { type: 'restricted' } : null
+  // 予定の日時を過ぎた(GAS が停止中と伝えるまで、画面は停止にしない)
+  if (!(at > nowMs)) return null
   const left = (at - nowMs) / DAY_MS
   if (left > CONTRACT_BANNER_DAYS) return null
   return { type: 'scheduled', kind: c.kind, suspendAt: c.suspendAt, daysLeft: Math.max(1, Math.ceil(left)) }

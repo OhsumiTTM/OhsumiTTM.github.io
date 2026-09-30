@@ -85,11 +85,24 @@ describe('提供停止・機能停止の知らせ(375px)', () => {
 describe('機能停止中(読み取り専用)の閲覧・書き出し', () => {
   it('期間・プロジェクト・表示・並び替え・表示項目・リスト・タスク詳細・管理画面を確かめる(ラベルは画面の表示と同じ)', () => {
     const steps = layout.READ_ONLY_STEPS as { do: string; labels?: string[] }[]
-    expect(steps.map((s) => s.do)).toEqual(['readOnlyWorkspace', 'readOnlyList', 'readOnlyTask', 'readOnlyAdmin'])
+    expect(steps.map((s) => s.do)).toEqual(['readOnlyWorkspace', 'readOnlyList', 'readOnlyTask', 'readOnlyAdmin',
+      'readOnlyAddTask', 'readOnlyComment', 'readOnlyExpense', 'readOnlyApprove'])
     expect(layout.READ_ONLY_CONTRACT).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
     const values = new Set(Object.values(ja))
     const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
-    for (const label of steps.flatMap((s) => s.labels ?? [])) expect(values.has(label) || nav.includes(`label: '${label}'`), label).toBe(true)
+    // 画面の上のメニュー(INPUT・OUTPUT・ADMIN)は header.tsx に直接書いてある
+    const header = readFileSync(join(ROOT, 'components', 'ohsumi', 'header.tsx'), 'utf8')
+    for (const label of steps.flatMap((s) => s.labels ?? [])) {
+      expect(values.has(label) || nav.includes(`label: '${label}'`) || new RegExp(`>\\s*${label}\\s*<`).test(header), label).toBe(true)
+    }
+  })
+})
+
+describe('機能停止中の書き込みの見張り', () => {
+  it('check:layout が書き込みとして数えない操作は、GAS の読み取りの一覧(READ_ONLY_ACTIONS)と ping・getLoginConfig だけ', () => {
+    const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
+    const gasReads = (/var READ_ONLY_ACTIONS = \[([\s\S]*?)\]/.exec(code)![1].match(/'(\w+)'/g) ?? []).map((x) => x.slice(1, -1))
+    expect([...(layout.LAYOUT_READ_ACTIONS as string[])].sort()).toEqual([...gasReads, 'ping', 'getLoginConfig'].sort())
   })
 })
 

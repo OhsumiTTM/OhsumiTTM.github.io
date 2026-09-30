@@ -6,7 +6,7 @@
 // 2. 作成・編集の操作: 画面の状態を変える前に止め(store の関数を包む)、「読み取り専用のため、保存できません」を出す。
 // 3. 万一 GAS に断られた時: 読み込み直さずに知らせ、送ろうとした文章をコピーできるように出す。
 
-import { contractBanner, type ContractInfo } from './contract'
+import type { ContractInfo } from './contract'
 
 export const READ_ONLY_OK_ATTR = 'data-read-only-ok'
 const DISABLED_MARK = 'data-read-only-disabled'
@@ -14,9 +14,17 @@ const DISABLED_MARK = 'data-read-only-disabled'
 // 止める input の type(文字・数値・日付などを書く欄と、ファイルの選択)
 const WRITING_INPUT_TYPES = new Set(['', 'text', 'number', 'date', 'datetime-local', 'time', 'month', 'week', 'email', 'url', 'tel', 'password', 'file'])
 
-/** 読み取り専用か(機能停止中。予定の日時を過ぎた時も) */
-export function isReadOnlyContract(c: ContractInfo, nowMs = Date.now()): boolean {
-  return contractBanner(c, nowMs)?.type === 'restricted'
+/** 読み取り専用か(GAS が機能停止中と伝えた時だけ) */
+export function isReadOnlyContract(c: ContractInfo): boolean {
+  return c.phase === 'inEffect' && c.kind === 'restrict'
+}
+
+// 作成・編集を止めた時刻。止めた直後の「保存しました」などの知らせを出さないために使う(toast.tsx)
+let lastBlockedAt = 0
+
+/** 今、作成・編集を止めたばかりか */
+export function blockedJustNow(nowMs = Date.now()): boolean {
+  return nowMs - lastBlockedAt < 1000
 }
 
 interface ElementLike {
@@ -143,6 +151,7 @@ export function guardStoreWrites<T extends object>(value: T, onBlocked: (name: s
   for (const [name, v] of Object.entries(value)) {
     if (typeof v !== 'function' || READ_SAFE_STORE_FUNCTIONS.has(name)) continue
     out[name] = (...args: unknown[]) => {
+      lastBlockedAt = Date.now()
       onBlocked(name, args)
       const p = Promise.reject(new ReadOnlyBlockedError())
       // 結果を使わない呼び出し元で、処理されない失敗として出さない

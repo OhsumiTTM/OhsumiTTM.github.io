@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useState } from 'react'
 import { Check } from 'lucide-react'
+import { blockedJustNow } from '@/lib/ohsumi/read-only'
 
 interface ToastItem {
   id: number
@@ -16,6 +17,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([])
 
   const toast = useCallback((message: string) => {
+    // 機能停止中に作成・編集を止めた直後は、「保存しました」などの知らせを出さない(止めた知らせだけを出す)
+    if (blockedJustNow()) return
     const id = Date.now() + Math.random()
     setItems((prev) => [...prev, { id, message }])
     setTimeout(() => {

@@ -69,7 +69,18 @@ export const READ_ONLY_STEPS = [
   { name: '機能停止中: リスト(検索・Excel 出力)', do: 'readOnlyList', labels: ['リスト', 'Excel出力'] },
   { name: '機能停止中: タスク詳細(書く欄は使えない)', do: 'readOnlyTask', view: 'リスト', text: '担当者が多いタスク' },
   { name: '機能停止中: 管理画面(検索・絞り込み・書き出し)', do: 'readOnlyAdmin', labels: ['全データをExcel出力', 'Members', '日報・週報', '人材DB'] },
+  // 主な作成の操作が、保存の手前で止まること(GAS に書き込みを送らない。止めた知らせを出し、書いた文章を残す)。
+  // 偽の GAS は書き込みも受け付けるので、画面の止め方に漏れがあれば、送った書き込みとして見つかる
+  { name: '機能停止中: タスクの追加が保存の手前で止まる', do: 'readOnlyAddTask', labels: ['INPUT', 'イベント準備の4タスクを入力', 'タスクを整理する', '選択したタスクを登録'] },
+  { name: '機能停止中: コメントが保存の手前で止まる', do: 'readOnlyComment', view: 'リスト', text: '担当者が多いタスク', labels: ['送信'] },
+  { name: '機能停止中: 経費申請が保存の手前で止まる', do: 'readOnlyExpense', labels: ['経費申請', '申請する'] },
+  { name: '機能停止中: 承認が保存の手前で止まる', do: 'readOnlyApprove', labels: ['Approvals', '承認する'] },
 ]
+
+// 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
+export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
+  'getFiles', 'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'revokeMemberSessions', 'updateLastLogin']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で確かめる)
@@ -268,8 +279,13 @@ async function run({ build = true } = {}) {
 
     // 画面の上部の知らせを確かめる時に、GAS の応答に付ける停止の状態(R1-e)
     let contract = null
+    // 画面が送った書き込み(読み取りの一覧に無い操作)
+    let sentWrites = []
     // GAS・Google への通信には偽の応答を返す(外には出さない)
     const gas = (body) => {
+      if (!LAYOUT_READ_ACTIONS.includes(body.action)) {
+        sentWrites.push(body.action === 'batch' ? 'batch(' + (body.ops || []).map((o) => o.action).join(',') + ')' : body.action)
+      }
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'getInitialData': return { memberId: member, version: 'layout', sheets: view }
@@ -304,11 +320,12 @@ async function run({ build = true } = {}) {
     await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
 
     const navigate = async (path = '/') => { await send('Page.navigate', { url: base + path }); await sleep(3000) }
-    const clickText = (text, from = 'button, a, [role=tab]') => evaluate(`(() => {
+    // gesture: 人が押した時と同じ扱いにする(機能停止中の知らせは、人が操作した時だけ出る)
+    const clickText = (text, from = 'button, a, [role=tab]', gesture = false) => evaluate(`(() => {
       const els = [...document.querySelectorAll(${JSON.stringify(from)})]
       const el = els.find((e) => e.textContent.trim() === ${JSON.stringify(text)}) || els.find((e) => e.textContent.trim().startsWith(${JSON.stringify(text)}))
       if (!el) throw new Error('見つかりません: ' + ${JSON.stringify(text)})
-      el.click(); return true })()`)
+      el.click(); return true })()`, gesture)
     // この端末の団体の一覧(lib/ohsumi/org-directory.ts)。2つ目は名前がとても長い団体
     const saveOrgs = (withSecond) => evaluate(`localStorage.setItem('ohsumi-orgs', JSON.stringify([
         { orgId: '${ORG}', gasUrl: '${GAS_URL}', source: 'default', checkedAt: Date.now(), name: 'サンプル団体' },
@@ -347,6 +364,10 @@ async function run({ build = true } = {}) {
         if (step.do === 'home' || step.do === 'admin') contract = null
         if (step.do.startsWith('readOnly')) {
           contract = pass.contract
+          // 経費申請には、カテゴリが1つ要る(サンプルのデータには無いので、設定に足す)
+          if (step.do === 'readOnlyExpense' && !view.Settings.rows.some((r) => r[0] === 'expense_categories')) {
+            view.Settings.rows.push(['expense_categories', JSON.stringify([{ id: 'travel', label: '交通費', approvalSteps: [] }])])
+          }
           if (step.do !== 'readOnlyTask') {
             await signIn(); await navigate('/')
             await clickText('あとで設定する').catch(() => {})
@@ -422,6 +443,64 @@ async function run({ build = true } = {}) {
             if (!(await evaluate(`!!document.getElementById('read-only-notice-title')`))) throw new Error('編集の操作で「読み取り専用のため、保存できません」が出ません')
             if ((await evaluate(`${priority}.value`)) !== before) throw new Error('編集の操作で画面が変わりました')
             await clickText('閉じる', '[role=dialog] button'); await sleep(300)
+          }
+          // 止まった書く欄にも、画面の状態として文章を入れる(止まる前に書いていた時と同じ)
+          const forceText = (finder, value) => evaluate(`(() => {
+            const el = ${finder}
+            if (!el) throw new Error('書く欄が見つかりません')
+            if (!el.disabled) throw new Error('書く欄が使えます(止まっていません)')
+            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+            el.dispatchEvent(new Event('input', { bubbles: true }))
+            return true })()`)
+          // 保存の手前で止まったか: 知らせが出て、書いた文章を残し、GAS に書き込みを送らず、「保存しました」を出さない
+          const expectBlocked = async (what, text) => {
+            await sleep(1200)
+            if (!(await evaluate(`!!document.getElementById('read-only-notice-title')`))) throw new Error(what + 'で「読み取り専用のため、保存できません」が出ません')
+            if (text && !(await evaluate(`[...document.getElementById('read-only-notice-title').closest('[role=dialog]').querySelectorAll('textarea')].some((t) => t.value.includes(${JSON.stringify(text)}))`))) {
+              throw new Error(what + 'で、書いた文章が知らせに残っていません')
+            }
+            if (sentWrites.length) throw new Error(what + 'で、GAS に書き込みを送りました: ' + sentWrites.join(', '))
+            const toasts = await evaluate(`[...document.querySelectorAll('.fixed.bottom-6 > div')].map((d) => d.textContent)`)
+            if (toasts.length) throw new Error(what + 'で、保存したかのような知らせが出ました: ' + toasts.join(' / '))
+            await evaluate(`(() => { const d = document.getElementById('read-only-notice-title').closest('[role=dialog]'); [...d.querySelectorAll('button')].find((b) => b.textContent.trim() === '閉じる').click(); return true })()`)
+            await sleep(300)
+          }
+          sentWrites = []
+          if (step.do === 'readOnlyAddTask') {
+            await clickText('INPUT'); await sleep(1000)
+            if (!(await evaluate(`[...document.querySelectorAll('main textarea')].every((t) => t.disabled)`))) throw new Error('タスクを書く欄が使えます')
+            await clickText('イベント準備の4タスクを入力'); await sleep(300)
+            await clickText('タスクを整理する'); await sleep(2500)
+            await clickText('選択したタスクを登録', 'button', true)
+            await expectBlocked('タスクの追加', '')
+          }
+          if (step.do === 'readOnlyComment') {
+            await clickText('一覧'); await sleep(500)
+            await clickText(step.view); await sleep(800)
+            await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+            const comment = 'コメントの本文です。保存できなくても消えないこと'
+            await forceText(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '送信').parentElement.querySelector('textarea')`, comment)
+            await sleep(300)
+            await clickText('送信', 'button', true)
+            await expectBlocked('コメント', comment)
+          }
+          if (step.do === 'readOnlyExpense') {
+            await clickText('経費申請'); await sleep(1000)
+            const modal = `[...document.querySelectorAll('[role=dialog]')].find((d) => d.textContent.includes('申請する'))`
+            await evaluate(`(() => { const s = ${modal}.querySelector('select'); if (!s || !s.options.length) throw new Error('経費のカテゴリがありません'); s.value = s.options[0].value; s.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+            await forceText(`${modal}.querySelector('input[type=number], input[inputmode=numeric]') || [...${modal}.querySelectorAll('input')].find((i) => i.placeholder && i.placeholder.includes('3500'))`, '3500')
+            const why = '会場の下見の交通費です(領収書がありません)'
+            await forceText(`${modal}.querySelector('textarea')`, why)
+            await sleep(300)
+            await evaluate(`(() => { [...${modal}.querySelectorAll('button')].find((b) => b.textContent.trim() === '申請する').click(); return true })()`, true)
+            await expectBlocked('経費申請', why)
+          }
+          if (step.do === 'readOnlyApprove') {
+            await clickText('ADMIN'); await sleep(1500)
+            await clickText('Approvals', 'aside nav button'); await sleep(1000)
+            await clickText('承認する', 'button', true)
+            await expectBlocked('承認', '')
           }
           if (step.do === 'readOnlyAdmin') {
             await clickText('ADMIN'); await sleep(1500)
