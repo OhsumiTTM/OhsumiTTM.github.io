@@ -99,8 +99,7 @@ export const ja = {
   // ---- login ---------------------------------------------------------
   'login.tagline': 'タスクを打ち上げ、組織を軌道に乗せる。',
   'login.signingIn': 'ログイン中…',
-  'login.gasOutdated': '団体の設定を取得できませんでした。団体の Apps Script(GAS)が古いか、接続できない可能性があります。団体の管理者に、GAS を最新版に更新する(gas/README.md の手順)よう依頼してください。',
-  'login.notConfigured': 'このサイトは、団体の Apps Script(GAS)の URL または Google の OAuth クライアントIDが設定されていません。団体の管理者にお問い合わせください。',
+  'login.notConfigured': 'このサイトは、レジストリの URL または Google の OAuth クライアントIDが設定されていません。FSIF(fsif.official@gmail.com)にお問い合わせください。',
   'login.failed': 'ログインできませんでした。もう一度お試しください。',
   'login.notRegistered': '{email} はOhsumiに登録されていません。',
   'login.setupCodeToggle': '初期設定コードをお持ちの方(団体を始める最初の代表)',
@@ -112,7 +111,7 @@ export const ja = {
   'login.orgUnavailable': '団体の接続先を確認できません。少し待ってから、もう一度お試しください。',
   'login.orgMismatch': '招待リンクの団体と、接続先の団体が一致しません。団体の担当者に確かめてください。',
   'login.orgMoved': '団体の接続先が変わりました。もう一度ログインしてください。',
-  'login.noOrg': '団体の担当者から受け取った招待リンクから開いてください。',
+  'login.noOrg': '団体から届いた招待リンクを開いてください。',
   'login.retry': 'もう一度試す',
   'login.orgLabel': '団体',
   'login.orgUnnamed': '団体({id})',

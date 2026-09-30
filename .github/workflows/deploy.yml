@@ -40,11 +40,11 @@ jobs:
 
       - name: Build static site
         env:
-          NEXT_PUBLIC_GAS_URL: ${{ secrets.CSV_GAS }}
           NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
           NEXT_PUBLIC_FEEDBACK_FORM_URL: ${{ secrets.FEEDBACK_FORM_URL }}
           NEXT_PUBLIC_GOOGLE_CALENDAR_READ: ${{ secrets.GOOGLE_CALENDAR_READ }}
-          # レジストリの管理画面(/registry-admin/)。未設定なら、その画面は「設定されていません」と出すだけ
+          # レジストリ。団体の接続先は、招待リンクの団体ID からレジストリが答える(ビルド時の既定の団体は無い)。
+          # 未設定なら、Ohsumi の画面と管理画面(/registry-admin/)は「設定されていません」と出すだけ
           NEXT_PUBLIC_REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
           NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID: ${{ secrets.REGISTRY_OAUTH_CLIENT_ID }}
         run: pnpm build

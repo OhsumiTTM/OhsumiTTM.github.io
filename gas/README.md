@@ -311,8 +311,12 @@ URLを知っている人がログインなしで全データを読めてしま�
 
 | Secret名 | 値の取得場所 | 説明 |
 |---|---|---|
-| `CSV_GAS` | 手順2でコピーした `/exec` で終わるURL | データの読み書きの窓口 |
+| `REGISTRY_URL` | レジストリのウェブアプリの URL(`registry/README.md` の 1.5) | 団体の接続先の解決(招待リンクの団体ID → 団体の GAS の URL)と、レジストリの管理画面 `/registry-admin/` |
 | `GOOGLE_OAUTH_CLIENT_ID` | 後述「4.1」参照 | ログイン認証（Googleサインイン） |
+
+団体の GAS の URL(手順2でコピーした `/exec` で終わる URL)は、Secrets には入れません。団体の担当者が、スプレッドシートの
+「Ohsumi」→「レジストリに登録する…」でレジストリに登録し、メンバーは招待リンク(`<サイトの URL>/?org=<団体ID>`)から開きます。
+以前の `CSV_GAS`(ビルド時の既定の団体)は、R1-f 後半で使わなくなりました。残っていれば、Secrets から消してください。
 
 ### 任意の Secrets
 
@@ -320,7 +324,6 @@ URLを知っている人がログインなしで全データを読めてしま�
 |---|---|
 | `FEEDBACK_FORM_URL` | フィードバックの送信先 Google フォームの `formResponse` で終わるURL |
 | `GOOGLE_CALENDAR_READ` | `true` にすると、Googleカレンダーの予定の表示と日程候補の空き時間の確認を有効にします(機密のスコープ `calendar` を要求します。Google の審査を通過するまでは設定しないでください) |
-| `REGISTRY_URL` | レジストリのウェブアプリの URL(レジストリの管理画面 `/registry-admin/` で使います。手順は `registry/README.md` の 1.5) |
 | `REGISTRY_OAUTH_CLIENT_ID` | レジストリの管理画面のログインに使う、レジストリ用の OAuth クライアント ID(同上。Ohsumi 本体のクライアントとは別) |
 
 **注意**: 静的サイトとしてビルドされるため、Web App の URL と OAuth クライアントIDはビルド後のJavaScriptから誰でも読み取れます。ただし、データの読み書きには Google アカウントでのログインが必要で、閲覧権限のないデータは Apps Script が返しません。
@@ -631,18 +634,17 @@ GAS の処理は成功しているのに、この転送先が 404 になり、�
 
 ### GAS の URL
 
-GitHub Secrets の `CSV_GAS`(`NEXT_PUBLIC_GAS_URL`)には、デプロイの「ウェブアプリの URL」
-(`https://script.google.com/macros/s/<ID>/exec`)をそのまま入れてください。
+団体の GAS の URL は、団体の担当者がレジストリに登録します(「Ohsumi」→「レジストリに登録する…」。
+`registry/README.md` の「4.」)。メンバーは招待リンク(`<サイトの URL>/?org=<団体ID>`)から開き、画面がレジストリ(`REGISTRY_URL`)で
+その団体の GAS の URL を調べます。送り先は、ページを開いた時に団体ごとに決まります(`lib/ohsumi/org-directory.ts`。
+`registry/README.md` の「1.7. 接続先の解決」)。ビルド時に決まる「既定の団体」(以前の `CSV_GAS`)はありません。
 
-**R1-d から:**
-- `CSV_GAS` は「既定の団体」です。招待リンクも団体の一覧も無い端末だけが、ここにつながります(R1-f まで)。
-- ほかの団体は、招待リンク(`<サイトの URL>/?org=<団体ID>`)から開きます。画面がレジストリ(`REGISTRY_URL`)で、その団体の GAS の URL を調べます。
-- 送り先は、ページを開いた時に団体ごとに決まります(`lib/ohsumi/org-directory.ts`。`registry/README.md` の「1.7. 接続先の解決」)。
-
+- 登録するのは、デプロイの「ウェブアプリの URL」(`https://script.google.com/macros/s/<ID>/exec`)そのものです
 - **`/u/1/` などを含む URL は使えません。** 複数の Google アカウントにログインしたブラウザのアドレスバーから
   コピーすると、この形になります。Google が転送し、POST の本文が失われます
 - **`/dev` の URL は使えません**(編集者だけが使えるテスト用です)
-- ビルドの最初に形を確かめ(`scripts/check-gas-url.mjs`)、違えばビルドを止めます(値そのものは表示しません)
+- 団体の GAS は、登録の前にこの形を確かめ、違えば登録しません。レジストリの URL(`REGISTRY_URL`)は、
+  ビルドの最初に形を確かめ(`scripts/check-registry-url.mjs`)、違えばビルドを止めます(値そのものは表示しません)
 
 **反映の順番:** どちらからでも構いません。以前の GAS は `requestId` を無視し、以前の画面は `retryLater` を
 無視するだけです。ただし、二重の書き込みを防ぐのは GAS 側なので、**GAS を先に**反映することをおすすめします。
@@ -893,7 +895,7 @@ Admin → Dashboard の「プロジェクト健全性」テーブルでは、期
 ## 7. 動作確認
 
 Secrets が未設定のままだとローカルのモックデータで動きます。
-必須の Secrets（`CSV_GAS`・`GOOGLE_OAUTH_CLIENT_ID`）が揃うと、次回のデプロイ以降はスプレッドシートからの読み込み・書き込みに切り替わります。
+必須の Secrets（`REGISTRY_URL`・`GOOGLE_OAUTH_CLIENT_ID`）が揃うと、次回のデプロイ以降は、招待リンクから開いた団体のスプレッドシートを読み書きします。
 
 ページを再読み込みしたときは、ログイン画面で「この端末にログイン情報を保存する」を選んでいれば、そのままログインした状態で読み込まれます(「4.2. ログインの仕組み」参照)。
 

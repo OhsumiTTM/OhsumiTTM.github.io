@@ -3,7 +3,7 @@
 // Script Web App. Reads go through the authenticated getInitialData action,
 // which returns only what the signed-in member may see (see gas/Code.gs's
 // READ_POLICY). See gas/README.md for the sheet schema and deployment steps.
-// All of this is optional — when NEXT_PUBLIC_GAS_URL isn't set (e.g. local
+// All of this is optional — when NEXT_PUBLIC_REGISTRY_URL isn't set (e.g. local
 // dev), the app falls back to the local seed data exactly as before.
 import type {
   AdminSection,
@@ -65,8 +65,7 @@ import {
 } from './code-normalize'
 import { applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
-import { checkGasUrl } from './gas-url'
-import { DEFAULT_GAS_URL, ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
+import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
 import { noteContractResponse } from './contract'
 import { extractUnsavedTexts } from './read-only'
 
@@ -83,19 +82,9 @@ export class ContractRestrictedError extends Error {
   }
 }
 
-// 送り先の団体の GAS は、ページを開いた時に決まる(org-directory.ts。招待リンク・この端末の団体の一覧・
-// ビルド時の既定の団体 NEXT_PUBLIC_GAS_URL)。レジストリ(NEXT_PUBLIC_REGISTRY_URL)があれば、既定の団体が
-// 無くても、招待リンクから団体につなげる
-
-// URL の形が違う(/u/1/ を含む・/dev など)と、Google の転送で POST の本文が失われる。
-// ビルドの前にも確かめている(scripts/check-gas-url.mjs)が、画面でもコンソールに出す
-if (typeof window !== 'undefined' && DEFAULT_GAS_URL) {
-  const check = checkGasUrl(DEFAULT_GAS_URL)
-  // eslint-disable-next-line no-console
-  if (check.level !== 'ok') (check.level === 'error' ? console.error : console.warn)(`[ohsumi] ${check.message}`)
-}
-
-export const isRemoteConfigured = !!DEFAULT_GAS_URL || !!REGISTRY_URL
+// 送り先の団体の GAS は、ページを開いた時に決まる(org-directory.ts。招待リンク・この端末の団体の一覧)。
+// 団体の GAS の URL は、レジストリ(NEXT_PUBLIC_REGISTRY_URL)が答えたものだけを使う(ビルド時の既定の団体は無い)
+export const isRemoteConfigured = !!REGISTRY_URL
 
 // 切り分け用: ブラウザのコンソールで ohsumiPing() を実行すると、何もしない ping を3回送り、
 // 往復の時間と GAS の中の時間を並べて出す(gas-transport.ts の pingGas)

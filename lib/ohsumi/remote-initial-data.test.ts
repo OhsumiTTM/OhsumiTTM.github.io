@@ -1,6 +1,7 @@
 // fetchInitialData: GAS の getInitialData の応答(見出し+行の配列)を、以前の
 // 公開CSV読み込みと同じ Member / Project / Task / 設定の形に変換できること
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTestOrg } from './test-org'
 
 type Remote = typeof import('./remote')
 let remote: Remote
@@ -18,7 +19,7 @@ function mockGas(result: unknown) {
 
 beforeEach(async () => {
   vi.resetModules()
-  vi.stubEnv('NEXT_PUBLIC_GAS_URL', 'https://script.example/exec')
+  await useTestOrg('https://script.example/exec')
   remote = await import('./remote')
   lastBody = null
 })

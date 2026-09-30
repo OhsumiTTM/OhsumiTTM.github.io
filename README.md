@@ -112,11 +112,16 @@ pnpm dev
 
 `http://localhost:3000` で確認できます。
 
+- レジストリ(`NEXT_PUBLIC_REGISTRY_URL`)を設定しない時は、ローカルのサンプルのデータで動きます(開発の時だけのデモのログイン)。
+- 団体の GAS につなぐ時は、`.env.local` に `NEXT_PUBLIC_REGISTRY_URL`(テスト用のレジストリ)と `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` を入れ、
+  テスト用の団体の招待リンク(`http://localhost:3000/?org=<団体ID>`)から開きます。ビルド時に団体の GAS の URL を決める設定はありません。
+
 ### 7. GitHub Pages へデプロイする
 
 1. リポジトリの Settings → Secrets and variables → Actions に、`gas/README.md`
-   「4. GitHub Secrets」の表にある Secret（`CSV_GAS` / `GOOGLE_OAUTH_CLIENT_ID`、
-   任意で `FEEDBACK_FORM_URL`）を設定します。
+   「4. GitHub Secrets」の表にある Secret（`REGISTRY_URL` / `GOOGLE_OAUTH_CLIENT_ID`、
+   任意で `FEEDBACK_FORM_URL` など）を設定します。団体の GAS の URL は Secrets に入れません
+   (団体ごとに、招待リンクの団体ID からレジストリが答えます。`registry/README.md` の「1.7」)。
 2. Settings → Pages で、Source を「GitHub Actions」に設定します。
 3. `main` ブランチに push すると `.github/workflows/deploy.yml` が自動でビルド・
    デプロイします。

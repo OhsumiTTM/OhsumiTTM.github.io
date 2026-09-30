@@ -29,7 +29,10 @@ export const ADMIN_MEMBER = 'sample-m-01' // 代表(サンプルのデータの 
 // 画面を開く手順。ラベルは日本語の画面の表示(lib/ohsumi/i18n/ja.ts)と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で、ja.ts にあることを確かめる)
 export const STEPS = [
+  // テスト用の団体(ORG)を、招待リンクから開く(レジストリの偽物が接続先を答える。ビルド時の既定の団体は無い)
   { name: 'ログイン画面', do: 'login' },
+  { name: 'ログイン画面(招待リンクなし)', do: 'loginNoOrg' },
+  { name: 'ログイン画面(招待リンクなし・この端末の団体から選ぶ)', do: 'loginNoOrgPick' },
   { name: 'ログイン画面(団体を選ぶ)', do: 'loginOrgs' },
   { name: 'ログイン画面(招待リンクの団体が見つからない)', do: 'loginMissingOrg' },
   { name: 'OUTPUT(自分)', do: 'home' },
@@ -240,7 +243,7 @@ const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-gra
 async function run({ build = true } = {}) {
   if (build) {
     console.log('テスト用の設定でビルドします…')
-    const env = { ...process.env, NEXT_PUBLIC_GAS_URL: GAS_URL, NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: '000000000000-layout.apps.googleusercontent.com',
+    const env = { ...process.env, NEXT_PUBLIC_GAS_URL: '', NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: '000000000000-layout.apps.googleusercontent.com',
       NEXT_PUBLIC_REGISTRY_URL: REGISTRY_URL, NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID: '000000000000-registry.apps.googleusercontent.com' }
     const b = spawnSync('pnpm', ['exec', 'next', 'build'], { cwd: ROOT, env, stdio: 'inherit' })
     if (b.status !== 0) throw new Error('ビルドに失敗しました')
@@ -307,8 +310,12 @@ async function run({ build = true } = {}) {
       if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')), ...(contract ? { contract } : {}) }))
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
-        // 接続先の解決: 一覧に無い団体(招待リンクの団体が見つからない画面)
-        if (body.action === 'resolveOrg') return fulfill('application/json', JSON.stringify({ ok: false, notFound: true, error: '団体が見つかりません。' }))
+        // 接続先の解決: テスト用の団体(ORG)だけを答える。ほかは見つからない(招待リンクの団体が見つからない画面)
+        if (body.action === 'resolveOrg') {
+          return fulfill('application/json', JSON.stringify(body.orgId === ORG
+            ? { ok: true, result: { orgId: ORG, gasUrl: GAS_URL, status: 'active', channel: 'standard', checkedAt: new Date().toISOString(), maxAgeSec: 86400 } }
+            : { ok: false, notFound: true, error: '団体が見つかりません。' }))
+        }
         return fulfill('application/json', JSON.stringify({ ok: true, result: registryResponse(body) }))
       }
       if (url.href.startsWith('https://accounts.google.com/gsi/client')) {
@@ -327,11 +334,12 @@ async function run({ build = true } = {}) {
       if (!el) throw new Error('見つかりません: ' + ${JSON.stringify(text)})
       el.click(); return true })()`, gesture)
     // この端末の団体の一覧(lib/ohsumi/org-directory.ts)。2つ目は名前がとても長い団体
-    const saveOrgs = (withSecond) => evaluate(`localStorage.setItem('ohsumi-orgs', JSON.stringify([
-        { orgId: '${ORG}', gasUrl: '${GAS_URL}', source: 'default', checkedAt: Date.now(), name: 'サンプル団体' },
+    // withCurrent: 今の団体にする(false なら、招待リンクなしで開いた時に一覧から選ぶ画面になる)
+    const saveOrgs = (withSecond, withCurrent = true) => evaluate(`localStorage.setItem('ohsumi-orgs', JSON.stringify([
+        { orgId: '${ORG}', gasUrl: '${GAS_URL}', source: 'registry', checkedAt: Date.now(), maxAgeSec: 86400, name: 'サンプル団体' },
         ${withSecond ? `{ orgId: 'org_SECONDSECONDSECOND01', gasUrl: 'https://script.google.com/macros/s/SECOND/exec', source: 'registry', checkedAt: Date.now(), maxAgeSec: 86400,
           name: 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会' },` : ''}
-      ])); localStorage.setItem('ohsumi-current-org', '${ORG}')`)
+      ]))${withCurrent ? `; localStorage.setItem('ohsumi-current-org', '${ORG}')` : ''}`)
     const signIn = async () => {
       await saveOrgs(false)
       await evaluate(`localStorage.setItem('ohsumi-session-${ORG}', JSON.stringify({ token: 'v1.layout.check', exp: Math.floor(Date.now() / 1000) + 86400 }))`)
@@ -350,7 +358,19 @@ async function run({ build = true } = {}) {
     view = viewerData(pass.member)
     for (const step of pass.steps) {
       try {
-        if (step.do === 'login') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/') }
+        if (step.do === 'login') {
+          await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/?org=' + ORG)
+          if (!(await evaluate(`localStorage.getItem('ohsumi-current-org') === '${ORG}'`))) throw new Error('招待リンクの団体が、この端末の団体になりません')
+        }
+        if (step.do === 'loginNoOrg' || step.do === 'loginNoOrgPick') {
+          await evaluate('localStorage.clear(); sessionStorage.clear()')
+          if (step.do === 'loginNoOrgPick') await saveOrgs(true, false)
+          await navigate('/')
+          if (!(await evaluate(`document.body.textContent.includes('団体から届いた招待リンクを開いてください')`))) throw new Error('「団体から届いた招待リンクを開いてください」が表示されません')
+          const options = await evaluate(`[...document.querySelectorAll('select option')].map((o) => o.value).filter(Boolean)`)
+          const want = step.do === 'loginNoOrgPick' ? [ORG, 'org_SECONDSECONDSECOND01'] : []
+          if (JSON.stringify(options) !== JSON.stringify(want)) throw new Error('団体を選ぶ欄が違います: ' + options.join(', '))
+        }
         if (step.do === 'loginOrgs') {
           await evaluate('localStorage.clear(); sessionStorage.clear()'); await saveOrgs(true); await navigate('/')
           const shown = await evaluate(`!!document.querySelector('select option[value="org_SECONDSECONDSECOND01"]')`)

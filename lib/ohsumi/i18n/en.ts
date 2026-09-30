@@ -99,8 +99,7 @@ export const en = {
   // ---- login ---------------------------------------------------------
   'login.tagline': 'Launch your tasks, get your team on track.',
   'login.signingIn': 'Signing in…',
-  'login.gasOutdated': "Couldn't load your organization's settings. Its Apps Script (GAS) may be out of date or unreachable. Please ask your organization's administrator to update the GAS to the latest version (see gas/README.md).",
-  'login.notConfigured': "This site's Apps Script (GAS) URL or Google OAuth client ID is not configured. Please contact your organization's administrator.",
+  'login.notConfigured': "This site is missing the registry URL or the Google OAuth client ID. Please contact FSIF (fsif.official@gmail.com).",
   'login.failed': 'Sign-in failed. Please try again.',
   'login.notRegistered': '{email} is not registered in Ohsumi.',
   'login.setupCodeToggle': 'Have a setup code? (first representative of a new organization)',
@@ -112,7 +111,7 @@ export const en = {
   'login.orgUnavailable': "We couldn't check where your organization is right now. Please wait a moment and try again.",
   'login.orgMismatch': "The organization in the invitation link doesn't match the one we reached. Please check with your organization contact.",
   'login.orgMoved': "Your organization's connection has changed. Please sign in again.",
-  'login.noOrg': 'Please open Ohsumi from the invitation link your organization sent you.',
+  'login.noOrg': 'Please open the invitation link your organization sent you.',
   'login.retry': 'Try again',
   'login.orgLabel': 'Organization',
   'login.orgUnnamed': 'Organization ({id})',

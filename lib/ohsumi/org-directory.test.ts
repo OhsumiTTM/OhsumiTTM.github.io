@@ -1,5 +1,5 @@
 // 接続先の団体(lib/ohsumi/org-directory.ts。R1-d)を確かめる:
-// 招待リンク・この端末の団体の一覧・既定の団体から使う団体を決めること、レジストリへの問い合わせ、
+// 招待リンク・この端末の団体の一覧から使う団体を決めること(ビルド時の既定の団体は無い)、レジストリへの問い合わせ、
 // 古い接続先の裏での確かめ直し、団体の切り替え、GAS への送り先が団体ごとに分かれること
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,7 +14,7 @@ class MemoryStorage {
 
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
 const ORG_B = 'org_BBBBBBBBBBBBBBBBBBBB'
-const DEFAULT_URL = 'https://script.google.com/macros/s/DEFAULT/exec'
+const OLD_DEFAULT_URL = 'https://script.google.com/macros/s/DEFAULT/exec'
 const URL_A = 'https://script.google.com/macros/s/AKfyA/exec'
 const URL_A2 = 'https://script.google.com/macros/s/AKfyA2/exec'
 const URL_B = 'https://script.google.com/macros/s/AKfyB/exec'
@@ -47,7 +47,6 @@ beforeEach(() => {
     dispatchEvent: (e: CustomEvent) => { events.push(e); return true },
   })
   vi.stubGlobal('CustomEvent', class<T> { type: string; detail: T; constructor(type: string, init: { detail: T }) { this.type = type; this.detail = init.detail } })
-  vi.stubEnv('NEXT_PUBLIC_GAS_URL', DEFAULT_URL)
   vi.stubEnv('NEXT_PUBLIC_REGISTRY_URL', REGISTRY)
 })
 
@@ -101,30 +100,24 @@ describe('使う団体を決める(decideStartOrg)', () => {
     const d = await load()
     const fresh = saved(ORG_A, URL_A)
     const old = saved(ORG_A, URL_A, { checkedAt: now - 25 * HOUR })
-    expect(d.decideStartOrg({ invite: ORG_A, saved: [fresh], currentId: null, defaultGasUrl: DEFAULT_URL, now })).toEqual({ kind: 'use', org: fresh, refresh: false })
-    expect(d.decideStartOrg({ invite: ORG_A, saved: [old], currentId: null, defaultGasUrl: DEFAULT_URL, now })).toEqual({ kind: 'use', org: old, refresh: true })
+    expect(d.decideStartOrg({ invite: ORG_A, saved: [fresh], currentId: null, now })).toEqual({ kind: 'use', org: fresh, refresh: false })
+    expect(d.decideStartOrg({ invite: ORG_A, saved: [old], currentId: null, now })).toEqual({ kind: 'use', org: old, refresh: true })
   })
 
   it('招待リンクの団体が一覧に無ければ、レジストリの答えを待つ。形が違えば使わない', async () => {
     const d = await load()
-    expect(d.decideStartOrg({ invite: ORG_B, saved: [saved(ORG_A, URL_A)], currentId: ORG_A, defaultGasUrl: DEFAULT_URL, now })).toEqual({ kind: 'resolve', orgId: ORG_B })
-    expect(d.decideStartOrg({ invite: 'invalid', saved: [], currentId: null, defaultGasUrl: DEFAULT_URL, now }).kind).toBe('invalidInvite')
+    expect(d.decideStartOrg({ invite: ORG_B, saved: [saved(ORG_A, URL_A)], currentId: ORG_A, now })).toEqual({ kind: 'resolve', orgId: ORG_B })
+    expect(d.decideStartOrg({ invite: 'invalid', saved: [], currentId: null, now }).kind).toBe('invalidInvite')
   })
 
-  it('招待リンクが無ければ、今の団体 → 既定の団体 → 一覧の先頭の順', async () => {
+  it('招待リンクが無ければ今の団体を使う。今の団体が無ければ、一覧に団体があっても自分では選ばない(招待リンクか一覧から選んでもらう)', async () => {
     const d = await load()
     const a = saved(ORG_A, URL_A)
-    const def = saved(ORG_B, DEFAULT_URL, { source: 'default' })
-    expect(d.decideStartOrg({ invite: null, saved: [def, a], currentId: ORG_A, defaultGasUrl: DEFAULT_URL, now })).toMatchObject({ kind: 'use', org: a })
-    expect(d.decideStartOrg({ invite: null, saved: [a, def], currentId: null, defaultGasUrl: DEFAULT_URL, now })).toMatchObject({ kind: 'use', org: def, refresh: false })
-    expect(d.decideStartOrg({ invite: null, saved: [a], currentId: null, defaultGasUrl: DEFAULT_URL, now })).toEqual({ kind: 'default' })
-    expect(d.decideStartOrg({ invite: null, saved: [a], currentId: null, defaultGasUrl: '', now })).toMatchObject({ kind: 'use', org: a })
-    expect(d.decideStartOrg({ invite: null, saved: [], currentId: null, defaultGasUrl: '', now })).toEqual({ kind: 'none' })
-  })
-
-  it('既定の団体は、レジストリに確かめ直さない', async () => {
-    const d = await load()
-    expect(d.isStale(saved(ORG_B, DEFAULT_URL, { source: 'default', checkedAt: 0 }), now)).toBe(false)
+    const b = saved(ORG_B, URL_B)
+    expect(d.decideStartOrg({ invite: null, saved: [b, a], currentId: ORG_A, now })).toMatchObject({ kind: 'use', org: a })
+    expect(d.decideStartOrg({ invite: null, saved: [a, b], currentId: null, now })).toEqual({ kind: 'none' })
+    expect(d.decideStartOrg({ invite: null, saved: [a], currentId: 'org_CCCCCCCCCCCCCCCCCCCC', now })).toEqual({ kind: 'none' })
+    expect(d.decideStartOrg({ invite: null, saved: [], currentId: null, now })).toEqual({ kind: 'none' })
   })
 })
 
@@ -133,7 +126,8 @@ describe('ページを開いた時(startOrg)', () => {
     local.setItem('ohsumi-orgs', JSON.stringify([saved(ORG_A, URL_A), saved(ORG_B, URL_B)]))
     setUrl('?org=' + ORG_B)
     const d = await load()
-    expect(d.getActiveGasUrl()).toBe(DEFAULT_URL)
+    // 団体が決まるまでは、どこにも送らない(ビルド時の既定の団体は無い)
+    expect(d.getActiveGasUrl()).toBe('')
     const first = d.startOrg()
     expect(first).toMatchObject({ kind: 'use', org: { orgId: ORG_B } })
     expect(d.getActiveOrg()).toEqual({ orgId: ORG_B, gasUrl: URL_B })
@@ -143,34 +137,17 @@ describe('ページを開いた時(startOrg)', () => {
     expect(d.startOrg()).toBe(first)
   })
 
-  it('R1-d より前の端末: 既定の団体の団体ID を一覧に移し、そのままログインしたままにする', async () => {
+  it('以前の保存は使わない: 既定の団体(source が default)の項目・R1-d より前の団体ID(ohsumi-login-config)', async () => {
+    local.setItem('ohsumi-orgs', JSON.stringify([saved(ORG_A, OLD_DEFAULT_URL, { source: 'default' }), saved(ORG_B, URL_B)]))
+    local.setItem('ohsumi-current-org', ORG_A)
     local.setItem('ohsumi-login-config', JSON.stringify({ orgId: ORG_A }))
     local.setItem('ohsumi-session-' + ORG_A, JSON.stringify({ token: 't', exp: Math.floor(Date.now() / 1000) + 100 }))
     const s = await import('./session')
-    expect(s.hasSavedSession()).toBe(true)
+    expect(s.hasSavedSession()).toBe(false)
     const d = await load()
-    expect(d.loadSavedOrgs()).toMatchObject([{ orgId: ORG_A, gasUrl: DEFAULT_URL, source: 'default' }])
-    expect(d.getActiveOrg()).toEqual({ orgId: ORG_A, gasUrl: DEFAULT_URL })
-    expect(local.getItem('ohsumi-login-config')).toBeNull()
-  })
-
-  it('既定の団体の団体ID が分かったら一覧に入れる。団体ID が変わった時は前の項目を消す', async () => {
-    const d = await load()
-    d.upsertSavedOrg(saved(ORG_B, URL_B))
-    d.rememberDefaultOrg(ORG_A)
-    d.rememberDefaultOrg('org_CCCCCCCCCCCCCCCCCCCC')
-    expect(d.loadSavedOrgs().map((o) => [o.orgId, o.source])).toEqual([['org_CCCCCCCCCCCCCCCCCCCC', 'default'], [ORG_B, 'registry']])
-    expect(d.getActiveOrg()).toEqual({ orgId: 'org_CCCCCCCCCCCCCCCCCCCC', gasUrl: DEFAULT_URL })
-  })
-
-  it('ほかの団体を使っている時は、既定の団体の団体ID を覚えない', async () => {
-    local.setItem('ohsumi-orgs', JSON.stringify([saved(ORG_B, URL_B)]))
-    local.setItem('ohsumi-current-org', ORG_B)
-    const d = await load()
-    d.startOrg()
-    d.rememberDefaultOrg(ORG_A)
     expect(d.loadSavedOrgs().map((o) => o.orgId)).toEqual([ORG_B])
-    expect(d.getActiveOrg().orgId).toBe(ORG_B)
+    expect(d.startOrg()).toEqual({ kind: 'none' })
+    expect(d.getActiveGasUrl()).toBe('')
   })
 
   it('一覧の壊れた項目(形の違う団体ID・接続先)は使わない', async () => {
@@ -222,7 +199,7 @@ describe('レジストリへの問い合わせ(resolveOrg)', () => {
     registry(d, { [ORG_A]: found(ORG_A, URL_A) })
     expect(await d.resolveAndActivate(ORG_A, async () => ORG_B)).toEqual({ status: 'mismatch' })
     expect(d.loadSavedOrgs()).toEqual([])
-    expect(d.getActiveGasUrl()).toBe(DEFAULT_URL)
+    expect(d.getActiveGasUrl()).toBe('')
     expect(await d.resolveAndActivate(ORG_A, async () => null)).toEqual({ status: 'unavailable' })
     const asked: string[] = []
     const ok = await d.resolveAndActivate(ORG_A, async (url) => { asked.push(url); return ORG_A })
