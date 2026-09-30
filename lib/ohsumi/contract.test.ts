@@ -2,6 +2,7 @@
 // 停止中・読み取り専用で断られた時の扱い(lib/ohsumi/contract.ts・remote.ts)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NO_CONTRACT, contractBanner, contractFromResponse, getContract, noteContractResponse, parseContract, resetContractForTest, subscribeContract } from './contract'
+import { TEST_ORG_ID, useTestOrg } from './test-org'
 
 const DAY = 24 * 3600 * 1000
 const NOW = Date.parse('2026-10-01T00:00:00Z')
@@ -68,9 +69,9 @@ describe('GAS に断られた時(remote.ts)', () => {
 
   beforeEach(async () => {
     vi.resetModules()
-    vi.stubEnv('NEXT_PUBLIC_GAS_URL', 'https://script.google.com/macros/s/ORG/exec')
     events = []
     vi.stubGlobal('window', { dispatchEvent: (e: CustomEvent) => { events.push({ type: e.type, detail: e.detail }); return true } })
+    await useTestOrg('https://script.google.com/macros/s/ORG/exec')
     remote = await import('./remote')
     contract = await import('./contract')
   })
@@ -95,7 +96,7 @@ describe('GAS に断られた時(remote.ts)', () => {
   it('提供停止中に断られたら、ログイン画面に戻して「利用を停止しています」を出す', async () => {
     mockGas({ ok: false, orgSuspended: true, error: 'この団体は、Ohsumi の利用を停止しています。', contract: { phase: 'inEffect', kind: 'suspend' } })
     await expect(remote.fetchInitialData()).rejects.toThrow(/利用を停止しています/)
-    expect(events).toEqual([{ type: 'ohsumi:org-changed', detail: { orgId: null, notice: 'orgSuspended' } }])
+    expect(events).toEqual([{ type: 'ohsumi:org-changed', detail: { orgId: TEST_ORG_ID, notice: 'orgSuspended' } }])
   })
 
   it('ログインの設定で停止中と分かる', async () => {

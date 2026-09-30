@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CLIENT_VERSION } from './codes'
+import { useTestOrg } from './test-org'
 
 class MemoryStorage {
   data = new Map<string, string>()
@@ -26,7 +27,7 @@ beforeEach(() => {
     google: { accounts: { id: { disableAutoSelect } } },
     dispatchEvent: vi.fn(),
   })
-  vi.stubEnv('NEXT_PUBLIC_GAS_URL', 'https://script.example/exec')
+  vi.stubEnv('NEXT_PUBLIC_REGISTRY_URL', 'https://script.google.com/macros/s/TEST_REGISTRY/exec')
 })
 
 afterEach(() => {
@@ -72,15 +73,22 @@ describe('セッショントークンの保存場所', () => {
     expect(disableAutoSelect).toHaveBeenCalled()
   })
 
-  it('再読み込み後に使えるセッションがあるか(団体の設定とセッションの両方が必要)', async () => {
+  it('再読み込み後に使えるセッションがあるか(今の団体とセッションの両方が必要)', async () => {
     const ORG = 'org_AAAAAAAAAAAAAAAAAAAA'
-    vi.stubEnv('NEXT_PUBLIC_GAS_URL', 'https://script.google.com/macros/s/DEFAULT/exec')
+    // この端末の団体の一覧にあり、今の団体になっている(招待リンクから開いた後)
+    local.setItem('ohsumi-orgs', JSON.stringify([{ orgId: ORG, gasUrl: 'https://script.google.com/macros/s/ORG/exec', source: 'registry', checkedAt: Date.now() }]))
+    local.setItem('ohsumi-current-org', ORG)
     const s = await import('./session')
-    expect(s.hasSavedSession()).toBe(false)
-    s.saveLoginConfig({ orgId: ORG })
     expect(s.hasSavedSession()).toBe(false)
     s.saveSession(ORG, { token: 'A', exp: nowSec() + 100, remember: true })
     expect(s.hasSavedSession()).toBe(true)
+  })
+
+  it('今の団体が無い端末(招待リンクから開いていない)は、セッションがあっても使わない', async () => {
+    const ORG = 'org_AAAAAAAAAAAAAAAAAAAA'
+    local.setItem('ohsumi-session-' + ORG, JSON.stringify({ token: 'A', exp: nowSec() + 100 }))
+    const s = await import('./session')
+    expect(s.hasSavedSession()).toBe(false)
   })
 
   it('「この端末にログイン情報を保存する」の初期値はチェックあり', async () => {
@@ -101,6 +109,11 @@ describe('セッショントークンの保存場所', () => {
 })
 
 describe('GAS との通信', () => {
+  // 招待リンクから団体を使い始めた後(ビルド時の既定の団体は無い)
+  beforeEach(async () => {
+    await useTestOrg('https://script.example/exec', 'org_a')
+  })
+
   function mockGas(responses: Record<string, unknown>[]) {
     const bodies: Record<string, unknown>[] = []
     vi.stubGlobal(
