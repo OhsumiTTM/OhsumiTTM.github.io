@@ -35,6 +35,8 @@ export const STEPS = [
   { name: 'ログイン画面(招待リンクなし・この端末の団体から選ぶ)', do: 'loginNoOrgPick' },
   { name: 'ログイン画面(団体を選ぶ)', do: 'loginOrgs' },
   { name: 'ログイン画面(招待リンクの団体が見つからない)', do: 'loginMissingOrg' },
+  // この端末に保存した団体は、団体ID の確認(getLoginConfig)の答えを待たずにログインボタンを出す
+  { name: 'ログイン画面(保存した団体・確認が遅い)', do: 'loginSlowConfig' },
   { name: 'OUTPUT(自分)', do: 'home' },
   { name: 'OUTPUT(一覧)', do: 'click', text: '一覧' },
   { name: 'ワークフロー', do: 'click', text: 'ワークフロー' },
@@ -284,6 +286,9 @@ async function run({ build = true } = {}) {
     let contract = null
     // 画面が送った書き込み(読み取りの一覧に無い操作)
     let sentWrites = []
+    // getLoginConfig の答えを遅らせる時間(ミリ秒)と、送られた回数
+    let slowConfigMs = 0
+    let configCalls = 0
     // GAS・Google への通信には偽の応答を返す(外には出さない)
     const gas = (body) => {
       if (!LAYOUT_READ_ACTIONS.includes(body.action)) {
@@ -307,6 +312,10 @@ async function run({ build = true } = {}) {
       if (url.origin === base) return send('Fetch.continueRequest', { requestId })
       const fulfill = (type, body) => send('Fetch.fulfillRequest', { requestId, responseCode: 200, body: b64(body),
         responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }] })
+      if (url.href.startsWith(GAS_URL) && slowConfigMs && JSON.parse(request.postData || '{}').action === 'getLoginConfig') {
+        configCalls++
+        return sleep(slowConfigMs).then(() => fulfill('application/json', JSON.stringify({ ok: true, result: { orgId: ORG } })))
+      }
       if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')), ...(contract ? { contract } : {}) }))
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
@@ -319,7 +328,7 @@ async function run({ build = true } = {}) {
         return fulfill('application/json', JSON.stringify({ ok: true, result: registryResponse(body) }))
       }
       if (url.href.startsWith('https://accounts.google.com/gsi/client')) {
-        return fulfill('text/javascript', 'window.google={accounts:{id:{initialize(){},renderButton(){},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
+        return fulfill('text/javascript', 'window.google={accounts:{id:{initialize(){},renderButton(e){e.setAttribute(\'data-layout-gsi\',\'1\')},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
       }
       return send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' })
     })
@@ -380,6 +389,26 @@ async function run({ build = true } = {}) {
           await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/?org=' + MISSING_ORG)
           const shown = await evaluate(`document.body.textContent.includes('団体が見つかりません')`)
           if (!shown) throw new Error('「団体が見つかりません」が表示されません')
+        }
+        if (step.do === 'loginSlowConfig') {
+          await evaluate('localStorage.clear(); sessionStorage.clear()'); await saveOrgs(false)
+          slowConfigMs = 8000; configCalls = 0
+          try {
+            await send('Page.navigate', { url: base + '/' })
+            // 答え(8秒後)より前に、ログインボタンが出ていること
+            const started = Date.now()
+            let shown = false
+            while (Date.now() - started < 4000 && !shown) {
+              await sleep(200)
+              shown = await evaluate(`!!document.querySelector('[data-layout-gsi]') && !document.body.textContent.includes('準備中')`).catch(() => false)
+            }
+            if (!shown) throw new Error('保存した団体なのに、団体ID の確認の答えを待ってからログインボタンが出ます')
+            if (configCalls !== 1) throw new Error('団体ID の確認が裏で送られていません(' + configCalls + '回)')
+            await sleep(slowConfigMs)
+            if (!(await evaluate(`!!document.querySelector('[data-layout-gsi]')`))) throw new Error('確認の答えを受け取った後に、ログインボタンが消えました')
+          } finally {
+            slowConfigMs = 0
+          }
         }
         if (step.do === 'home' || step.do === 'admin') contract = null
         if (step.do.startsWith('readOnly')) {
