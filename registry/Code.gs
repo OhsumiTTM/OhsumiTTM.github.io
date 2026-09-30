@@ -43,8 +43,9 @@ var REGISTRY_SHEETS = {
   RegistrationCodes: ['code_hash', 'kind', 'target_org_id', 'org_name', 'contact_name', 'contact_email', 'expires_at', 'issued_by', 'issued_at', 'used_at', 'used_org_id', 'revoked_at',
     'code_id', 'revoked_by', 'note'],
   // registry_key は共有鍵そのもの(団体の GAS との確認に使うため、元の値を持つ。保護したシート・誰とも共有しない)。
-  // register_request_hash は、最後の登録の送り直しを見分けるための requestId の SHA-256
-  Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_request_hash'],
+  // register_nonce_hash は、最後の登録の送り直しを見分けるための値(団体の GAS が作ってスクリプトプロパティに
+  // 保存した乱数 registerNonce)の SHA-256
+  Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_nonce_hash'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
 }
 // 管理者は、スクリプトプロパティ ADMIN_EMAILS(カンマ区切り)の許可リストで決める。
@@ -692,13 +693,18 @@ function consumeRegistrationCode(input, orgId, nowMs) {
 // ---- 団体の登録(registerOrg) ----
 //
 // 団体の GAS が、スプレッドシートの「Ohsumi」メニューの「レジストリに登録」から呼ぶ(1回の通信)。
-//   要求: { action: 'registerOrg', code, orgId, gasUrl, gasVersion, requestId }
+//   要求: { action: 'registerOrg', code, orgId, gasUrl, gasVersion, registerNonce }
 //   返事: { ok: true, result: { orgId, registryKey, keyGen, displayName, registeredAt, kind } }
 // - 登録コード(kind: new)は新しい団体だけ、再登録コード(kind: reissue)は発行した時に選んだ団体だけに使える
 // - 共有鍵(registryKey)はレジストリが作り、Secrets(保護したシート)に保存する。操作の記録・一覧には出さない
-// - **送り直し:** 通信が途中で失われると、団体の GAS は同じ requestId・同じコードで送り直す。その団体の最後の登録と
-//   requestId・コードが同じなら、同じ結果(同じ共有鍵)を返し、登録し直さない(「使用済み」で失敗しない)。
-//   送り直しを受け付けるのは、登録から REGISTER_REPLAY_HOURS 時間まで
+// - **送り直し:** registerNonce は、団体の GAS が登録の前に作り、スクリプトプロパティ(REGISTRY_PENDING)にだけ
+//   保存する乱数(32バイト・base64url の43文字)。通信が途中で失われると、団体の GAS は同じ registerNonce・同じコードで
+//   送り直す。レジストリは registerNonce の SHA-256 だけを Secrets に保存し、次の**すべて**が合う時だけ、同じ結果
+//   (同じ共有鍵)を返す(登録し直さない):
+//     団体ID が同じ / registerNonce がその団体の最後の登録と同じ / 登録コードがその団体の登録に使われたもの /
+//     その登録から REGISTER_REPLAY_HOURS 時間以内
+//   使用済みの登録コードを手に入れただけ(registerNonce を知らない)では、共有鍵は返さない。ほかの失敗と同じ
+//   エラー(REGISTRATION_CODE_INVALID)で断り、総当たりの失敗として数える
 // - **総当たりの対策:** 登録は1分に10回まで(レジストリ全体)。コードが違う・使えない登録が1時間に
 //   REGISTER_FAIL_LIMIT 回を超えたら、その1時間は登録を受け付けない(監視の「断ったリクエスト」にも数える)。
 //   コードは16文字(約79ビット)で、使えない理由(無い・使用済み・期限切れ・取り消し済み)は区別せず同じエラーを返す
@@ -706,7 +712,7 @@ var REGISTER_REPLAY_HOURS = 24
 var REGISTER_FAIL_LIMIT = 30
 var ORG_ID_PATTERN = /^org_[A-Za-z0-9_-]{16,64}$/
 var GAS_EXEC_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
-var REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/
+var REGISTER_NONCE_PATTERN = /^[A-Za-z0-9_-]{43,64}$/
 
 function findOrgRow(orgId) {
   if (!orgId) return null
@@ -751,18 +757,19 @@ function registerOrg(body, nowMs) {
   }
   var orgId = String(body.orgId || '')
   var gasUrl = String(body.gasUrl || '')
-  var requestId = String(body.requestId || '')
+  var registerNonce = String(body.registerNonce || '')
   var gasVersion = cleanText(body.gasVersion, 40)
   if (!ORG_ID_PATTERN.test(orgId)) throw registryError('団体ID の形が正しくありません。団体の GAS で setupOhsumi を実行してから、もう一度お試しください。')
   if (!GAS_EXEC_URL_PATTERN.test(gasUrl)) throw registryError('団体の GAS のウェブアプリの URL の形が正しくありません(…/macros/s/…/exec)。')
-  if (!REQUEST_ID_PATTERN.test(requestId)) throw registryError('リクエストの形が正しくありません。')
+  if (!REGISTER_NONCE_PATTERN.test(registerNonce)) throw registryError('リクエストの形が正しくありません。団体の GAS を最新の版にしてから、もう一度お試しください。')
   if (!normalizeRegistrationCode(body.code)) throw registryError(REGISTRATION_CODE_INVALID)
   var codeHash = registrationCodeHash(body.code)
-  var requestHash = 'sha256:' + sha256Hex(requestId)
+  var nonceHash = 'sha256:' + sha256Hex(registerNonce)
   return withRegistryLock(function () {
-    // 送り直し: この団体の最後の登録と requestId・コードが同じなら、同じ結果を返す
+    // 送り直し: この団体の最後の登録と registerNonce・コードが同じで、24時間以内なら、同じ結果を返す。
+    // 合わない時は下の通常の登録に進み、使用済みのコードとして(ほかの失敗と同じエラーで)断る
     var secret = findSecretRow(orgId)
-    if (secret && safeEquals(String(secret.values.register_request_hash || ''), requestHash)) {
+    if (secret && safeEquals(String(secret.values.register_nonce_hash || ''), nonceHash)) {
       var usedRow = null
       readRows('RegistrationCodes').forEach(function (r) {
         if (safeEquals(String(r.values.code_hash || ''), codeHash) && String(r.values.used_org_id || '') === orgId) usedRow = r
@@ -814,7 +821,7 @@ function registerOrg(body, nowMs) {
       orgValues.gas_version = gasVersion
     }
     var keyGen = secret ? Number(secret.values.key_gen || 0) + 1 : 1
-    var secretValues = { org_id: orgId, registry_key: key, key_gen: keyGen, updated_at: at, register_request_hash: requestHash }
+    var secretValues = { org_id: orgId, registry_key: key, key_gen: keyGen, updated_at: at, register_nonce_hash: nonceHash }
     if (secret) setRowFields('Secrets', secret.row, secretValues)
     else appendRowByHeaders('Secrets', secretValues)
     rememberOrgFingerprint(orgId, orgValues)

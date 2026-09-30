@@ -30,7 +30,10 @@ function registry() {
 
 type Reg = ReturnType<typeof registry>
 
-function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Record<string, string> } = {}) {
+// レジストリの Secrets に保存した共有鍵(先頭の ' は、シートが文字として扱う印なので除く)
+const storedKey = (reg: Reg) => String(reg.sheets.get('Secrets')!.rows[1][1]).replace(/^'/, '')
+
+function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Record<string, string>; emails?: Record<string, string>; serviceUrl?: string } = {}) {
   const props: Record<string, string> = { REGISTRY_URL, OHSUMI_WEBAPP_URL: ORG_URL, GOOGLE_OAUTH_CLIENT_ID: 'x', ...(opts.props ?? {}) }
   const cache = new Map<string, string>()
   const logs: string[] = []
@@ -38,6 +41,8 @@ function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Re
   const members: string[][] = opts.members ?? [['id', 'name', 'role']]
   const added: { id: string; name: string; email: string; role: string }[] = []
   let fetches = 0
+  const dialogs: { title: string; text: string }[] = []
+  let promptAnswer = ''
   const ctx = vm.createContext({
     console: { log: (m: string) => logs.push(String(m)), warn: (m: string) => logs.push(String(m)), error: (m: string) => logs.push(String(m)) },
     Logger: { log: (m: string) => logs.push(String(m)) },
@@ -53,11 +58,21 @@ function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Re
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
     SpreadsheetApp: {
       flush() {},
+      // メニューのダイアログ(表示した文を覚える。入力欄には promptAnswer を返す)
+      getUi: () => ({
+        ButtonSet: { OK: 'OK', OK_CANCEL: 'OK_CANCEL' },
+        Button: { OK: 'OK', CANCEL: 'CANCEL' },
+        alert: (title: string, text: string) => { dialogs.push({ title, text }) },
+        prompt: (title: string, text: string) => {
+          dialogs.push({ title, text })
+          return { getSelectedButton: () => 'OK', getResponseText: () => promptAnswer }
+        },
+      }),
       getActiveSpreadsheet: () => ({
         getSheetByName: (n: string) => (n === 'Members' ? { getDataRange: () => ({ getValues: () => members.map((r) => r.slice()) }) } : null),
       }),
     },
-    ScriptApp: { getService: () => ({ getUrl: () => ORG_URL }) },
+    ScriptApp: { getService: () => ({ getUrl: () => opts.serviceUrl ?? ORG_URL }) },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' },
       Charset: { UTF_8: 'utf8' },
@@ -89,7 +104,7 @@ function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Re
   }
   // ログインの確認(IDトークン = メールアドレス)と、その後の初期データ
   c.verifyGoogleIdToken = (idToken: string) => ({ email: idToken })
-  c.findMemberIdByEmailCached = (email: string) => added.find((a) => a.email === email)?.id ?? null
+  c.findMemberIdByEmailCached = (email: string) => opts.emails?.[email] ?? added.find((a) => a.email === email)?.id ?? null
   c.getInitialDataForMember = (id: string) => ({ memberId: id })
   c.issueSessionToken = (id: string) => ({ token: 'session-' + id, exp: 1 })
   c.recordLastLogin = () => true
@@ -97,7 +112,8 @@ function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Re
   const post = (body: object) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: JSON.stringify(body) } }).text)
   const register = (code: string, now?: number) => (gas.registerWithRegistry as (c: string, d?: object) => Record<string, unknown>)(code, now ? { now: () => now } : undefined)
   const login = (email: string, setupCode?: string) => post({ action: 'exchangeIdToken', idToken: email, nonceSecret: 'n', setupCode })
-  return { gas, c, props, logs, sent, added, members, post, register, login, fetches: () => fetches }
+  const menu = (answer: string) => { promptAnswer = answer; (gas.registerWithRegistryFromMenu as () => void)() }
+  return { gas, c, props, logs, sent, added, members, dialogs, post, register, login, menu, fetches: () => fetches }
 }
 
 describe('レジストリへの登録(団体の GAS)', () => {
@@ -114,7 +130,7 @@ describe('レジストリへの登録(団体の GAS)', () => {
     const orgRow = reg.sheets.get('Orgs')!.rows[1]
     expect(orgRow.slice(0, 2)).toEqual([o.props.ORG_ID, ORG_URL])
     // 共有鍵は団体の GAS のスクリプトプロパティに保存する(レジストリと同じ値)
-    expect(o.props.REGISTRY_SHARED_KEY).toBe(reg.sheets.get('Secrets')!.rows[1][1])
+    expect(o.props.REGISTRY_SHARED_KEY).toBe(storedKey(reg))
     expect(o.props.REGISTRY_PENDING).toBeUndefined()
     // 初期設定コードはハッシュだけを保存する(72時間)
     expect(o.props.INITIAL_SETUP_HASH).toMatch(/^sha256:[0-9a-f]{64}$/)
@@ -122,15 +138,17 @@ describe('レジストリへの登録(団体の GAS)', () => {
     expect(Number(o.props.INITIAL_SETUP_EXPIRES) - Date.now()).toBeLessThanOrEqual(72 * HOUR + 1000)
   })
 
-  it('応答が失われても、同じ requestId で送り直し、同じ共有鍵を受け取る(二重に登録しない)', () => {
+  it('応答が失われても、同じ registerNonce で送り直し、同じ共有鍵を受け取る(二重に登録しない)', () => {
     const reg = registry()
     const o = org(reg, { lose: [1] })
     const out = o.register(reg.issue().code)
     expect(out.keyGen).toBe(1)
     expect(o.sent).toHaveLength(2)
-    expect(o.sent[1].requestId).toBe(o.sent[0].requestId)
+    expect(o.sent[1].registerNonce).toBe(o.sent[0].registerNonce)
+    // registerNonce は32バイトの乱数(base64url の43文字)
+    expect(String(o.sent[0].registerNonce)).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(1)
-    expect(o.props.REGISTRY_SHARED_KEY).toBe(reg.sheets.get('Secrets')!.rows[1][1])
+    expect(o.props.REGISTRY_SHARED_KEY).toBe(storedKey(reg))
   })
 
   it('3回とも応答が失われた後、メニューからやり直しても(同じ登録コード)、「使用済み」で失敗せず同じ結果になる', () => {
@@ -139,11 +157,13 @@ describe('レジストリへの登録(団体の GAS)', () => {
     const code = reg.issue().code
     expect(() => o.register(code)).toThrow(/応答を受け取れませんでした[\s\S]*二重には登録されません/)
     expect(o.props.REGISTRY_SHARED_KEY).toBeUndefined()
+    // 送る前にスクリプトプロパティに保存してある
+    expect(JSON.parse(o.props.REGISTRY_PENDING).registerNonce).toBe(o.sent[0].registerNonce)
     const out = o.register(code)
     expect(out.keyGen).toBe(1)
-    expect(new Set(o.sent.map((s) => s.requestId)).size).toBe(1)
+    expect(new Set(o.sent.map((s) => s.registerNonce)).size).toBe(1)
     expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(1)
-    expect(o.props.REGISTRY_SHARED_KEY).toBe(reg.sheets.get('Secrets')!.rows[1][1])
+    expect(o.props.REGISTRY_SHARED_KEY).toBe(storedKey(reg))
   })
 
   it('使えない登録コードは、レジストリの理由をそのまま知らせる', () => {
@@ -159,6 +179,41 @@ describe('レジストリへの登録(団体の GAS)', () => {
     expect(() => org(reg, { props: { OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/X/dev' } }).register('AAAA')).toThrow(/OHSUMI_WEBAPP_URL/)
   })
 
+  it('この GAS の URL が /dev・/u/1/・/a/macros/<ドメイン>/・? 付きの時は、レジストリに送る前に断る', () => {
+    const reg = registry()
+    const cases: [string, RegExp][] = [
+      ['https://script.google.com/macros/s/ORGGAS/dev', /\/dev はエディタで試すための URL/],
+      ['https://script.google.com/macros/u/1/s/ORGGAS/exec', /\/u\/1\/ などは、複数の Google アカウント/],
+      ['https://script.google.com/macros/u/0/s/ORGGAS/dev', /レジストリに登録できない形/],
+      ['https://script.google.com/a/macros/example.org/s/ORGGAS/exec', /Google Workspace のドメインの中だけ/],
+      ['https://script.google.com/macros/s/ORGGAS/exec?v=1', /\? や # の後ろは付けません/],
+      ['https://script.google.com/macros/s/ORGGAS/exec/', /レジストリに登録できない形/],
+    ]
+    for (const [url, why] of cases) {
+      // スクリプトプロパティに入れた時も、ScriptApp の URL を使う時も
+      for (const o of [org(reg, { props: { OHSUMI_WEBAPP_URL: url } }), org(reg, { props: { OHSUMI_WEBAPP_URL: '' }, serviceUrl: url })]) {
+        const code = reg.issue().code
+        expect(() => o.register(code), url).toThrow(why)
+        expect(o.fetches(), url).toBe(0)
+        expect(o.props.REGISTRY_PENDING, url).toBeUndefined()
+      }
+    }
+    expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(0)
+  })
+
+  it('メニューでは、登録する URL を送る前に表示する。URL の形が違えば、コードを聞かずに止める', () => {
+    const reg = registry()
+    const o = org(reg)
+    o.menu(reg.issue().code)
+    expect(o.dialogs[0].text).toContain(ORG_URL)
+    expect(o.dialogs[1].title).toBe('登録しました')
+    const bad = org(reg, { props: { OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/ORGGAS/dev' } })
+    bad.menu(reg.issue().code)
+    expect(bad.dialogs).toHaveLength(1)
+    expect(bad.dialogs[0]).toMatchObject({ title: '登録できませんでした' })
+    expect(bad.fetches()).toBe(0)
+  })
+
   it('再登録コードで、新しい共有鍵に入れ替わる(代表がいれば初期設定コードは作らない)', () => {
     const reg = registry()
     const o = org(reg, { members: [['id', 'name', 'role'], ['1', '代表', 'top']] })
@@ -169,7 +224,7 @@ describe('レジストリへの登録(団体の GAS)', () => {
     const second = o.register(re.code)
     expect(second).toMatchObject({ kind: 'reissue', keyGen: 2 })
     expect(o.props.REGISTRY_SHARED_KEY).not.toBe(key1)
-    expect(o.props.REGISTRY_SHARED_KEY).toBe(reg.sheets.get('Secrets')!.rows[1][1])
+    expect(o.props.REGISTRY_SHARED_KEY).toBe(storedKey(reg))
   })
 })
 
@@ -226,6 +281,61 @@ describe('初期設定コードで最初の代表が入る', () => {
   it('初期設定コードを付けないログインは、これまでどおり「登録されていない」を返す', () => {
     const { o } = started()
     expect(o.login('someone@example.org').result).toEqual({ memberId: null, email: 'someone@example.org' })
+  })
+})
+
+describe('すでにメンバーと代表がいる団体の登録', () => {
+  // 動いている団体: 代表・メンバーがいて、ログインの設定(団体ID・署名鍵・ログアウトの世代)がある
+  const running = () => {
+    const reg = registry()
+    const before: Record<string, string> = {
+      ORG_ID: 'org_RUNNINGRUNNINGRUN1', SESSION_SIGNING_KEY: 'signing-key-existing', SESSION_KEY_ID: 'kid00001', SESSION_GEN_m2: '3',
+    }
+    const members = [['id', 'name', 'role'], ['m1', '代表さん', '代表'], ['m2', 'メンバー', 'base']]
+    const o = org(reg, { members, props: before, emails: { 'daihyo@example.org': 'm1', 'member@example.org': 'm2' } })
+    return { reg, o, before, members: members.map((r) => r.slice()) }
+  }
+
+  it('登録しても、初期設定コードは作らず、団体ID・ログインの鍵・メンバーは変わらない', () => {
+    const { reg, o, before, members } = running()
+    const out = o.register(reg.issue().code)
+    expect(out.setupCode).toBeUndefined()
+    expect(Object.keys(o.props).filter((k) => k.startsWith('INITIAL_SETUP_'))).toEqual([])
+    for (const [k, v] of Object.entries(before)) expect(o.props[k], k).toBe(v)
+    expect(o.members).toEqual(members)
+    expect(o.added).toEqual([])
+    // レジストリには、今の団体ID で登録される
+    expect(reg.sheets.get('Orgs')!.rows[1].slice(0, 2)).toEqual([before.ORG_ID, ORG_URL])
+    // 登録で増えるスクリプトプロパティは、共有鍵まわりだけ
+    expect(Object.keys(o.props).filter((k) => !(k in before)).sort()).toEqual(
+      ['GOOGLE_OAUTH_CLIENT_ID', 'OHSUMI_WEBAPP_URL', 'REGISTRY_KEY_GEN', 'REGISTRY_REGISTERED_AT', 'REGISTRY_SHARED_KEY', 'REGISTRY_URL'])
+  })
+
+  it('今の代表・メンバーは、これまでどおりログインできる(初期設定コードを付けて来ても、代表にならず今のメンバーのまま)', () => {
+    const { reg, o } = running()
+    o.register(reg.issue().code)
+    expect(o.login('daihyo@example.org').result.session.token).toBe('session-m1')
+    expect(o.login('member@example.org').result.session.token).toBe('session-m2')
+    expect(o.login('member@example.org', 'AAAA-BBBB-CCCC-DDDD').result.session.token).toBe('session-m2')
+    expect(o.added).toEqual([])
+  })
+
+  it('メンバーでない人が初期設定コードらしきものを付けて来ても、団体に入れない(コードが作られていない)', () => {
+    const { reg, o, members } = running()
+    o.register(reg.issue().code)
+    const res = o.login('stranger@example.org', 'AAAA-BBBB-CCCC-DDDD')
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/使えなくなっています/)
+    expect(o.members).toEqual(members)
+    expect(o.login('stranger@example.org').result).toEqual({ memberId: null, email: 'stranger@example.org' })
+  })
+
+  it('「初期設定コードを作り直す」も、代表がいる団体では作らない', () => {
+    const { reg, o } = running()
+    o.register(reg.issue().code)
+    ;(o.gas.regenerateInitialSetupCodeFromMenu as () => void)()
+    expect(o.dialogs.at(-1)!.text).toMatch(/既に代表がいます/)
+    expect(Object.keys(o.props).filter((k) => k.startsWith('INITIAL_SETUP_'))).toEqual([])
   })
 })
 

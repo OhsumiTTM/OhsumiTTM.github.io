@@ -12,7 +12,8 @@ const ORG_B = 'org_BBBBBBBBBBBBBBBBBBBB'
 const URL_A = 'https://script.google.com/macros/s/AKfyA/exec'
 const URL_A2 = 'https://script.google.com/macros/s/AKfyA2/exec'
 const URL_B = 'https://script.google.com/macros/s/AKfyB/exec'
-const REQ = (n: number) => `request-id-${String(n).padStart(8, '0')}-abcdef`
+// 団体の GAS が作ってスクリプトプロパティに保存する乱数(registerNonce。43文字以上)
+const REQ = (n: number) => `register-nonce-${String(n).padStart(8, '0')}-abcdefghijklmnopqrstu`
 
 function ready() {
   const tokens: Record<string, TokenInfo> = {
@@ -43,7 +44,7 @@ describe('団体の登録(registerOrg)', () => {
   it('登録コードで団体を登録し、共有鍵を受け取る。団体・担当者・共有鍵を保存し、操作の記録に残す', () => {
     const t = ready()
     const code = t.issue().result.code
-    const res = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, gasVersion: 'r1c-1', requestId: REQ(1) })
+    const res = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, gasVersion: 'r1c-1', registerNonce: REQ(1) })
     expect(res.ok, JSON.stringify(res)).toBe(true)
     expect(res.result).toMatchObject({ orgId: ORG_A, keyGen: 1, displayName: 'テスト団体A', kind: 'new' })
     expect(String(res.result.registryKey).length).toBeGreaterThanOrEqual(64)
@@ -61,14 +62,14 @@ describe('団体の登録(registerOrg)', () => {
     expect((t.gas.findUnrecordedOrgEdits as () => string[])()).toEqual([])
   })
 
-  it('登録コードは1回だけ使える。ほかの団体・別の登録(別の requestId)では使えない', () => {
+  it('登録コードは1回だけ使える。ほかの団体・別の登録(別の registerNonce)では使えない', () => {
     const t = ready()
     const code = t.issue().result.code
-    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }).ok).toBe(true)
-    const again = t.register({ code, orgId: ORG_B, gasUrl: URL_B, requestId: REQ(2) })
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }).ok).toBe(true)
+    const again = t.register({ code, orgId: ORG_B, gasUrl: URL_B, registerNonce: REQ(2) })
     expect(again.ok).toBe(false)
     expect(again.error).toMatch(/使えなくなっています/)
-    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(3) }).ok).toBe(false)
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(3) }).ok).toBe(false)
     expect(t.rows('Orgs').slice(1)).toHaveLength(1)
   })
 
@@ -76,20 +77,20 @@ describe('団体の登録(registerOrg)', () => {
     const t = ready()
     const now = Date.now()
     const expired = t.issue().result.code
-    const late = t.register({ code: expired, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now + 14 * DAY + 60_000)
+    const late = t.register({ code: expired, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 14 * DAY + 60_000)
     expect(late.ok).toBe(false)
     const revoked = t.issue().result
     expect(t.post({ action: 'revokeRegistrationCode', session: t.session, codeId: revoked.codeId, reason: 'テスト' }).ok).toBe(true)
-    const r2 = t.register({ code: revoked.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(2) }, now)
-    const r3 = t.register({ code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, requestId: REQ(3) }, now)
+    const r2 = t.register({ code: revoked.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(2) }, now)
+    const r3 = t.register({ code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(3) }, now)
     expect([late.error, r2.error, r3.error].every((e) => e === late.error && /使えなくなっています/.test(String(e)))).toBe(true)
     expect(t.rows('Orgs').slice(1)).toHaveLength(0)
   })
 
-  it('通信が途中で失われて送り直した時(同じ requestId・同じコード)は、同じ結果(同じ共有鍵)を返し、二重に登録しない', () => {
+  it('通信が途中で失われて送り直した時(同じ registerNonce・同じコード)は、同じ結果(同じ共有鍵)を返し、二重に登録しない', () => {
     const t = ready()
     const code = t.issue().result.code
-    const body = { action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }
+    const body = { action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }
     const first = t.post(body)
     const second = t.post(body)
     const third = t.post({ ...body, code: code.toLowerCase().replace(/-/g, ' ') })
@@ -106,17 +107,59 @@ describe('団体の登録(registerOrg)', () => {
     const t = ready()
     const now = Date.now()
     const code = t.issue().result.code
-    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now).ok).toBe(true)
-    // requestId だけ知っていても、コードが違えば受け付けない
-    expect(t.register({ code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now).ok).toBe(false)
-    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now + 25 * 3600 * 1000).ok).toBe(false)
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now).ok).toBe(true)
+    // registerNonce だけ知っていても、コードが違えば受け付けない
+    expect(t.register({ code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now).ok).toBe(false)
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 25 * 3600 * 1000).ok).toBe(false)
+  })
+
+  it('使用済みの登録コードを手に入れても、登録の時の registerNonce が合わなければ共有鍵を受け取れない(ほかの失敗と同じエラー)', () => {
+    const t = ready()
+    const now = Date.now()
+    const code = t.issue().result.code
+    const first = t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now)
+    expect(first.ok).toBe(true)
+    const invalid = t.register({ code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(9) }, now).error
+    expect(invalid).toMatch(/使えなくなっています/)
+    const failsBefore = Number(t.cache.get('regfail:' + Math.floor(now / 3600_000)) ?? 0)
+    const attempts = [
+      // 同じ団体ID・同じコード・違う registerNonce(24時間以内)
+      t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(2) }, now + 60_000),
+      // 別の接続先を名乗っても同じ
+      t.register({ code, orgId: ORG_A, gasUrl: URL_B, registerNonce: REQ(3) }, now + 60_000),
+      // registerNonce は合っていても、団体ID が違う
+      t.register({ code, orgId: ORG_B, gasUrl: URL_B, registerNonce: REQ(1) }, now + 60_000),
+      // registerNonce・団体ID・コードが合っていても、登録から24時間を過ぎた
+      t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 24 * 3600_000 + 60_000),
+    ]
+    for (const a of attempts) {
+      expect(a.ok).toBe(false)
+      expect(a.error).toBe(invalid)
+      expect(JSON.stringify(a)).not.toContain(String(first.result!.registryKey))
+    }
+    // 総当たりの失敗として数える(24時間後の1回は別の時間帯)
+    expect(Number(t.cache.get('regfail:' + Math.floor(now / 3600_000)))).toBe(failsBefore + 3)
+    // 登録は変わらない(共有鍵・接続先・鍵の世代)
+    expect(t.rows('Secrets').slice(1).map((r) => [r[0], String(r[1]).replace(/^'/, ''), r[2]])).toEqual([[ORG_A, first.result!.registryKey, 1]])
+    expect(t.rows('Orgs').slice(1).map((r) => [r[0], r[1]])).toEqual([[ORG_A, URL_A]])
+    // 合っている送り直しは、24時間以内なら同じ結果
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 23 * 3600_000)).toMatchObject({ ok: true, replayed: true, result: first.result })
+  })
+
+  it('レジストリは registerNonce そのものを保存しない(SHA-256 だけ)', () => {
+    const t = ready()
+    expect(t.register({ code: t.issue().result.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }).ok).toBe(true)
+    const everything = JSON.stringify([...t.sheets.values()].map((sh) => sh.rows)) + t.logs.join('\n')
+    expect(everything).not.toContain(REQ(1))
+    expect(t.rows('Secrets')[0]).toContain('register_nonce_hash')
+    expect(String(t.rows('Secrets')[1][4])).toMatch(/^sha256:[0-9a-f]{64}$/)
   })
 
   it('新しい団体の登録コードで、登録済みの団体を登録し直そうとした時は、再登録コードを使うよう知らせる(コードは使わない)', () => {
     const t = ready()
-    expect(t.register({ code: t.issue().result.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }).ok).toBe(true)
+    expect(t.register({ code: t.issue().result.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }).ok).toBe(true)
     const code2 = t.issue().result
-    const res = t.register({ code: code2.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(2) })
+    const res = t.register({ code: code2.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(2) })
     expect(res.error).toMatch(/登録済み/)
     expect(t.post({ action: 'adminOverview', session: t.session }).result.codes.find((c: { codeId: string }) => c.codeId === code2.codeId).state).toBe('unused')
   })
@@ -124,26 +167,33 @@ describe('団体の登録(registerOrg)', () => {
   it('形の違う団体ID・接続先の URL は受け付けない', () => {
     const t = ready()
     const code = t.issue().result.code
-    expect(t.register({ code, orgId: 'org_short', gasUrl: URL_A, requestId: REQ(1) }).error).toMatch(/団体ID/)
-    expect(t.register({ code, orgId: ORG_A, gasUrl: 'https://script.google.com/macros/u/1/s/AKfyA/exec', requestId: REQ(1) }).error).toMatch(/URL/)
-    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, requestId: 'short' }).error).toMatch(/形/)
+    expect(t.register({ code, orgId: 'org_short', gasUrl: URL_A, registerNonce: REQ(1) }).error).toMatch(/団体ID/)
+    for (const bad of [
+      'https://script.google.com/macros/u/1/s/AKfyA/exec',
+      'https://script.google.com/macros/s/AKfyA/dev',
+      'https://script.google.com/a/macros/example.org/s/AKfyA/exec',
+      'https://script.google.com/macros/s/AKfyA/exec?x=1',
+      'https://script.google.com/macros/s/AKfyA/exec/',
+      'http://script.google.com/macros/s/AKfyA/exec',
+    ]) expect(t.register({ code, orgId: ORG_A, gasUrl: bad, registerNonce: REQ(1) }).error, bad).toMatch(/URL/)
+    expect(t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: 'short-nonce-0123456789' }).error).toMatch(/形/)
   })
 })
 
 describe('再登録コード(共有鍵が漏れた時の作り直し・接続先の変更)', () => {
   it('管理画面で登録済みの団体を選んで発行し、その団体が使うと新しい共有鍵に入れ替わる。接続先も新しくなる', () => {
     const t = ready()
-    const first = t.register({ code: t.issue().result.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) })
+    const first = t.register({ code: t.issue().result.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) })
     const re = t.issue({ kind: 'reissue', targetOrgId: ORG_A, orgName: '無視される名前' })
     expect(re.ok, JSON.stringify(re)).toBe(true)
     expect(re.result).toMatchObject({ kind: 'reissue', targetOrgId: ORG_A, orgName: 'テスト団体A' })
     // ほかの団体では使えない
-    expect(t.register({ code: re.result.code, orgId: ORG_B, gasUrl: URL_B, requestId: REQ(2) }).ok).toBe(false)
-    const second = t.register({ code: re.result.code, orgId: ORG_A, gasUrl: URL_A2, requestId: REQ(3) })
+    expect(t.register({ code: re.result.code, orgId: ORG_B, gasUrl: URL_B, registerNonce: REQ(2) }).ok).toBe(false)
+    const second = t.register({ code: re.result.code, orgId: ORG_A, gasUrl: URL_A2, registerNonce: REQ(3) })
     expect(second.ok, JSON.stringify(second)).toBe(true)
     expect(second.result).toMatchObject({ orgId: ORG_A, keyGen: 2, kind: 'reissue' })
     expect(second.result!.registryKey).not.toBe(first.result!.registryKey)
-    expect(t.rows('Secrets').slice(1).map((r) => [r[0], r[1], r[2]])).toEqual([[ORG_A, second.result!.registryKey, 2]])
+    expect(t.rows('Secrets').slice(1).map((r) => [r[0], String(r[1]).replace(/^'/, ''), r[2]])).toEqual([[ORG_A, second.result!.registryKey, 2]])
     expect(t.rows('Orgs').slice(1).map((r) => r[1])).toEqual([URL_A2])
     expect(t.audit()).toContainEqual(expect.objectContaining({ action: 'reregisterOrg', target: ORG_A }))
     expect((t.gas.findUnrecordedOrgEdits as () => string[])()).toEqual([])
@@ -163,20 +213,20 @@ describe('登録コードの総当たりの対策', () => {
     const now = Date.now()
     const good = t.issue().result.code
     for (let i = 0; i < 30; i++) {
-      expect(t.register({ code: `WRNG-${String(i).padStart(4, 'A')}-CCCC-DDDD`, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(100 + i) }, now).ok).toBe(false)
+      expect(t.register({ code: `WRNG-${String(i).padStart(4, 'A')}-CCCC-DDDD`, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(100 + i) }, now).ok).toBe(false)
     }
-    const blocked = t.register({ code: good, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now)
+    const blocked = t.register({ code: good, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now)
     expect(blocked.ok).toBe(false)
     expect(blocked.error).toMatch(/しばらく登録を受け付けていません/)
     // 監視の「断ったリクエスト」にも数える
     expect((t.gas.rejectedCount as (n: number) => number)(now)).toBeGreaterThan(0)
     // 次の1時間には登録できる
-    expect(t.register({ code: good, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) }, now + 3600 * 1000).ok).toBe(true)
+    expect(t.register({ code: good, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now + 3600 * 1000).ok).toBe(true)
   })
 
   it('登録の問い合わせは1分に10回まで(レジストリ全体)', () => {
     const t = ready()
-    const results = Array.from({ length: 12 }, (_, i) => t.post({ action: 'registerOrg', code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, requestId: REQ(i) }))
+    const results = Array.from({ length: 12 }, (_, i) => t.post({ action: 'registerOrg', code: 'AAAA-BBBB-CCCC-DDDD', orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(i) }))
     expect(results.slice(0, 10).every((r) => !r.retryLater)).toBe(true)
     expect(results.slice(10).every((r) => r.retryLater === true)).toBe(true)
   })
@@ -186,9 +236,9 @@ describe('共有鍵・登録コードを残さない', () => {
   it('共有鍵と登録コードは、操作の記録・実行ログ・管理画面の一覧に元の形で出ない', () => {
     const t = ready()
     const issued = t.issue().result
-    const res = t.post({ action: 'registerOrg', code: issued.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(1) })
+    const res = t.post({ action: 'registerOrg', code: issued.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) })
     const re = t.issue({ kind: 'reissue', targetOrgId: ORG_A })
-    const res2 = t.post({ action: 'registerOrg', code: re.result.code, orgId: ORG_A, gasUrl: URL_A, requestId: REQ(2) })
+    const res2 = t.post({ action: 'registerOrg', code: re.result.code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(2) })
     const secrets = [res.result.registryKey, res2.result.registryKey, issued.code, issued.code.replace(/-/g, ''), re.result.code.replace(/-/g, '')]
     const overview = JSON.stringify(t.post({ action: 'adminOverview', session: t.session }))
     const places = { audit: JSON.stringify(t.rows('AuditLog')), logs: t.logs.join('\n'), overview }

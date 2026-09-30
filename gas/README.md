@@ -419,7 +419,7 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 | `SESSION_GEN_<メンバーID>` | メンバーごとの世代番号(全端末でログアウト) |
 | `REGISTRY_URL` / `OHSUMI_WEBAPP_URL` | レジストリの URL と、この GAS のウェブアプリの URL(レジストリへの登録に使う。手で入れる。`registry/README.md` の 4.2) |
 | `REGISTRY_SHARED_KEY` / `REGISTRY_KEY_GEN` / `REGISTRY_REGISTERED_AT` | レジストリとの共有鍵・その世代・登録した日時(「Ohsumi」→「レジストリに登録する…」が保存する。**共有鍵は表示・共有しないでください**) |
-| `REGISTRY_PENDING` | 登録の途中で応答が失われた時に、同じ登録として送り直すための requestId と、登録コードの SHA-256(登録できたら消える) |
+| `REGISTRY_PENDING` | 登録の途中で応答が失われた時に、同じ登録として送り直すための乱数(registerNonce。レジストリはこれが合う時だけ、24時間まで同じ共有鍵を返す)と、登録コードの SHA-256(登録できたら消える。**ほかに写さない**) |
 | `INITIAL_SETUP_HASH` / `INITIAL_SETUP_EXPIRES` / `INITIAL_SETUP_FAILS` | 最初の代表の初期設定コードの SHA-256・有効期限(72時間)・間違えた回数(使うと消える) |
 
 `LEGACY_ACCESS_TOKEN_AUTH` が残っている場合は、今は使っていないので削除して構いません。

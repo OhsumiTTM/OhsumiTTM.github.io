@@ -1661,15 +1661,22 @@ function verifyGoogleIdToken(idToken, nonceSecret) {
 //     スクリプトプロパティ REGISTRY_SHARED_KEY に保存する(値は表示しない)。
 //     代表がまだいなければ、初期設定コードを作り、その場のダイアログにだけ1回表示する
 //   - 「初期設定コードを作り直す」: 代表がまだいない時だけ。前のコードは使えなくなる
-// 通信が途中で失われた時は、同じ requestId で最大3回送る(レジストリは同じ結果を返し、二重に登録しない)。
-// 別の時にメニューからやり直した時も、同じ登録コードなら同じ requestId を使う(REGISTRY_PENDING に
-// requestId とコードの SHA-256 だけを覚える)
+// 送り直し: 登録の前に乱数 registerNonce(32バイト)を作り、スクリプトプロパティ REGISTRY_PENDING に保存してから送る。
+// 通信が途中で失われた時は、同じ registerNonce で最大3回送る。別の時にメニューからやり直した時も、同じ登録コードなら
+// 同じ registerNonce を使う(REGISTRY_PENDING には registerNonce とコードの SHA-256 だけを覚え、登録できたら消す)。
+// レジストリは、registerNonce が合う時だけ(登録から24時間まで)同じ結果を返す。使用済みの登録コードだけでは、
+// 共有鍵を受け取れない
+//
+// この GAS の URL(レジストリに伝える接続先): スクリプトプロパティ OHSUMI_WEBAPP_URL(無ければ ScriptApp の URL)。
+// https://script.google.com/macros/s/…/exec の形だけを使い、/dev・/u/1/・/a/macros/<ドメイン>/・? や # の付いたものは
+// 送る前に断る(checkOwnWebAppUrl)。メニューでは、送る前に登録する URL を表示する
 //
 // 初期設定コード: 16文字(読み間違えない31種類の文字)。有効期限72時間・1回限り。スクリプトプロパティには
 // SHA-256 だけを保存する。最初の代表は、ログイン画面の「初期設定コード」の欄に入れて Google でログインする
 // (exchangeIdToken に setupCode を付ける。1回の通信)。間違いが INITIAL_SETUP_FAIL_LIMIT 回続いたら、
 // そのコードは使えなくなる(メニューで作り直す)
 var REGISTRY_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
+var REGISTER_NONCE_PATTERN = /^[A-Za-z0-9_-]{43,64}$/
 var REGISTRY_FETCH_ATTEMPTS = 3
 var INITIAL_SETUP_TTL_HOURS = 72
 var INITIAL_SETUP_FAIL_LIMIT = 10
@@ -1800,6 +1807,28 @@ function claimInitialSetup(email, code, nowMs) {
   }
 }
 
+// この GAS のウェブアプリの URL(レジストリに伝える接続先)
+function ownWebAppUrl(all) {
+  var url = String((all || {}).OHSUMI_WEBAPP_URL || '').trim()
+  if (url) return url
+  try { return String(ScriptApp.getService().getUrl() || '') } catch (e) { return '' }
+}
+
+// レジストリに伝えてよい URL か。問題があれば、直し方の文を返す(無ければ '')
+function checkOwnWebAppUrl(url) {
+  var how = 'デプロイの画面(デプロイ → デプロイを管理)に出るウェブアプリの URL(https://script.google.com/macros/s/…/exec)を、' +
+    'そのままスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。'
+  url = String(url || '')
+  if (!url) return 'この GAS のウェブアプリの URL が分かりません。先にウェブアプリとしてデプロイし、' + how
+  if (REGISTRY_URL_PATTERN.test(url)) return ''
+  var what = 'この GAS の URL(' + url + ')は、レジストリに登録できない形です'
+  if (/\/dev(?:[?#].*)?$/.test(url)) what += '(/dev はエディタで試すための URL で、編集者しか使えません)'
+  else if (/\/u\/\d+\//.test(url)) what += '(/u/1/ などは、複数の Google アカウントでログインしたブラウザのアドレスバーの形です)'
+  else if (/\/a\/macros\//.test(url)) what += '(/a/macros/<ドメイン>/ は、Google Workspace のドメインの中だけの形です)'
+  else if (/[?#]/.test(url)) what += '(? や # の後ろは付けません)'
+  return what + '。' + how
+}
+
 // レジストリに登録する(メニューから。テストでは fetch を差し替える)。
 // 返り値: { displayName, keyGen, kind, setupCode?, setupExpiresAt? }(共有鍵は返さない)
 function registerWithRegistry(code, deps) {
@@ -1814,19 +1843,16 @@ function registerWithRegistry(code, deps) {
   if (!REGISTRY_URL_PATTERN.test(registryUrl)) {
     throw userError('スクリプトプロパティ REGISTRY_URL に、FSIF から伝えられたレジストリの URL(https://script.google.com/macros/s/…/exec)を入れてください。')
   }
-  var gasUrl = String(all.OHSUMI_WEBAPP_URL || '').trim()
-  if (!gasUrl) {
-    try { gasUrl = String(ScriptApp.getService().getUrl() || '') } catch (e) { gasUrl = '' }
-  }
-  if (!REGISTRY_URL_PATTERN.test(gasUrl)) {
-    throw userError('この GAS のウェブアプリの URL が分かりません。先にウェブアプリとしてデプロイし、デプロイの画面に出る URL(https://script.google.com/macros/s/…/exec)をスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。')
-  }
-  // 同じ登録コードでやり直す時は、同じ requestId を使う(レジストリが送り直しと分かるように)
+  var gasUrl = ownWebAppUrl(all)
+  var urlProblem = checkOwnWebAppUrl(gasUrl)
+  if (urlProblem) throw userError(urlProblem)
+  // 同じ登録コードでやり直す時は、同じ registerNonce を使う(レジストリが送り直しと分かるように)。
+  // 送る前に保存する(応答が失われても、次に同じ値で送れるように)
   var codeHash = oneTimeCodeHash(code)
   var pending = {}
   try { pending = JSON.parse(all.REGISTRY_PENDING || '{}') || {} } catch (e) { pending = {} }
-  if (pending.codeHash !== codeHash || !pending.requestId) {
-    pending = { requestId: generateSecret().slice(0, 32), codeHash: codeHash }
+  if (pending.codeHash !== codeHash || !REGISTER_NONCE_PATTERN.test(String(pending.registerNonce || ''))) {
+    pending = { registerNonce: generateSecret(), codeHash: codeHash }
     props.setProperty('REGISTRY_PENDING', JSON.stringify(pending))
   }
   var payload = JSON.stringify({
@@ -1835,7 +1861,7 @@ function registerWithRegistry(code, deps) {
     orgId: props.getProperty('ORG_ID'),
     gasUrl: gasUrl,
     gasVersion: OHSUMI_GAS_VERSION,
-    requestId: pending.requestId,
+    registerNonce: pending.registerNonce,
   })
   var res = null
   var lastProblem = ''
@@ -1883,7 +1909,16 @@ function setupCodeMessage(setupCode, expiresAt) {
 
 function registerWithRegistryFromMenu() {
   var ui = SpreadsheetApp.getUi()
-  var input = ui.prompt('レジストリに登録', 'FSIF から受け取った登録コード(または再登録コード)を入れてください。', ui.ButtonSet.OK_CANCEL)
+  // 送る前に、登録する接続先(この GAS の URL)を確かめる
+  var gasUrl = ownWebAppUrl(PropertiesService.getScriptProperties().getProperties())
+  var urlProblem = checkOwnWebAppUrl(gasUrl)
+  if (urlProblem) {
+    ui.alert('登録できませんでした', urlProblem, ui.ButtonSet.OK)
+    return
+  }
+  var input = ui.prompt('レジストリに登録',
+    'この GAS の URL を、団体の接続先として登録します:\n' + gasUrl + '\n\n' +
+    'FSIF から受け取った登録コード(または再登録コード)を入れてください。', ui.ButtonSet.OK_CANCEL)
   if (input.getSelectedButton() !== ui.Button.OK) return
   var out
   try {
