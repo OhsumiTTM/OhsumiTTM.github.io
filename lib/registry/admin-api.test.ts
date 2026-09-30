@@ -110,6 +110,19 @@ describe('停止の予定(R1-e)', () => {
     expect(bodies[1]).toEqual({ action: 'clearSuspension', session: session.token, orgId: 'org_A', reason: '回答を確認' })
   })
 
+  it('提供停止を当日に(確認の画面を経た時だけ。confirm を付ける)・プランの記録。どちらも送り直さない', async () => {
+    const { api, bodies } = await load([
+      JSON.stringify({ ok: true, result: { orgId: 'org_A', state: 'suspended' } }),
+      new Error('network'),
+      JSON.stringify({ ok: true, result: {} }),
+    ])
+    expect(await api.suspendNow(session, 'org_A', '規約違反')).toMatchObject({ state: 'suspended' })
+    expect(bodies[0]).toEqual({ action: 'scheduleSuspension', session: session.token, orgId: 'org_A', kind: 'suspend', immediate: true, confirm: true, reason: '規約違反' })
+    await expect(api.setOrgPlan(session, 'org_A', 'paid', '契約')).rejects.toThrow(/応答を受け取れませんでした/)
+    expect(bodies).toHaveLength(2)
+    expect(bodies[1]).toEqual({ action: 'setOrgPlan', session: session.token, orgId: 'org_A', plan: 'paid', reason: '契約' })
+  })
+
   it('入れられるいちばん早い日時は、今から14日後(datetime-local の形)', async () => {
     const { api } = await load([])
     const now = new Date(2026, 9, 1, 9, 30).getTime()
