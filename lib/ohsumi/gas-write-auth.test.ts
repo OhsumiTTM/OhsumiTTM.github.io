@@ -456,17 +456,14 @@ describe('片方だけ成功すると困る組み合わせ(batch)', () => {
     expect(written(t)).toEqual(['history_json'])
   })
 
-  it('コメントの保存が失敗したら、メンションの通知を送らない', () => {
+  it('コメントの保存が失敗したら、メンションの通知を送らない(通知は updateComments の中で、保存した後に送る)', () => {
     const t = setup()
     t.warm()
     const sent: string[] = []
-    t.c.notifyMention_ = () => { sent.push('mention') }
+    t.c.queueNotification_ = (id: string) => { sent.push(id) }
     t.c.updateRowFieldsUnmeasured_ = () => { throw new Error('シートに書けませんでした') }
-    const res = t.post({ action: 'batch', sessionToken: 'm-base', ops: [
-      { action: 'updateComments', taskId: 't1', comments: [{ id: 'c1', byId: 'm-base', text: 'hi' }] },
-      { action: 'notifyMention', taskId: 't1', commentText: 'hi', memberIds: ['m-lead'] },
-    ] })
-    expect(res.result.results[1]).toMatchObject({ ok: false, skipped: true })
+    const res = t.post({ action: 'updateComments', sessionToken: 'm-base', taskId: 't1', comments: [{ id: 'c1', byId: 'm-base', text: '@班長 見てください' }] })
+    expect(res.ok).toBe(false)
     expect(sent).toEqual([])
   })
 

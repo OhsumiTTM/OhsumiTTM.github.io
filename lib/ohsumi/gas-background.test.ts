@@ -31,8 +31,15 @@ function setup(opts: { lockBusy?: boolean } = {}) {
   const snapshot = {
     Members: { headers: ['id', 'name', 'role', 'project_ids', 'permission_overrides_json'], rows: [['m1', 'A', 'r-lead', 'p1, p2', '[]']] },
     Settings: { headers: ['key', 'value'], rows: [['roles', roles]] },
+    // m1 が担当するタスク(進捗は担当者などだけが書ける)
+    Tasks: { headers: ['id', 'title', 'assignee_id', 'creator_id'], rows: [['t1', 'T', 'm1', 'm1']] },
   }
-  c.loadSnapshot_ = () => { calls.push('loadSnapshot'); return { version: 'v1', data: snapshot, cacheHit: true } }
+  c.loadSnapshot_ = () => {
+    calls.push('loadSnapshot')
+    const snap = { version: 'v1', data: snapshot, cacheHit: true }
+    c._requestSnapshot = snap
+    return snap
+  }
   c.getActingMemberById_ = () => { calls.push('sheet:Members'); return { id: 'm1', role: 'top', project_ids: [], permission_overrides: [] } }
   c.readRoleSettings_ = () => { calls.push('sheet:Settings'); return { roles } }
   c.getExpenses_ = (acting: { id: string; role: string; project_ids: string[] }) => { calls.push('getExpenses:' + acting.role + ':' + acting.project_ids.join('|')); return [{ id: 'e1' }] }
