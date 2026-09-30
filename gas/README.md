@@ -782,6 +782,16 @@ GitHub Secrets の `CSV_GAS`(`NEXT_PUBLIC_GAS_URL`)には、デプロイの「�
 - コピーは誰とも共有しません。ほかの人と共有しないでください（メンバーのデータがそのまま入っています）。
 - **削除してよい目安**: 移行の後、**1か月ほど問題が無ければ**削除して構いません。問題が見つかった時は、コピーから値を確かめて直すために使います。
 
+### 4.6.4. Orbit からの移行の点検(migrationReport・renameOrbitCalendarEvents・listChangesFromOrbit)
+
+Orbit から移す時に使う関数です(手順は `docs/orbit-migration-plan.md`)。どれもエディタから実行し、結果は実行ログに出ます。
+
+| 関数 | 中身 | 使うスクリプトプロパティ |
+|---|---|---|
+| `migrationReport` | 移行の前と後で比べる数(行数・役職ごと・ステータスや部門ごと・見つからない参照・開けないファイルなど)を出す。読み取りだけ。前回の結果を覚え、次に実行した時に違う数だけを出す | `MIGRATION_REPORT_LAST`(前回の結果。関数が書く) |
+| `renameOrbitCalendarEvents` | 実行するアカウントのカレンダーの、今日から2年先までの `[Orbit] タスク名` の予定を `[Ohsumi] タスク名` にする | `CALENDAR_RENAME_MODE`(無い・`dryRun`: 件数と例だけ / `apply`: 変えて dryRun に戻す)・`CALENDAR_RENAME_DIRECTION`(`toOrbit` で逆向き) |
+| `listChangesFromOrbit` | 元の Orbit のシートを移行と同じ変換にしてから今のシートと比べ、追加・変更・削除された行を日本語の値で出す。読み取りだけ。メールアドレスは出さない | `ORBIT_SPREADSHEET_ID`(元の Orbit のスプレッドシートの ID)・`MIGRATION_TOP_ROLE_NAME`(移行の時に使った場合) |
+
 ## 4.7. Discord Webhook 連携（任意）
 
 タスクが確認待ちになったとき、および期限超過タスクの日次サマリーを Discord チャンネルに通知できます。
