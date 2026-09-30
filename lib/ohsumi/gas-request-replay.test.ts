@@ -94,8 +94,8 @@ describe('書き込みの送り直し(requestId)', () => {
     const t = setup({ lockBusy: true })
     expect(t.post(write({ requestId: 'req-00000007' }))).toMatchObject({ ok: false, retryLater: true })
     expect(t.writes).toHaveLength(0)
-    // 覚えていない(次に送り直された時は処理する)
-    expect(t.cache.size).toBe(0)
+    // 覚えていない(次に送り直された時は処理する)。停止の状態を確かめ直した印(contract:)は別
+    expect([...t.cache.keys()].filter((k) => !k.startsWith('contract:'))).toEqual([])
   })
 
   it('結果が大きすぎて覚えられない時は、完了したことだけを返す(やり直さない)', () => {

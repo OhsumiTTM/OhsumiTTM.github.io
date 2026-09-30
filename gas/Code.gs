@@ -2500,7 +2500,7 @@ var INITIAL_SETUP_FAIL_LIMIT = 10
 var SETUP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)
-var OHSUMI_GAS_VERSION = 'r1e-1'
+var OHSUMI_GAS_VERSION = 'r1e-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2726,22 +2726,35 @@ function setupCodeMessage_(setupCode, expiresAt) {
 //   restrict(機能停止): 読み取り(閲覧・書き出し)とログインだけを受け付け、作成・編集は断る(restricted)。
 //                      通知・毎朝の処理は止めない。画面の上部に、アンケートへの回答のお願いを出す
 // 状態は、1時間ごとのトリガー(checkContractStatus)でレジストリの checkIn に確かめ、スクリプトプロパティ
-// CONTRACT_STATE に覚える。停止中(予定の日時を過ぎた時も)は、解除がすぐ効くように、使われるたびに確かめ直す
-// (1分に1回まで)。レジストリに確かめられない時は、最後に確かめた状態のまま使い続ける
-// (最後に届いた停止の予定の日時は守る)。
+// CONTRACT_STATE に覚える。リクエストの時にも確かめ直す(currentContract_):
+//   - 停止中(予定の日時を過ぎた時も)は、解除がすぐ効くように、どの操作でも1分に1回まで
+//   - 停止の予定がある時は、書き込み(読み取りの一覧に無い操作)の前に1分に1回まで
+//   - 停止の予定が無い時も、書き込みの前に10分に1回まで(レジストリで停止した後、書き込みを受け付け続けないように)
+// レジストリに確かめられない時は、最後に確かめた状態のまま使い続ける(最後に届いた停止の予定の日時は守る)。
+// 機能停止中は、READ_ONLY_ACTIONS(読み取り・ログイン)に無い操作をすべて断る。batch は、中の操作に関わらず断る。
+// 画面の停止の表示は、この GAS が応答に付けた contract だけで決まる(画面は自分で停止を判断しない)。
 // checkIn は、共有鍵(REGISTRY_SHARED_KEY)で 'checkIn.<団体ID>.<時刻(秒)>' に付けた HMAC-SHA256 の署名で確かめる。
 // 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる(送った予告は CONTRACT_NOTICES_SENT に覚える)。
 // 応答には、画面が表示に使う contract({ phase, kind, suspendAt })を付ける
 var CONTRACT_NOTICE_DAYS = [14, 7, 1]
 var CONTRACT_RECHECK_SEC = 60
+var CONTRACT_RECHECK_IDLE_SEC = 600
 var CONTRACT_SUSPENDED_MESSAGE = 'この団体は、Ohsumi の利用を停止しています。'
 var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いします。回答が確認でき次第、再開します。'
-// 機能停止中にも受け付ける操作(ログイン・読み取り・自分のログインの無効化・ルールどおりの定期タスクの生成)
-var RESTRICT_ALLOWED_ACTIONS = [
+// 機能停止中にも受け付ける操作(読み取りの一覧)。ここに無い操作は、すべて断る(新しく足した操作も、ここに足さない限り断る)。
+// 読み取り・ログイン(初期設定コードで代表を入れる時を除く)・ログインの記録・自分や管理者によるログインの無効化だけを入れる
+var READ_ONLY_ACTIONS = [
   'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses', 'getFiles',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
-  'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin', 'checkAndGenerateRecurringTasks',
+  'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
 ]
+
+// 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
+function readOnlyAllows_(body) {
+  if (READ_ONLY_ACTIONS.indexOf(body.action) < 0) return false
+  if (body.action === 'exchangeIdToken' && body.setupCode) return false
+  return true
+}
 
 function readContractState_() {
   try {
@@ -2806,15 +2819,17 @@ function refreshContractState_(deps) {
   return state
 }
 
-// リクエストの時の状態。停止中(予定の日時を過ぎた時も)は、解除がすぐ効くように確かめ直す(1分に1回まで)
-function currentContract_(nowMs) {
+// リクエストの時の状態。レジストリに確かめ直すのは(上の説明):
+//   停止中 → どの操作でも1分に1回まで / 予定あり → 書き込みの前に1分に1回まで / 予定なし → 書き込みの前に10分に1回まで
+// writing: 読み取りの一覧に無い操作か(省くと読み取り)
+function currentContract_(nowMs, writing) {
   var state = null
   try { state = JSON.parse(requestProps_().CONTRACT_STATE || 'null') } catch (e) { state = null }
   var c = effectiveContract_(state, nowMs)
-  if (c.phase !== 'inEffect') return c
+  if (c.phase !== 'inEffect' && !writing) return c
   var cache = CacheService.getScriptCache()
   if (cache.get('contract:recheck')) return c
-  cache.put('contract:recheck', '1', CONTRACT_RECHECK_SEC)
+  cache.put('contract:recheck', '1', c.phase === 'none' ? CONTRACT_RECHECK_IDLE_SEC : CONTRACT_RECHECK_SEC)
   var fresh = refreshContractState_()
   return fresh ? effectiveContract_(fresh, nowMs) : c
 }
@@ -2823,7 +2838,7 @@ function currentContract_(nowMs) {
 function contractRejection_(c, body) {
   if (c.phase !== 'inEffect') return null
   if (c.kind === 'suspend') return { ok: false, orgSuspended: true, error: CONTRACT_SUSPENDED_MESSAGE }
-  if (RESTRICT_ALLOWED_ACTIONS.indexOf(body.action) >= 0) return null
+  if (readOnlyAllows_(body)) return null
   return { ok: false, restricted: true, error: 'Ohsumi は読み取り専用になっています(作成・編集はできません)。' + CONTRACT_RESTRICTED_MESSAGE }
 }
 
@@ -4041,7 +4056,7 @@ function handlePost_(e, state) {
     if (versionError) return ({ ok: false, error: versionError, reloadRequired: true })
 
     // 提供停止中はすべて断り、機能停止中は読み取りとログインだけを受け付ける(R1-e)
-    var contract = timed_('contractMs', function () { return currentContract_(Date.now()) })
+    var contract = timed_('contractMs', function () { return currentContract_(Date.now(), !readOnlyAllows_(body)) })
     state.contract = contract
     var contractError = contractRejection_(contract, body)
     if (contractError) return contractError

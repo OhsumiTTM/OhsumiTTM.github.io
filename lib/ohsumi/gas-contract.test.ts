@@ -34,11 +34,11 @@ describe('レジストリに状態を確かめる(checkIn)', () => {
     check(p)
     expect(state(p)).toMatchObject({ phase: 'none' })
     const sent = p.o.sent.at(-1)!
-    expect(sent).toMatchObject({ action: 'checkIn', orgId: p.o.props.ORG_ID, gasVersion: 'r1e-1' })
+    expect(sent).toMatchObject({ action: 'checkIn', orgId: p.o.props.ORG_ID, gasVersion: 'r1e-2' })
     expect(sent.sig).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(JSON.stringify(sent)).not.toContain(p.o.props.REGISTRY_SHARED_KEY)
     expect(String(p.orgValue('last_check_at'))).toMatch(/^\d{4}-/)
-    expect(p.orgValue('gas_version')).toBe('r1e-1')
+    expect(p.orgValue('gas_version')).toBe('r1e-2')
   })
 
   it('確かめられない時(鍵が違う・通信エラー)は null を返し、覚えた状態を変えない', () => {
@@ -195,7 +195,93 @@ describe('停止の予定の予告', () => {
 describe('トリガーと版', () => {
   it('setupOhsumi で1時間ごとの checkContractStatus のトリガーを作る。レジストリに伝える版を上げる', () => {
     expect(CODE_GS).toMatch(/ScriptApp\.newTrigger\('checkContractStatus'\)\.timeBased\(\)\.everyHours\(1\)\.create\(\)/)
-    expect(CODE_GS).toContain("var OHSUMI_GAS_VERSION = 'r1e-1'")
+    expect(CODE_GS).toContain("var OHSUMI_GAS_VERSION = 'r1e-2'")
   })
 })
 
+
+// doPost が受け付ける操作: runWriteAction_ の case(新しく足した操作も、自動でここに入る)と、その前で扱う操作
+function acceptedActions(): string[] {
+  const start = CODE_GS.indexOf('function runWriteAction_(')
+  const body = CODE_GS.slice(start, CODE_GS.indexOf('\nfunction ', start + 10))
+  const cases = [...body.matchAll(/case '(\w+)':/g)].map((m) => m[1])
+  return [...new Set([...cases, 'exchangeIdToken', 'getInitialData', 'getLoginConfig', 'ping', 'batch'])]
+}
+
+describe('機能停止中は、読み取りの一覧に無い操作をすべて断る(どの経路でも)', () => {
+  // 機能停止中の団体(レジストリでも機能停止中。確かめ直しても変わらない)。処理まで進んだ操作を数える
+  function restricted() {
+    const p = pair()
+    p.setOrg({ suspend_at: iso(Date.now() - 1000), suspend_kind: 'restrict' })
+    check(p)
+    expect(state(p)).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
+    const reached: string[] = []
+    const c = p.o.c
+    for (const f of ['authenticateRequest_', 'runWriteAction_', 'runBatch_', 'exchangeIdToken_', 'claimInitialSetup_']) {
+      const orig = c[f] as (...a: unknown[]) => unknown
+      c[f] = (...a: unknown[]) => { reached.push(f); return orig(...a) }
+    }
+    return { ...p, reached }
+  }
+  const readOnly = () => ((/var READ_ONLY_ACTIONS = \[([\s\S]*?)\]/.exec(CODE_GS)![1].match(/'(\w+)'/g) ?? []).map((x) => x.slice(1, -1)))
+
+  it('受け付ける操作は125以上あり、読み取りの一覧はその一部だけ(読み取り・ログイン)', () => {
+    const all = acceptedActions()
+    expect(all.length).toBeGreaterThan(125)
+    for (const a of readOnly()) expect(all, a).toContain(a)
+    expect(readOnly()).not.toContain('createTasks')
+    expect(readOnly()).not.toContain('batch')
+  })
+
+  it('1本ずつ送った時: 読み取りの一覧に無い操作は、処理(認証も)に進まずに断る', () => {
+    const t = restricted()
+    const writes = acceptedActions().filter((a) => !readOnly().includes(a) && a !== 'getLoginConfig' && a !== 'ping')
+    expect(writes).toContain('createTasks')
+    for (const action of writes) {
+      const res = t.o.post({ action, sessionToken: 'session-m1', tasks: [{ name: 'x' }], taskId: 't1', text: '本文' })
+      expect(res, action).toMatchObject({ ok: false, restricted: true })
+    }
+    expect(t.reached).toEqual([])
+  })
+
+  it('batch で送った時: 中の操作が何でも、処理に進まずに断る(読み取りの一覧の操作を混ぜても)', () => {
+    const t = restricted()
+    const ops = acceptedActions().filter((a) => a !== 'batch')
+    for (const action of ops) {
+      const res = t.o.post({ action: 'batch', sessionToken: 'session-m1', ops: [{ action, taskId: 't1' }] })
+      expect(res, action).toMatchObject({ ok: false, restricted: true })
+    }
+    expect(t.reached).toEqual([])
+  })
+
+  it('初期設定コードで代表を入れるログインは断る(メンバーを足すため)。ふつうのログインは受け付ける', () => {
+    const t = restricted()
+    expect(t.o.login('new@example.com', 'AAAA-BBBB-CCCC-DDDD')).toMatchObject({ ok: false, restricted: true })
+    expect(t.reached).toEqual([])
+    expect(t.o.login('top@example.com').restricted).toBeUndefined()
+    expect(t.reached).toContain('exchangeIdToken_')
+  })
+
+  it('GAS がまだ停止を知らない時も、書き込みの前にレジストリに確かめ直して断る(予定のみ・予定なしと覚えていた時)', () => {
+    for (const known of [
+      { phase: 'scheduled', kind: 'restrict', suspendAt: iso(Date.now() + 0.9 * DAY) },
+      { phase: 'none', kind: '', suspendAt: '' },
+    ]) {
+      const p = pair()
+      p.o.props.CONTRACT_STATE = JSON.stringify(known)
+      // レジストリでは今すぐ機能停止にした(テスト環境の testSuspendNow と同じ)
+      p.setOrg({ suspend_at: iso(Date.now() - 1000), suspend_kind: 'restrict' })
+      const res = p.o.post({ action: 'createTasks', sessionToken: 'session-m1', tasks: [{ name: 'x' }] })
+      expect(res, known.phase).toMatchObject({ ok: false, restricted: true, contract: { phase: 'inEffect', kind: 'restrict' } })
+      expect(state(p).phase).toBe('inEffect')
+    }
+  })
+
+  it('読み取りでは、予定なしの時にレジストリへ問い合わせない(読み込みを遅くしない)', () => {
+    const p = pair()
+    check(p)
+    const before = p.o.fetches()
+    p.o.post({ action: 'getInitialData', sessionToken: 'session-m1' })
+    expect(p.o.fetches()).toBe(before)
+  })
+})
