@@ -1,4 +1,4 @@
-// ビルドの前に、団体の GAS の URL(NEXT_PUBLIC_GAS_URL)の形を確かめる。
+// ビルドの前に、団体の GAS の URL(NEXT_PUBLIC_GAS_URL)と、レジストリの URL(NEXT_PUBLIC_REGISTRY_URL)の形を確かめる。
 // /u/数字/ を含む URL・/dev の URL・形の違う URL ならビルドを止める(lib/ohsumi/gas-url.ts と同じ決まり)。
 // 値そのものは表示しない。
 //
@@ -7,6 +7,12 @@ import { pathToFileURL } from 'node:url'
 
 const CANONICAL = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/
 const WORKSPACE = /^https:\/\/script\.google\.com\/a\/macros\/[^/]+\/s\/[A-Za-z0-9_-]+\/exec$/
+
+/** @returns {'ok' | 'error'} */
+export function registryUrlLevel(url) {
+  const u = String(url ?? '').trim()
+  return !u || CANONICAL.test(u) ? 'ok' : 'error'
+}
 
 /** @returns {'ok' | 'warn' | 'error'} */
 export function gasUrlLevel(url) {
@@ -28,5 +34,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   }
   if (level === 'warn') {
     console.warn('NEXT_PUBLIC_GAS_URL が Google Workspace の形(/a/macros/…)です。https://script.google.com/macros/s/…/exec の形をおすすめします。')
+  }
+  // レジストリはレジストリ専用の個人向け Google アカウントに置くので、/macros/s/…/exec の形だけを受け付ける
+  if (registryUrlLevel(process.env.NEXT_PUBLIC_REGISTRY_URL) === 'error') {
+    console.error(
+      'NEXT_PUBLIC_REGISTRY_URL(GitHub Secrets の REGISTRY_URL)の形が正しくありません。' +
+        'レジストリのデプロイの「ウェブアプリの URL」(https://script.google.com/macros/s/…/exec)をそのまま使ってください。',
+    )
+    process.exit(1)
   }
 }

@@ -53,6 +53,47 @@ export const ADMIN_STEPS = [
     'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
 ]
 
+// レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
+// (lib/ohsumi/check-layout.test.ts で確かめる)
+export const REGISTRY_URL = 'https://script.google.com/macros/s/LAYOUT_REGISTRY/exec'
+export const REGISTRY_STEPS = [
+  { name: 'レジストリ管理(ログイン)', do: 'registryLogin' },
+  { name: 'レジストリ管理(団体)', do: 'registry' },
+  { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
+  { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
+  { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
+]
+
+// レジストリの偽の応答(長い団体名・URL・メールで、はみ出しを確かめる)
+export function registryResponse(body) {
+  const long = 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会'
+  const iso = (d) => new Date(Date.UTC(2026, 9, d)).toISOString()
+  switch (body.action) {
+    case 'adminOverview':
+      return {
+        me: { email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 1800 },
+        codeTtlDays: 14,
+        orgs: [
+          { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'v1' },
+          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', channel: 'standard', gasUrl: '', gasVersion: '' },
+          { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: '', suspendReason: '', channel: '', gasUrl: '', gasVersion: '' },
+        ],
+        codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
+          codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
+          state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
+        })),
+        audit: [
+          { at: iso(3), actor: 'registry.admin.with.a.long.address@example.com', action: 'issueRegistrationCode', target: 'rc_0abcdefghij', before: '', after: JSON.stringify({ orgName: long, contactEmail: 'contact.person.long.address@example.org', expiresAt: iso(14) }), reason: '' },
+          { at: iso(2), actor: 'stranger@example.com', action: 'adminLoginDenied', target: '', before: '', after: '', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' },
+        ],
+      }
+    case 'issueRegistrationCode':
+      return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName }
+    default:
+      return {}
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ヘッドレスの Chrome を起動し、操作の窓口(remote debugging)が開くまで待つ。
@@ -167,7 +208,8 @@ const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-gra
 async function run({ build = true } = {}) {
   if (build) {
     console.log('テスト用の設定でビルドします…')
-    const env = { ...process.env, NEXT_PUBLIC_GAS_URL: GAS_URL, NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: '000000000000-layout.apps.googleusercontent.com' }
+    const env = { ...process.env, NEXT_PUBLIC_GAS_URL: GAS_URL, NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: '000000000000-layout.apps.googleusercontent.com',
+      NEXT_PUBLIC_REGISTRY_URL: REGISTRY_URL, NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID: '000000000000-registry.apps.googleusercontent.com' }
     const b = spawnSync('pnpm', ['exec', 'next', 'build'], { cwd: ROOT, env, stdio: 'inherit' })
     if (b.status !== 0) throw new Error('ビルドに失敗しました')
     const c = spawnSync('node', ['scripts/csp.mjs'], { cwd: ROOT, stdio: 'inherit' })
@@ -224,6 +266,7 @@ async function run({ build = true } = {}) {
       const fulfill = (type, body) => send('Fetch.fulfillRequest', { requestId, responseCode: 200, body: b64(body),
         responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }] })
       if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')) }))
+      if (url.href.startsWith(REGISTRY_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: registryResponse(JSON.parse(request.postData || '{}')) }))
       if (url.href.startsWith('https://accounts.google.com/gsi/client')) {
         return fulfill('text/javascript', 'window.google={accounts:{id:{initialize(){},renderButton(){},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
       }
@@ -245,7 +288,9 @@ async function run({ build = true } = {}) {
     const passes = [
       { member: MEMBER, steps: STEPS },
       { member: ADMIN_MEMBER, steps: ADMIN_STEPS },
+      { member: ADMIN_MEMBER, steps: REGISTRY_STEPS },
     ]
+    const registrySession = () => evaluate(`sessionStorage.setItem('ohsumi-registry-admin-session', JSON.stringify({ token: 'ra1.layout.check', exp: Math.floor(Date.now() / 1000) + 1800, email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000) }))`)
     for (const pass of passes) {
     member = pass.member
     view = viewerData(pass.member)
@@ -262,6 +307,19 @@ async function run({ build = true } = {}) {
           await clickText('あとで設定する').catch(() => {})
           await sleep(800)
           await clickText('ADMIN'); await sleep(1500)
+        }
+        if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
+        if (step.do === 'registry') { await registrySession(); await navigate('/registry-admin/') }
+        if (step.do === 'registryIssue') {
+          // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
+          await evaluate(`(() => {
+            const el = [...document.querySelectorAll('label')].find((l) => l.textContent.startsWith('団体名')).querySelector('input')
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会')
+            el.dispatchEvent(new Event('input', { bubbles: true }))
+            return true })()`)
+          await sleep(300); await clickText('発行する'); await sleep(1500)
+          const shown = await evaluate(`document.body.textContent.includes('ABCD-EFGH-JKMN-PQRS')`)
+          if (!shown) throw new Error('発行した登録コードが表示されません')
         }
         if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }
         if (step.do === 'openTask') {

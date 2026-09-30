@@ -72,3 +72,20 @@ describe('スマホの幅の表示の確認', () => {
     expect(tasks.rows.some((r) => r[tasks.headers.indexOf('visibility')] === '幹部')).toBe(false)
   })
 })
+
+describe('レジストリの管理画面(375px)', () => {
+  it('ログイン・団体・登録コード・発行した後・操作の記録を開く(タブのラベルは管理画面の TABS と同じ)', () => {
+    const steps = layout.REGISTRY_STEPS as { do: string; text?: string }[]
+    const kinds = new Set(steps.map((s) => s.do))
+    for (const k of ['registryLogin', 'registry', 'registryIssue']) expect(kinds.has(k), k).toBe(true)
+    const src = readFileSync(join(ROOT, 'components', 'registry', 'registry-admin.tsx'), 'utf8')
+    for (const s of steps.filter((s) => s.do === 'click')) expect(src).toContain(`label: '${s.text}'`)
+    expect(src).toContain('発行する')
+  })
+
+  it('偽の応答は、団体の状態・登録コードの状態をすべて含む', () => {
+    const r = layout.registryResponse({ action: 'adminOverview' }) as { orgs: { state: string }[]; codes: { state: string }[] }
+    expect(new Set(r.orgs.map((o) => o.state))).toEqual(new Set(['active', 'scheduled', 'suspended']))
+    expect(new Set(r.codes.map((c) => c.state))).toEqual(new Set(['unused', 'used', 'expired', 'revoked']))
+  })
+})

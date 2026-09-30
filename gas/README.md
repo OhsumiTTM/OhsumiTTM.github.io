@@ -314,6 +314,8 @@ URLを知っている人がログインなしで全データを読めてしま�
 |---|---|
 | `FEEDBACK_FORM_URL` | フィードバックの送信先 Google フォームの `formResponse` で終わるURL |
 | `GOOGLE_CALENDAR_READ` | `true` にすると、Googleカレンダーの予定の表示と日程候補の空き時間の確認を有効にします(機密のスコープ `calendar` を要求します。Google の審査を通過するまでは設定しないでください) |
+| `REGISTRY_URL` | レジストリのウェブアプリの URL(レジストリの管理画面 `/registry-admin/` で使います。手順は `registry/README.md` の 1.5) |
+| `REGISTRY_OAUTH_CLIENT_ID` | レジストリの管理画面のログインに使う、レジストリ用の OAuth クライアント ID(同上。Ohsumi 本体のクライアントとは別) |
 
 **注意**: 静的サイトとしてビルドされるため、Web App の URL と OAuth クライアントIDはビルド後のJavaScriptから誰でも読み取れます。ただし、データの読み書きには Google アカウントでのログインが必要で、閲覧権限のないデータは Apps Script が返しません。
 
