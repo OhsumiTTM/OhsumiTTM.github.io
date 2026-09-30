@@ -11,6 +11,7 @@ class FakeSheet {
   constructor(public rows: unknown[][]) {}
   getLastRow() { return this.rows.length }
   getLastColumn() { return this.rows[0]?.length ?? 0 }
+  getDataRange() { return this.getRange(1, 1, this.getLastRow(), this.getLastColumn()) }
   getRange(row: number, col: number, numRows = 1, numCols = 1) {
     return {
       getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? '')),

@@ -387,13 +387,13 @@ describe('内訳の記録(ログインの遅さの切り分け)', () => {
         result: 1,
         timing: body.action === 'getFiles'
           ? { totalMs: 750, authMs: 122, folderPropsMs: 20, driveMs: 400, fileCacheMs: 30, fileCacheHits: 2, blobMs: 90, otherMs: 10 }
-          : { totalMs: 3000, backgroundMs: 1725, expensesMs: 400, expensesCache: 'miss', formSubmissionsMs: 600, formSubmissionsCache: 'hit', candidatesMs: 20, myEmailMs: 300, myEmailCache: 'miss', filesMs: 40, filesCount: 3, filesKB: 180, lastLoginMs: 12, lastLogin: 'queued', otherMs: 50 },
+          : { totalMs: 3000, backgroundMs: 1725, expensesMs: 400, expensesCache: 'miss', expensesSheetMs: 350, expensesRows: 12, expensesCols: 14, formSubmissionsMs: 600, formSubmissionsCache: 'hit', candidatesMs: 20, myEmailMs: 300, myEmailCache: 'miss', filesMs: 40, filesCount: 3, filesKB: 180, lastLoginMs: 12, lastLogin: 'queued', otherMs: 50 },
       }),
     )
     await sendToGas(URL, { action: 'getInitialData' })
     await sendToGas(URL, { action: 'getFiles', fileIds: [] })
     const lines = h.logs.map((l) => l.text).join('\n')
-    expect(lines).toContain('裏での読み込み 1725(経費 400 miss・フォームの回答 600 hit・候補者 20・メール 300 miss・画像 40(3件 180KB))')
+    expect(lines).toContain('裏での読み込み 1725(経費 400 miss(シート 350ms・12行×14列)・フォームの回答 600 hit・候補者 20・メール 300 miss・画像 40(3件 180KB))')
     expect(lines).toMatch(/・応答 [\d.]+KB・/)
     expect(lines).toContain('最終ログイン日時の記録 12(書き込み待ちに追加)')
     expect(lines).toContain('その他 50')

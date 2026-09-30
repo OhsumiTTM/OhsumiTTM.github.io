@@ -1096,6 +1096,15 @@ function setupOhsumi() {
     } else {
       console.log('✅ onSpreadsheetChange トリガー既存')
     }
+    // セルの編集は、編集したシートの版だけを新しくする(どの表が変わったか分かるため)
+    var hasEdit = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'onSpreadsheetEdit' })
+    if (!hasEdit) {
+      ScriptApp.newTrigger('onSpreadsheetEdit').forSpreadsheet(ss).onEdit().create()
+      console.log('✅ onSpreadsheetEdit トリガー作成')
+    } else {
+      console.log('✅ onSpreadsheetEdit トリガー既存')
+    }
+    PropertiesService.getScriptProperties().setProperty('EDIT_TRIGGER_INSTALLED', 'true')
   } catch (e) { console.error('❌ 変更検知トリガー設定: ' + e) }
   bumpDataVersion()
 
@@ -3444,7 +3453,7 @@ function doPost(e) {
       // ロックを放す前に、シートへの書き込みを確定させる(確定前にロックを放すと、
       // 次にロックを取った実行が更新前の値を読むことがある)
       try { SpreadsheetApp.flush() } catch (flushErr) { /* 書き込みは実行の終了時にも確定する */ }
-      bumpDataVersion()
+      bumpVersionsAfterWrite(body && body.action)
       lock.releaseLock()
     }
   }
@@ -4756,13 +4765,11 @@ function getMemberEmailValueCached(memberId) {
   } else {
     noteTiming('myEmailCache', 'miss')
     map = {}
-    var sheet = getMemberEmailsSheet()
-    var headers = headerRow(sheet)
-    var idCol = headers.indexOf('id')
-    var emailCol = headers.indexOf('email')
-    var lastRow = sheet.getLastRow()
-    if (lastRow >= 2 && idCol >= 0 && emailCol >= 0) {
-      sheet.getRange(2, 1, lastRow - 1, headers.length).getValues().forEach(function (row) {
+    var table = readWholeSheet(SHEET_MEMBER_EMAILS, 'myEmail')
+    var idCol = table ? table.headers.indexOf('id') : -1
+    var emailCol = table ? table.headers.indexOf('email') : -1
+    if (table && idCol >= 0 && emailCol >= 0) {
+      table.rows.forEach(function (row) {
         var id = String(row[idCol])
         if (!(id in map)) map[id] = String(row[emailCol] || '')
       })
@@ -5477,7 +5484,8 @@ function getBackgroundData(acting, body) {
     noteTiming('filesCount', out.files.length)
   }
   BACKGROUND_DATA_PARTS.forEach(function (part) {
-    var t = Date.now()
+    // 区間として計る(中のシートの読み込みの時間は、この中に含まれる)
+    var t = beginTiming()
     var allowed = true
     try {
       authorizeAction(acting, part.action, body)
@@ -5489,7 +5497,7 @@ function getBackgroundData(acting, body) {
     } catch (err) {
       out.errors[part.key] = toErrorMessage(err)
     }
-    noteTiming(part.key + 'Ms', Date.now() - t)
+    endTiming(part.key + 'Ms', t)
   })
   return out
 }
@@ -5536,7 +5544,7 @@ function generateRecurringTasksLocked() {
   try {
     var genResult = generateRecurringTasksInternal()
     // 定期タスクを生成した場合は読み取りキャッシュを無効にする
-    if (genResult && genResult.generated && genResult.generated.length > 0) bumpDataVersion()
+    if (genResult && genResult.generated && genResult.generated.length > 0) bumpSnapshotVersion()
     return genResult
   } finally {
     lock.releaseLock()
@@ -6732,22 +6740,99 @@ function getDataVersion() {
   return PropertiesService.getScriptProperties().getProperty(DATA_VERSION_PROPERTY_KEY) || '0'
 }
 
-function bumpDataVersion() {
+// 版は表(または読み込みの単位)ごとに分ける。関係の無い書き込みで、ほかの表のキャッシュを捨てないため。
+//   snapshot         Members・Projects・Tasks・Settings(DATA_VERSION。初期データと読み取りの認証)
+//   expenses         Expenses(TABLE_VERSION_expenses)
+//   formSubmissions  FormSubmissions(TABLE_VERSION_formSubmissions)
+//   candidates       Candidates(TABLE_VERSION_candidates)
+// メールアドレス表(MemberEmails)は、これまでどおり MEMBER_EMAILS_VERSION で別に持つ。
+var TABLE_VERSION_PREFIX = 'TABLE_VERSION_'
+var VERSIONED_TABLES = ['expenses', 'formSubmissions', 'candidates']
+
+function newVersionValue() {
+  return String(Date.now()) + '-' + Math.floor(Math.random() * 1e6)
+}
+
+function getTableVersion(table) {
+  return PropertiesService.getScriptProperties().getProperty(TABLE_VERSION_PREFIX + table) || '0'
+}
+
+function bumpTableVersion(table) {
   try {
-    PropertiesService.getScriptProperties().setProperty(
-      DATA_VERSION_PROPERTY_KEY,
-      String(Date.now()) + '-' + Math.floor(Math.random() * 1e6),
-    )
+    PropertiesService.getScriptProperties().setProperty(TABLE_VERSION_PREFIX + table, newVersionValue())
   } catch (e) {
-    // 版の更新に失敗しても、キャッシュの有効期限(6時間)で最終的に反映される
-    Logger.log('bumpDataVersion failed: ' + e)
+    Logger.log('bumpTableVersion failed: ' + e)
   }
 }
 
-// スプレッドシートを手で編集したときにキャッシュを無効にする(setupOhsumi で
-// インストール型トリガーとして登録する)。スクリプトからの書き込みでは発火しない。
-// どのシートが編集されたかは分からないため、メールアドレス表の版も新しくする。
+// スナップショット(Members・Projects・Tasks・Settings)の版だけを新しくする
+function bumpSnapshotVersion() {
+  try {
+    PropertiesService.getScriptProperties().setProperty(DATA_VERSION_PROPERTY_KEY, newVersionValue())
+  } catch (e) {
+    // 版の更新に失敗しても、キャッシュの有効期限(最長5分)で反映される
+    Logger.log('bumpSnapshotVersion failed: ' + e)
+  }
+}
+
+// すべての表の版を新しくする(どの表が変わったか分からない時: 設定・毎日の処理・移行・手動の編集の一部など)
+function bumpDataVersion() {
+  bumpSnapshotVersion()
+  VERSIONED_TABLES.forEach(bumpTableVersion)
+}
+
+// アプリからの書き込み(ロックを取った操作)の後に、その操作が書くかもしれない表の版だけを新しくする。
+// 一覧は scripts/gas-write-tables.mjs で Code.gs を調べた結果を含むこと(lib/ohsumi/gas-table-versions.test.ts で確かめる)。
+// 一覧に無い操作はスナップショットの版を新しくする(これまでどおり)
+var TABLE_WRITE_ACTIONS = {
+  expenses: ['notifyTaskRejected', 'submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense'],
+  formSubmissions: ['notifyTaskRejected', 'submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
+  candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'],
+}
+// Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
+
+function bumpVersionsAfterWrite(action) {
+  action = String(action || '')
+  VERSIONED_TABLES.forEach(function (t) {
+    if (TABLE_WRITE_ACTIONS[t].indexOf(action) >= 0) bumpTableVersion(t)
+  })
+  if (SNAPSHOT_UNTOUCHED_ACTIONS.indexOf(action) < 0) bumpSnapshotVersion()
+}
+
+// シートの名前 → 版を新しくする処理(スプレッドシートの直接の編集で使う)
+var SHEET_VERSION_BUMPS = {
+  Members: bumpSnapshotVersion,
+  Projects: bumpSnapshotVersion,
+  Tasks: bumpSnapshotVersion,
+  Settings: bumpSnapshotVersion,
+  Expenses: function () { bumpTableVersion('expenses') },
+  FormSubmissions: function () { bumpTableVersion('formSubmissions') },
+  Candidates: function () { bumpTableVersion('candidates') },
+  MemberEmails: function () { bumpMemberEmailsVersion() },
+}
+
+// スプレッドシートを手で変えたときにキャッシュを無効にする(setupOhsumi でインストール型トリガーとして登録する)。
+// スクリプトからの書き込みでは発火しない。変更検知(onChange)には、どのシートが変わったかが入らないため、
+// セルの編集は onSpreadsheetEdit(編集したシートが分かる)に任せ、それ以外(行の追加・削除・シートの追加など)は
+// すべての版を新しくする。onSpreadsheetEdit のトリガーが無い団体(setupOhsumi を実行し直していない)では、
+// 編集もすべての版を新しくする
 function onSpreadsheetChange(e) {
+  var editHandled = PropertiesService.getScriptProperties().getProperty('EDIT_TRIGGER_INSTALLED') === 'true'
+  if (e && e.changeType === 'EDIT' && editHandled) return
+  bumpDataVersion()
+  bumpMemberEmailsVersion()
+}
+
+// セルの編集(インストール型の onEdit)。編集したシートの版だけを新しくする。知らないシートなら、すべて新しくする
+function onSpreadsheetEdit(e) {
+  var name = ''
+  try { name = e && e.range ? String(e.range.getSheet().getName()) : '' } catch (err) { name = '' }
+  var bump = SHEET_VERSION_BUMPS[name]
+  if (bump) {
+    bump()
+    return
+  }
   bumpDataVersion()
   bumpMemberEmailsVersion()
 }
@@ -7029,7 +7114,7 @@ function loadSnapshot() {
 var _requestRows = {}
 
 function loadVersionedRows(prefix, loader) {
-  var version = getDataVersion()
+  var version = getTableVersion(prefix)
   var memoKey = prefix + ':' + version
   if (_requestRows[memoKey]) return _requestRows[memoKey]
   var rows = readChunkedCache(prefix, version)
@@ -7959,12 +8044,9 @@ function getCandidates(acting) {
 }
 
 function readAllCandidates() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CANDIDATES)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return candidateRowToObject(headers, row)
-  })
+  var table = readWholeSheet(SHEET_CANDIDATES, 'candidates')
+  if (!table) return []
+  return table.rows.map(function (row) { return candidateRowToObject(table.headers, row) })
 }
 
 // ---- フォームの回答(FormSubmissions)の読み取り ----------------------------------
@@ -8052,12 +8134,13 @@ var GET_FILES_MAX_IDS = 30
 var GET_FILES_MAX_BYTES = 8 * 1024 * 1024
 var FILE_CACHE_MAX_CHARS = 95000
 
+// フォルダの設定は、リクエストの最初にまとめて読んだスクリプトプロパティ(requestProps)から読む
 function allowedUploadFolderIds() {
-  var props = PropertiesService.getScriptProperties()
+  var props = requestProps()
   var ids = []
-  var current = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  var current = props[UPLOAD_FOLDER_PROPERTY_KEY]
   if (current) ids.push(current)
-  splitCsvList(props.getProperty(LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY)).forEach(function (id) {
+  splitCsvList(props[LEGACY_UPLOAD_FOLDERS_PROPERTY_KEY]).forEach(function (id) {
     if (ids.indexOf(id) < 0) ids.push(id)
   })
   return ids
@@ -8100,15 +8183,13 @@ var FILE_META_TTL = 21600
 // 1件のファイルの種類を返す。アップロード用フォルダの外・見つからない時は null。
 // file は Drive から開いた時だけ入る(キャッシュから分かった時は null)。
 // cachedOnly の時は Drive を開かない(キャッシュに無ければ undefined)
-function uploadedFileMeta(id, allowed, cache, cachedOnly) {
+// prefetched: getFiles が最初に getAll でまとめて読んだキャッシュ(キー → 値)
+function uploadedFileMeta(id, allowed, cache, cachedOnly, prefetched) {
   var metaKey = 'filemeta:' + id
-  var t = Date.now()
-  var cached = null
-  try { cached = cache.get(metaKey) } catch (e) { cached = null }
-  addTiming('fileCacheMs', Date.now() - t)
+  var cached = prefetched ? prefetched[metaKey] || null : null
   if (cached) return { kind: cached, file: null }
   if (cachedOnly) return undefined
-  t = Date.now()
+  var t = Date.now()
   try {
     var file = DriveApp.getFileById(id)
     if (!isInAllowedFolder(file, allowed)) return null
@@ -8131,6 +8212,15 @@ function getFiles(acting, fileIds, options) {
   var allowed = allowedUploadFolderIds()
   addTiming('folderPropsMs', Date.now() - t)
   var cache = CacheService.getScriptCache()
+  // ファイルの種類と画像のキャッシュを、1回の getAll でまとめて読む(1件ずつ読むと、1回ごとに待ち時間がかかる)
+  var prefetched = {}
+  var ct = Date.now()
+  try {
+    var keys = []
+    ids.forEach(function (id) { keys.push('filemeta:' + id, 'file:' + id) })
+    if (keys.length) prefetched = cache.getAll(keys) || {}
+  } catch (e) { prefetched = {} }
+  addTiming('fileCacheMs', Date.now() - ct)
   var expenseViewer = null
   var expenses = null
   var totalBytes = 0
@@ -8138,7 +8228,7 @@ function getFiles(acting, fileIds, options) {
   var out = []
   ids.forEach(function (id) {
     if (!/^[A-Za-z0-9_-]{10,200}$/.test(id)) { out.push({ id: id, ok: false, error: 'invalid' }); return }
-    var meta = uploadedFileMeta(id, allowed, cache, options.cachedOnly)
+    var meta = uploadedFileMeta(id, allowed, cache, options.cachedOnly, prefetched)
     if (meta === undefined) return
     if (!meta) { out.push({ id: id, ok: false, error: 'notFound' }); return }
     var kind = meta.kind === 'other' ? '' : meta.kind
@@ -8159,10 +8249,7 @@ function getFiles(acting, fileIds, options) {
     // 領収書はキャッシュしない
     var cacheKey = 'file:' + id
     if (kind !== 'receipt') {
-      var ct = Date.now()
-      var hit = null
-      try { hit = cache.get(cacheKey) } catch (e) { hit = null }
-      addTiming('fileCacheMs', Date.now() - ct)
+      var hit = prefetched[cacheKey] || null
       if (hit) {
         var sep = hit.indexOf('|')
         var cachedData = hit.slice(sep + 1)
@@ -8238,22 +8325,31 @@ function initialImageFileIds(snapshotData, memberId) {
 // ログインの応答に入れる画像の合計の上限(base64 の文字数)
 var INITIAL_FILES_MAX_CHARS = 1500000
 
+// シート1枚を1回の呼び出しで読む(getDataRange)。これまでは最終行・見出し・本文を別々に読んでいて、
+// 呼び出しごとに待ち時間がかかっていた。timing に <prefix>SheetMs(読み込みの時間)・<prefix>Rows・<prefix>Cols を記録する。
+// 返り値は { headers, rows }(見出しは前後の空白を除く)。シートが無ければ null
+function readWholeSheet(name, prefix) {
+  var t = Date.now()
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  if (!sheet) return null
+  var values = sheet.getDataRange().getValues()
+  noteTiming(prefix + 'SheetMs', Date.now() - t)
+  noteTiming(prefix + 'Rows', Math.max(values.length - 1, 0))
+  noteTiming(prefix + 'Cols', values.length ? values[0].length : 0)
+  if (!values.length) return { headers: [], rows: [] }
+  return { headers: values[0].map(function (h) { return String(h).trim() }), rows: values.slice(1) }
+}
+
 function readAllFormSubmissions() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_FORM_SUBMISSIONS)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return formSubmissionRowToObject(headers, row)
-  })
+  var table = readWholeSheet(SHEET_FORM_SUBMISSIONS, 'formSubmissions')
+  if (!table) return []
+  return table.rows.map(function (row) { return formSubmissionRowToObject(table.headers, row) })
 }
 
 function readAllExpenses() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EXPENSES)
-  if (!sheet || sheet.getLastRow() < 2) return []
-  var headers = headerRow(sheet)
-  return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().map(function (row) {
-    return expenseRowToApplication(headers, row)
-  })
+  var table = readWholeSheet(SHEET_EXPENSES, 'expenses')
+  if (!table) return []
+  return table.rows.map(function (row) { return expenseRowToApplication(table.headers, row) })
 }
 
 // 段階③(手動実行): アップロード用フォルダと旧フォルダ内の「リンクを知っている
