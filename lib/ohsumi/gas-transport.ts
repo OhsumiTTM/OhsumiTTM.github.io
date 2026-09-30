@@ -127,6 +127,8 @@ export interface GasTiming extends SheetReadTiming {
   sheetReadMs?: number
   sheetWriteMs?: number
   notifyMs?: number
+  // 通知の宛先・言語を調べる(メンバー・メールアドレス・団体の通知先)
+  recipientsMs?: number
   mailMs?: number
   mailCount?: number
   chatMs?: number
@@ -245,6 +247,7 @@ function describeTiming(timing: GasTiming | undefined): string {
     if (timing.batchOps != null) inner.push(`${timing.batchOps}件をまとめて`)
     if (timing.sheetReadMs != null) inner.push(`行の読み込み ${timing.sheetReadMs}`)
     if (timing.sheetWriteMs != null) inner.push(`シートへの書き込み ${timing.sheetWriteMs}`)
+    if (timing.recipientsMs != null) inner.push(`宛先を調べる ${timing.recipientsMs}`)
     if (timing.notifyMs != null) inner.push(`通知の準備 ${timing.notifyMs}`)
     if (timing.mailMs != null) inner.push(`メール ${timing.mailMs}(${timing.mailCount ?? 0}件)`)
     if (timing.chatMs != null) inner.push(`チャット ${timing.chatMs}`)
