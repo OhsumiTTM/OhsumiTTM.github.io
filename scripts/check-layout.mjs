@@ -39,6 +39,8 @@ export const STEPS = [
   { name: 'ログイン画面(招待リンクなし・この端末の団体から選ぶ)', do: 'loginNoOrgPick' },
   { name: 'ログイン画面(団体を選ぶ)', do: 'loginOrgs' },
   { name: 'ログイン画面(招待リンクの団体が見つからない)', do: 'loginMissingOrg' },
+  // 団体に登録されていない Google アカウントでログインした時: 団体名と対処を出し、初期設定コードの欄は開かない
+  { name: 'ログイン画面(登録されていないアカウント)', do: 'loginNotMember' },
   // この端末に保存した団体は、団体ID の確認(getLoginConfig)の答えを待たずにログインボタンを出す
   { name: 'ログイン画面(保存した団体・確認が遅い)', do: 'loginSlowConfig' },
   { name: 'OUTPUT(自分)', do: 'home' },
@@ -301,6 +303,8 @@ async function run({ build = true } = {}) {
     let sentWrites = []
     // ほかの端末で開く: getInviteMailStatus の答え(available / notChecked)と、送った sendInviteLinkToMe の本文
     let inviteMail = 'available'
+    // exchangeIdToken に、団体に登録されていないアカウントとして答える
+    let notMember = false
     let inviteBodies = []
     // getLoginConfig の答えを遅らせる時間(ミリ秒)と、送られた回数
     let slowConfigMs = 0
@@ -312,6 +316,7 @@ async function run({ build = true } = {}) {
       }
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
+        case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
         case 'getInitialData': return { memberId: member, version: 'layout', sheets: view }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
@@ -346,7 +351,7 @@ async function run({ build = true } = {}) {
         return fulfill('application/json', JSON.stringify({ ok: true, result: registryResponse(body) }))
       }
       if (url.href.startsWith('https://accounts.google.com/gsi/client')) {
-        return fulfill('text/javascript', 'window.google={accounts:{id:{initialize(){},renderButton(e){e.setAttribute(\'data-layout-gsi\',\'1\')},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
+        return fulfill('text/javascript', 'window.google={accounts:{id:{initialize(c){window.__gsiConfig=c},renderButton(e){e.setAttribute(\'data-layout-gsi\',\'1\')},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
       }
       return send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' })
     })
@@ -388,6 +393,29 @@ async function run({ build = true } = {}) {
         if (step.do === 'login') {
           await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/?org=' + ORG)
           if (!(await evaluate(`localStorage.getItem('ohsumi-current-org') === '${ORG}'`))) throw new Error('招待リンクの団体が、この端末の団体になりません')
+          // アドレスバーに団体を残す(ブックマーク・ホーム画面に追加したアイコンに団体が残る)
+          if ((await evaluate('location.search')) !== '?org=' + ORG) throw new Error('アドレスバーから ?org= が消えました')
+        }
+        if (step.do === 'loginNotMember') {
+          await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/?org=' + ORG)
+          notMember = true
+          try {
+            // Google のボタンで、団体に登録されていないアカウントを選んだことにする(nonce は画面が initialize に渡したもの)
+            await evaluate(`(() => {
+              const c = window.__gsiConfig
+              if (!c) throw new Error('Google のログインが準備されていません')
+              const b64 = (o) => btoa(JSON.stringify(o)).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')
+              c.callback({ credential: b64({ alg: 'RS256' }) + '.' + b64({ nonce: c.nonce, email: 'stranger@example.com' }) + '.sig' })
+              return true })()`)
+            // 失敗した後は、読み込み直したページで知らせる
+            await sleep(3500)
+            const text = await evaluate('document.body.textContent')
+            if (!text.includes('stranger@example.com は「サンプル団体」のメンバーとして登録されていません')) throw new Error('どの団体に・どのアカウントで入ろうとしたかが出ません')
+            if (!text.includes('代表に、このアドレスの登録を頼んでください')) throw new Error('どうすればよいかが出ません')
+            if (text.includes('このアカウントが団体の代表になります')) throw new Error('初期設定コードの欄が開いています')
+          } finally {
+            notMember = false
+          }
         }
         if (step.do === 'loginNoOrg' || step.do === 'loginNoOrgPick') {
           await evaluate('localStorage.clear(); sessionStorage.clear()')
@@ -593,6 +621,8 @@ async function run({ build = true } = {}) {
           await signIn(); await navigate('/')
           await clickText('あとで設定する').catch(() => {})
           await sleep(800)
+          // ?org= の無い URL で開いても、アドレスバーを今の団体の /?org=<団体ID> にする(ホーム画面に追加しても団体が残る)
+          if ((await evaluate('location.search')) !== '?org=' + ORG) throw new Error('アドレスバーが /?org=<団体ID> になりません')
         }
         if (step.do === 'admin') {
           await signIn(); await navigate('/')
