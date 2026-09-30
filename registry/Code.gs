@@ -21,7 +21,7 @@
 //
 // 設定と手順は registry/README.md を参照。
 
-var REGISTRY_VERSION = 'r1b-1'
+var REGISTRY_VERSION = 'r1b-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -117,11 +117,18 @@ function registryJson(obj) {
 // ---- 死活の確認 ----
 
 // 鍵(HEALTH_KEY)が無ければ、動いていることだけを返す。監視の GAS は鍵を付けて詳細を受け取る。
-// 団体の情報は返さない
+// 鍵を付けて来たのに合わない時は keyValid: false を付ける(監視が「鍵が違う」と分かるように。
+// 鍵を付けない問い合わせには付けない)。団体の情報は返さない
 function healthResponse(key) {
   var props = PropertiesService.getScriptProperties().getProperties() || {}
   var res = { ok: true, version: REGISTRY_VERSION, time: new Date().toISOString() }
-  if (!props.HEALTH_KEY || !safeEquals(String(key || ''), props.HEALTH_KEY)) return res
+  var given = String(key || '')
+  if (!given) return res
+  if (!props.HEALTH_KEY || !safeEquals(given, props.HEALTH_KEY)) {
+    res.keyValid = false
+    return res
+  }
+  res.keyValid = true
   res.lastBackupAt = props.LAST_BACKUP_AT || null
   res.unrecordedEdits = Number(props.LAST_UNRECORDED_EDITS || 0)
   res.rejectedLastHour = rejectedCount(Date.now())

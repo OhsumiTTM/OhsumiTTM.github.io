@@ -22,8 +22,13 @@ var MONITOR_STATE_KEY = 'MONITOR_STATE'
 // ---- 判定(Google のサービスを使わない純粋な関数) ----
 
 // health の応答(または通信の失敗)を、{ reachable, problems: { キー: 説明 } } にする
+var KEY_MISMATCH_REASON = '鍵(HEALTH_KEY)が違います。監視の GAS のスクリプトプロパティ HEALTH_KEY を、レジストリの HEALTH_KEY と同じにしてください'
+
 function evaluateHealth(res, now) {
   if (!res || !res.ok || !res.version) return { reachable: false, reason: res && res.error ? String(res.error) : '応答がありません', problems: {} }
+  // レジストリは動いているが、鍵が合わず状態(バックアップなど)を受け取れない。
+  // 状態を確かめられないので、応答が無い時と同じく2回続いたら知らせる
+  if (res.keyValid === false) return { reachable: false, keyMismatch: true, reason: KEY_MISMATCH_REASON, problems: {} }
   var problems = {}
   if (!res.lastBackupAt) problems.backup = 'バックアップがまだ一度も作られていません'
   else {
@@ -42,7 +47,7 @@ function formatDuration(ms) {
 }
 
 // 前の状態と今回の結果から、次の状態と知らせる文を決める
-// state: { failures, firstFailureAt, down, downSince, problems: { キー: 説明 } }
+// state: { failures, firstFailureAt, down, downSince, keyMismatch(鍵が違って止まったか), problems: { キー: 説明 } }
 function nextMonitorState(state, result, now) {
   state = state || { failures: 0, firstFailureAt: null, down: false, downSince: null, problems: {} }
   var next = { failures: state.failures, firstFailureAt: state.firstFailureAt, down: state.down, downSince: state.downSince, problems: state.problems || {} }
@@ -53,11 +58,21 @@ function nextMonitorState(state, result, now) {
     if (next.failures >= 2 && !state.down) {
       next.down = true
       next.downSince = next.firstFailureAt
-      messages.push('🔴 レジストリが応答しません(2回続けて失敗。原因: ' + result.reason + ')')
+      next.keyMismatch = !!result.keyMismatch
+      messages.push(result.keyMismatch
+        ? '🔴 レジストリの状態を確かめられません(2回続けて。原因: ' + result.reason + ')'
+        : '🔴 レジストリが応答しません(2回続けて失敗。原因: ' + result.reason + ')')
+    } else if (state.down) {
+      next.keyMismatch = state.keyMismatch
     }
     return { state: next, messages: messages }
   }
-  if (state.down) messages.push('🟢 レジストリが復旧しました(止まっていた時間: ' + formatDuration(now - state.downSince) + ')')
+  if (state.down) {
+    messages.push(state.keyMismatch
+      ? '🟢 レジストリの状態を確かめられるようになりました(確かめられなかった時間: ' + formatDuration(now - state.downSince) + ')'
+      : '🟢 レジストリが復旧しました(止まっていた時間: ' + formatDuration(now - state.downSince) + ')')
+  }
+  next.keyMismatch = false
   next.failures = 0
   next.firstFailureAt = null
   next.down = false

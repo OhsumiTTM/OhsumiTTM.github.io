@@ -42,14 +42,28 @@ describe('シートの用意(setupRegistry)', () => {
 })
 
 describe('死活の確認(health)', () => {
-  it('鍵が無い・違う時は、動いていることだけを返す', () => {
+  it('鍵が無い時は、動いていることだけを返す', () => {
     const t = setup()
     t.gas.setupRegistry()
-    for (const key of [undefined, 'wrong']) {
+    for (const key of [undefined, '']) {
       const res = t.post({ action: 'health', key })
       expect(Object.keys(res).sort()).toEqual(['ok', 'time', 'version'])
       expect(res.ok).toBe(true)
     }
+  })
+
+  it('鍵が違う時は、動いていることと、鍵が違うこと(keyValid: false)だけを返す', () => {
+    const t = setup()
+    t.gas.setupRegistry()
+    // 1文字だけ違う鍵(手順で試す形)
+    const key = String(t.props.HEALTH_KEY)
+    const oneOff = key.slice(0, -1) + (key.endsWith('A') ? 'B' : 'A')
+    for (const k of ['wrong', oneOff]) {
+      const res = t.post({ action: 'health', key: k })
+      expect(Object.keys(res).sort()).toEqual(['keyValid', 'ok', 'time', 'version'])
+      expect(res).toMatchObject({ ok: true, keyValid: false })
+    }
+    expect(t.post({ action: 'health', key }).keyValid).toBe(true)
   })
 
   it('鍵が合えば、最後のバックアップ・記録の無い変更・断った回数を返す。団体の情報は返さない', () => {
