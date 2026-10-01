@@ -297,6 +297,7 @@ export function Header() {
               onClick={() => setMenuOpen((o) => !o)}
               className="flex items-center gap-2 rounded-lg py-1 pl-1 pr-1.5 transition-colors hover:bg-secondary"
               aria-expanded={menuOpen}
+              data-account-menu
             >
               <Avatar member={currentUser} size={28} />
               <span className="hidden text-sm font-medium sm:inline">
