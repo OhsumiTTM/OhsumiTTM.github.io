@@ -155,6 +155,10 @@ export interface Member {
   // 活動休止中フラグ — true のときタスクのおすすめ対象から除外される
   // (store.tsx の recommendedAssignees/taskRecommendations で inactive 除外)
   inactive?: boolean
+  // 退会した日時(ISO)。退会したメンバーは inactive で、一覧に出さない。個人情報は保存期間の後に消す
+  // (消した後は名前が「退会したメンバー」になる。gas/Code.gs の「個人情報の削除」)
+  withdrawnAt?: string
+  personalDataPurgedAt?: string
   // Ohsumiへの最終アクセス日時（ISO datetime）— GAS側でlogin actionを
   // 受け取ったときに更新。25日間アクセスなしで管理者に通知（item 25）
   lastLogin?: string

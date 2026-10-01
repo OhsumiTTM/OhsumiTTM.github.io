@@ -76,6 +76,8 @@ export const READ_ACTIONS = new Set([
   'listBackups',
   'previewRestore',
   'searchBackupTasks',
+  // 個人情報の削除の予定(代表だけ)
+  'getPersonalDataStatus',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',

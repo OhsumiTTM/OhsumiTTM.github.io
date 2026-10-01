@@ -78,6 +78,26 @@ export interface MemberInviteResult {
   reason?: 'notChecked' | 'noEmail' | 'mailQuota' | 'limited'
 }
 
+/** 個人情報を消す前の人(gas/Code.gs の pendingPersonalData_)。kind: member(退会したメンバー) / candidate(採用しなかった候補者) */
+export interface PendingPersonalData {
+  kind: 'member' | 'candidate'
+  id: string
+  name: string
+  since: string
+  purgeAt: string
+  extended: boolean
+}
+
+/** 個人情報の削除の状態(代表だけ)。upcoming: 7日以内に消す人数(日ごと) */
+export interface PersonalDataStatus {
+  retentionDays: number
+  min: number
+  max: number
+  noticeDays: number
+  pending: PendingPersonalData[]
+  upcoming: { date: string; count: number }[]
+}
+
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */
 export interface BackupStatus {
   lastSuccessAt: string
@@ -337,6 +357,8 @@ function mapMemberRow(
     permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json)?.map((ov) => normalizePermissionOverride(ov, departments)),
     skillPoints: parseJsonObject<SkillPoints>(r.skill_points_json),
     inactive: r.inactive === 'TRUE' ? true : undefined,
+    withdrawnAt: r.withdrawn_at || undefined,
+    personalDataPurgedAt: r.personal_data_purged_at || undefined,
     absentDates: splitTags(r.absent_dates),
     availableHours: parseJsonObject<{ start: string; end: string }>(r.available_hours_json),
     lastLogin: r.last_login || undefined,
@@ -1030,6 +1052,12 @@ export const remoteApi = {
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // メールの1日の上限の状態(代表・全権管理者だけ)
   getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
+  // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)
+  getPersonalDataStatus: () => postToGas<PersonalDataStatus>('getPersonalDataStatus', {}),
+  setPersonalDataRetention: (days: number) => postToGas<{ retentionDays: number }>('setPersonalDataRetention', { days }),
+  purgePersonalDataNow: (kind: PendingPersonalData['kind'], id: string) => postToGas('purgePersonalDataNow', { kind, id }),
+  extendPersonalData: (kind: PendingPersonalData['kind'], id: string) => postToGas<{ purgeAt: string }>('extendPersonalData', { kind, id }),
+  cancelWithdrawal: (memberId: string) => postToGas('cancelWithdrawal', { memberId }),
   // バックアップ(代表だけ。gas/Code.gs の「バックアップ」)
   getBackupStatus: () => postToGas<BackupStatus>('getBackupStatus', {}),
   listBackups: () => postToGas<{ status: BackupStatus; backups: BackupEntry[]; keep: { daily: number; weekly: number; monthly: number } }>('listBackups', {}),

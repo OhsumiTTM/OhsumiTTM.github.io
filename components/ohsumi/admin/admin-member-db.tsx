@@ -263,6 +263,7 @@ export function AdminMemberDb() {
   // filtered rows (applied on top of the already-scoped member list)
   const filteredMembers = useMemo(() => {
     return scopedMembers.filter((m) => {
+      if (m.withdrawnAt) return false
       if (!showInactive && m.inactive) return false
       return allowedCols.every((col) => {
         const f = filters[col.key]?.toLowerCase().trim()

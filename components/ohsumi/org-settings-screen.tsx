@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { BackupPanel } from './backup-panel'
+import { PersonalDataPanel } from './personal-data-panel'
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -243,6 +244,12 @@ export function OrgSettingsScreen() {
         {isDaihyo && remoteOk && (
           <Section>
             <BackupPanel />
+            <AdminAccessNote level="daihyo" className="mt-1.5" />
+          </Section>
+        )}
+        {isDaihyo && remoteOk && (
+          <Section>
+            <PersonalDataPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
