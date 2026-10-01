@@ -81,6 +81,9 @@ import {
   type MailQueueStatus,
   setOrgDemo,
   type OrgKpis,
+  featureLabel,
+  setFeatureSwitches,
+  type FeatureSwitches,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -114,6 +117,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   suspendNow: '当日の提供停止(緊急)',
   setOrgPlan: 'プランの変更',
   setOrgDemo: 'デモの印の付け外し',
+  setFeatureSwitches: '機能を止めた・再開した',
   sendSuspensionNotice: '停止の予告を担当者に送った',
   testSuspendNow: '(テスト)今すぐ停止',
   testScheduleSuspension: '(テスト)停止の予定',
@@ -269,8 +273,9 @@ export function RegistryAdmin() {
       ) : tab === 'orgs' ? (
         <>
           {overview.kpis && <KpiPanel kpis={overview.kpis} />}
+          {overview.features && <FeatureSwitchControl features={overview.features} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
-          <OrgList orgs={overview.orgs} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
+          <OrgList orgs={overview.orgs} features={overview.features} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
         </>
       ) : tab === 'codes' ? (
         <CodesPanel
@@ -398,12 +403,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function OrgList({
   orgs,
+  features,
   session,
   draft,
   onChanged,
   onAuthError,
 }: {
   orgs: OrgSummary[]
+  features?: FeatureSwitches
   session: AdminSession
   draft: SuspensionInput | null
   onChanged: () => void
@@ -471,6 +478,7 @@ function OrgList({
           </dl>
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           <DemoControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
+          {features && <FeatureSwitchControl features={features} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
           {o.gasStatus && o.gasStatus.versionState !== 'latest' && <GasUpdateRequest org={o} session={session} onAuthError={onAuthError} />}
           <SuspensionControl
             org={o}
@@ -1701,6 +1709,83 @@ function KpiPanel({ kpis }: { kpis: OrgKpis }) {
       <p className="mt-0.5 break-words text-muted-foreground">
         定量データ({kpis.metrics.reportingOrgs} 団体{kpis.metrics.latestPeriod ? `・最新の期間 ${kpis.metrics.latestPeriod} の週まで` : ''}): {totals || 'まだありません'}
       </p>
+    </section>
+  )
+}
+
+// ---- 機能のスイッチ(PR W) ----
+// 全団体(org を省く)・1つの団体の止める機能を選ぶ。ログインと読み取りは止められない(団体の GAS の側で決めている)。
+// 5分以内の Google でのログインが必要。止めてから団体に効くまで最大10分ほど
+function FeatureSwitchControl({ features, org, session, onChanged, onAuthError }: { features: FeatureSwitches; org?: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const current = org ? (org.disabledFeatures ?? []) : features.globalDisabled
+  const [open, setOpen] = useState(false)
+  const [picked, setPicked] = useState<string[]>(current)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  if (org && org.disabledFeatures === undefined) return null
+  const names = (ids: string[]) => ids.map((id) => featureLabel(features.catalog, id)).join('・')
+  const save = async () => {
+    if (needsReauth(session)) {
+      onAuthError('機能を止める・再開する前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      await setFeatureSwitches(session, org ? { scope: 'org', orgId: org.orgId } : { scope: 'global' }, picked, reason)
+      setOpen(false)
+      setReason('')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && (err.authError || err.reauthRequired)) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
+  const summary = current.length ? `止めている機能: ${names(current)}` : org ? '' : '止めている機能はありません'
+  const body = (
+    <>
+      {summary && <p className={'break-words ' + (current.length ? 'text-amber-800 dark:text-amber-300' : 'text-muted-foreground')} data-feature-summary>{summary}</p>}
+      {!open ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant="ghost" onClick={() => { setPicked(current); setOpen(true); setMessage(null) }}>{org ? 'この団体の機能を止める・再開する…' : '全団体の機能を止める・再開する…'}</Button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2 text-xs">
+          <p>
+            {org ? 'この団体だけで止めます(全団体で止めている機能は、ここで再開できません)。' : 'すべての団体で止めます。'}
+            ログイン・閲覧・書き出しは止められません。止めてから団体に効くまで、最大10分ほどかかります。
+          </p>
+          <fieldset className="grid gap-1 sm:grid-cols-2" data-feature-options>
+            {features.catalog.map((f) => (
+              <label key={f.id} className="flex min-w-0 items-start gap-1.5">
+                <input type="checkbox" className="mt-0.5" checked={picked.includes(f.id)} onChange={() => toggle(f.id)} />
+                <span className="min-w-0 break-words">{f.label}{org && features.globalDisabled.includes(f.id) ? '(全団体で停止中)' : ''}</span>
+              </label>
+            ))}
+          </fieldset>
+          <label className="block">
+            理由(必須。操作の記録に残します)
+            <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy || !reason.trim()} onClick={() => void save()}>{busy ? '保存しています…' : '保存する'}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+          </div>
+          {message && <p className="text-sm break-words text-destructive">{message}</p>}
+        </div>
+      )}
+    </>
+  )
+  if (org) return <div className="mt-2 text-xs" data-org-features>{body}</div>
+  return (
+    <section data-feature-switches className="mb-4 rounded-lg border border-border p-3 text-xs">
+      <h2 className="text-sm font-medium">機能のスイッチ(全団体)</h2>
+      <p className="mt-0.5 text-muted-foreground">不具合が見つかった時に、団体の GAS を更新する前に、その機能だけを止めます。</p>
+      <div className="mt-1">{body}</div>
     </section>
   )
 }

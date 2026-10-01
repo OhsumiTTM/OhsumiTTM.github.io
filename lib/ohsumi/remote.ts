@@ -223,6 +223,8 @@ export interface OpsStatus {
   // 古い GAS は返さない
   longRecords?: LongRecords
   surveys?: PendingSurvey[]
+  // レジストリから止めている機能(機能のスイッチ。gas/Code.gs の FEATURE_SWITCHES)
+  disabledFeatures?: { id: string; label: string }[]
 }
 
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */

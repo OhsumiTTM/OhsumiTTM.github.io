@@ -62,6 +62,8 @@ export interface OrgSummary {
   jobs?: { dailyAt: string; hourlyAt: string; reported: boolean; dailyStale: boolean }
   // デモの団体(定量データの集計・KPI・アンケート・停止の予定から外す。古いレジストリでは無い)
   demo?: boolean
+  // この団体だけ止めている機能の ID(全団体の分は含めない。古いレジストリでは無い)
+  disabledFeatures?: string[]
 }
 
 // 判定: latest 最新 / outdated 古い / updateRequired 更新が要る / noCheck 24時間以上確認が無い
@@ -175,6 +177,8 @@ export interface Overview {
   mailQueue?: MailQueueStatus
   // KPI(デモの団体を除く。古いレジストリでは無い)
   kpis?: OrgKpis
+  // 機能のスイッチ(古いレジストリでは無い)
+  features?: FeatureSwitches
 }
 
 // ---- デモの団体と KPI(PR S) ----
@@ -185,6 +189,29 @@ export interface OrgKpis {
   demoOrgs: number
   // 団体ごとの一番新しい期間の集計値の合計(デモの団体・デモの時に受け取ったものを除く)
   metrics: { reportingOrgs: number; latestPeriod: string; totals: Record<string, number> }
+}
+
+// ---- 機能のスイッチ(団体の GAS の機能を止める。PR W) ----
+// ログインと読み取りは止められない(団体の GAS の側で決めている)。止めてから団体に効くまで最大10分ほど
+export interface FeatureSwitches {
+  catalog: { id: string; label: string }[]
+  // 全団体で止めている機能の ID
+  globalDisabled: string[]
+}
+
+/** 止める機能を変える(全団体・1つの団体)。5分以内のログインが必要。送り直さない */
+export function setFeatureSwitches(
+  session: AdminSession,
+  target: { scope: 'global' } | { scope: 'org'; orgId: string },
+  features: string[],
+  reason: string,
+): Promise<OrgSummary | { scope: 'global'; disabled: string[] }> {
+  return callRegistry('setFeatureSwitches', { session: session.token, ...target, features, reason })
+}
+
+/** 機能の ID → 表示名(一覧に無い ID はそのまま) */
+export function featureLabel(catalog: FeatureSwitches['catalog'], id: string): string {
+  return catalog.find((f) => f.id === id)?.label ?? id
 }
 
 /** デモの印を付ける・外す。送り直さない */

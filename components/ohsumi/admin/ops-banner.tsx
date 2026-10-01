@@ -5,8 +5,9 @@
 //   - スプレッドシート・フォルダの共有に問題がある: 問題ごとに直し方を出し、直した後に「確かめ直す」で消せる
 //   - 1つの記録が上限(5万文字)の8割を超えている: 記録の種類ごとに件数と記録を出す(gas/Code.gs の longRecords_)
 //   - FSIF からの回答待ちのアンケート: 回答のリンク・回答期限・未回答で入る機能停止の日時を出す(gas/Code.gs の surveysStatus_)
+//   - FSIF がレジストリから止めている機能(gas/Code.gs の FEATURE_SWITCHES)
 import { useEffect, useState } from 'react'
-import { ClipboardList, ExternalLink, FileWarning, ShieldAlert, TimerOff } from 'lucide-react'
+import { ClipboardList, ExternalLink, FileWarning, PauseCircle, ShieldAlert, TimerOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { isRemoteConfigured, remoteApi, type OpsStatus, type SharingProblem } from '@/lib/ohsumi/remote'
@@ -23,6 +24,27 @@ const KIND_KEYS: Record<SharingProblem['kind'], TranslationKey> = {
   viewer: 'ops.sharing.kind.viewer',
   unknown: 'ops.sharing.kind.unknown',
 }
+// 機能のスイッチの ID → 表示名(知らない ID は GAS が付けた名前を出す)
+const FEATURE_KEYS: Record<string, TranslationKey> = {
+  uploads: 'feature.uploads',
+  expenses: 'feature.expenses',
+  forms: 'feature.forms',
+  schedule: 'feature.schedule',
+  dailyReports: 'feature.dailyReports',
+  recruiting: 'feature.recruiting',
+  skills: 'feature.skills',
+  projectHealth: 'feature.projectHealth',
+  training: 'feature.training',
+  memberSurvey: 'feature.memberSurvey',
+  restore: 'feature.restore',
+  personalData: 'feature.personalData',
+  webhookSettings: 'feature.webhookSettings',
+  chatNotify: 'feature.chatNotify',
+  calendarSync: 'feature.calendarSync',
+  recurringTasks: 'feature.recurringTasks',
+  metricsSend: 'feature.metricsSend',
+}
+
 // Google フォームの URL だけをリンクにする(GAS とレジストリでも確かめている)
 const FORM_URL = /^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/
 
@@ -55,7 +77,8 @@ export function OpsBanner() {
   const longGroups = status.longRecords?.groups ?? []
   const longCount = longGroups.reduce((n, g) => n + g.count, 0)
   const surveys = (status.surveys ?? []).filter((s) => FORM_URL.test(s.formUrl))
-  if (!status.jobs.dailyStale && problems.length === 0 && longCount === 0 && surveys.length === 0) return null
+  const features = status.disabledFeatures ?? []
+  if (!status.jobs.dailyStale && problems.length === 0 && longCount === 0 && surveys.length === 0 && features.length === 0) return null
   const fmtDay = (key: string) => new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'medium', timeZone: 'Asia/Tokyo' }).format(new Date(key + 'T00:00:00+09:00'))
 
   const recheck = async () => {
@@ -63,7 +86,7 @@ export function OpsBanner() {
     setError(null)
     try {
       const next = await remoteApi.recheckSharing()
-      setStatus((prev) => ({ ...next, longRecords: next.longRecords ?? prev?.longRecords, surveys: next.surveys ?? prev?.surveys }))
+      setStatus((prev) => ({ ...next, longRecords: next.longRecords ?? prev?.longRecords, surveys: next.surveys ?? prev?.surveys, disabledFeatures: next.disabledFeatures ?? prev?.disabledFeatures }))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -73,6 +96,20 @@ export function OpsBanner() {
 
   return (
     <div className="border-b border-border">
+      {features.length > 0 && (
+        <div role="status" data-ops-features className="flex items-start gap-1.5 bg-warning-muted px-4 py-2 text-xs text-warning">
+          <PauseCircle className="mt-px size-3.5 shrink-0" />
+          <div className="min-w-0 flex-1 break-words">
+            <p className="font-medium">{t('ops.features.title', { count: String(features.length) })}</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
+              {features.map((f) => (
+                <li key={f.id} data-ops-feature={f.id}>{FEATURE_KEYS[f.id] ? t(FEATURE_KEYS[f.id]) : f.label}</li>
+              ))}
+            </ul>
+            <p className="mt-1 text-foreground/80">{t('ops.features.desc')}</p>
+          </div>
+        </div>
+      )}
       {surveys.length > 0 && (
         <div role="status" data-ops-surveys className={'flex items-start gap-1.5 px-4 py-2 text-xs ' + (surveys.some((s) => s.overdue) ? 'bg-destructive/10 text-destructive' : 'bg-warning-muted text-warning')}>
           <ClipboardList className="mt-px size-3.5 shrink-0" />
