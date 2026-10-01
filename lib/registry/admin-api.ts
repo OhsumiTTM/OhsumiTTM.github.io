@@ -58,6 +58,8 @@ export interface OrgSummary {
   mail?: OrgMailSummary
   // 団体の GAS の版の判定(古いレジストリでは無い)
   gasStatus?: GasStatus
+  // 毎日・毎時の処理が最後に成功した時刻(団体の GAS が checkIn で伝えたもの)。dailyStale: 26時間以上成功していない
+  jobs?: { dailyAt: string; hourlyAt: string; reported: boolean; dailyStale: boolean }
 }
 
 // 判定: latest 最新 / outdated 古い / updateRequired 更新が要る / noCheck 24時間以上確認が無い

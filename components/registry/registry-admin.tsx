@@ -387,6 +387,7 @@ function OrgList({
             {o.mail?.level === 'reached' && <Badge tone="bad">メールの上限に達した</Badge>}
             {o.mail?.level === 'low' && <Badge tone="warn">メールの残り {o.mail.remaining}</Badge>}
             {o.gasStatus && <Badge tone={GAS_JUDGEMENT_TONES[o.gasStatus.judgement]}>GAS: {GAS_JUDGEMENT_LABELS[o.gasStatus.judgement]}</Badge>}
+            {o.jobs?.dailyStale && <Badge tone="bad">毎日の処理が26時間以上成功していない</Badge>}
           </div>
           <dl className="space-y-1">
             <Field label="契約の状態">{CONTRACT_LABELS[o.contractStatus] ?? o.contractStatus}{o.contractUntil ? `(${fmt(o.contractUntil)} まで)` : ''}</Field>
@@ -398,6 +399,7 @@ function OrgList({
               </span>
             </Field>
             <Field label="登録日">{fmt(o.createdAt)}</Field>
+            {o.jobs?.reported && <Field label="毎日・毎時の処理">最後に成功: 毎日 {fmt(o.jobs.dailyAt)}・毎時 {fmt(o.jobs.hourlyAt)}</Field>}
             {o.mail && o.mail.level !== 'unknown' && <Field label="メール">{mailText(o.mail)}</Field>}
             {o.suspendAt && (
               <>
