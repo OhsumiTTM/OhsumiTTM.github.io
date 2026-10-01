@@ -231,7 +231,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-6'
+var REGISTRY_VERSION = '2026.10.01-5'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):

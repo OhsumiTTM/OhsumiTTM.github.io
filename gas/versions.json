@@ -1,6 +1,6 @@
 {
   "registry/Code.gs": {
-    "version": "2026.10.01-6",
+    "version": "2026.10.01-5",
     "sha256": "d2e03d1f88411faaa87151a227c1dc0792aa975c7d4597bb81c7abe720a37beb"
   },
   "registry/monitor/Monitor.gs": {
