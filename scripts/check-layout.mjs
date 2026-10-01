@@ -66,6 +66,12 @@ export const STEPS = [
   // 提供停止・機能停止(R1-e): 画面の上部の知らせ(文は ja.ts の app.contract*)
   { name: 'OUTPUT(機能停止中の知らせ)', do: 'contract', contract: { phase: 'inEffect', kind: 'restrict', suspendAt: '2026-10-01T00:00:00.000Z' }, expect: 'アンケートへの回答をお願いします' },
   { name: 'OUTPUT(提供停止の予告)', do: 'contract', contract: { phase: 'scheduled', kind: 'suspend', days: 6 }, expect: '提供を停止します' },
+  // 書きかけを守る(PR C): ログインが切れた・画面が古い時は、送れなかった文章をコピーできるように出し、INPUT の書きかけは残す。
+  // 権限が足りない時はデータを読み直す。ログインの期限が近づいたら、先に知らせる
+  { name: 'ログインが切れた時(送れなかったコメントを出す・書きかけを残す)', do: 'unsaved', fail: 'authError', view: 'リスト', text: '担当者が多いタスク' },
+  { name: '画面が古い時(送れなかったコメントを出す・読み込み直す)', do: 'unsaved', fail: 'reloadRequired', view: 'リスト', text: '担当者が多いタスク' },
+  { name: '権限が足りない時(データを読み直す)', do: 'unsaved', fail: 'forbidden', view: 'リスト', text: '担当者が多いタスク' },
+  { name: 'ログインの期限が近い時の知らせ', do: 'sessionExpiry' },
 ]
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
@@ -301,6 +307,9 @@ async function run({ build = true } = {}) {
     let contract = null
     // 画面が送った書き込み(読み取りの一覧に無い操作)
     let sentWrites = []
+    // 書き込みに返す失敗(authError・reloadRequired・forbidden)と、初期データを読んだ回数
+    let failWrites = ''
+    let initialDataCalls = 0
     // ほかの端末で開く: getInviteMailStatus の答え(available / notChecked)と、送った sendInviteLinkToMe の本文
     let inviteMail = 'available'
     // exchangeIdToken に、団体に登録されていないアカウントとして答える
@@ -339,7 +348,15 @@ async function run({ build = true } = {}) {
         configCalls++
         return sleep(slowConfigMs).then(() => fulfill('application/json', JSON.stringify({ ok: true, result: { orgId: ORG } })))
       }
-      if (url.href.startsWith(GAS_URL)) return fulfill('application/json', JSON.stringify({ ok: true, result: gas(JSON.parse(request.postData || '{}')), ...(contract ? { contract } : {}) }))
+      if (url.href.startsWith(GAS_URL)) {
+        const body = JSON.parse(request.postData || '{}')
+        if (body.action === 'getInitialData') initialDataCalls++
+        // 書き込みを断る(ログインが切れた・画面が古い・権限が足りない)
+        if (failWrites && !LAYOUT_READ_ACTIONS.includes(body.action)) {
+          return fulfill('application/json', JSON.stringify({ ok: false, [failWrites]: true, error: '断りました(' + failWrites + ')' }))
+        }
+        return fulfill('application/json', JSON.stringify({ ok: true, result: gas(body), ...(contract ? { contract } : {}) }))
+      }
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
         // 接続先の解決: テスト用の団体(ORG)だけを答える。ほかは見つからない(招待リンクの団体が見つからない画面)
@@ -372,10 +389,13 @@ async function run({ build = true } = {}) {
         ${withSecond ? `{ orgId: 'org_SECONDSECONDSECOND01', gasUrl: 'https://script.google.com/macros/s/SECOND/exec', source: 'registry', checkedAt: Date.now(), maxAgeSec: 86400,
           name: 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会' },` : ''}
       ]))${withCurrent ? `; localStorage.setItem('ohsumi-current-org', '${ORG}')` : ''}`)
-    const signIn = async () => {
+    // expSec: セッションの残りの秒数(ログインの期限が近い時の知らせを確かめる時に短くする)
+    const signIn = async (expSec = 86400) => {
       await saveOrgs(false)
-      await evaluate(`localStorage.setItem('ohsumi-session-${ORG}', JSON.stringify({ token: 'v1.layout.check', exp: Math.floor(Date.now() / 1000) + 86400 }))`)
+      await evaluate(`localStorage.setItem('ohsumi-session-${ORG}', JSON.stringify({ token: 'v1.layout.check', exp: Math.floor(Date.now() / 1000) + ${expSec} }))`)
     }
+    // INPUT の書きかけ(ログインが切れても消えないこと)
+    const DRAFT_KEY = 'ohsumi-input-draft-' + MEMBER
 
     await navigate('/')
     const passes = [
@@ -669,6 +689,59 @@ async function run({ build = true } = {}) {
           await sleep(300); await clickText('発行する'); await sleep(1500)
           const shown = await evaluate(`document.body.textContent.includes('ABCD-EFGH-JKMN-PQRS')`)
           if (!shown) throw new Error('発行した登録コードが表示されません')
+        }
+        if (step.do === 'unsaved') {
+          contract = null
+          await signIn()
+          await evaluate(`localStorage.setItem('${'${DRAFT_KEY}'}', JSON.stringify({ text: 'INPUT の書きかけです' }))`.replace('${DRAFT_KEY}', DRAFT_KEY))
+          await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          await clickText(step.view); await sleep(800)
+          await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+          const comment = '送れなかったコメントです(' + step.fail + ')'
+          await evaluate(`(() => {
+            const ta = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '送信').parentElement.querySelector('textarea')
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ${JSON.stringify(comment)})
+            ta.dispatchEvent(new Event('input', { bubbles: true }))
+            return true })()`)
+          await sleep(300)
+          const readsBefore = initialDataCalls
+          failWrites = step.fail
+          try {
+            await clickText('送信', 'button', true)
+            await sleep(step.fail === 'authError' ? 4000 : 2500)
+          } finally {
+            failWrites = ''
+          }
+          if (step.fail === 'forbidden') {
+            if (initialDataCalls <= readsBefore) throw new Error('権限が足りないと断られても、データを読み直しません')
+          } else {
+            const notice = await evaluate(`(() => {
+              const d = document.querySelector('[data-unsaved-notice]')
+              return d ? { kind: d.getAttribute('data-unsaved-notice'), texts: [...d.querySelectorAll('textarea')].map((t) => t.value), text: d.textContent } : null })()`)
+            const wantKind = step.fail === 'authError' ? 'sessionEnded' : step.fail
+            if (!notice || notice.kind !== wantKind) throw new Error('保存できなかった知らせが出ません(' + JSON.stringify(notice) + ')')
+            if (!notice.texts.some((t) => t.includes(comment))) throw new Error('送れなかったコメントが、知らせに残っていません')
+            if (step.fail === 'reloadRequired' && !notice.text.includes('読み込み直す')) throw new Error('「読み込み直す」がありません')
+            if (step.fail === 'authError') {
+              if (!(await evaluate(`!!document.querySelector('[data-layout-gsi]')`))) throw new Error('ログイン画面に戻りません')
+              if (!(await evaluate(`!!localStorage.getItem('${'${DRAFT_KEY}'}')`.replace('${DRAFT_KEY}', DRAFT_KEY)))) throw new Error('ログインが切れた時に、INPUT の書きかけが消えました')
+            }
+          }
+        }
+        if (step.do === 'sessionExpiry') {
+          contract = null
+          await signIn(5 * 60)
+          await evaluate(`localStorage.setItem('${'${DRAFT_KEY}'}', JSON.stringify({ text: 'INPUT の書きかけです' }))`.replace('${DRAFT_KEY}', DRAFT_KEY))
+          await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          const banner = await evaluate(`document.querySelector('[data-session-expiry]')?.textContent ?? ''`)
+          if (!banner.includes('ログインの期限まで、あと5分です')) throw new Error('ログインの期限が近いことを知らせません: ' + banner)
+          await clickText('ログインし直す', '[data-session-expiry] button'); await sleep(3000)
+          if (!(await evaluate(`!!document.querySelector('[data-layout-gsi]')`))) throw new Error('「ログインし直す」でログイン画面に戻りません')
+          if (!(await evaluate(`!!localStorage.getItem('${'${DRAFT_KEY}'}')`.replace('${DRAFT_KEY}', DRAFT_KEY)))) throw new Error('ログインし直す時に、INPUT の書きかけが消えました')
         }
         if (step.do === 'otherDevice') {
           inviteMail = step.mail || 'available'
