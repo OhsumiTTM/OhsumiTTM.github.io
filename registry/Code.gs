@@ -231,7 +231,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-3'
+var REGISTRY_VERSION = '2026.10.01-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -244,7 +244,9 @@ var REGISTRY_SHEETS = {
   Orgs: ['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
     'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan',
     // メールの1日の上限(checkIn で団体の GAS が伝える): 残りの数・その日に送れなかった数・その日・最後に上限に達した日
-    'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date'],
+    'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date',
+    // 毎日・毎時の処理が最後に成功した時刻(checkIn で団体の GAS が伝える)
+    'daily_job_at', 'hourly_job_at'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   Usage: ['org_id', 'date', 'metrics_json'],
@@ -682,6 +684,7 @@ function orgSummary_(values, nowMs) {
     gasVersion: String(values.gas_version || ''),
     mail: orgMailSummary_(values),
     gasStatus: gasVersionStatus_(values, gasVersionList_(), nowMs),
+    jobs: orgJobSummary_(values, nowMs),
   }
 }
 
@@ -1379,7 +1382,8 @@ function merged_(values, fields) {
 }
 
 // 団体の GAS が契約の状態を確かめる(1時間ごと・停止の予定や停止中は使われるたびに1分に1回まで)。
-//   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, mail, sig }
+//   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, mail, jobs, sig }
+//          jobs: { dailyAt, hourlyAt }(毎日・毎時の処理が最後に成功した時刻)
 //          mail: { remaining(メールの残りの数。分からなければ null), skipped(その日に上限で送れなかった数), date, lastReachedDate }
 //          sig = base64url(HMAC-SHA256(共有鍵, 'checkIn.' + orgId + '.' + ts))。時刻は前後5分まで
 //   返事: { ok: true, result: { phase: none | scheduled | inEffect, kind, suspendAt, reason, checkedAt, siteOrigins } }
@@ -1404,11 +1408,14 @@ function checkIn_(body, nowMs) {
   var lastCheck = timeOf_(row.values.last_check_at)
   var gasVersion = cleanText_(body.gasVersion, 40)
   var mail = checkInMailFields_(body.mail, row.values)
-  // 送れなかった数が変わった時(上限に達した時)は、10分を待たずに書く
+  var jobs = checkInJobFields_(body.jobs, row.values)
+  // 送れなかった数が変わった時(上限に達した時)・毎日の処理が新しく成功した時は、10分を待たずに書く
   var mailChanged = mail && String(mail.mail_skipped) !== String(row.values.mail_skipped === undefined ? '' : row.values.mail_skipped)
-  if (!(lastCheck > 0) || nowMs - lastCheck >= CHECKIN_WRITE_INTERVAL_MS || gasVersion !== String(row.values.gas_version || '') || mailChanged) {
+  var jobsChanged = jobs && jobs.daily_job_at !== isoOf_(row.values.daily_job_at)
+  if (!(lastCheck > 0) || nowMs - lastCheck >= CHECKIN_WRITE_INTERVAL_MS || gasVersion !== String(row.values.gas_version || '') || mailChanged || jobsChanged) {
     var fields = { last_check_at: new Date(nowMs).toISOString(), gas_version: gasVersion }
     if (mail) Object.keys(mail).forEach(function (k) { fields[k] = mail[k] })
+    if (jobs) Object.keys(jobs).forEach(function (k) { fields[k] = jobs[k] })
     setRowFields_('Orgs', row.row, fields)
   }
   var c = contractState_(row.values, nowMs)
@@ -1429,6 +1436,7 @@ function checkIn_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-4', security: false, required: false, note: '毎日・毎時の処理の見張りと、共有の確認(PR H)' },
   { version: '2026.10.01-3', security: false, required: false, note: '退会したメンバー・採用しなかった候補者の個人情報の削除(PR G)' },
   { version: '2026.10.01-2', security: false, required: false, note: '毎日のバックアップと、バックアップから戻す(PR F)' },
   { version: '2026.10.01-1', security: true, required: true,
@@ -1513,13 +1521,14 @@ function gasVersionStatus_(values, versions, nowMs) {
 // 監視の毎日のまとめ: 更新が要る団体・24時間以上確認が無い団体の数(利用停止の団体は数えない)
 function gasVersionCounts_(nowMs) {
   var versions = gasVersionList_()
-  var out = { latest: versions.length ? versions[0].version : '', updateRequired: 0, noCheck: 0, orgs: 0 }
+  var out = { latest: versions.length ? versions[0].version : '', updateRequired: 0, noCheck: 0, dailyJobStale: 0, orgs: 0 }
   readRows_('Orgs').forEach(function (r) {
     if (!String(r.values.org_id || '') || String(r.values.status || '') !== 'active') return
     var st = gasVersionStatus_(r.values, versions, nowMs)
     out.orgs++
     if (st.versionState === 'updateRequired') out.updateRequired++
     if (st.noCheck) out.noCheck++
+    if (orgJobSummary_(r.values, nowMs).dailyStale) out.dailyJobStale++
   })
   return out
 }
@@ -1585,6 +1594,27 @@ function gasUpdateRequestText_(name, st) {
       '3. エディタで setupOhsumi を実行する\n\n' +
       '詳しくは gas/README.md の「2. Apps Script のデプロイ」をご覧ください。ご不明な点は FSIF にお問い合わせください。',
   }
+}
+
+// checkIn で伝えられた、毎日・毎時の処理が最後に成功した時刻を、Orgs の列の値にする(列が無い・伝えられていない時は null)
+function checkInJobFields_(jobs, values) {
+  if (!jobs || typeof jobs !== 'object' || !('daily_job_at' in values)) return null
+  var iso = function (v) {
+    var t = Date.parse(String(v || ''))
+    return isFinite(t) && t > 0 ? new Date(t).toISOString() : ''
+  }
+  return { daily_job_at: iso(jobs.dailyAt), hourly_job_at: iso(jobs.hourlyAt) }
+}
+
+// 毎日の処理が止まっているか: 最後に伝えられた成功の時刻から DAILY_JOB_STALE_HOURS 時間を過ぎた
+// (伝えられていない団体は判定しない。確認そのものが来ていない団体は、checkState・判定の「24時間以上確認が無い」で分かる)
+var DAILY_JOB_STALE_HOURS = 26
+function orgJobSummary_(values, nowMs) {
+  var dailyAt = isoOf_(values.daily_job_at)
+  var hourlyAt = isoOf_(values.hourly_job_at)
+  var t = timeOf_(dailyAt)
+  return { dailyAt: dailyAt, hourlyAt: hourlyAt, reported: !!dailyAt || !!hourlyAt,
+    dailyStale: t > 0 && nowMs - t > DAILY_JOB_STALE_HOURS * 3600 * 1000 }
 }
 
 // checkIn で伝えられたメールの上限の状態を、Orgs の列の値にする。

@@ -194,9 +194,9 @@ describe('実行(checkRegistry)', () => {
 
   it('毎朝の知らせに、更新が要る団体の数と、24時間以上確認が無い団体の数を書く(health に summary を付けて聞く)', () => {
     const t = setup()
-    t.setHealth(good({ keyValid: true, gasVersions: { latest: '2026.10.01-1', updateRequired: 2, noCheck: 1, orgs: 5 } }))
+    t.setHealth(good({ keyValid: true, gasVersions: { latest: '2026.10.01-1', updateRequired: 2, noCheck: 1, dailyJobStale: 3, orgs: 5 } }))
     t.gas.monitorHeartbeat()
-    expect(t.discord[0]).toContain('団体の GAS(利用中 5 団体。最新の版: 2026.10.01-1)\n・更新が要る団体: 2\n・24時間以上確認が無い団体: 1')
+    expect(t.discord[0]).toContain('団体の GAS(利用中 5 団体。最新の版: 2026.10.01-1)\n・更新が要る団体: 2\n・24時間以上確認が無い団体: 1\n・毎日の処理が26時間以上成功していない団体: 3')
     expect(t.mails).toHaveLength(0)
   })
 
