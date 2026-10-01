@@ -110,7 +110,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -126,6 +126,8 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(アンケート)', do: 'click', text: 'アンケート', from: '[role=tab]' },
   { name: 'レジストリ管理(アンケートの送り先を選ぶ)', do: 'registrySurveys' },
+  { name: 'レジストリ管理(お知らせ)', do: 'click', text: 'お知らせ', from: '[role=tab]' },
+  { name: 'レジストリ管理(お知らせの出す団体を選ぶ)', do: 'registryAnnouncements' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
 ]
 
@@ -156,6 +158,12 @@ export function registryResponse(body) {
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
+        announcements: [
+          { announcementId: 'an_1', title: 'とても長い題のお知らせ'.repeat(3), body: '1行目\n' + 'とても長い本文の例です。'.repeat(10), importance: 'urgent', targetKind: 'orgs', targetPlan: '', targetOrgIds: ['org_' + 'x'.repeat(40), 'org_b'],
+            publishedAt: iso(1), expiresAt: iso(31), createdBy: 'registry.admin.with.a.long.address@example.com', state: 'active', withdrawnAt: '', withdrawnBy: '' },
+          { announcementId: 'an_2', title: 'Ohsumiプランの団体へ', body: '本文', importance: 'normal', targetKind: 'plan', targetPlan: 'ohsumi', targetOrgIds: [],
+            publishedAt: iso(1), expiresAt: iso(2), createdBy: 'registry.admin.with.a.long.address@example.com', state: 'expired', withdrawnAt: '', withdrawnBy: '' },
+        ],
         surveyLimits: { ohsumi: 24, cosmo_base: 12, paid: 4 },
         survey12mCounts: { ['org_' + 'x'.repeat(40)]: 12, org_b: 0, org_r: 3, org_c: 4 },
         surveys: [
@@ -382,6 +390,12 @@ async function run({ build = true } = {}) {
             { surveyId: 'sv_1', title: '2026年秋の利用状況のアンケート(とても長い名前の例です)'.repeat(2), formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: true, restrictAt: '2026-10-07T15:00:00.000Z' },
             { surveyId: 'sv_2', title: 'javascript の URL は出さない', formUrl: 'javascript:alert(1)', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: false, restrictAt: '' },
           ] }
+        // FSIF からのお知らせ(緊急・重要・通常。長い題と本文で、はみ出しを確かめる)
+        case 'getAnnouncements': return { registered: true, stale: false, fetchedAt: '2026-10-01T03:00:00.000Z', announcements: [
+          { announcementId: 'an_1', title: '通常のお知らせ', body: '通常の本文', importance: 'normal', publishedAt: '2026-09-20T00:00:00.000Z', expiresAt: '2026-10-20T00:00:00.000Z' },
+          { announcementId: 'an_2', title: '緊急: とても長い題のお知らせ'.repeat(3), body: '1行目\n' + 'とても長い本文の例です。https://example.com/a/very/long/url/that/should/wrap/' + 'x'.repeat(60), importance: 'urgent', publishedAt: '2026-09-30T00:00:00.000Z', expiresAt: '2026-10-30T00:00:00.000Z' },
+          { announcementId: 'an_3', title: '重要なお知らせ', body: '重要な本文', importance: 'important', publishedAt: '2026-09-25T00:00:00.000Z', expiresAt: '2026-10-25T00:00:00.000Z' },
+        ] }
         // FSIF に送る集計値(プレビューと履歴)
         case 'getMetricsStatus': return { plan: 'cosmo_base', mandatory: false, defaultOn: true, enabled: true, slot: { dow: 3, hour: 14 },
           nextAt: '2026-10-07T05:00:00.000Z', definitionsVersion: 1,
@@ -754,6 +768,10 @@ async function run({ build = true } = {}) {
           for (const want of ['長くなっている記録があります(3 件)', '1on1 の記録: 2 件', 'コメント: 1 件', '47,210 文字', 'm2(41,000 文字)']) {
             if (!long.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + long)
           }
+          // FSIF からのお知らせ: 緊急・重要・通常の順に出る
+          const order = await evaluate(`[...document.querySelectorAll('[data-announcements] [data-announcement]')].map((e) => e.getAttribute('data-announcement')).join(',')`)
+          if (order !== 'urgent,important,normal') throw new Error('お知らせが緊急・重要・通常の順に出ません: ' + order)
+          if (!(await evaluate(`document.querySelector('[data-announcements]').textContent`)).includes('FSIF からのお知らせ')) throw new Error('お知らせの見出しが出ません')
           const surveys = await evaluate(`(document.querySelector('[data-ops-surveys]')?.textContent ?? '') + '|' + [...document.querySelectorAll('[data-ops-surveys] a')].map((a) => a.getAttribute('href')).join(',')`)
           for (const want of ['FSIF からのアンケートへの回答をお願いします(1 件)', '回答期限(2026/09/24)を過ぎています', 'から読み取り専用になります', '回答する', 'https://docs.google.com/forms/d/e/']) {
             if (!surveys.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + surveys)
@@ -826,6 +844,14 @@ async function run({ build = true } = {}) {
           await evaluate(`[...document.querySelectorAll('[data-survey-send] input[type=radio]')][2].click()`)
           await sleep(300)
           if (!(await evaluate(`document.querySelector('[data-survey-send]').textContent`)).includes('直近12か月 12 / 12件')) throw new Error('団体を選ぶ欄に、今年の数と上限が出ません')
+        }
+        if (step.do === 'registryAnnouncements') {
+          const text = await evaluate(`document.body.textContent`)
+          for (const want of ['お知らせを出す', '重要度', '掲載中', '緊急']) {
+            if (!text.includes(want)) throw new Error('お知らせのタブに「' + want + '」が出ません')
+          }
+          await evaluate(`[...document.querySelectorAll('[data-announcement-form] input[name=announcement-target]')][2].click()`)
+          await sleep(300)
         }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)

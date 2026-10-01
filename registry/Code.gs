@@ -233,7 +233,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-11'
+var REGISTRY_VERSION = '2026.10.01-12'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -264,6 +264,9 @@ var REGISTRY_SHEETS = {
   // アンケート(管理画面から送る)。send_date は送付日(日本時間の YYYY-MM-DD)、status は open / answered / cancelled、
   // reminders_json は送ったメール(送付日から何日目か)の記録
   Surveys: ['survey_id', 'org_id', 'title', 'form_url', 'send_date', 'status', 'reminders_json', 'answered_at', 'answered_by', 'created_by', 'created_at', 'note'],
+  // お知らせ(管理画面から出す)。importance は normal / important / urgent、target_kind は all / plan / orgs
+  Announcements: ['announcement_id', 'title', 'body', 'importance', 'target_kind', 'target_plan', 'target_org_ids', 'published_at', 'expires_at', 'created_by',
+    'withdrawn_at', 'withdrawn_by'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
   // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
   // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
@@ -279,7 +282,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120, fetchAnnouncements: 300 }
 
 // ---- 入口 ----
 
@@ -312,6 +315,9 @@ var REGISTRY_ACTIONS = {
   markSurveyAnswered: function (body) { return closeSurvey_(body, Date.now(), 'answered') },
   cancelSurvey: function (body) { return closeSurvey_(body, Date.now(), 'cancelled') },
   scheduleSurveyRestriction: function (body) { return scheduleSurveyRestriction_(body, Date.now()) },
+  fetchAnnouncements: function (body) { return fetchAnnouncements_(body, Date.now()) },
+  publishAnnouncement: function (body) { return publishAnnouncement_(body, Date.now()) },
+  withdrawAnnouncement: function (body) { return withdrawAnnouncement_(body, Date.now()) },
 }
 
 function registryJson_(obj) {
@@ -772,6 +778,7 @@ function adminOverview_(body, nowMs) {
       surveys: so.surveys,
       surveyLimits: so.surveyLimits,
       survey12mCounts: so.survey12mCounts,
+      announcements: announcementList_(nowMs),
     },
   }
 }
@@ -1445,7 +1452,9 @@ function checkIn_(body, nowMs) {
   var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
   return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate, plan: plan,
     // 回答待ちのアンケート(代表の管理画面に出す)
-    surveys: openSurveysFor_(orgId, row.values, nowMs) } }
+    surveys: openSurveysFor_(orgId, row.values, nowMs),
+    // 掲載中の緊急のお知らせの ID(団体の GAS が、自分の団体の代表に1回だけメールで送る。本文は fetchAnnouncements で取る)
+    urgentAnnouncementIds: announcementsFor_(orgId, plan, nowMs).filter(function (a) { return a.importance === 'urgent' }).map(function (a) { return a.announcementId }) } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -1905,6 +1914,156 @@ function scheduleSurveyRestriction_(body, nowMs) {
   })
 }
 
+// ---- お知らせ(R2: PR P) ----
+//
+// 管理画面から、全団体・プラン別・団体を選んでお知らせを出す。重要度は normal(通常)/ important(重要)/ urgent(緊急)。
+// 団体の GAS は、代表・管理者が管理画面を開いた時に、共有鍵の署名で取りに来る(fetchAnnouncements。団体の GAS が10分覚える)。
+// 本文が長くなるため、checkIn には入れない(団体の GAS のスクリプトプロパティは、1つの値が9KBまで)。
+// 緊急のお知らせは、checkIn で ID だけを伝え、団体の GAS が自分の団体の代表にメールで1回だけ送る
+// (レジストリから全団体に送ると、レジストリのメールの1日の上限に届くため)。
+// 取り下げたもの・掲載の終わり(expires_at)を過ぎたものは伝えない。プラン別は、出した後にプランを変えた団体にも、今のプランで決める
+var ANNOUNCEMENT_IMPORTANCE = ['normal', 'important', 'urgent']
+var ANNOUNCEMENT_TITLE_MAX = 100
+var ANNOUNCEMENT_BODY_MAX = 1000
+// 掲載の期間(省いた時は30日。長くても1年)
+var ANNOUNCEMENT_DEFAULT_DAYS = 30
+var ANNOUNCEMENT_MAX_DAYS = 365
+// checkIn で1団体に伝える数(新しい順)
+var ANNOUNCEMENT_CHECKIN_MAX = 20
+var ANNOUNCEMENT_SHOW_MAX = 200
+
+function announcementOrgIds_(values) {
+  return String(values.target_org_ids || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
+}
+
+// お知らせの状態(純粋な関数): active(掲載中)/ expired(掲載の終わりを過ぎた)/ withdrawn(取り下げ)
+function announcementState_(values, nowMs) {
+  if (String(values.withdrawn_at || '')) return 'withdrawn'
+  var exp = timeOf_(values.expires_at)
+  return exp > 0 && exp <= nowMs ? 'expired' : 'active'
+}
+
+// この団体が対象か(純粋な関数)
+function announcementTargets_(values, orgId, plan) {
+  var kind = String(values.target_kind || '')
+  if (kind === 'all') return true
+  if (kind === 'plan') return !!plan && String(values.target_plan || '') === plan
+  if (kind === 'orgs') return announcementOrgIds_(values).indexOf(orgId) >= 0
+  return false
+}
+
+function announcementSummary_(values, nowMs) {
+  return {
+    announcementId: String(values.announcement_id || ''),
+    title: String(values.title || ''),
+    body: String(values.body || ''),
+    importance: ANNOUNCEMENT_IMPORTANCE.indexOf(String(values.importance)) >= 0 ? String(values.importance) : 'normal',
+    targetKind: String(values.target_kind || ''),
+    targetPlan: String(values.target_plan || ''),
+    targetOrgIds: announcementOrgIds_(values),
+    publishedAt: isoOf_(values.published_at),
+    expiresAt: isoOf_(values.expires_at),
+    createdBy: String(values.created_by || ''),
+    state: announcementState_(values, nowMs),
+    withdrawnAt: isoOf_(values.withdrawn_at),
+    withdrawnBy: String(values.withdrawn_by || ''),
+  }
+}
+
+function announcementList_(nowMs) {
+  var list = readRows_('Announcements').filter(function (r) { return String(r.values.announcement_id || '') }).map(function (r) { return announcementSummary_(r.values, nowMs) })
+  list.sort(function (a, b) { return b.publishedAt.localeCompare(a.publishedAt) })
+  return list.slice(0, ANNOUNCEMENT_SHOW_MAX)
+}
+
+// 団体の GAS に返す: 掲載中で、この団体が対象のお知らせ(新しい順)
+function announcementsFor_(orgId, plan, nowMs) {
+  return readRows_('Announcements').filter(function (r) {
+    return String(r.values.announcement_id || '') && announcementState_(r.values, nowMs) === 'active' && announcementTargets_(r.values, orgId, plan)
+  }).map(function (r) {
+    var s = announcementSummary_(r.values, nowMs)
+    return { announcementId: s.announcementId, title: s.title, body: s.body, importance: s.importance, publishedAt: s.publishedAt, expiresAt: s.expiresAt }
+  }).sort(function (a, b) { return b.publishedAt.localeCompare(a.publishedAt) }).slice(0, ANNOUNCEMENT_CHECKIN_MAX)
+}
+
+// 団体の GAS が取りに来る。{ action: 'fetchAnnouncements', orgId, ts, sig }
+//   sig = base64url(HMAC-SHA256(共有鍵, 'announcements.' + orgId + '.' + ts))。時刻は前後5分まで
+//   返事: { ok: true, result: { announcements: [{ announcementId, title, body, importance, publishedAt, expiresAt }] } }
+function fetchAnnouncements_(body, nowMs) {
+  var orgId = String(body.orgId || '')
+  var ts = Number(body.ts)
+  if (!ORG_ID_PATTERN.test(orgId) || !(ts > 0) || Math.abs(nowSecOf_(nowMs) - ts) > CHECKIN_MAX_SKEW_SEC) {
+    countRejected_(nowMs)
+    throw registryError_(CHECKIN_INVALID, { authError: true })
+  }
+  var secret = findSecretRow_(orgId)
+  var row = findOrgRow_(orgId)
+  var key = secret ? String(secret.values.registry_key || '') : ''
+  var expected = key ? b64url_(Utilities.computeHmacSha256Signature('announcements.' + orgId + '.' + ts, key)) : ''
+  if (!row || !expected || !safeEquals_(expected, String(body.sig || ''))) {
+    countRejected_(nowMs)
+    throw registryError_(CHECKIN_INVALID, { authError: true })
+  }
+  var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
+  return { ok: true, result: { announcements: announcementsFor_(orgId, plan, nowMs) } }
+}
+
+// 管理画面: お知らせを出す。{ session, title, body, importance, target: { kind: all | plan | orgs, plan, orgIds }, expiresAt(ISO。省くと30日後) }
+function publishAnnouncement_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var title = cleanText_(body.title, ANNOUNCEMENT_TITLE_MAX)
+  // 本文は改行を残す(ほかの制御文字だけを除く)
+  var text = String(body.body === null || body.body === undefined ? '' : body.body).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f]/g, ' ').trim()
+  if (!title) throw registryError_('お知らせの題を入れてください。')
+  if (!text) throw registryError_('お知らせの本文を入れてください。')
+  if (text.length > ANNOUNCEMENT_BODY_MAX) throw registryError_('本文は' + ANNOUNCEMENT_BODY_MAX + '文字までにしてください。')
+  var importance = String(body.importance || 'normal')
+  if (ANNOUNCEMENT_IMPORTANCE.indexOf(importance) < 0) throw registryError_('重要度(通常・重要・緊急)を選んでください。')
+  var target = body.target && typeof body.target === 'object' ? body.target : {}
+  var kind = String(target.kind || '')
+  if (['all', 'plan', 'orgs'].indexOf(kind) < 0) throw registryError_('出す団体(全団体・プラン・団体を選ぶ)を選んでください。')
+  if (kind === 'plan' && PLANS.indexOf(String(target.plan || '')) < 0) throw registryError_('出すプランを選んでください。')
+  var orgIds = kind === 'orgs' && Array.isArray(target.orgIds) ? target.orgIds.map(String) : []
+  if (kind === 'orgs') {
+    if (!orgIds.length) throw registryError_('出す団体を選んでください。')
+    var known = orgValuesById_()
+    if (orgIds.some(function (id) { return !known[id] })) throw registryError_('選んだ団体のうち、見つからないものがあります。一覧を読み直してください。')
+  }
+  var exp = body.expiresAt ? timeOf_(body.expiresAt) : nowMs + ANNOUNCEMENT_DEFAULT_DAYS * DAY_MS
+  if (!(exp > nowMs)) throw registryError_('掲載の終わりは、今より後にしてください。')
+  if (exp > nowMs + ANNOUNCEMENT_MAX_DAYS * DAY_MS) throw registryError_('掲載の終わりは、' + ANNOUNCEMENT_MAX_DAYS + '日以内にしてください。')
+  return withRegistryLock_(function () {
+    var values = {
+      announcement_id: 'an_' + generateSecret_().replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
+      title: title, body: text, importance: importance,
+      target_kind: kind, target_plan: kind === 'plan' ? String(target.plan) : '', target_org_ids: orgIds.join(','),
+      published_at: new Date(nowMs).toISOString(), expires_at: new Date(exp).toISOString(), created_by: session.sub,
+    }
+    appendRowByHeaders_('Announcements', values)
+    appendAudit_({ actor: session.sub, action: 'publishAnnouncement', target: kind === 'plan' ? 'plan:' + target.plan : kind === 'all' ? 'all' : orgIds.join(','),
+      after: { announcementId: values.announcement_id, title: title, importance: importance, expiresAt: values.expires_at } })
+    return { ok: true, result: announcementSummary_(values, nowMs) }
+  })
+}
+
+// 管理画面: お知らせを取り下げる(団体の管理画面から、次の確認で消える)。{ session, announcementId, reason }
+function withdrawAnnouncement_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var row = null
+    readRows_('Announcements').forEach(function (r) { if (String(r.values.announcement_id) === String(body.announcementId || '')) row = r })
+    if (!row) throw registryError_('そのお知らせは見つかりません。')
+    if (String(row.values.withdrawn_at || '')) throw registryError_('このお知らせは、取り下げ済みです。')
+    var fields = { withdrawn_at: new Date(nowMs).toISOString(), withdrawn_by: session.sub }
+    setRowFields_('Announcements', row.row, fields)
+    appendAudit_({ actor: session.sub, action: 'withdrawAnnouncement', target: String(row.values.announcement_id), before: { title: String(row.values.title || '') }, reason: reason })
+    return { ok: true, result: announcementSummary_(merged_(row.values, fields), nowMs) }
+  })
+}
+
 // ---- 団体の GAS の版 ----
 //
 // 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
@@ -1916,6 +2075,7 @@ function scheduleSurveyRestriction_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-12', security: false, required: false, note: 'FSIF からのお知らせを代表・管理者の管理画面に出す(PR P)' },
   { version: '2026.10.01-11', security: false, required: false, note: 'FSIF からのアンケートを代表の管理画面に出す(PR O)' },
   { version: '2026.10.01-10', security: false, required: false, note: '個人を特定しない集計値を週1回レジストリに送る(PR N)' },
   { version: '2026.10.01-9', security: false, required: false, note: 'マニフェストに使う許可(oauthScopes)を書き、許可が足りない時の知らせ(PR M)' },

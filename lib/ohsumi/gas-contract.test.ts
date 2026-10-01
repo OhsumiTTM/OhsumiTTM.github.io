@@ -254,6 +254,64 @@ describe('FSIF からのアンケート(PR O)', () => {
   })
 })
 
+describe('FSIF からのお知らせ(PR P)', () => {
+  it('代表・管理者が開いた時にレジストリへ取りに行き、10分覚える。届かない時は最後に取れたものを出す', () => {
+    const p = pair()
+    expect(p.reg.post({ action: 'publishAnnouncement', session: p.reg.session, title: '緊急のお知らせ', body: '本文', importance: 'urgent', target: { kind: 'all' } }).ok).toBe(true)
+    const st = p.g.announcementsStatus_(Date.now()) as { registered: boolean; stale: boolean; announcements: { title: string; importance: string }[] }
+    expect(st).toMatchObject({ registered: true, stale: false })
+    expect(st.announcements).toEqual([expect.objectContaining({ title: '緊急のお知らせ', importance: 'urgent' })])
+    const n = p.o.fetches()
+    p.g.announcementsStatus_(Date.now())
+    expect(p.o.fetches()).toBe(n)
+    // 10分を過ぎ、レジストリに届かない時
+    p.o.cache.delete('announcements:v1')
+    const stale = p.g.announcementsStatus_(Date.now(), { fetch: () => { throw new Error('offline') } }) as { stale: boolean; announcements: unknown[] }
+    expect(stale.stale).toBe(true)
+    expect(stale.announcements).toHaveLength(1)
+  })
+
+  it('緊急のお知らせは、checkIn で受け取り、代表にメールで1回だけ送る。通常・重要は送らない', () => {
+    const p = pair()
+    // 先に一覧を開いて覚えている(新しいお知らせの前の一覧)
+    p.g.announcementsStatus_(Date.now())
+    const post = (title: string, importance: string) => p.reg.post({ action: 'publishAnnouncement', session: p.reg.session, title, body: title + 'の本文', importance, target: { kind: 'all' } })
+    post('通常のお知らせ', 'normal')
+    post('重要なお知らせ', 'important')
+    expect(post('緊急のお知らせ', 'urgent').ok).toBe(true)
+    check(p)
+    expect(state(p).urgentAnnouncementIds).toHaveLength(1)
+    const urgent = p.o.mails.filter((m) => m.subject.includes('緊急のお知らせ'))
+    expect(urgent.map((m) => m.to)).toEqual(['top@example.com'])
+    expect(urgent[0].subject).toContain('「緊急のお知らせ」')
+    expect(urgent[0].body).toContain('緊急のお知らせの本文')
+    expect(p.o.mails.some((m) => m.subject.includes('重要なお知らせ') || m.subject.includes('通常のお知らせ'))).toBe(false)
+    check(p)
+    expect(p.o.mails.filter((m) => m.subject.includes('緊急のお知らせ'))).toHaveLength(1)
+  })
+
+  it('メールの上限で送れなかった緊急のお知らせは、次の確認で送り直す', () => {
+    const p = pair()
+    p.reg.post({ action: 'publishAnnouncement', session: p.reg.session, title: '緊急', body: '本文', importance: 'urgent', target: { kind: 'all' } })
+    p.o.c.sendMail_ = () => false
+    check(p)
+    expect(p.o.props.URGENT_ANNOUNCEMENTS_MAILED).toBeUndefined()
+    p.o.c.sendMail_ = (m: { to: string; subject: string; body: string }) => { p.o.mails.push(m); return true }
+    check(p)
+    expect(JSON.parse(p.o.props.URGENT_ANNOUNCEMENTS_MAILED!)).toHaveLength(1)
+  })
+
+  it('レジストリに登録していない団体は、取りに行かない。形の違うものは捨てる', () => {
+    const reg = registry()
+    const o = org(reg)
+    expect((o.gas as unknown as Record<string, (n: number) => unknown>).announcementsStatus_(Date.now())).toMatchObject({ registered: false, announcements: [] })
+    expect(o.fetches()).toBe(0)
+    const p = pair()
+    expect(p.g.parseAnnouncements_([{ announcementId: 'a', title: 't', body: 'x'.repeat(2000), importance: 'critical', publishedAt: 'x' }, { title: 'no id' }, null]))
+      .toEqual([{ announcementId: 'a', title: 't', body: 'x'.repeat(1000), importance: 'normal', publishedAt: '', expiresAt: '' }])
+  })
+})
+
 describe('機能停止(restrict)', () => {
   it('作成・編集は断り、アンケートへの回答をお願いする。ログイン・読み取りは受け付ける', () => {
     const p = pair()
