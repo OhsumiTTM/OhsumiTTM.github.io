@@ -76,6 +76,8 @@ import {
   getDiagnosticsReport,
   normalizeReceiptNo,
   type DiagnosticsReport,
+  MAIL_KIND_LABELS,
+  type MailQueueStatus,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -257,6 +259,7 @@ export function RegistryAdmin() {
         </div>
       </nav>
       {error && <p className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm break-words text-destructive">{error}</p>}
+      {overview?.mailQueue && <MailQueueNotice q={overview.mailQueue} />}
       {!overview ? (
         <p className="text-sm text-muted-foreground">{loading ? '読み込み中…' : '一覧を読み込めませんでした。「読み直す」を押してください。'}</p>
       ) : tab === 'orgs' ? (
@@ -677,7 +680,7 @@ function GasUpdateRequest({ org, session, onAuthError }: { org: OrgSummary; sess
       const res = await requestGasUpdate(session, org.orgId, reason)
       setOpen(false)
       setReason('')
-      setMessage({ ok: true, text: `担当者 ${res.sentTo} 人に、更新のお願いを送りました。` })
+      setMessage({ ok: true, text: res.queued ? `今日はレジストリのメールの上限に達しているため、担当者 ${res.sentTo} 人への更新のお願いは、翌日以降に送ります。` : `担当者 ${res.sentTo} 人に、更新のお願いを送りました。` })
     } catch (err) {
       if (err instanceof RegistryError && err.authError) onAuthError(err.message)
       else setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) })
@@ -1604,5 +1607,18 @@ function DiagnosticsTab({ overview, session, onAuthError }: { overview: Overview
         )}
       </section>
     </div>
+  )
+}
+
+// レジストリのメールの1日の上限(PR R)。送れていないメールがある時だけ、どのタブでも上に出す
+function MailQueueNotice({ q }: { q: MailQueueStatus }) {
+  if (!q.pending) return null
+  const kinds = Object.keys(q.byKind).map((k) => `${MAIL_KIND_LABELS[k] ?? k} ${q.byKind[k]}`).join('・')
+  return (
+    <p data-mail-queue className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
+      レジストリのメールで、1日の上限のため送れていないもの: {q.pending} 通(宛先 {q.recipients} 件。{kinds})。
+      翌日以降の毎日の処理で、停止の予告 → リマインド → アンケートの送付の順に送ります。今日の残り: {q.remainingToday}
+      {q.oldestAt ? `。いちばん古いもの: ${fmt(q.oldestAt)}` : ''}
+    </p>
   )
 }

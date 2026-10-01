@@ -160,6 +160,7 @@ export function registryResponse(body) {
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
+        mailQueue: { pending: 23, recipients: 31, byKind: { reminder: 15, send: 8 }, oldestAt: iso(1), remainingToday: 0 },
         diagnostics: [
           { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13' },
         ],
@@ -805,6 +806,7 @@ async function run({ build = true } = {}) {
           await registrySession(); await navigate('/registry-admin/')
           // メールの上限に達した・近い団体が分かる(一覧の上の数と、団体ごとの印)
           const mail = await evaluate(`(document.querySelector('[data-mail-level-summary]')?.textContent ?? '') + '|' + document.body.textContent`)
+          if (!(await evaluate(`document.querySelector('[data-mail-queue]')?.textContent ?? ''`)).includes('1日の上限のため送れていないもの: 23 通')) throw new Error('レジストリのメールで送れていない件数が出ません')
           for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8', 'GAS: 更新が要る', 'GAS: 24時間以上確認が無い', 'GAS: 最新', '担当者に更新のお願いを送る…', '毎日の処理が26時間以上成功していない', '毎日・毎時の処理']) {
             if (!mail.includes(want)) throw new Error('レジストリの管理画面に「' + want + '」が出ません')
           }
