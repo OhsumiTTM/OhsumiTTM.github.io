@@ -2569,7 +2569,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-13'
+var OHSUMI_GAS_VERSION = '2026.10.02-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2841,6 +2841,83 @@ function readOnlyAllows_(body) {
   if (READ_ONLY_ACTIONS.indexOf(body.action) < 0) return false
   if (body.action === 'exchangeIdToken' && body.setupCode) return false
   return true
+}
+
+// ---- 機能のスイッチ(レジストリから団体の機能を止める) ----------------------------
+//
+// 不具合が見つかった時に、この GAS を更新し直す前に、その機能だけを止められるようにする。
+// レジストリの checkIn が disabledFeatures(止める機能の ID の一覧。全団体の分と、その団体の分を合わせたもの)を返し、
+// CONTRACT_STATE に覚える。書き込みの前の確かめ直し(10分に1回まで)で伝わるので、止めてから効くまで最大10分ほど。
+// 知らない ID は無視する(レジストリの一覧の方が新しい時)。止めた操作は featureDisabled を付けて断る。
+// ログイン・読み取り(READ_ONLY_ACTIONS)と、ログインの前の操作は、ここに入れない(止められない。テストで確かめる)。
+// ID は、レジストリの FEATURE_IDS と同じにする(テストで確かめる)
+//   actions: 止める操作
+//   inside: 操作ではなく、処理の中で止めるもの(毎日の処理・通知の途中。画面には失敗を返さない)
+var FEATURE_SWITCHES = {
+  uploads: { label: 'ファイルのアップロード', actions: ['uploadAvatar', 'uploadOrgLogo', 'uploadExpenseReceipt', 'uploadSurveyImage'] },
+  expenses: { label: '経費の申請・承認', actions: ['submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense', 'uploadExpenseReceipt'] },
+  forms: { label: 'フォーム・アンケートの回答と承認', actions: ['updateTaskForm', 'notifyFormResult', 'submitCustomForm', 'approveFormStep', 'rejectFormSubmission'] },
+  schedule: { label: '日程調整', actions: ['updateTaskSchedule', 'notifyScheduleResult'] },
+  dailyReports: { label: '日報の提出', actions: ['submitDailyReport'] },
+  recruiting: { label: '採用の候補者', actions: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'] },
+  skills: { label: 'スキル・ポイント・クイズ', actions: ['awardSkillPoints', 'importPortableRecord', 'submitQuizResult', 'bulkUpdateSkills', 'updateSkillLevels'] },
+  projectHealth: { label: 'プロジェクトの健康状態', actions: ['updateProjectHealth', 'notifyProjectHealth', 'reportProjectHealth', 'updateProjectHealthRecord'] },
+  training: { label: '研修の申請', actions: ['updateTrainingHistory', 'notifyTrainingRequest', 'notifyTrainingDecision'] },
+  memberSurvey: { label: 'メンバーのアンケートの回答', actions: ['submitSurveyResponse'] },
+  restore: { label: 'バックアップから戻す', actions: ['restoreBackup', 'restoreTasks'] },
+  personalData: { label: '個人情報の削除の操作', actions: ['setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails'] },
+  webhookSettings: { label: 'Discord・Slack の設定と接続テスト', actions: ['updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook'] },
+  chatNotify: { label: 'Discord・Slack への通知', inside: true },
+  calendarSync: { label: 'Google カレンダーへの登録', inside: true },
+  recurringTasks: { label: '定期タスクの作成', inside: true },
+  metricsSend: { label: 'FSIF への集計値の送信', inside: true },
+}
+var FEATURE_DISABLED_MESSAGE = 'この機能は、不具合の確認のため FSIF が一時的に止めています。再開までお待ちください(閲覧はできます)。'
+
+// レジストリから届いた一覧を、知っている ID だけにする
+function parseDisabledFeatures_(list) {
+  if (!Array.isArray(list)) return []
+  var out = []
+  list.forEach(function (x) {
+    var id = String(x)
+    if (Object.prototype.hasOwnProperty.call(FEATURE_SWITCHES, id) && out.indexOf(id) < 0) out.push(id)
+  })
+  return out
+}
+
+// 今止めている機能の ID(CONTRACT_STATE。このリクエストの中では、1回読んだスクリプトプロパティを使う)
+function disabledFeatures_() {
+  var state = null
+  try { state = JSON.parse(requestProps_().CONTRACT_STATE || 'null') } catch (e) { state = null }
+  return parseDisabledFeatures_(state && state.disabledFeatures)
+}
+
+function featureDisabled_(id) {
+  return disabledFeatures_().indexOf(id) >= 0
+}
+
+// その操作を止めている機能(無ければ '')
+function disabledFeatureOfAction_(action) {
+  var ids = disabledFeatures_()
+  for (var i = 0; i < ids.length; i++) {
+    var f = FEATURE_SWITCHES[ids[i]]
+    if (f.actions && f.actions.indexOf(action) >= 0) return ids[i]
+  }
+  return ''
+}
+
+// 止めている操作なら、featureDisabled を付けたエラーを投げる
+function assertFeatureEnabled_(action) {
+  var id = disabledFeatureOfAction_(action)
+  if (!id) return
+  var e = userError_(FEATURE_SWITCHES[id].label + ': ' + FEATURE_DISABLED_MESSAGE)
+  e.featureDisabled = id
+  throw e
+}
+
+// 代表の管理画面に出す一覧
+function disabledFeaturesForClient_() {
+  return disabledFeatures_().map(function (id) { return { id: id, label: FEATURE_SWITCHES[id].label } })
 }
 
 function readContractState_() {
@@ -3132,6 +3209,8 @@ function refreshContractState_(deps) {
     // 掲載中の緊急のお知らせの ID(代表にメールで1回だけ送る)
     urgentAnnouncementIds: (Array.isArray(out.urgentAnnouncementIds) ? out.urgentAnnouncementIds : [])
       .map(function (x) { return String(x).slice(0, 40) }).filter(function (x) { return /^an_[A-Za-z0-9]+$/.test(x) }).slice(0, 20),
+    // レジストリから止めている機能(機能のスイッチ。古いレジストリは返さない)
+    disabledFeatures: parseDisabledFeatures_(out.disabledFeatures),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -4870,6 +4949,7 @@ function errorResponse_(err, action) {
   var out = { ok: false, error: toErrorMessage_(err) }
   if (err && err.cellTooLong) out.cellTooLong = err.cellTooLong
   if (err && err.conflict) out.conflict = err.conflict
+  if (err && err.featureDisabled) out.featureDisabled = err.featureDisabled
   return out
 }
 
@@ -5098,6 +5178,8 @@ function runBatch_(ops, acting, denied) {
 // 1つの書き込みの操作を実行する(権限の確認・ロック・送り直しの確認は済んでいること)
 function runWriteAction_(body, actingMember) {
   var result
+  // レジストリから止めている機能の操作は断る(まとめて送られた時も、1つずつ)
+  assertFeatureEnabled_(body.action)
   // 書き込みの競合チェック: 画面が開いた時点の版。記録の一覧の差分は、今のシートの一覧に当て直し、権限も確かめ直す
   setExpectedRowVersions_(body)
   if (body.listOps !== undefined && LIST_ACTIONS[body.action]) {
@@ -5564,7 +5646,7 @@ function runWriteAction_(body, actingMember) {
       result = { recorded: reportClientError_(body, actingMember.id) }
       break
     case 'getOpsStatus':
-      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_() }
+      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_(), disabledFeatures: disabledFeaturesForClient_() }
       break
     case 'recheckSharing':
       result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()), surveys: surveysStatus_() }
@@ -7205,6 +7287,7 @@ function syncCalendarForTask_(taskId) {
 
 function syncCalendarForTaskUnmeasured_(taskId) {
   try {
+    if (featureDisabled_('calendarSync')) return
     var task = findRow_(SHEET_TASKS, taskId)
     if (!task || !task.due_date) return
 
@@ -8684,6 +8767,8 @@ function getSettingValue_(key) {
 // とズレて期限が1日早くなることがあった。両方の経路をここへ統一し、
 // LockServiceで排他制御することでどちらも解消する。
 function generateRecurringTasksLocked_() {
+  // レジストリから止めている時は作らない(画面には失敗を返さない)
+  if (featureDisabled_('recurringTasks')) return { generated: [] }
   var lock = LockService.getScriptLock()
   try {
     lock.waitLock(10000) // 最大10秒待つ。取れなければ諦める(次の呼び出しに任せる)
@@ -8989,6 +9074,7 @@ function logSuppressedChat_(kind, content) {
 
 function sendDiscordMessage_(content) {
   try {
+    if (featureDisabled_('chatNotify')) return
     var url = getDiscordWebhookUrl_()
     if (!url) return
     if (isChatSuppressed_()) { logSuppressedChat_('Discord', content); return }
@@ -9005,6 +9091,7 @@ function sendDiscordMessage_(content) {
 
 function sendSlackMessage_(content) {
   try {
+    if (featureDisabled_('chatNotify')) return
     var url = getSlackWebhookUrl_()
     if (!url) return
     if (isChatSuppressed_()) { logSuppressedChat_('Slack', content); return }
@@ -14781,6 +14868,7 @@ function maybeSendMetrics_(nowMs, deps) {
   var sharing = metricsSharing_()
   syncMetricsNotice_(sharing.enabled)
   if (!sharing.enabled) return 'disabled'
+  if (featureDisabled_('metricsSend')) return 'featureDisabled'
   var week = metricsWeek_(nowMs, metricsSlot_(orgId))
   var state = readMetricsState_()
   if (state.sent[week.period]) return 'alreadySent'

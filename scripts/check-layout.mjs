@@ -154,7 +154,7 @@ export function registryResponse(body) {
           { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1', mail: { remaining: 0, skipped: 37, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' },
             jobs: { dailyAt: iso(-3), hourlyAt: iso(-1), reported: true, dailyStale: true },
             gasStatus: { current: 'r1e-1', latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, versionState: 'updateRequired', noCheck: false, judgement: 'updateRequired' } },
-          { orgId: 'org_demo', displayName: 'デモ団体(立ち上げのテスト)', status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: '2026.10.01-1', demo: true },
+          { orgId: 'org_demo', displayName: 'デモ団体(立ち上げのテスト)', status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: '2026.10.01-1', demo: true, disabledFeatures: ['dailyReports', 'webhookSettings', 'calendarSync'] },
           { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
@@ -163,6 +163,8 @@ export function registryResponse(body) {
         })),
         kpis: { activeOrgs: 3, byPlan: { ohsumi: 1, cosmo_base: 1, paid: 0, '': 1 }, demoOrgs: 1, metrics: { reportingOrgs: 2, latestPeriod: '2026-09-28', totals: { members: 52, active_7d: 31, tasks: 1240, tasks_done: 980, tasks_overdue: 12 } } },
         mailQueue: { pending: 23, recipients: 31, byKind: { reminder: 15, send: 8 }, oldestAt: iso(1), remainingToday: 0 },
+        // 機能のスイッチ(全団体で止めている機能・止められる機能の一覧)
+        features: { catalog: [['uploads','ファイルのアップロード'],['expenses','経費の申請・承認'],['forms','フォーム・アンケートの回答と承認'],['schedule','日程調整'],['dailyReports','日報の提出'],['recruiting','採用の候補者'],['skills','スキル・ポイント・クイズ'],['projectHealth','プロジェクトの健康状態'],['training','研修の申請'],['memberSurvey','メンバーのアンケートの回答'],['restore','バックアップから戻す'],['personalData','個人情報の削除の操作'],['webhookSettings','Discord・Slack の設定と接続テスト'],['chatNotify','Discord・Slack への通知'],['calendarSync','Google カレンダーへの登録'],['recurringTasks','定期タスクの作成'],['metricsSend','FSIF への集計値の送信']].map(([id, label]) => ({ id, label })), globalDisabled: ['chatNotify'] },
         diagnostics: [
           { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13' },
         ],
@@ -405,6 +407,8 @@ async function run({ build = true } = {}) {
             { target: 'spreadsheet', kind: 'editor', detail: 'former.leader.with.a.long.address@example.com' },
             { target: 'uploads', kind: 'viewer', detail: 'member@example.com' },
           ] },
+          // FSIF がレジストリから止めている機能(知らない ID は GAS が付けた名前を出す)
+          disabledFeatures: [{ id: 'dailyReports', label: '日報の提出' }, { id: 'futureFeature', label: 'これから足す機能(とても長い名前の機能の説明が続きます)'.repeat(2) }],
           // 1つのセルの上限の8割を超えている記録
           longRecords: { warnAt: 40000, max: 50000, maxLength: 47210, groups: [
             { sheet: 'Members', field: 'one_on_ones_json', label: '1on1 の記録', count: 2, items: [
@@ -812,6 +816,10 @@ async function run({ build = true } = {}) {
             if (!surveys.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + surveys)
           }
           if (surveys.includes('javascript')) throw new Error('Google フォームでない URL のアンケートを出しています')
+          const features = await evaluate(`document.querySelector('[data-ops-features]')?.textContent ?? ''`)
+          for (const want of ['一部の機能を一時的に止めています(2 件)', '日報の提出', 'これから足す機能']) {
+            if (!features.includes(want)) throw new Error('管理画面に、止めている機能「' + want + '」が出ません: ' + features)
+          }
           const privacyBanner = await evaluate(`document.querySelector('[data-personal-data-banner]')?.textContent ?? ''`)
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
@@ -824,6 +832,12 @@ async function run({ build = true } = {}) {
           // メールの上限に達した・近い団体が分かる(一覧の上の数と、団体ごとの印)
           const mail = await evaluate(`(document.querySelector('[data-mail-level-summary]')?.textContent ?? '') + '|' + document.body.textContent`)
           if (!(await evaluate(`document.querySelector('[data-mail-queue]')?.textContent ?? ''`)).includes('1日の上限のため送れていないもの: 23 通')) throw new Error('レジストリのメールで送れていない件数が出ません')
+          // 機能のスイッチ: 全団体・団体ごとに止めている機能が出る。全団体の選ぶ欄を開くと、17の機能が並ぶ
+          if (!(await evaluate(`document.querySelector('[data-feature-switches]')?.textContent ?? ''`)).includes('止めている機能: Discord・Slack への通知')) throw new Error('全団体で止めている機能が出ません')
+          if (!(await evaluate(`document.querySelector('[data-org-demo] [data-org-features]')?.textContent ?? ''`)).includes('止めている機能: 日報の提出・Discord・Slack の設定と接続テスト・Google カレンダーへの登録')) throw new Error('団体で止めている機能が出ません')
+          await evaluate(`[...document.querySelectorAll('[data-feature-switches] button')].find((b) => b.textContent.includes('全団体の機能を止める'))?.click()`)
+          await sleep(100)
+          if ((await evaluate(`document.querySelectorAll('[data-feature-switches] [data-feature-options] input').length`)) !== 17) throw new Error('止められる機能の一覧が出ません')
           // デモの団体: 印が出て、停止の予定を入れるボタンが無い。KPI はデモを除く
           const demo = await evaluate(`document.querySelector('[data-org-demo]')?.textContent ?? ''`)
           if (!demo.includes('デモ') || !demo.includes('デモの団体には、停止の予定を入れられません') || demo.includes('停止の予定を入れる…') || !demo.includes('デモの印を外す…')) throw new Error('デモの団体の表示が違います: ' + demo)

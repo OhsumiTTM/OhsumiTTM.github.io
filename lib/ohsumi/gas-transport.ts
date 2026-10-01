@@ -57,6 +57,8 @@ export interface GasResponse<T = unknown> {
   cellTooLong?: { sheet: string; field: string; length: number; max: number; texts?: string[] | null }
   // ほかの人が先に同じ行・記録を変えたため、上書きせずに断った(書き込みの競合チェック)
   conflict?: { sheet: string; id: string }
+  // レジストリから止めている機能の操作のため、断った(機能の ID。gas/Code.gs の FEATURE_SWITCHES)
+  featureDisabled?: string
   // 1つのセルの上限の8割を超えた記録を書いた(保存は済んでいる)
   longRecords?: LongRecordWritten[]
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)

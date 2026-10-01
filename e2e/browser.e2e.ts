@@ -178,14 +178,16 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
     await waitFor(loggedIn, '代表がログインできません')
     // 団体のデータ(代表あての承認依頼の知らせに、団体Aのタスク)が届き、管理の画面(ADMIN)が出る
     await waitFor(async () => (await allText()).includes('団体Aのタスク'), '団体のデータが出ません')
-    expect(await text()).toContain('ADMIN')
+    await waitFor(async () => (await text()).includes('ADMIN'), '代表に管理の画面(ADMIN)が出ません')
   })
 
   it('ログアウト: ログイン画面に戻り、読み込み直してもログインしたままにならない', async () => {
     // ヘッダーの右端(アカウント)のメニューを開いて「ログアウト」
+    // メニューが開くまでの時間は、端末の混み具合で変わる(決まった時間を待たず、「ログアウト」が出るまで待つ)
+    const logoutItem = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === 'ログアウト')`
     await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
-    await sleep(400)
-    await page.evaluate(`[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === 'ログアウト').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!${logoutItem}`), 'アカウントのメニューが開きません')
+    await page.evaluate(`${logoutItem}.click(); true`)
     await waitFor(async () => !(await loggedIn()), 'ログアウトできません')
     expect(await page.evaluate(`localStorage.getItem('ohsumi-session-${A.orgId}')`)).toBeNull()
     await navigate('/?org=' + A.orgId)
