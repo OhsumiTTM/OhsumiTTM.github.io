@@ -70,4 +70,9 @@ describe('simple-markdown', () => {
       expect(out.replace(/<[^>]*>/g, '')).not.toMatch(/\[[^\]]*\]|XX/)
     }
   })
+  it('箇条書きの中で字下げした表・区切りの無い「|」の行でも止まらない', () => {
+    const blocks = parseMarkdown(['1. 料金は次のとおりです。', '', '   | 人数 | 料金 |', '   | --- | --- |', '   | 10人以下 | 10,000円 |', '', '| 区切りの無い行 |', '2. 次'].join('\n'))
+    expect(blocks.map((b) => b.type)).toEqual(['ol', 'table', 'paragraph', 'ol'])
+    expect(blocks[1]).toMatchObject({ header: ['人数', '料金'], rows: [['10人以下', '10,000円']] })
+  })
 })

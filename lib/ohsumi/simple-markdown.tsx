@@ -29,7 +29,8 @@ export function parseMarkdown(source: string): Block[] {
       i++
       continue
     }
-    if (line.trim().startsWith('|') && TABLE_SEPARATOR.test(lines[i + 1] ?? '')) {
+    // 表(箇条書きの中で字下げした表も、表として読む)
+    if (line.trim().startsWith('|') && TABLE_SEPARATOR.test((lines[i + 1] ?? '').trim())) {
       const header = splitRow(line)
       const rows: string[][] = []
       i += 2
@@ -55,6 +56,8 @@ export function parseMarkdown(source: string): Block[] {
     ) {
       para.push(lines[i++])
     }
+    // 段落にならない行(表の区切りの無い「|」で始まる行など)も、1行の段落にして必ず先へ進む(止まらないように)
+    if (para.length === 0) para.push(lines[i++])
     blocks.push({ type: 'paragraph', lines: para })
   }
   return blocks
