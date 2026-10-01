@@ -64,6 +64,8 @@ export interface OrgSummary {
   demo?: boolean
   // この団体だけ止めている機能の ID(全団体の分は含めない。古いレジストリでは無い)
   disabledFeatures?: string[]
+  // この団体だけの上限・しきい値(全団体の値は含めない。古いレジストリでは無い)
+  tunables?: Record<string, number>
 }
 
 // 判定: latest 最新 / outdated 古い / updateRequired 更新が要る / noCheck 24時間以上確認が無い
@@ -179,6 +181,8 @@ export interface Overview {
   kpis?: OrgKpis
   // 機能のスイッチ(古いレジストリでは無い)
   features?: FeatureSwitches
+  // 上限・しきい値(古いレジストリでは無い)
+  tunables?: Tunables
 }
 
 // ---- デモの団体と KPI(PR S) ----
@@ -207,6 +211,39 @@ export function setFeatureSwitches(
   reason: string,
 ): Promise<OrgSummary | { scope: 'global'; disabled: string[] }> {
   return callRegistry('setFeatureSwitches', { session: session.token, ...target, features, reason })
+}
+
+// ---- 上限・しきい値(団体の GAS に配る。PR X) ----
+// 団体の GAS も、届いた値を範囲(min〜max)に収めて使う。団体ごとの値は、全団体の値より優先する
+export interface TunableSpec {
+  key: string
+  label: string
+  def: number
+  min: number
+  max: number
+}
+export interface Tunables {
+  catalog: TunableSpec[]
+  global: Record<string, number>
+}
+
+/** 上限・しきい値を変える(その範囲の値をまるごと置き換える。空の項目は既定に戻す)。5分以内のログインが必要。送り直さない */
+export function setTunables(
+  session: AdminSession,
+  target: { scope: 'global' } | { scope: 'org'; orgId: string },
+  values: Record<string, number>,
+  reason: string,
+): Promise<OrgSummary | { scope: 'global'; values: Record<string, number> }> {
+  return callRegistry('setTunables', { session: session.token, ...target, values, reason })
+}
+
+/** 入力欄の文字を値にする。空は undefined(既定に戻す)。範囲の外・整数でない時はエラーの文 */
+export function parseTunableInput(spec: TunableSpec, text: string): { value?: number; error?: string } {
+  const t = text.trim()
+  if (!t) return {}
+  const v = Number(t)
+  if (!Number.isInteger(v) || v < spec.min || v > spec.max) return { error: `${spec.label}は、${spec.min}〜${spec.max}の整数で入れてください。` }
+  return { value: v }
 }
 
 /** 機能の ID → 表示名(一覧に無い ID はそのまま) */

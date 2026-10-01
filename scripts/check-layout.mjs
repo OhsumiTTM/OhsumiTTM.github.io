@@ -154,7 +154,7 @@ export function registryResponse(body) {
           { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1', mail: { remaining: 0, skipped: 37, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' },
             jobs: { dailyAt: iso(-3), hourlyAt: iso(-1), reported: true, dailyStale: true },
             gasStatus: { current: 'r1e-1', latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, versionState: 'updateRequired', noCheck: false, judgement: 'updateRequired' } },
-          { orgId: 'org_demo', displayName: 'デモ団体(立ち上げのテスト)', status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: '2026.10.01-1', demo: true, disabledFeatures: ['dailyReports', 'webhookSettings', 'calendarSync'] },
+          { orgId: 'org_demo', displayName: 'デモ団体(立ち上げのテスト)', status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: '2026.10.01-1', demo: true, disabledFeatures: ['dailyReports', 'webhookSettings', 'calendarSync'], tunables: { inviteMailPerHour: 1, contractRecheckIdleSec: 1800 } },
           { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
@@ -164,6 +164,8 @@ export function registryResponse(body) {
         kpis: { activeOrgs: 3, byPlan: { ohsumi: 1, cosmo_base: 1, paid: 0, '': 1 }, demoOrgs: 1, metrics: { reportingOrgs: 2, latestPeriod: '2026-09-28', totals: { members: 52, active_7d: 31, tasks: 1240, tasks_done: 980, tasks_overdue: 12 } } },
         mailQueue: { pending: 23, recipients: 31, byKind: { reminder: 15, send: 8 }, oldestAt: iso(1), remainingToday: 0 },
         // 機能のスイッチ(全団体で止めている機能・止められる機能の一覧)
+        // 上限・しきい値(項目の一覧と、全団体の値)
+        tunables: { catalog: [['notifyPerHour','通知(1人1時間)',60,10,300],['mentionPerHour','メンションの通知の宛先(1人1時間)',30,5,100],['resultNotifyPerHour','結果の通知(1人1時間)',10,3,50],['translatePerHour','翻訳する文(1人1時間)',500,50,2000],['clientErrorPerHour','画面のエラーの記録(1人1時間)',30,5,100],['inviteMailPerHour','本人あての招待リンクのメール(1人1時間)',3,1,10],['digestMailReserve','まとめて送る分に回すメールの残り',10,5,50],['dailyJobStaleHours','毎日の処理が止まったとみなす時間',26,25,72],['hourlyJobStaleHours','毎時の処理が止まったとみなす時間',3,2,24],['personalDataNoticeDays','個人情報を消す前に知らせる日数',7,3,30],['metricsRetryMaxHours','集計値の送り直しの間隔の上限(時間)',24,6,72],['contractRecheckIdleSec','書き込みの前にレジストリへ確かめ直す間隔(秒)',600,120,1800],['announcementsCacheSec','お知らせを覚えておく時間(秒)',600,60,3600]].map(([key, label, def, min, max]) => ({ key, label, def, min, max })), global: { translatePerHour: 1000 } },
         features: { catalog: [['uploads','ファイルのアップロード'],['expenses','経費の申請・承認'],['forms','フォーム・アンケートの回答と承認'],['schedule','日程調整'],['dailyReports','日報の提出'],['recruiting','採用の候補者'],['skills','スキル・ポイント・クイズ'],['projectHealth','プロジェクトの健康状態'],['training','研修の申請'],['memberSurvey','メンバーのアンケートの回答'],['restore','バックアップから戻す'],['personalData','個人情報の削除の操作'],['webhookSettings','Discord・Slack の設定と接続テスト'],['chatNotify','Discord・Slack への通知'],['calendarSync','Google カレンダーへの登録'],['recurringTasks','定期タスクの作成'],['metricsSend','FSIF への集計値の送信']].map(([id, label]) => ({ id, label })), globalDisabled: ['chatNotify'] },
         diagnostics: [
           { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13' },
@@ -838,6 +840,12 @@ async function run({ build = true } = {}) {
           await evaluate(`[...document.querySelectorAll('[data-feature-switches] button')].find((b) => b.textContent.includes('全団体の機能を止める'))?.click()`)
           await sleep(100)
           if ((await evaluate(`document.querySelectorAll('[data-feature-switches] [data-feature-options] input').length`)) !== 17) throw new Error('止められる機能の一覧が出ません')
+          // 上限・しきい値: 全団体・団体ごとの既定と違う値が出る。全団体の入力欄を開くと、13の項目が並ぶ
+          if (!(await evaluate(`document.querySelector('[data-tunables]')?.textContent ?? ''`)).includes('既定と違う値: 翻訳する文(1人1時間) 1000')) throw new Error('全団体の上限・しきい値が出ません')
+          if (!(await evaluate(`document.querySelector('[data-org-demo] [data-org-tunables]')?.textContent ?? ''`)).includes('本人あての招待リンクのメール(1人1時間) 1')) throw new Error('団体の上限・しきい値が出ません')
+          await evaluate(`[...document.querySelectorAll('[data-tunables] button')].find((b) => b.textContent.includes('全団体の上限・しきい値を変える'))?.click()`)
+          await sleep(100)
+          if ((await evaluate(`document.querySelectorAll('[data-tunables] [data-tunable-fields] input').length`)) !== 13) throw new Error('上限・しきい値の入力欄が出ません')
           // デモの団体: 印が出て、停止の予定を入れるボタンが無い。KPI はデモを除く
           const demo = await evaluate(`document.querySelector('[data-org-demo]')?.textContent ?? ''`)
           if (!demo.includes('デモ') || !demo.includes('デモの団体には、停止の予定を入れられません') || demo.includes('停止の予定を入れる…') || !demo.includes('デモの印を外す…')) throw new Error('デモの団体の表示が違います: ' + demo)
