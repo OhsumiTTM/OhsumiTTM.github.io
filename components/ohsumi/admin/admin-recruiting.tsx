@@ -176,8 +176,12 @@ export function AdminRecruiting() {
 
   const convert = (c: Candidate) => {
     if (!confirm(t('admin.recruiting.confirmConvert', { name: c.name }))) return
-    convertCandidateToMember(c.id)
+    // 招待メール: 登録したアドレスに、団体の招待リンクを送る(リンクは GAS が作る)
+    const sendInvite = !!c.email && confirm(t('admin.recruiting.confirmInvite'))
     toast(t('admin.recruiting.convertedToast', { name: c.name }))
+    convertCandidateToMember(c.id, undefined, sendInvite).then((invite) => {
+      if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : 'admin.members.invite.mailNotSent'))
+    })
   }
 
   return (

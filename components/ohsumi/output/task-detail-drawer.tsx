@@ -1,5 +1,6 @@
 'use client'
 
+import { currentInviteLink } from '@/components/ohsumi/other-device'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useRef, useState } from 'react'
 import { getCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
@@ -1244,6 +1245,7 @@ function DrawerBody({
   const currentUserTz = members.find((m) => m.id === currentUserId)?.timezone ?? DEFAULT_TIMEZONE
   const overdue = isOverdue(task, currentUserTz)
   const calendarUrl = googleCalendarUrl(task, {
+    appLink: currentInviteLink() ?? undefined,
     projectName,
     department: departmentNameOf(task.department),
     category: task.category,
@@ -2490,8 +2492,8 @@ const SCHEDULE_RESPONSE_COLOR: Record<ScheduleResponseValue, string> = {
 function AddToGCalButton({ task }: { task: Task }) {
   const { t } = useI18n()
   const href =
-    googleCalendarUrl(task) ??
-    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, new Date().toISOString().slice(0, 10), task.description || 'Ohsumiから追加')
+    googleCalendarUrl(task, { appLink: currentInviteLink() ?? undefined }) ??
+    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, new Date().toISOString().slice(0, 10), [task.description, `Ohsumiから追加${currentInviteLink() ? ': ' + currentInviteLink() : ''}`].filter(Boolean).join('\n'))
 
   return (
     <a

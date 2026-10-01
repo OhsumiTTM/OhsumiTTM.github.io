@@ -71,6 +71,12 @@ import { extractUnsavedTexts } from './read-only'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
+/** 新しいメンバーへの招待メールの結果(gas/Code.gs の sendMemberInvite_)。notChecked: レジストリに確かめていない団体 */
+export interface MemberInviteResult {
+  sent: boolean
+  reason?: 'notChecked' | 'noEmail'
+}
+
 /** 本人あての招待リンクのメールを送れるか(gas/Code.gs の inviteMailStatus_) */
 export interface InviteMailStatus {
   available: boolean
@@ -688,8 +694,9 @@ export interface BackgroundData {
 }
 
 export interface ExchangeResult extends InitialData {
-  // 登録されていないアカウントの場合、本人のメールアドレス(ログイン画面の表示用)
+  // 登録されていないアカウントの場合、本人のメールアドレスと団体名(ログイン画面の表示用)
   email?: string
+  orgName?: string
   session?: StoredSession
   // GAS が最終ログイン日時を記録した(画面は updateLastLogin を送らなくてよい)
   lastLoginRecorded?: boolean
@@ -719,8 +726,8 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
     throw err
   }
   if (!json.ok || !json.result) throw new Error(json.error || 'ログインに失敗しました')
-  const res = json.result as InitialDataResponse & { email?: string; session?: StoredSession; reloadInitialData?: boolean; lastLoginRecorded?: boolean }
-  if (!res.memberId) return { memberId: null, email: res.email }
+  const res = json.result as InitialDataResponse & { email?: string; orgName?: string; session?: StoredSession; reloadInitialData?: boolean; lastLoginRecorded?: boolean }
+  if (!res.memberId) return res.orgName ? { memberId: null, email: res.email, orgName: res.orgName } : { memberId: null, email: res.email }
   // 送り直しで受け取った前回の結果(gas/Code.gs の rememberLogin_)には、初期データが入っていない。
   // 受け取ったセッションで、初期データを読み直す
   if (res.reloadInitialData && res.session) {
@@ -914,8 +921,9 @@ export const remoteApi = {
       dataUrl,
       filename,
     }),
-  addMember: (name: string, email: string, affiliation: string, role: Role) =>
-    postToGas<{ id: string }>('addMember', { name, email, affiliation, role }),
+  // sendInvite: 登録したアドレスに招待メールを送る(リンクは GAS が SITE_ORIGINS と団体ID から作る)
+  addMember: (name: string, email: string, affiliation: string, role: Role, sendInvite = false) =>
+    postToGas<{ id: string; invite?: MemberInviteResult }>('addMember', { name, email, affiliation, role, sendInvite }),
   updateEmail: (memberId: string, email: string) => postToGas('updateEmail', { memberId, email }),
   // 裏での読み込み(経費・フォームの回答・採用の候補者・自分のメールアドレス)を1回で受け取る。
   // それぞれ個別の操作と同じ絞り込みを通る。失敗したものは errors に理由が入る(gas/Code.gs の getBackgroundData)
@@ -994,8 +1002,8 @@ export const remoteApi = {
     },
   ) => postToGas('updateCandidate', { candidateId, fields }),
   removeCandidate: (candidateId: string) => postToGas('removeCandidate', { candidateId }),
-  convertCandidateToMember: (candidateId: string, role?: string) =>
-    postToGas('convertCandidateToMember', { candidateId, role }),
+  convertCandidateToMember: (candidateId: string, role?: string, sendInvite = false) =>
+    postToGas<{ memberId: string; invite?: MemberInviteResult }>('convertCandidateToMember', { candidateId, role, sendInvite }),
   updateReviewer: (taskId: string, reviewerId: string | null) =>
     postToGas('updateReviewer', { taskId, reviewerId }),
   updateReviewers: (taskId: string, reviewerIds: string[], requiredApprovals?: number | 'all') =>

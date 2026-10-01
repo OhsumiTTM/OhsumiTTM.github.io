@@ -58,7 +58,8 @@ function noop<T extends object>(target: T): T {
 
 export interface Sent { kind: 'mail' | 'chat' | 'queue'; to: string; text: string }
 
-export function guardHarness(opts: { code?: string; props?: Record<string, string> } = {}) {
+// realCalendar: カレンダーの予定を作る処理を動かし、作った予定を events に記録する
+export function guardHarness(opts: { code?: string; props?: Record<string, string>; realCalendar?: boolean } = {}) {
   const code = opts.code ?? CODE_GS
   const cache = new Map<string, string>()
   const props: Record<string, string> = {
@@ -104,6 +105,12 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     ['m-other', 'other@example.com'], ['m-victim', 'victim@example.com'], ['m-off', 'off@example.com']])
 
   const sent: Sent[] = []
+  const events: { title: string; options: Record<string, unknown> }[] = []
+  const calendar = noop({
+    getEvents: () => [],
+    createEvent: (title: string, _s: Date, _e: Date, options: Record<string, unknown>) => { events.push({ title, options }) },
+    createAllDayEvent: (title: string, _d: Date, options: Record<string, unknown>) => { events.push({ title, options }) },
+  })
   const blob = (d: Buffer | string) => {
     const bytes = Buffer.isBuffer(d) ? d : Buffer.from(String(d))
     return noop({ getBytes: () => bytes, getDataAsString: () => bytes.toString('utf8') })
@@ -140,7 +147,7 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     LanguageApp: { translate: (s: string) => '[訳]' + s },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
     DriveApp: noop({}),
-    CalendarApp: noop({}),
+    CalendarApp: noop({ getDefaultCalendar: () => calendar }),
     ScriptApp: noop({ getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/GUARD/exec' }) }),
     UrlFetchApp: { fetch: () => ({ getResponseCode: () => 200, getContentText: () => '{}' }) },
     Utilities: noop({
@@ -177,7 +184,7 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     return { tables }
   }
   c.isTestEnvironment_ = () => false
-  c.syncCalendarForTask_ = () => {}
+  if (!opts.realCalendar) c.syncCalendarForTask_ = () => {}
   c.sendDiscordMessage_ = (content: string) => { sent.push({ kind: 'chat', to: 'discord', text: String(content) }) }
   c.sendSlackMessage_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } }
@@ -194,7 +201,8 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     for (const r of sheets.MemberEmails.rows.slice(1)) String(r[1]).split(/[\s,;]+/).filter(Boolean).forEach((e) => out.add(e.toLowerCase()))
     return out
   }
-  return { c, post, sheets, props, cache, sent, allSent, tasksJson, savedText, registeredEmails }
+  const addSheet = (name: string, rows: Cell[][]) => add(name, rows)
+  return { c, post, sheets, props, cache, sent, events, allSent, tasksJson, savedText, registeredEmails, addSheet }
 }
 
 // doPost が受け付ける操作: runWriteAction_ の case(新しく足した操作も、自動でここに入る)

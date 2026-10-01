@@ -831,10 +831,9 @@ function registerWithRegistryFromMenu() {
     return
   }
   var msg = '団体「' + out.displayName + '」をレジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました。'
-  // 招待リンク(R1-d): メンバーは、初めての端末で Ohsumi のサイトの URL の後ろに /?org=団体ID を付けたリンクから開く
+  // 招待リンク(R1-d): メンバーは、初めての端末でこのリンクから開く。サイトの URL は、レジストリに確かめて受け取る(SITE_ORIGINS)
   var orgId = PropertiesService.getScriptProperties().getProperty('ORG_ID')
-  msg += '\n\n団体ID: ' + orgId + '\n招待リンク: Ohsumi のサイトの URL の後ろに /?org=' + orgId +
-    ' を付けたもの(代表は、ログインした後に管理画面の「Members」でも確かめられます)'
+  msg += '\n\n' + setupInviteLinkText_(orgId)
   if (out.setupCode) msg += '\n\n' + setupCodeMessage_(out.setupCode, out.setupExpiresAt)
   ui.alert('登録しました', msg, ui.ButtonSet.OK)
 }
@@ -2906,6 +2905,57 @@ function inviteSiteOrigins_() {
   return parseSiteOrigins_(state.siteOrigins)
 }
 
+// 正式なサイトの招待リンク(<SITE_ORIGINS の最初>/?org=<団体ID>)。レジストリに確かめていない団体は ''
+function canonicalInviteLink_() {
+  var origins = inviteSiteOrigins_()
+  var orgId = String(requestProps_().ORG_ID || '')
+  return origins.length && orgId ? origins[0] + '/?org=' + encodeURIComponent(orgId) : ''
+}
+
+// 登録を終えた時に出す招待リンク。レジストリに確かめて、サイトの URL(SITE_ORIGINS)が分かれば完全なリンクを出す
+function setupInviteLinkText_(orgId) {
+  var link = ''
+  try {
+    resetRequestProps_()
+    refreshContractState_()
+    resetRequestProps_()
+    link = canonicalInviteLink_()
+  } catch (e) {
+    link = ''
+  }
+  if (link) return '団体ID: ' + orgId + '\n招待リンク: ' + link + '\n(メンバーには、初めての端末でこのリンクから開くよう伝えてください。代表は、ログインした後に管理画面の「Members」でも確かめられます)'
+  return '団体ID: ' + orgId + '\n招待リンク: Ohsumi のサイトの URL の後ろに /?org=' + orgId +
+    ' を付けたもの(レジストリからサイトの URL を受け取れませんでした。代表は、ログインした後に管理画面の「Members」でも確かめられます)'
+}
+
+// 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)
+function withSiteLink_(text) {
+  var link = ''
+  try { link = canonicalInviteLink_() } catch (e) { link = '' }
+  var body = String(text || '')
+  if (!link || body.indexOf(link) >= 0) return body
+  return body + '\n\nOhsumi を開く / Open Ohsumi: ' + link
+}
+
+// 新しいメンバーへの招待メール(メンバーの追加・候補者を正式なメンバーにする時に、選んだ時だけ)。
+// 宛先は、そのメンバーの登録済みのアドレス。リンクは SITE_ORIGINS と団体ID から GAS が作る
+function sendMemberInvite_(memberId) {
+  var link = canonicalInviteLink_()
+  if (!link) return { sent: false, reason: 'notChecked' }
+  var emails = registeredEmailsOf_(memberId)
+  if (emails.length === 0) return { sent: false, reason: 'noEmail' }
+  var orgName = getSettingValue_('org_name') || 'Ohsumi'
+  sendMail_({
+    to: emails.join(','),
+    subject: '[Ohsumi] ' + orgName + ' の Ohsumi に招待されました',
+    body: orgName + ' の Ohsumi(タスク・メンバーの管理)に招待されました。\n\n' +
+      '次のリンクを開き、このメールアドレスの Google アカウントでログインしてください。\n\n' + link +
+      '\n\nスマホでは、開いた後に「ホーム画面に追加」をすると、次からすぐに開けます。' +
+      '\n\n---\nYou have been invited to ' + orgName + ' on Ohsumi. Open the link above and sign in with the Google account for this email address.',
+  })
+  return { sent: true }
+}
+
 function inviteMailKey_(memberId) {
   return 'invmail:' + sha256Base64Url_(String(memberId))
 }
@@ -3036,8 +3086,9 @@ function exchangeIdToken_(body) {
   if (!memberId && body.setupCode) {
     memberId = timed_('setupMs', function () { return claimInitialSetup_(google.email, body.setupCode, Date.now()) })
   }
-  // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
-  if (!memberId) return { memberId: null, email: google.email }
+  // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスと団体名だけ返す
+  // (団体名は、Google でログインした後にだけ返す。どの団体に入ろうとしたかを画面に出すため)
+  if (!memberId) return { memberId: null, email: google.email, orgName: String(getSettingValue_('org_name') || '') }
   // 休止中のメンバーはログインできない(休止を解除すれば、またログインできる)
   if (memberIsInactive_(memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
   var data = getInitialDataForMember_(memberId, null)
@@ -5005,6 +5056,8 @@ function runWriteAction_(body, actingMember) {
     case 'addMember':
       if (body.role) requireKnownRole_(body.role)
       result = addMember_(body.name, body.email, body.affiliation, body.role)
+      // 招待メールを送る(選んだ時だけ。宛先は登録したアドレス、リンクは GAS が作る)
+      if (body.sendInvite) result.invite = sendMemberInvite_(result.id)
       break
     case 'addCandidate':
       result = addCandidate_(body.candidate || {})
@@ -5018,6 +5071,7 @@ function runWriteAction_(body, actingMember) {
     case 'convertCandidateToMember':
       if (body.role) requireKnownRole_(body.role)
       result = convertCandidateToMember_(body.candidateId, body.role)
+      if (body.sendInvite && result && result.memberId) result.invite = sendMemberInvite_(result.memberId)
       break
     case 'updateEducationInfo':
       result = updateMemberFields_(body.memberId, {
@@ -5786,6 +5840,8 @@ function allowRequestNotification_(what) {
 function sendMail_(options) {
   if (!allowRequestNotification_('メール ' + options.subject)) return
   countAction_('mailCount')
+  // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>)
+  options.body = withSiteLink_(options.body)
   return measureAction_('mailMs', function () { return sendMailUnmeasured_(options) })
 }
 
@@ -6434,6 +6490,10 @@ function syncCalendarForTaskUnmeasured_(taskId) {
     var eventOptions = isTestEnvironment_()
       ? {}
       : { guests: guests.join(','), sendInvites: true }
+    // 予定からサイトを開けるようにする(レジストリに確かめていない団体では付けない)
+    var eventLink = ''
+    try { eventLink = canonicalInviteLink_() } catch (linkErr) { eventLink = '' }
+    if (eventLink) eventOptions.description = 'Ohsumi を開く / Open Ohsumi: ' + eventLink
     if (isTestEnvironment_()) {
       console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + guests.join(','))
     }
@@ -7857,6 +7917,7 @@ function notifyChat_(content) {
 
 function notifyChatUnmeasured_(content) {
   if (!allowRequestNotification_('Discord/Slack')) return
+  content = withSiteLink_(content)
   sendDiscordMessage_(content)
   sendSlackMessage_(content)
 }

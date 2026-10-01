@@ -232,13 +232,13 @@ export function LoginScreen() {
           if (result.status === 'notRegistered') {
             // 同じアカウントで自動ログインを繰り返さないようにする
             window.google?.accounts?.id?.disableAutoSelect()
-            failure = tRef.current('login.notRegistered', { email: result.email ?? '' })
-            // 最初の代表の場合に備えて、初期設定コードの欄を開く
-            openSetup = true
-            if (mountedRef.current) {
-              setLoginError(failure)
-              setSetupOpen(true)
-            }
+            // どの団体に・どのアカウントで入ろうとしたかと、どうすればよいかを出す。
+            // 初期設定コードの欄は開かない(最初の代表だけが使う。必要な人は自分で開く)
+            const orgName = result.orgName || loadSavedOrgs().find((o) => o.orgId === orgId)?.name || ''
+            failure = orgName
+              ? tRef.current('login.notRegisteredInOrg', { email: result.email ?? '', org: orgName })
+              : tRef.current('login.notRegistered', { email: result.email ?? '' })
+            if (mountedRef.current) setLoginError(failure)
           }
         } catch (e) {
           failure = e instanceof Error ? e.message : tRef.current('login.failed')
