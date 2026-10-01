@@ -416,7 +416,7 @@ function splitTags(value: string | undefined): string[] {
 // progress_note, original_input_id) carry the richer fields this UI grew
 // during the mock phase — see gas/README.md for the full column list.
 
-export const AVATAR_PALETTE = ['#6366f1', '#db2777', '#059669', '#d97706', '#0ea5e9', '#8b5cf6', '#e11d48', '#0891b2']
+export const AVATAR_PALETTE = ['#2f5bea', '#db2777', '#059669', '#d97706', '#0ea5e9', '#8b5cf6', '#e11d48', '#0891b2']
 
 export function colorForId(id: string): string {
   let hash = 0

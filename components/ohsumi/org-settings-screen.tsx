@@ -172,14 +172,14 @@ export function OrgSettingsScreen() {
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <input
               type="color"
-              value={themeColorValid ? themeColorDraft : '#6366f1'}
+              value={themeColorValid ? themeColorDraft : '#2f5bea'}
               onChange={(e) => setThemeColorDraft(e.target.value)}
               className="h-9 w-12 cursor-pointer rounded-md border border-border bg-background p-0.5"
             />
             <input
               value={themeColorDraft}
               onChange={(e) => setThemeColorDraft(e.target.value)}
-              placeholder="#6366f1"
+              placeholder="#2f5bea"
               className="h-9 w-28 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
             />
             <Button
