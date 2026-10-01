@@ -325,6 +325,8 @@ interface OhsumiContextValue extends OhsumiState {
   surveyInvitedIds: string[]
   updateSurveyInvitedIds: (ids: string[]) => void
   orgName: string
+  // 個人を特定しない集計値を FSIF に送っているか(画面の下に出す)
+  metricsSharingNotice: boolean
   setOrgName: (name: string) => void
   orgLogoUrl: string
   setOrgLogoUrl: (url: string) => void
@@ -968,6 +970,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // アンケート回答対象者の限定。空配列=全員回答可
   const [surveyInvitedIds, setSurveyInvitedIds] = useState<string[]>([])
   // 団体名・ロゴ — SettingsCSV + localStorageキャッシュで復元
+  const [metricsSharingNotice, setMetricsSharingNotice] = useState(false)
   const [orgName, setOrgNameState] = useState<string>(() => {
     try { return typeof window !== 'undefined' ? (window.localStorage.getItem(ORG_NAME_STORAGE_KEY) ?? '') : '' } catch { return '' }
   })
@@ -1217,6 +1220,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setSkillFieldSkillsState(s.skillFieldSkills)
     setSkillFieldThresholdState(s.skillFieldThreshold ?? DEFAULT_SKILL_FIELD_THRESHOLD)
     setOrgNotificationEmails(s.orgNotificationEmails)
+    setMetricsSharingNotice(s.metricsSharingNotice === true)
     setSurveyInvitedIds(s.surveyInvitedIds)
     if (s.orgName) {
       setOrgNameState(s.orgName)
@@ -5281,6 +5285,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     surveyInvitedIds,
     updateSurveyInvitedIds,
     orgName,
+    metricsSharingNotice,
     setOrgName,
     orgLogoUrl,
     setOrgLogoUrl,

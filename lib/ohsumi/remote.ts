@@ -158,6 +158,19 @@ export interface UsageStatus {
   }
 }
 
+/** FSIF に送る集計値(gas/Code.gs の metricsStatus_。代表だけ) */
+export interface MetricsStatus {
+  plan: '' | 'cosmo_base' | 'ohsumi' | 'paid'
+  mandatory: boolean
+  defaultOn: boolean
+  enabled: boolean
+  slot: { dow: number; hour: number }
+  nextAt: string
+  definitionsVersion: number
+  preview: Record<string, number>
+  history: { period: string; at: string; ok: boolean; error: string; attempt: number }[]
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
@@ -620,6 +633,8 @@ export interface RemoteSettings {
   expenseCategories: import('./types').ExpenseCategory[]
   // カスタムフォーム定義 — Settings キー "custom_form_defs"
   customFormDefs: import('./types').CustomFormDef[]
+  // 個人を特定しない集計値を FSIF に送っているか — Settings キー "metrics_sharing_notice"(on / off。GAS が書く)
+  metricsSharingNotice: boolean
   // 団体名・ロゴ — Settings キー "org_name" / "org_logo_url"
   orgName: string
   orgLogoUrl: string
@@ -697,6 +712,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     orgNotificationEmails: splitTags(byKey.get('org_notification_emails')),
     surveyInvitedIds: splitTags(byKey.get('survey_invited_ids')),
     orgName: byKey.get('org_name') ?? '',
+    metricsSharingNotice: byKey.get('metrics_sharing_notice') === 'on',
     orgLogoUrl: byKey.get('org_logo_url') ?? '',
     themeColor: byKey.get('theme_color') ?? '',
     projectOrder: splitTags(byKey.get('project_order')),
@@ -1168,6 +1184,9 @@ export const remoteApi = {
   recheckSharing: () => postToGas<OpsStatus>('recheckSharing', {}),
   // 利用の集計とエラーの件数(代表だけ)・画面のエラーの記録(種類と操作の名前だけ。文は送らない)
   getUsageStatus: () => postToGas<UsageStatus>('getUsageStatus', {}),
+  // FSIF に送る集計値(代表だけ)
+  getMetricsStatus: () => postToGas<MetricsStatus>('getMetricsStatus', {}),
+  setMetricsSharing: (enabled: boolean) => postToGas<MetricsStatus>('setMetricsSharing', { enabled }),
   reportClientError: (kind: string, errorAction?: string) => postToGas<{ recorded: boolean }>('reportClientError', { kind, errorAction: errorAction ?? '' }),
   // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)
   getPersonalDataStatus: () => postToGas<PersonalDataStatus>('getPersonalDataStatus', {}),

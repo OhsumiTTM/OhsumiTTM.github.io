@@ -250,6 +250,21 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 コードは、団体の登録(`registerOrg`。R1-c)で使います。
 無いコード・使用済み・期限切れ・取り消し済みは、区別せず同じエラーを返します(当てずっぽうの手がかりにしないため)。
 
+### Usage(定量データ。PR N)
+
+団体の GAS が週1回送る、個人を特定しない集計値(`reportMetrics`)。1行が1団体・1期間です。
+
+| 列 | 内容 |
+|---|---|
+| `org_id` | 団体ID |
+| `date` | 期間(その週の月曜日 `YYYY-MM-DD`) |
+| `metrics_json` | 集計値(各項目の定義は `gas/README.md` の「4.18」)。知らない項目・0 未満・数でない値は捨てる |
+| `metrics_version` | 定義の版 |
+| `received_at` | 最後に受け取った日時(同じ期間の送り直しは上書きする) |
+
+署名は `base64url(HMAC-SHA256(共有鍵, 'metrics.' + orgId + '.' + ts + '.' + period + '.' + JSON.stringify(metrics)))`。時刻は前後5分までです。
+checkIn の返事に、団体のプラン(`plan`)を入れます(団体の GAS が送るかを決めるため)。
+
 ## 1.7. 接続先の解決(R1-d)
 
 計測では、GAS のウェブアプリは何もしない ping でも1回あたり約1.3〜2.5秒、たまに10秒以上かかります。

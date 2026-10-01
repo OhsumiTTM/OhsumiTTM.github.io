@@ -923,6 +923,8 @@ function sendBatchNotifications() {
   try {
     // 利用の集計(キャッシュの1時間ごとの回数)を、シートに移す
     try { flushUsage_(Date.now()) } catch (usageErr) { console.warn('利用の集計を移せませんでした: ' + ((usageErr && usageErr.message) || usageErr)) }
+    // 週1回、個人を特定しない集計値を FSIF(レジストリ)に送る(団体ごとにずらした曜日・時刻。失敗したら時間を置いて送り直す)
+    try { maybeSendMetrics_(Date.now()) } catch (metricsErr) { console.warn('集計値を送れませんでした: ' + maskEmailsIn_(String(metricsErr))) }
     sendBatchNotificationsUnrecorded_()
   } catch (e) {
     recordJobRun_('hourly', false, e)
@@ -2562,7 +2564,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-9'
+var OHSUMI_GAS_VERSION = '2026.10.01-10'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2821,6 +2823,8 @@ var READ_ONLY_ACTIONS = [
   'getOpsStatus',
   // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)
   'getUsageStatus',
+  // FSIF に送る集計値の状態・プレビュー・送信の履歴(読み取りだけ)
+  'getMetricsStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2971,6 +2975,8 @@ function refreshContractState_(deps) {
     siteOrigins: parseSiteOrigins_(out.siteOrigins),
     // この GAS の版の更新が要るか(レジストリの版の一覧で判定したもの)
     gasUpdate: parseGasUpdate_(out.gasUpdate),
+    // プラン(集計値を送るかの決まりに使う。古いレジストリは返さない)
+    plan: ['cosmo_base', 'ohsumi', 'paid'].indexOf(String(out.plan || '')) >= 0 ? String(out.plan) : '',
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -3747,7 +3753,7 @@ function authorizeAction_(acting, action, body) {
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
-  var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus']
+  var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus', 'getMetricsStatus', 'setMetricsSharing']
   if (opsActions.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
@@ -4414,6 +4420,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getOpsStatus', 'recheckSharing',
   // 利用の集計とエラーの件数(読むだけ)・画面のエラーの記録(エラーの記録のシートに1行足すだけ)
   'getUsageStatus', 'reportClientError',
+  // FSIF に送る集計値の状態・プレビュー(シートとスクリプトプロパティを読むだけ)
+  'getMetricsStatus',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -5378,6 +5386,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'deleteOrphanEmails':
       result = deleteOrphanEmails_(body.ids, actingMember.id)
+      break
+    case 'getMetricsStatus':
+      result = metricsStatus_(Date.now())
+      break
+    case 'setMetricsSharing':
+      result = setMetricsSharing_(body.enabled === true, actingMember.id, Date.now())
       break
     case 'getUsageStatus':
       result = usageStatus_(Date.now())
@@ -10168,6 +10182,8 @@ var READ_POLICY = {
       learning_courses: 'all',
       training_programs: 'all',
       survey_questions: 'all',
+      // 集計値を FSIF に送っているか(on / off。メンバーにも画面の下に出す)
+      metrics_sharing_notice: 'all',
     },
   },
 }
@@ -14466,4 +14482,219 @@ var PERMISSION_MESSAGE = 'この機能に必要な Google の許可がありま�
 function isPermissionError_(err) {
   var msg = String((err && err.message) || err || '')
   return /You do not have permission to call|Required permissions:|Authorization is required|権限がありません.*(必要な権限|許可)/i.test(msg)
+}
+
+// ---- 定量データ(個人を特定しない集計値)を週1回 FSIF に送る ----
+//
+// 送るかはプランで決まる(レジストリの checkIn が伝える CONTRACT_STATE.plan):
+//   ohsumi(Ohsumiプラン): 必須(いつも送る) / cosmo_base(Cosmo Baseプラン): 代表が選ぶ(初期値は送る) /
+//   paid(有償プラン): 代表が選ぶ(初期値は送らない) / 未設定: 代表が選ぶ(初期値は送らない)
+// 代表の選択はスクリプトプロパティ METRICS_CHOICE(on / off)。送っているかは Settings の metrics_sharing_notice に書き、
+// メンバーにも画面の下に出す。各指標の定義は gas/README.md の「4.18」(定義の版 METRICS_VERSION)
+// 送る曜日・時刻は団体ID から決めて、団体ごとにずらす。期間はその週(月曜日から)。失敗したら1・2・4・8時間…(最長24時間)を
+// 置いて送り直す。レジストリは同じ団体・同じ期間を1件として扱う(送り直しは上書き)
+var METRICS_VERSION = 1
+var METRICS_HISTORY_KEEP = 12
+var METRICS_RETRY_MAX_HOURS = 24
+
+function metricsPlan_() {
+  var state = null
+  try { state = JSON.parse(PropertiesService.getScriptProperties().getProperty('CONTRACT_STATE') || 'null') } catch (e) { state = null }
+  return state && state.plan ? String(state.plan) : ''
+}
+
+// { plan, mandatory, defaultOn, choice, enabled }
+function metricsSharing_() {
+  var plan = metricsPlan_()
+  var choice = String(PropertiesService.getScriptProperties().getProperty('METRICS_CHOICE') || '')
+  var mandatory = plan === 'ohsumi'
+  var defaultOn = plan === 'ohsumi' || plan === 'cosmo_base'
+  var enabled = mandatory ? true : choice === 'on' ? true : choice === 'off' ? false : defaultOn
+  return { plan: plan, mandatory: mandatory, defaultOn: defaultOn, choice: choice, enabled: enabled }
+}
+
+// 団体ごとの送る曜日(0=日曜日)と時刻(1〜22時)
+function metricsSlot_(orgId) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'metrics-slot:' + String(orgId || ''), Utilities.Charset.UTF_8)
+  var h = ((bytes[0] & 0xff) << 8) | (bytes[1] & 0xff)
+  return { dow: h % 7, hour: 1 + (Math.floor(h / 7) % 22) }
+}
+
+// その時刻を含む週の月曜日(YYYY-MM-DD。スクリプトのタイムゾーン)と、その週の送る時刻(ミリ秒)
+function metricsWeek_(nowMs, slot) {
+  var tz = Session.getScriptTimeZone()
+  var dow = Number(Utilities.formatDate(new Date(nowMs), tz, 'u')) % 7 // 1=月曜日 … 7=日曜日 → 0=日曜日
+  var daysFromMonday = (dow + 6) % 7
+  var monday = Utilities.formatDate(new Date(nowMs - daysFromMonday * 86400000), tz, 'yyyy-MM-dd')
+  var hourNow = Number(Utilities.formatDate(new Date(nowMs), tz, 'H'))
+  var minuteNow = Number(Utilities.formatDate(new Date(nowMs), tz, 'm'))
+  var startOfToday = nowMs - (hourNow * 60 + minuteNow) * 60000 - (nowMs % 60000)
+  var slotDays = (slot.dow + 6) % 7 // 月曜日から何日目
+  var slotAt = startOfToday + (slotDays - daysFromMonday) * 86400000 + slot.hour * 3600000
+  return { period: monday, slotAt: slotAt }
+}
+
+function readMetricsState_() {
+  var s = null
+  try { s = JSON.parse(PropertiesService.getScriptProperties().getProperty('METRICS_STATE') || 'null') } catch (e) { s = null }
+  s = s && typeof s === 'object' ? s : {}
+  if (!Array.isArray(s.history)) s.history = []
+  if (!s.sent || typeof s.sent !== 'object') s.sent = {}
+  return s
+}
+
+function writeMetricsState_(s) {
+  s.history = s.history.slice(0, METRICS_HISTORY_KEEP)
+  var periods = Object.keys(s.sent).sort().reverse().slice(0, METRICS_HISTORY_KEEP)
+  var sent = {}
+  periods.forEach(function (p) { sent[p] = s.sent[p] })
+  s.sent = sent
+  PropertiesService.getScriptProperties().setProperty('METRICS_STATE', JSON.stringify(s))
+}
+
+function cellTimeMs_(v) {
+  if (v instanceof Date) return v.getTime()
+  var t = Date.parse(String(v || ''))
+  return isFinite(t) ? t : NaN
+}
+
+// 送る集計値(定義は gas/README.md の「4.18」)。個人を特定しない数だけ
+function metricsSnapshot_(nowMs) {
+  var day = 86400000
+  var within = function (v, days) { var t = cellTimeMs_(v); return isFinite(t) && t <= nowMs && nowMs - t < days * day }
+  var table = function (name) {
+    var t = snapshotTableOrSheet_(name)
+    return (t.rows || []).map(function (r) { var o = {}; t.headers.forEach(function (h, i) { o[h] = r[i] }); return o })
+  }
+  var members = table(SHEET_MEMBERS).filter(function (m) {
+    return String(m.id || '') && !boolCellValue_(m.inactive) && !String(m.withdrawn_at || '') && !String(m.personal_data_purged_at || '')
+  })
+  var tasks = table(SHEET_TASKS).filter(function (t) { return String(t.id || '') })
+  var projects = table(SHEET_PROJECTS).filter(function (p) { return String(p.id || '') && !boolCellValue_(p.archived) })
+  var today = Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  var isDone = function (t) { return normalizeCode_('status', t.status) === 'done' }
+  // ログイン・読み込み・書き込みの回数(利用の集計。直近7日)
+  var usage = usageStatus_(nowMs)
+  var last7 = usage.days.slice(-7)
+  var sum = function (k) { return last7.reduce(function (n, d) { return n + d[k] }, 0) }
+  return {
+    version: METRICS_VERSION,
+    members: members.length,
+    active_7d: members.filter(function (m) { return within(m.last_login, 7) }).length,
+    active_30d: members.filter(function (m) { return within(m.last_login, 30) }).length,
+    logins_7d: sum('login'),
+    opens_7d: sum('open'),
+    writes_7d: sum('writes'),
+    tasks: tasks.length,
+    tasks_open: tasks.filter(function (t) { return !isDone(t) }).length,
+    tasks_done: tasks.filter(isDone).length,
+    tasks_overdue: tasks.filter(function (t) { var d = String(t.due_date || '').slice(0, 10); return !isDone(t) && d && d < today }).length,
+    tasks_created_7d: tasks.filter(function (t) { return within(t.created_at, 7) }).length,
+    tasks_completed_7d: tasks.filter(function (t) { return isDone(t) && within(String(t.completed_date || '').slice(0, 10) + 'T00:00:00', 7) }).length,
+    projects: projects.length,
+    errors_7d: usage.errors.last7Days,
+  }
+}
+
+function boolCellValue_(v) {
+  return v === true || /^(true|1|yes)$/i.test(String(v === undefined || v === null ? '' : v).trim())
+}
+
+// 毎時の処理から呼ぶ。送る時刻を過ぎ、その週の分をまだ送っていなければ送る(失敗したら時間を置いて送り直す)
+function maybeSendMetrics_(nowMs, deps) {
+  var props = PropertiesService.getScriptProperties()
+  var orgId = String(props.getProperty('ORG_ID') || '')
+  if (!orgId) return 'noOrg'
+  var sharing = metricsSharing_()
+  syncMetricsNotice_(sharing.enabled)
+  if (!sharing.enabled) return 'disabled'
+  var week = metricsWeek_(nowMs, metricsSlot_(orgId))
+  var state = readMetricsState_()
+  if (state.sent[week.period]) return 'alreadySent'
+  if (nowMs < week.slotAt) return 'notYet'
+  if (state.retry && state.retry.period === week.period && nowMs < Number(state.retry.nextAt)) return 'waitingRetry'
+  return sendMetricsNow_(nowMs, week.period, state, deps)
+}
+
+function sendMetricsNow_(nowMs, period, state, deps) {
+  deps = deps || {}
+  var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
+  var props = PropertiesService.getScriptProperties()
+  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
+  var orgId = String(props.getProperty('ORG_ID') || '')
+  var attempts = state.retry && state.retry.period === period ? Number(state.retry.attempts) + 1 : 1
+  var error = ''
+  if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) {
+    error = 'レジストリに登録していません'
+  } else {
+    try {
+      var metrics = metricsSnapshot_(nowMs)
+      var ts = Math.floor(nowMs / 1000)
+      var sig = base64UrlEncode_(Utilities.computeHmacSha256Signature('metrics.' + orgId + '.' + ts + '.' + period + '.' + JSON.stringify(metrics), key))
+      var payload = JSON.stringify({ action: 'reportMetrics', orgId: orgId, ts: ts, period: period, metrics: metrics, sig: sig })
+      var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
+      var res = JSON.parse(r.getContentText())
+      if (!res || !res.ok) error = String((res && res.error) || '応答の形が違います').slice(0, 200)
+    } catch (e) {
+      error = maskEmailsIn_(String((e && e.message) || e)).slice(0, 200)
+    }
+  }
+  var at = new Date(nowMs).toISOString()
+  state.history.unshift({ period: period, at: at, ok: !error, error: error, attempt: attempts })
+  if (!error) {
+    state.sent[period] = at
+    delete state.retry
+  } else {
+    var waitHours = Math.min(METRICS_RETRY_MAX_HOURS, Math.pow(2, attempts - 1))
+    state.retry = { period: period, attempts: attempts, nextAt: nowMs + waitHours * 3600000 }
+    appendErrorLog_('job', 'reportMetrics', 'metricsFailed')
+  }
+  writeMetricsState_(state)
+  return error ? 'failed' : 'sent'
+}
+
+// 送っているかを Settings に書く(メンバーの画面の下の表示。変わった時だけ書く)
+function syncMetricsNotice_(enabled) {
+  var want = enabled ? 'on' : 'off'
+  try {
+    if (String(getSettingValue_('metrics_sharing_notice') || '') === want) return
+    updateSetting_('metrics_sharing_notice', want)
+    bumpDataVersion()
+  } catch (e) {
+    console.warn('集計値の表示を書けませんでした: ' + maskEmailsIn_(String(e)))
+  }
+}
+
+// 代表の管理画面: プラン・送るか・次に送る時刻・次に送る内容(プレビュー)・送信の履歴
+function metricsStatus_(nowMs) {
+  var orgId = String(PropertiesService.getScriptProperties().getProperty('ORG_ID') || '')
+  var sharing = metricsSharing_()
+  var slot = metricsSlot_(orgId)
+  var week = metricsWeek_(nowMs, slot)
+  var state = readMetricsState_()
+  var nextAt = week.slotAt
+  if (state.sent[week.period] || nowMs >= week.slotAt) nextAt = week.slotAt + 7 * 86400000
+  if (!state.sent[week.period] && state.retry && state.retry.period === week.period) nextAt = Number(state.retry.nextAt)
+  else if (!state.sent[week.period] && nowMs >= week.slotAt) nextAt = nowMs
+  return {
+    plan: sharing.plan,
+    mandatory: sharing.mandatory,
+    defaultOn: sharing.defaultOn,
+    enabled: sharing.enabled,
+    slot: slot,
+    nextAt: sharing.enabled ? new Date(nextAt).toISOString() : '',
+    definitionsVersion: METRICS_VERSION,
+    preview: metricsSnapshot_(nowMs),
+    history: state.history,
+  }
+}
+
+function setMetricsSharing_(enabled, actorId, nowMs) {
+  var sharing = metricsSharing_()
+  if (sharing.mandatory && !enabled) throw userError_('Ohsumiプランでは、集計値の送信は必須のため止められません。')
+  PropertiesService.getScriptProperties().setProperty('METRICS_CHOICE', enabled ? 'on' : 'off')
+  syncMetricsNotice_(enabled)
+  appendOrgAudit_(actorId, 'setMetricsSharing', '', { before: sharing.enabled, after: enabled })
+  return metricsStatus_(nowMs)
 }
