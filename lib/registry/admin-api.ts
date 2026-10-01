@@ -160,11 +160,11 @@ export interface Overview {
   codeTtlDays: number
   // 団体の GAS の版の一覧(新しい順。古いレジストリでは無い)
   gasVersions?: GasVersionEntry[]
-  // アンケート(新しい順)・プランごとの年間の上限・今年(日本時間)・団体ごとの今年の数(古いレジストリでは無い)
+  // アンケート(新しい順)・プランごとの上限(直近12か月)(古いレジストリでは無い)
   surveys?: SurveySummary[]
   surveyLimits?: Record<Plan, number>
-  surveyYear?: string
-  surveyYearCounts?: Record<string, number>
+  // 団体ごとの直近12か月の数(送付の予定を含む)
+  survey12mCounts?: Record<string, number>
   // お知らせ(新しい順。古いレジストリでは無い)
   announcements?: AnnouncementSummary[]
 }
