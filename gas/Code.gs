@@ -671,6 +671,9 @@ function testPersonalDataPurge() {
 // キャッシュなし(シートから読む)とキャッシュあり、それぞれの所要時間と
 // データ量を出力する。実行するとデータの版が新しくなる(全員のキャッシュが
 // 一度無効になる)が、データそのものは変更しない。
+// Orbit の移行の予行演習(docs/orbit-migration-plan.md の 5)でも、移行したコピーで実行し、
+// タスクの件数・読み込みの大きさ・圧縮の割合・時間・1つのセルの記録の長さの最大値と、
+// 「完了から一定期間が過ぎたタスクを最初の読み込みから外す」が移行の前に要るかの判定を記録する
 function measureReadPerformance() {
   function ms(start) { return Date.now() - start }
   bumpDataVersion()
@@ -681,6 +684,9 @@ function measureReadPerformance() {
   var readSheetsMs = ms(t)
 
   var json = JSON.stringify(data)
+  t = Date.now()
+  var gzipChars = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(json, 'application/json')).getBytes()).length
+  var gzipMs = ms(t)
   t = Date.now()
   var cached = writeSnapshotCache_(version, data)
   var writeCacheMs = ms(t)
@@ -701,21 +707,38 @@ function measureReadPerformance() {
   emails.getDataRange().getValues()
   var readEmailsMs = ms(t)
 
+  var m = readPerformanceMetrics_(data, {
+    jsonChars: json.length,
+    gzipChars: gzipChars,
+    viewerChars: filtered ? JSON.stringify(filtered).length : 0,
+    readSheetsMs: readSheetsMs,
+    cached: cached,
+  })
   var lines = [
     '📊 読み取り性能の計測結果',
     '  行数: Members=' + members.rows.length +
       ' Projects=' + ((data.Projects || {}).rows || []).length +
-      ' Tasks=' + ((data.Tasks || {}).rows || []).length +
+      ' Tasks=' + m.tasks +
       ' Settings=' + ((data.Settings || {}).rows || []).length,
-    '  データ量(JSON): ' + Math.round(json.length / 1024) + ' KB',
+    '  タスク: ' + m.tasks + ' 件(うち完了 ' + m.doneTasks + ' 件。完了のタスクの行は全体の ' + m.doneSharePercent + '%)',
+    '  データ量(JSON): ' + kb_(m.jsonChars) + ' KB',
+    '  圧縮後(gzip・base64): ' + kb_(m.gzipChars) + ' KB(圧縮の割合 ' + m.gzipPercent + '%。圧縮に ' + gzipMs + ' ms)',
+    '  キャッシュの分割: ' + m.chunks + ' / ' + SNAPSHOT_MAX_CHUNKS + ' 個(' + m.chunkPercent + '%)',
     '  キャッシュなし: シート読み込み ' + readSheetsMs + ' ms',
     '  キャッシュ書き込み: ' + writeCacheMs + ' ms (' + (cached ? '成功' : '上限超過のためキャッシュしない') + ')',
     '  キャッシュあり: キャッシュ読み込み ' + readCacheMs + ' ms (' + (fromCache ? '取得成功' : '取得失敗') + ')',
     '  閲覧者ごとの絞り込み: ' + filterMs + ' ms',
     '  MemberEmails 読み込み(キャッシュなし時のみ): ' + readEmailsMs + ' ms',
-    '  絞り込み後のデータ量(先頭メンバー視点): ' + (filtered ? Math.round(JSON.stringify(filtered).length / 1024) + ' KB' : '-'),
-    '  ※ 上記に加え、Webアプリ呼び出しの往復とトークン検証(5分キャッシュ)の時間がかかります',
+    '  絞り込み後のデータ量(先頭メンバー視点): ' + (filtered ? kb_(m.viewerChars) + ' KB' : '-'),
+    '  1つのセルの記録の長さ: 最大 ' + m.cells.maxLength + ' 文字(上限 ' + CELL_MAX_CHARS + ' 文字の ' + m.cells.maxPercent + '%)',
   ]
+  m.cells.top.forEach(function (c) {
+    lines.push('    ' + c.sheet + '.' + c.field + '(' + cellFieldLabel_(c.field) + '): 最大 ' + c.maxLength + ' 文字' +
+      (c.over ? '、8割を超えた記録 ' + c.over + ' 件' : ''))
+  })
+  lines.push('  ※ 上記に加え、Webアプリ呼び出しの往復とトークン検証(5分キャッシュ)の時間がかかります')
+  lines.push('')
+  lines = lines.concat(readPerformanceVerdict_(m))
   console.log(lines.join('\n'))
   return lines.join('\n')
 }
@@ -830,6 +853,11 @@ function doPost(e) {
   if (state.contract && state.contract.phase !== 'none' && out) out.contract = contractForClient_(state.contract)
   // 通知の回数の上限を超えて、送らなかった通知があった(操作そのものは済んでいる)
   if (_notifyLimited && out) out.notifyLimited = true
+  // 1つのセルの上限の8割を超えた記録を書いた(書いた人に知らせる。初めて超えた記録は代表にも知らせる)
+  if (_longCells.length && out) {
+    out.longRecords = _longCells.map(function (c) { return { sheet: c.sheet, id: c.id, name: c.name, field: c.field, length: c.length, max: CELL_MAX_CHARS } })
+    notifyTopsOfLongRecords_(_longCells)
+  }
   return jsonOutput_(out)
 }
 
@@ -2046,8 +2074,10 @@ function appendRowByHeaders_(sheet, sheetName, obj) {
     throw userError_(sheetName + 'シートに列が見つかりません: ' + unknown.join(', ') +
       '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。')
   }
+  var row = headers.map(function (h) { return obj[h] !== undefined ? obj[h] : '' })
+  assertRowCellLengths_(sheetName, headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, sheetName)
-  sheet.appendRow(headers.map(function (h) { return obj[h] !== undefined ? obj[h] : '' }))
+  sheet.appendRow(row)
 }
 
 // A member is completing a certain number of same-category tasks and
@@ -2523,7 +2553,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-4'
+var OHSUMI_GAS_VERSION = '2026.10.01-5'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2778,7 +2808,7 @@ var READ_ONLY_ACTIONS = [
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
-  // 毎日・毎時の処理と共有の状態(読み取りだけ)
+  // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
 ]
 
@@ -4625,8 +4655,15 @@ function handlePost_(e, state) {
     // が投げるものや、コード内の想定外のバグ)は詳細をLoggerに記録し、
     // フロントには定型メッセージだけを返す(スタックトレース等の内部情報や
     // リクエストの中身・トークンは返さない/ログにも出さない)。
-    return remember_(replayKey, { ok: false, error: toErrorMessage_(err) })
+    return remember_(replayKey, errorResponse_(err))
   }
+}
+
+// 失敗の応答。1つのセルの上限を超えて断った時は、画面が書いた文章を残せるよう cellTooLong を付ける
+function errorResponse_(err) {
+  var out = { ok: false, error: toErrorMessage_(err) }
+  if (err && err.cellTooLong) out.cellTooLong = err.cellTooLong
+  return out
 }
 
 // 書き込みアクション(ロックを取ったもの)の後は、読み取りキャッシュを無効にするため、
@@ -4836,7 +4873,7 @@ function runBatch_(ops, acting, denied) {
       try {
         results[i] = { ok: true, result: runWriteAction_(ops[i], acting) }
       } catch (err) {
-        results[i] = { ok: false, error: toErrorMessage_(err) }
+        results[i] = errorResponse_(err)
       }
       break
     }
@@ -5302,7 +5339,7 @@ function runWriteAction_(body, actingMember) {
       result = deleteOrphanEmails_(body.ids, actingMember.id)
       break
     case 'getOpsStatus':
-      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_() }
+      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_() }
       break
     case 'recheckSharing':
       result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()) }
@@ -5567,6 +5604,7 @@ function createTasks_(tasks, actingMemberId) {
       }
     })
     // F4: 値を書き込む前に対象列を書式なしテキスト(@)にする
+    assertRowCellLengths_('Tasks', headers, row)
     protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Tasks')
     sheet.appendRow(row)
     created.push({ tempId: t.tempId, id: id })
@@ -6995,6 +7033,7 @@ function createProject_(name, description, type, parentId) {
     if (h === 'parent_id') return parentId || ''
     return ''
   })
+  assertRowCellLengths_('Projects', headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Projects')
   sheet.appendRow(row)
   return { id: id }
@@ -7132,6 +7171,7 @@ function addMember_(name, email, affiliation, role) {
         return ''
     }
   })
+  assertRowCellLengths_('Members', headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Members')
   sheet.appendRow(row)
   // affiliation isn't its own column — it's derived from project_ids (or,
@@ -7477,6 +7517,13 @@ function updateSetting_(key, value) {
       // ない上、setupOhsumi()が初期キーを書式設定なしでappendRowするため、
       // Tasks等と違い「行作成時に必ず保護済み」という前提が成り立たない。
       // よって更新のたびに設定する。
+      if (typeof value === 'string' && value.length > CELL_MAX_CHARS) {
+        assertCellLength_(SHEET_SETTINGS, 'value', value, sheet.getRange(i + 2, valueCol).getValue())
+      }
+      // 前の値は、8割を超える時だけ読む(初めて超えたかを確かめるため)
+      if (typeof value === 'string' && value.length > CELL_WARN_CHARS) {
+        noteLongCell_(SHEET_SETTINGS, String(key), String(key), 'value', value, sheet.getRange(i + 2, valueCol).getValue())
+      }
       protectRowFromFormulaInjection_(sheet, headers, i + 2, 'Settings')
       sheet.getRange(i + 2, valueCol).setValue(value)
       return { key: key }
@@ -7487,6 +7534,7 @@ function updateSetting_(key, value) {
     if (h === 'value') return value
     return ''
   })
+  assertRowCellLengths_(SHEET_SETTINGS, headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Settings')
   sheet.appendRow(row)
   return { key: key }
@@ -7689,8 +7737,12 @@ function updateRowFieldsUnmeasured_(sheetName, rowId, fields) {
       '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。',
     )
   }
+  // 1つのセルの上限(5万文字)を超える値は、何も書かずに断る。8割を超えた値は、書いた後に知らせる
+  var before = grid.values[targetRow - 1] || []
+  cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value, before[c.col - 1]) })
   // 隣り合う列は1回の setValues にまとめる。離れた列は、間のセル(数式など)を書き換えないよう別に書く
   // (セルへの書き込みは、Apps Script が書き込みの確定の時にまとめて送る)
+  cols.forEach(function (c) { noteLongCell_(sheetName, rowId, recordName_(headers, before), headers[c.col - 1], c.value, before[c.col - 1]) })
   contiguousColumnRuns_(cols).forEach(function (run) {
     grid.sheet.getRange(targetRow, run[0].col, 1, run.length).setValues([run.map(function (c) { return c.value })])
   })
@@ -7698,6 +7750,141 @@ function updateRowFieldsUnmeasured_(sheetName, rowId, fields) {
   if (rowValues) cols.forEach(function (c) { rowValues[c.col - 1] = c.value })
 
   return { id: rowId, updated: Object.keys(fields) }
+}
+
+// ---- 1つのセルの長さ ----
+//
+// スプレッドシートの1つのセルには 5万文字までしか入らない。コメント・1on1 の記録・経歴・評価・アンケートの回答などは、
+// 記録を JSON にして1つのセルに入れているため、使い続けると増え続ける。
+//   - 上限を超える値は、何も書かずに断る(cellTooLong。画面は書いた文章を、機能停止の時と同じ知らせでコピーできる形で残す)
+//   - 8割(4万文字)を超えた値は、書いた後に、書いた人(応答の longRecords)と代表(初めて超えた時に、まとめのメール)に知らせる
+//   - どの記録がいくつ上限に近いかは、代表の管理画面で見られる(getLongRecords)
+var CELL_MAX_CHARS = 50000
+var CELL_WARN_CHARS = 40000
+// このリクエストで書いた、8割を超えた記録 [{ sheet, id, name, field, length, crossed }]
+var _longCells = []
+
+function cellTooLongError_(sheetName, field, value, before) {
+  var length = value.length
+  var e = userError_('この記録は長くなりすぎたため、保存できませんでした(' + length + '文字。1つの記録は' + CELL_MAX_CHARS +
+    '文字まで)。書いた文章は消えていないので、コピーして残してください。古い記録の整理は代表に相談してください。')
+  e.cellTooLong = { sheet: String(sheetName), field: String(field), length: length, max: CELL_MAX_CHARS, texts: newCellTexts_(value, before) }
+  return e
+}
+
+// 断った値のうち、前の値に無かった文章(書いた人が今回書いたもの)。画面はこれをコピーできるように出す
+// (記録の一覧を丸ごと送る保存なので、前からの記録は除く)。前の値が分からない時は null(画面が送った内容から取り出す)
+function newCellTexts_(value, before) {
+  if (before === undefined || before === null) return null
+  var leaves = function (v, out) {
+    if (typeof v === 'string') out.push(v)
+    else if (Array.isArray(v)) v.forEach(function (x) { leaves(x, out) })
+    else if (v && typeof v === 'object') Object.keys(v).forEach(function (k) { leaves(v[k], out) })
+    return out
+  }
+  var parse = function (text) { try { return JSON.parse(text) } catch (e) { return text } }
+  var old = {}
+  leaves(parse(String(before)), []).forEach(function (t) { old[t] = true })
+  var seen = {}
+  return leaves(parse(value), []).filter(function (t) {
+    if (old[t] || seen[t] || !String(t).trim()) return false
+    seen[t] = true
+    return true
+  }).slice(0, 20)
+}
+
+function assertCellLength_(sheetName, field, value, before) {
+  if (typeof value === 'string' && value.length > CELL_MAX_CHARS) throw cellTooLongError_(sheetName, field, value, before)
+}
+
+function assertRowCellLengths_(sheetName, headers, row) {
+  row.forEach(function (v, i) { assertCellLength_(sheetName, headers[i], v, '') })
+}
+
+// 記録の名前(タスクの題名・メンバーの名前・設定のキー)。知らせと一覧に出す
+function recordName_(headers, rowValues) {
+  var keys = ['title', 'name', 'key']
+  for (var i = 0; i < keys.length; i++) {
+    var col = headers.indexOf(keys[i])
+    if (col >= 0 && rowValues[col] !== undefined && rowValues[col] !== '') return String(rowValues[col]).slice(0, 100)
+  }
+  return ''
+}
+
+// 8割を超えた値を書く時に覚える(crossed: 書く前は8割以下だった = 初めて超えた)
+function noteLongCell_(sheetName, id, name, field, value, before) {
+  if (typeof value !== 'string' || value.length <= CELL_WARN_CHARS) return
+  _longCells.push({
+    sheet: String(sheetName), id: String(id), name: name || '', field: String(field), length: value.length,
+    crossed: String(before === undefined || before === null ? '' : before).length <= CELL_WARN_CHARS,
+  })
+}
+
+// 初めて8割を超えた記録を、代表にまとめのメールで知らせる(書き込みの確定の後に、doPost から呼ぶ)
+function notifyTopsOfLongRecords_(cells) {
+  var crossed = cells.filter(function (c) { return c.crossed })
+  if (!crossed.length) return
+  try {
+    var to = Object.keys(topEmailSet_())
+    if (!to.length) return
+    var lines = crossed.map(function (c) {
+      return '・' + (c.name || c.id) + ' の ' + cellFieldLabel_(c.field) + '(' + c.length + '文字 / 上限 ' + CELL_MAX_CHARS + '文字)'
+    })
+    deliverNotification_(to, { ja: {
+      subject: 'この記録は長くなっています',
+      body: '次の記録が、1つの記録に入る長さの上限(' + CELL_MAX_CHARS + '文字)の8割を超えました。\n' + lines.join('\n') +
+        '\n\n上限を超えると、それ以上は保存できなくなります。団体の設定の画面の「長くなっている記録」で一覧を確かめ、古い記録の整理を検討してください。',
+    } }, false)
+  } catch (e) {
+    console.warn('長くなっている記録の知らせを送れませんでした: ' + ((e && e.message) || e))
+  }
+}
+
+var CELL_FIELD_LABELS = {
+  comments_json: 'コメント', history_json: '変更の記録', progress_history_json: '進み具合の記録',
+  one_on_ones_json: '1on1 の記録', career_history_json: '経歴', evaluation_history_json: '評価',
+  survey_responses_json: 'アンケートの回答', training_history_json: '研修の記録', development_plan_json: '育成の計画',
+  transfer_history_json: '異動の記録', qualifications_json: '資格', description: '説明', value: '設定の値',
+}
+
+function cellFieldLabel_(field) {
+  return CELL_FIELD_LABELS[field] || field
+}
+
+// 8割を超えているセルを、表(Members・Projects・Tasks・Settings)から探す。記録の種類(シートと列)ごとにまとめ、長い順に並べる
+function longRecordsNow_() {
+  var data = {}
+  SNAPSHOT_SHEETS.forEach(function (name) { data[name] = snapshotTableOrSheet_(name) })
+  return longRecords_(data)
+}
+
+function longRecords_(data) {
+  var groups = {}
+  var maxLength = 0
+  SNAPSHOT_SHEETS.forEach(function (name) {
+    var table = data[name]
+    if (!table || !table.headers) return
+    var idCol = table.headers.indexOf(name === SHEET_SETTINGS ? 'key' : 'id')
+    ;(table.rows || []).forEach(function (row) {
+      row.forEach(function (v, col) {
+        var length = typeof v === 'string' ? v.length : String(v === null || v === undefined ? '' : v).length
+        if (length > maxLength) maxLength = length
+        if (length <= CELL_WARN_CHARS) return
+        var field = table.headers[col]
+        var key = name + ':' + field
+        if (!groups[key]) groups[key] = { sheet: name, field: field, label: cellFieldLabel_(field), items: [] }
+        groups[key].items.push({ id: idCol >= 0 ? String(row[idCol]) : '', name: recordName_(table.headers, row), length: length })
+      })
+    })
+  })
+  var list = Object.keys(groups).map(function (k) {
+    var g = groups[k]
+    g.items.sort(function (a, b) { return b.length - a.length })
+    g.count = g.items.length
+    return g
+  })
+  list.sort(function (a, b) { return b.items[0].length - a.items[0].length })
+  return { warnAt: CELL_WARN_CHARS, max: CELL_MAX_CHARS, maxLength: maxLength, groups: list }
 }
 
 // 列の番号の並び(書く値つき)を、隣り合う列ごとのまとまりにする(Google のサービスを使わない)
@@ -7801,16 +7988,22 @@ function requestReplayValue_(obj) {
   var stored = { ok: obj.ok, replayed: true }
   if (obj.ok) stored.result = obj.result
   else stored.error = obj.error
+  if (obj.cellTooLong) stored.cellTooLong = obj.cellTooLong
   var text = JSON.stringify(stored)
   if (text.length <= REQUEST_REPLAY_MAX_CHARS) return text
   // 結果が大きすぎて覚えられない: 処理は済んでいることだけを伝える(やり直さない)
-  return JSON.stringify({
+  // (1つのセルの上限で断った時は、文章を除いて覚える。画面は送った内容から文章を取り出す)
+  var small = {
     ok: false,
     replayed: true,
     error: obj.ok
       ? 'この操作は完了しています。「情報更新」で最新の状態を読み込んでください。'
       : obj.error,
-  })
+  }
+  if (!obj.ok && obj.cellTooLong) {
+    small.cellTooLong = { sheet: obj.cellTooLong.sheet, field: obj.cellTooLong.field, length: obj.cellTooLong.length, max: obj.cellTooLong.max, texts: null }
+  }
+  return JSON.stringify(small)
 }
 
 // ---- 処理時間の内訳 ----------------------------------------------------------
@@ -7837,6 +8030,7 @@ function startRequestTiming_() {
   _requestTiming = { start: Date.now() }
   _requestActorId = null
   _notifyLimited = false
+  _longCells = []
   _requestSnapshot = null
   _requestRows = {}
   _timingDepth = 0
@@ -13661,4 +13855,90 @@ function dailyMaintenanceUnrecorded_() {
   try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + err) }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
+}
+
+// ---- 読み取り性能の計測(measureReadPerformance)の判定 ----
+
+function kb_(chars) {
+  return Math.round(chars / 1024)
+}
+
+// 計測の結果から、判定に使う値を出す(Google のサービスを使わない)
+//   sizes: { jsonChars, gzipChars, viewerChars, readSheetsMs, cached }
+function readPerformanceMetrics_(data, sizes) {
+  var tasks = data.Tasks || { headers: [], rows: [] }
+  var statusCol = tasks.headers.indexOf('status')
+  var doneRows = (tasks.rows || []).filter(function (r) { return statusCol >= 0 && normalizeCode_('status', r[statusCol]) === 'done' })
+  var tasksChars = JSON.stringify(tasks.rows || []).length
+  var doneChars = JSON.stringify(doneRows).length
+  // 1つのセルの長さ: シートと列ごとの最大と、8割を超えた件数(長い順に5つ)
+  var fields = {}
+  var maxLength = 0
+  SNAPSHOT_SHEETS.forEach(function (name) {
+    var table = data[name]
+    if (!table || !table.headers) return
+    ;(table.rows || []).forEach(function (row) {
+      row.forEach(function (v, col) {
+        var length = String(v === null || v === undefined ? '' : v).length
+        var key = name + '.' + table.headers[col]
+        var f = fields[key] || (fields[key] = { sheet: name, field: table.headers[col], maxLength: 0, over: 0 })
+        if (length > f.maxLength) f.maxLength = length
+        if (length > CELL_WARN_CHARS) f.over++
+        if (length > maxLength) maxLength = length
+      })
+    })
+  })
+  var top = Object.keys(fields).map(function (k) { return fields[k] })
+    .filter(function (f) { return f.maxLength > 0 })
+    .sort(function (a, b) { return b.maxLength - a.maxLength })
+    .slice(0, 5)
+  var chunks = Math.ceil(sizes.gzipChars / SNAPSHOT_CHUNK_SIZE)
+  return {
+    tasks: (tasks.rows || []).length,
+    doneTasks: doneRows.length,
+    doneSharePercent: tasksChars > 2 ? Math.round(doneChars / tasksChars * 100) : 0,
+    jsonChars: sizes.jsonChars,
+    gzipChars: sizes.gzipChars,
+    gzipPercent: sizes.jsonChars ? Math.round(sizes.gzipChars / sizes.jsonChars * 100) : 0,
+    chunks: chunks,
+    chunkPercent: Math.round(chunks / SNAPSHOT_MAX_CHUNKS * 100),
+    viewerChars: sizes.viewerChars,
+    readSheetsMs: sizes.readSheetsMs,
+    cached: sizes.cached,
+    cells: { maxLength: maxLength, maxPercent: Math.round(maxLength / CELL_MAX_CHARS * 100), top: top },
+  }
+}
+
+// 移行の前に「完了から一定期間が過ぎたタスクを最初の読み込みから外す」が要るかの目安。
+// 移行の後に増える分(1年ほど)を見込み、それぞれの限界の手前に置く
+//   - タスクの件数: 画面が1回で受け取れるのは 3,000 件ほど → 2,000 件
+//   - 閲覧者ごとの読み込みの大きさ: 3MB
+//   - キャッシュの分割: 上限 60 個の 75%(45 個)。超えるとキャッシュできず、毎回シートから読む
+//   - キャッシュなしのシート読み込み: 画面の読み込みの待ち時間(20秒)の、ほかの処理を除いた残り → 8秒
+var READ_LIMIT_TASKS = 2000
+var READ_LIMIT_VIEWER_CHARS = 3 * 1024 * 1024
+var READ_LIMIT_CHUNK_PERCENT = 75
+var READ_LIMIT_SHEETS_MS = 8000
+
+function readPerformanceVerdict_(m) {
+  var reasons = []
+  if (m.tasks >= READ_LIMIT_TASKS) reasons.push('タスクが ' + m.tasks + ' 件(目安 ' + READ_LIMIT_TASKS + ' 件)')
+  if (m.viewerChars >= READ_LIMIT_VIEWER_CHARS) reasons.push('閲覧者ごとの読み込みが ' + kb_(m.viewerChars) + ' KB(目安 ' + kb_(READ_LIMIT_VIEWER_CHARS) + ' KB)')
+  if (!m.cached || m.chunkPercent >= READ_LIMIT_CHUNK_PERCENT) reasons.push('キャッシュの分割が ' + m.chunks + ' / ' + SNAPSHOT_MAX_CHUNKS + ' 個(目安 ' + READ_LIMIT_CHUNK_PERCENT + '%)')
+  if (m.readSheetsMs >= READ_LIMIT_SHEETS_MS) reasons.push('キャッシュなしのシート読み込みが ' + m.readSheetsMs + ' ms(目安 ' + READ_LIMIT_SHEETS_MS + ' ms)')
+  var lines = ['🧭 判定(完了から一定期間が過ぎたタスクを最初の読み込みから外す)']
+  if (reasons.length) {
+    lines.push('  移行の前に作る必要があります: ' + reasons.join('、'))
+    lines.push('  完了のタスクの行は全体の ' + m.doneSharePercent + '% です' +
+      (m.doneSharePercent < 30 ? '(外しても減る量が少ないため、ほかの方法も検討してください)' : '(外すと読み込みが減ります)'))
+  } else {
+    lines.push('  移行の前には要りません(すべての目安を下回っています)。移行の後も、毎月この計測で見直してください')
+  }
+  lines.push('🧭 判定(1つのセルの記録の長さ)')
+  if (m.cells.maxLength > CELL_WARN_CHARS) {
+    lines.push('  上限の8割(' + CELL_WARN_CHARS + ' 文字)を超えた記録があります。移行の前に、古い記録の整理を代表と相談してください')
+  } else {
+    lines.push('  上限の8割を超えた記録はありません')
+  }
+  return lines
 }

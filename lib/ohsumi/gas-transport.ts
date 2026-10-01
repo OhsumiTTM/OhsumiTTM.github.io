@@ -26,6 +26,16 @@
 //    (書き込みは requestId を保ったまま、いつもの待ち時間の後に送り直す)。
 // 5. 切り分け用の ping(pingGas)。GAS は何もせずに返すので、往復の時間と GAS の中の時間を比べられる。
 
+/** 1つのセルの上限の8割を超えた記録(gas/Code.gs の noteLongCell_) */
+export interface LongRecordWritten {
+  sheet: string
+  id: string
+  name: string
+  field: string
+  length: number
+  max: number
+}
+
 export interface GasResponse<T = unknown> {
   ok: boolean
   result?: T
@@ -43,6 +53,10 @@ export interface GasResponse<T = unknown> {
   contract?: unknown
   // 通知の回数の上限(1人1時間)を超えて、一部の通知を送らなかった(操作そのものは済んでいる)
   notifyLimited?: boolean
+  // 1つのセルの上限(5万文字)を超えるため、保存を断った。texts: 今回書いた文章(分からない時は null)
+  cellTooLong?: { sheet: string; field: string; length: number; max: number; texts?: string[] | null }
+  // 1つのセルの上限の8割を超えた記録を書いた(保存は済んでいる)
+  longRecords?: LongRecordWritten[]
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)
   retryLater?: boolean
   // 同じ requestId の前回の結果を返した(処理はやり直していない)
@@ -651,7 +665,8 @@ async function sendGroup(group: PendingWrite[]): Promise<void> {
     // まとめた本体が断られた(セッションが無効・画面の版が古いなど)時は、どの操作にも同じ応答を返す
     if (!results) return r.ok ? { ok: false, error: 'まとめて送った書き込みの結果を読めませんでした。' } : r
     const one = results[sent.indexOf(p)] ?? { ok: false, error: '結果がありません' }
-    return { ...one, session: r.session, replayed: r.replayed }
+    // 長くなった記録の知らせは、まとめた全体に1回だけ付く。最初の操作に渡す(何度も知らせない)
+    return { ...one, session: r.session, replayed: r.replayed, ...(p === sent[0] && r.longRecords ? { longRecords: r.longRecords } : {}) }
   }
   for (const p of group) p.resolve(responseOf(sameAs.get(p) ?? p))
 }

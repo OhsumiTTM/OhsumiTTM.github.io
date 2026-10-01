@@ -48,8 +48,8 @@ export function ReadOnlyNotice() {
     }
   }
   const kind = readOnlyNotice.kind ?? 'readOnly'
-  const title = { readOnly: 'app.readOnlyNoticeTitle', sessionEnded: 'app.sessionEndedNoticeTitle', orgSuspended: 'app.orgSuspendedNoticeTitle', reloadRequired: 'app.reloadRequiredNoticeTitle' } as const
-  const body = { readOnly: 'app.contractRestricted', sessionEnded: 'app.sessionEndedNoticeBody', orgSuspended: 'app.orgSuspendedNoticeBody', reloadRequired: 'app.reloadRequiredNoticeBody' } as const
+  const title = { readOnly: 'app.readOnlyNoticeTitle', sessionEnded: 'app.sessionEndedNoticeTitle', orgSuspended: 'app.orgSuspendedNoticeTitle', reloadRequired: 'app.reloadRequiredNoticeTitle', cellTooLong: 'app.cellTooLongNoticeTitle' } as const
+  const body = { readOnly: 'app.contractRestricted', sessionEnded: 'app.sessionEndedNoticeBody', orgSuspended: 'app.orgSuspendedNoticeBody', reloadRequired: 'app.reloadRequiredNoticeBody', cellTooLong: 'app.cellTooLongNoticeBody' } as const
   return (
     <Modal open onClose={closeReadOnlyNotice} labelledBy="read-only-notice-title">
       <div {...{ [READ_ONLY_OK_ATTR]: '' }} data-unsaved-notice={kind}>

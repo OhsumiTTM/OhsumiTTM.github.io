@@ -164,6 +164,32 @@ describe('GAS との通信', () => {
     expect(ev.detail.texts).toContain('保存できなかったコメントです')
   })
 
+  it('1つの記録が長くなりすぎて断られたら、GAS が返した今回の文章を付けた CellTooLongError にする(返さない時は送った内容から)', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    const comments = [{ id: 'c0', byId: 'm1', text: '前からのコメントです', at: '2026-09-01' }, { id: 'c1', byId: 'm1', text: '今回書いたコメントです', at: '2026-10-01' }]
+    mockGas([{ ok: false, error: '長すぎます', cellTooLong: { sheet: 'Tasks', field: 'comments_json', length: 50100, max: 50000, texts: ['c1', 'm1', '今回書いたコメントです', '2026-10-01'] } }])
+    const err = await remote.remoteApi.updateComments('t1', comments).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(remote.CellTooLongError)
+    expect((err as InstanceType<typeof remote.CellTooLongError>).texts).toEqual(['今回書いたコメントです'])
+    mockGas([{ ok: false, error: '長すぎます', cellTooLong: { sheet: 'Tasks', field: 'comments_json', length: 50100, max: 50000, texts: null } }])
+    const fallback = await remote.remoteApi.updateComments('t1', comments).catch((e: unknown) => e)
+    expect((fallback as InstanceType<typeof remote.CellTooLongError>).texts).toEqual(expect.arrayContaining(['今回書いたコメントです', '前からのコメントです']))
+  })
+
+  it('8割を超えた記録を書いた時は、書いた人に知らせる合図を送る', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    const records = [{ sheet: 'Tasks', id: 't1', name: 'タスク1', field: 'comments_json', length: 41000, max: 50000 }]
+    mockGas([{ ok: true, result: { id: 't1' }, longRecords: records }])
+    await remote.remoteApi.updateComments('t1', [])
+    const dispatch = (window as unknown as { dispatchEvent: ReturnType<typeof vi.fn> }).dispatchEvent
+    const ev = dispatch.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.type === remote.LONG_RECORDS_EVENT)!
+    expect(ev.detail).toEqual(records)
+  })
+
   it('画面が古いと断られたら、送ろうとした文章を付けた ReloadRequiredError にする', async () => {
     const s = await import('./session')
     const remote = await import('./remote')

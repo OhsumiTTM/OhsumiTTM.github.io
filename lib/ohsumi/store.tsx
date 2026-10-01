@@ -100,6 +100,7 @@ import {
   colorForId,
   fetchInitialData,
   exchangeIdToken,
+  CellTooLongError,
   ContractRestrictedError,
   ReloadRequiredError,
   FORBIDDEN_EVENT,
@@ -1039,6 +1040,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setLoadError(err instanceof Error ? err.message : String(err))
   }, [])
 
+  // runRemote から、画面のデータを読み直す(refreshAll は後で作るので、作った後に入れる)
+  const refreshAllRef = useRef<() => void>(() => {})
+
   // fire a remote write; clears a stale error banner on success, reports on failure.
   // onFailure を渡した時は、失敗した時に画面の変更を元に戻し(楽観的な更新の取り消し)、戻したことも知らせる
   const runRemote = useCallback(
@@ -1062,6 +1066,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           }
           // 画面が古い: 書いた文章をコピーできるように出し、読み込み直すよう案内する
           if (err instanceof ReloadRequiredError) setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'reloadRequired' })
+          // 1つの記録が長くなりすぎて断られた: 書いた文章をコピーできるように出し、画面を保存されている内容に戻す
+          if (err instanceof CellTooLongError) {
+            setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'cellTooLong' })
+            refreshAllRef.current()
+          }
           reportRemoteError(err)
         })
     },
@@ -1405,6 +1414,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       .catch(reportLoadError)
       .finally(() => setRefreshing(false))
   }, [reportLoadError, applyInitialData, applyOrLoadRecords])
+
+  refreshAllRef.current = refreshAll
 
   // 権限が足りないと断られた: 役職・担当が変わったかもしれないので、画面のデータを読み直す(30秒に1回まで)
   const forbiddenRefreshAtRef = useRef(0)

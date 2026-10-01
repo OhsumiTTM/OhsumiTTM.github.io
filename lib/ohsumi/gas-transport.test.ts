@@ -89,6 +89,14 @@ describe('送る順番', () => {
     expect((h.sent[0].ops as { action: string }[]).map((o) => o.action)).toEqual(['createTasks', 'updateTaskStatus', 'assignTask', 'updateComments'])
   })
 
+  it('まとめて送った時、長くなった記録の知らせ(longRecords)は最初の操作の応答にだけ付ける(何度も知らせない)', async () => {
+    const records = [{ sheet: 'Tasks', id: 't1', name: 'タスク1', field: 'comments_json', length: 41000, max: 50000 }]
+    harness(() => json({ ok: true, longRecords: records, result: { results: [{ ok: true }, { ok: true }] } }))
+    const [a, b] = await Promise.all(['updateComments', 'updateTaskHistory'].map((action) => sendToGas(URL, { action })))
+    expect(a.longRecords).toEqual(records)
+    expect(b.longRecords).toBeUndefined()
+  })
+
   it('読み取りは3本まで同時に送る', async () => {
     const h = harness(() => json({ ok: true, result: [] }))
     await Promise.all(Array.from({ length: 7 }, (_, i) => sendToGas(URL, { action: 'getFiles', fileIds: [String(i)] })))
