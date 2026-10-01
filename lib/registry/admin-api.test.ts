@@ -166,3 +166,12 @@ describe('mailLevelCounts', () => {
     expect(mailLevelCounts([m('reached'), m('low'), m('low'), m('ok'), m('unknown'), {}])).toEqual({ reached: 1, low: 2 })
   })
 })
+
+describe('needsGasUpdate', () => {
+  it('最後に伝えられた版で更新が要る団体だけ(24時間以上確認が無い団体も、版で更新が要れば入る)', async () => {
+    const { needsGasUpdate } = await import('./admin-api')
+    const g = (versionState: 'latest' | 'outdated' | 'updateRequired', noCheck = false) =>
+      ({ gasStatus: { current: '', latest: '', minimum: '', security: false, versionState, noCheck, judgement: noCheck ? 'noCheck' as const : versionState } })
+    expect([g('updateRequired'), g('updateRequired', true), g('outdated'), g('latest', true), {}].map(needsGasUpdate)).toEqual([true, true, false, false, false])
+  })
+})
