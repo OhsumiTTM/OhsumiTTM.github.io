@@ -859,6 +859,8 @@ function sendBatchNotifications() {
   try { flushPendingLastLogins_() } catch (e) { console.error('flushPendingLastLogins failed: ' + e) }
   // 提供停止中は、通知を送らない(機能停止中は送る)
   if (contractSuspendedNow_()) return
+  // バックアップから戻している間は、通知のキューを書き換えない
+  if (restoreInProgress_()) return
   var props = PropertiesService.getScriptProperties()
   var allProps = props.getProperties()
   var now = new Date()
@@ -922,6 +924,10 @@ function sendBatchNotifications() {
 function dailyMaintenance() {
   // 提供停止中は、定期の処理を止める(機能停止中は続ける)
   if (contractSuspendedNow_()) return
+  // バックアップから戻している間は、書き込む処理を止める
+  if (restoreInProgress_()) return
+  // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
+  dailyBackup_(Date.now())
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -2539,7 +2545,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-1'
+var OHSUMI_GAS_VERSION = '2026.10.01-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2790,6 +2796,8 @@ var READ_ONLY_ACTIONS = [
   'getInviteMailStatus', 'sendInviteLinkToMe',
   // メールの1日の上限の状態・この GAS の版の更新(代表の管理画面に出す)
   'getMailQuotaStatus', 'getGasUpdateStatus',
+  // バックアップの状態・一覧・戻す前の確かめ(戻すのは書き込みなので、機能停止中は断る)
+  'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -3705,6 +3713,10 @@ function authorizeAction_(acting, action, body) {
   // 代表 can do anything
   if (isDaihyo) return
 
+  // バックアップ(一覧・戻す)は代表だけ(権限の個別の上書きでも渡さない)
+  var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks']
+  if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
+
   // --- 代表のみ ---
   var daihyoOnly = [
     'updateRole',              // ロール変更は代表のみ
@@ -4353,6 +4365,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getInviteMailStatus', 'sendInviteLinkToMe',
   // メールの1日の上限の状態・この GAS の版の更新(スクリプトプロパティを読むだけ)
   'getMailQuotaStatus', 'getGasUpdateStatus',
+  // バックアップの状態・一覧・戻す前の確かめ(バックアップを読むだけ)
+  'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -4440,6 +4454,9 @@ function handlePost_(e, state) {
     state.contract = contract
     var contractError = contractRejection_(contract, body)
     if (contractError) return contractError
+
+    // バックアップから戻している間は、書き込みを受け付けない(読み取りは受け付ける)
+    if (!readOnlyAllows_(body) && restoreInProgress_()) return ({ ok: false, restoring: true, error: RESTORE_MESSAGE })
 
     // まとめて送られた書き込み(batch)は、中の操作がすべて受け付けられるものかを先に確かめる
     if (body.action === 'batch') {
@@ -5249,6 +5266,24 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getMailQuotaStatus':
       result = mailQuotaStatus_()
+      break
+    case 'getBackupStatus':
+      result = backupStatus_()
+      break
+    case 'listBackups':
+      result = { status: backupStatus_(), backups: listBackups_(), keep: BACKUP_KEEP }
+      break
+    case 'previewRestore':
+      result = previewRestore_(body.backupId)
+      break
+    case 'searchBackupTasks':
+      result = searchBackupTasks_(body.backupId, body.query)
+      break
+    case 'restoreBackup':
+      result = restoreBackup_(body.backupId, actingMember.id, Date.now())
+      break
+    case 'restoreTasks':
+      result = restoreTasks_(body.backupId, body.taskIds, actingMember.id, Date.now())
       break
     case 'getGasUpdateStatus':
       result = gasUpdateStatus_()
@@ -12696,3 +12731,370 @@ function formatMigrationDiff_(diff, ctx) {
   return lines
 }
 
+// ---- バックアップ(毎日のコピーと、戻す) -------------------------------------------------
+//
+// 毎日の処理(dailyMaintenance)で、団体のスプレッドシートのコピーを「バックアップ」フォルダに作る
+// (BACKUP_FOLDER_ID。GAS のアカウントだけが持つ。編集者・閲覧者を外し、リンクの共有も「制限付き」にする)。
+// コピーするのはスプレッドシートだけ(アップロードしたファイルはコピーしない)。
+// 残す数は、毎日の分 BACKUP_KEEP.daily・毎週の分 BACKUP_KEEP.weekly・毎月の分 BACKUP_KEEP.monthly(最長で約3か月)。
+// 超えた古いものはゴミ箱に移す。作るのに失敗した時は BACKUP_STATE に残し、代表の管理画面に出す(getBackupStatus)。
+// 戻す(代表だけ):
+//   - 全体を戻す(restoreBackup): データのシートをすべてバックアップの内容に置き換える(操作の記録 AuditLog は残す)。
+//     戻す前に今の状態を自動でバックアップし、戻している間は書き込みを止め(RESTORE_IN_PROGRESS)、終わったらデータの版を上げる。
+//     戻す前に、シートごとの件数の差を見せる(previewRestore)
+//   - 一部のタスクだけ戻す(restoreTasks): 選んだタスクの行と、そのタスクのコメント・変更の記録・進捗の記録だけを戻す。
+//     バックアップの後に付いたコメントなどは残し、戻したことを変更の記録とタスクの履歴に残す
+// どちらも操作の記録(AuditLog シート)に残す
+var BACKUP_FOLDER_PROPERTY_KEY = 'BACKUP_FOLDER_ID'
+var BACKUP_STATE_KEY = 'BACKUP_STATE'
+var BACKUP_NAME_PREFIX = 'Ohsumi バックアップ '
+var BACKUP_BEFORE_RESTORE_SUFFIX = '(戻す前)'
+var BACKUP_KEEP = { daily: 7, weekly: 4, monthly: 3 }
+var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
+// 戻している印が残ったまま(実行の途中で止まった時など)でも、これを過ぎたら書き込みを受け付ける
+var RESTORE_STALE_MS = 30 * 60 * 1000
+var RESTORE_MESSAGE = 'バックアップから戻しています。終わるまで(数分)待ってから、もう一度お試しください。'
+// 戻さないシート(操作の記録は、戻した記録を含めて残す)
+var RESTORE_EXCLUDED_SHEETS = ['AuditLog']
+// 一部のタスクを戻す時に、行を置き換えずに合わせるもの(バックアップの後に付いたものも残す)
+var RESTORE_MERGED_TASK_LISTS = ['comments_json', 'history_json', 'progress_history_json']
+var RESTORE_TASKS_MAX = 50
+var BACKUP_SEARCH_MAX = 30
+
+// ファイル・フォルダを、GAS のアカウントだけが持つようにする
+function makeDrivePrivate_(file) {
+  try { file.getEditors().forEach(function (u) { try { file.removeEditor(u) } catch (e) { /* 自分自身など */ } }) } catch (e) { /* 一覧を読めない時 */ }
+  try { file.getViewers().forEach(function (u) { try { file.removeViewer(u) } catch (e) { /* 自分自身など */ } }) } catch (e) { /* 一覧を読めない時 */ }
+  try { file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE) } catch (e) { /* 変えられない場合 */ }
+}
+
+function backupFolder_() {
+  var props = PropertiesService.getScriptProperties()
+  var id = props.getProperty(BACKUP_FOLDER_PROPERTY_KEY)
+  if (id) {
+    try { return DriveApp.getFolderById(id) } catch (e) { /* 消された: 作り直す */ }
+  }
+  var folder = DriveApp.createFolder('Ohsumi バックアップ(' + (getSettingValue_('org_name') || 'Ohsumi') + ')')
+  makeDrivePrivate_(folder)
+  props.setProperty(BACKUP_FOLDER_PROPERTY_KEY, folder.getId())
+  return folder
+}
+
+// バックアップを1つ作る。kind: daily(毎日) / beforeRestore(戻す前)
+function createBackup_(kind, nowMs) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var name = BACKUP_NAME_PREFIX + Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') +
+    (kind === 'beforeRestore' ? BACKUP_BEFORE_RESTORE_SUFFIX : '')
+  // スプレッドシートだけをコピーする(アップロードしたファイルはコピーしない)
+  var copy = DriveApp.getFileById(ss.getId()).makeCopy(name, backupFolder_())
+  makeDrivePrivate_(copy)
+  return { id: copy.getId(), name: name, at: new Date(nowMs).toISOString(), kind: kind }
+}
+
+function readBackupState_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(BACKUP_STATE_KEY) || '{}') || {} } catch (e) { return {} }
+}
+
+function writeBackupState_(fields) {
+  var s = readBackupState_()
+  Object.keys(fields).forEach(function (k) { s[k] = fields[k] })
+  PropertiesService.getScriptProperties().setProperty(BACKUP_STATE_KEY, JSON.stringify(s))
+  return s
+}
+
+// 毎日の処理から: バックアップを作り、残す数を超えた古いものをゴミ箱に移す。失敗しても毎日の処理は続ける
+function dailyBackup_(nowMs) {
+  nowMs = nowMs || Date.now()
+  try {
+    var made = createBackup_('daily', nowMs)
+    writeBackupState_({ lastSuccessAt: made.at, lastName: made.name, lastFailureAt: '', lastError: '' })
+  } catch (e) {
+    var message = String((e && e.message) || e).slice(0, 300)
+    writeBackupState_({ lastFailureAt: new Date(nowMs).toISOString(), lastError: message })
+    console.error('バックアップを作れませんでした: ' + message)
+    return null
+  }
+  try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
+  return made
+}
+
+// 画面に出す状態: 最後に作れた日時と、最後に作れなかった日時(作れた後にまた作れた時は出さない)
+function backupStatus_() {
+  var s = readBackupState_()
+  var failed = !!s.lastFailureAt && !(Date.parse(s.lastSuccessAt || '') > Date.parse(s.lastFailureAt))
+  return { lastSuccessAt: String(s.lastSuccessAt || ''), failed: failed, failedAt: failed ? String(s.lastFailureAt) : '', error: failed ? String(s.lastError || '') : '' }
+}
+
+// バックアップの一覧(新しい順)。フォルダの中の、名前が BACKUP_NAME_PREFIX で始まるスプレッドシートだけ
+function listBackups_() {
+  var out = []
+  var files = backupFolder_().getFiles()
+  while (files.hasNext()) {
+    var f = files.next()
+    var name = String(f.getName())
+    if (name.indexOf(BACKUP_NAME_PREFIX) !== 0) continue
+    out.push({ id: String(f.getId()), name: name, at: new Date(f.getDateCreated()).toISOString(),
+      kind: name.slice(-BACKUP_BEFORE_RESTORE_SUFFIX.length) === BACKUP_BEFORE_RESTORE_SUFFIX ? 'beforeRestore' : 'daily' })
+  }
+  out.sort(function (a, b) { return Date.parse(b.at) - Date.parse(a.at) })
+  return out
+}
+
+// 日付の区切り(日・週・月)。週は月曜日から
+function backupPeriodKeys_(ms, tz) {
+  var parts = Utilities.formatDate(new Date(ms), tz, 'yyyy-MM-dd-u').split('-')
+  var dow = Number(parts[3]) || 1
+  var monday = Utilities.formatDate(new Date(ms - (dow - 1) * 24 * 3600 * 1000), tz, 'yyyy-MM-dd')
+  return { day: parts.slice(0, 3).join('-'), week: monday, month: parts[0] + '-' + parts[1] }
+}
+
+// 残すバックアップの ID(純粋な関数)。entries は新しい順に並べたもの { id, at }。
+// 毎日の分: 新しい順に BACKUP_KEEP.daily 個 / 毎週の分: 週ごとに一番新しいものを、新しい週から BACKUP_KEEP.weekly 週 /
+// 毎月の分: 月ごとに一番新しいものを、新しい月から BACKUP_KEEP.monthly か月
+function backupsToKeep_(entries, keysOf) {
+  var keep = {}
+  entries.slice(0, BACKUP_KEEP.daily).forEach(function (e) { keep[e.id] = true })
+  var pick = function (kind, count) {
+    var seen = {}
+    var n = 0
+    entries.forEach(function (e) {
+      var k = keysOf(e)[kind]
+      if (seen[k] || n >= count) return
+      seen[k] = true
+      n++
+      keep[e.id] = true
+    })
+  }
+  pick('week', BACKUP_KEEP.weekly)
+  pick('month', BACKUP_KEEP.monthly)
+  return keep
+}
+
+// 残す数を超えた古いバックアップを、ゴミ箱に移す。移した数を返す
+function pruneBackups_(nowMs) {
+  var tz = Session.getScriptTimeZone()
+  var entries = listBackups_().map(function (b) { return { id: b.id, at: Date.parse(b.at) } })
+  var keep = backupsToKeep_(entries, function (e) { return backupPeriodKeys_(e.at, tz) })
+  var removed = 0
+  entries.forEach(function (e) {
+    if (keep[e.id]) return
+    DriveApp.getFileById(e.id).setTrashed(true)
+    removed++
+  })
+  return removed
+}
+
+// 画面から受け取ったバックアップの ID が、バックアップのフォルダの中のものか(ほかのファイルは開かない)
+function backupById_(backupId) {
+  var id = String(backupId || '')
+  var found = null
+  listBackups_().forEach(function (b) { if (b.id === id) found = b })
+  if (!found) throw userError_('そのバックアップは見つかりません。一覧を読み直してください。')
+  return found
+}
+
+// ---- 戻している間 ----
+
+function restoreInProgress_() {
+  var raw = PropertiesService.getScriptProperties().getProperty(RESTORE_STATE_KEY)
+  if (!raw) return null
+  var s = null
+  try { s = JSON.parse(raw) } catch (e) { s = null }
+  if (!s || !(Date.now() - Date.parse(s.startedAt || '') < RESTORE_STALE_MS)) return null
+  return s
+}
+
+// ---- 操作の記録(団体のスプレッドシートの AuditLog シート) ----
+var AUDIT_LOG_HEADERS = ['at', 'actor_id', 'action', 'target', 'detail_json']
+
+function appendOrgAudit_(actorId, action, target, detail) {
+  var sheet = getOrCreateSheet_('AuditLog', AUDIT_LOG_HEADERS)
+  var values = { at: new Date().toISOString(), actor_id: String(actorId || ''), action: String(action), target: String(target || ''), detail_json: JSON.stringify(detail || {}) }
+  var headers = headerRow_(sheet)
+  var row = headers.map(function (h) { return values[h] === undefined ? '' : values[h] })
+  sheet.appendRow(row)
+}
+
+// ---- 全体を戻す ----
+
+// シートを { 名前: 値の2次元配列 } で読む
+function sheetValuesOf_(spreadsheet) {
+  var out = {}
+  spreadsheet.getSheets().forEach(function (s) {
+    var name = String(s.getName())
+    if (RESTORE_EXCLUDED_SHEETS.indexOf(name) >= 0) return
+    out[name] = s.getDataRange().getValues()
+  })
+  return out
+}
+
+function dataRowCount_(values) {
+  return Math.max(0, (values || []).filter(function (r) { return r.some(function (v) { return v !== '' && v !== null }) }).length - 1)
+}
+
+// 戻す前に見せる、シートごとの件数(今・バックアップ)
+function previewRestore_(backupId) {
+  var b = backupById_(backupId)
+  var current = sheetValuesOf_(SpreadsheetApp.getActiveSpreadsheet())
+  var backup = sheetValuesOf_(SpreadsheetApp.openById(b.id))
+  var names = Object.keys(backup)
+  Object.keys(current).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n) })
+  return {
+    backup: b,
+    sheets: names.map(function (n) {
+      return { name: n, current: n in current ? dataRowCount_(current[n]) : null, backup: n in backup ? dataRowCount_(backup[n]) : null }
+    }),
+  }
+}
+
+// 全体を戻す(代表だけ。ロックを取った書き込みの中で呼ぶ)
+function restoreBackup_(backupId, actorId, nowMs) {
+  nowMs = nowMs || Date.now()
+  var b = backupById_(backupId)
+  var props = PropertiesService.getScriptProperties()
+  props.setProperty(RESTORE_STATE_KEY, JSON.stringify({ by: actorId, startedAt: new Date(nowMs).toISOString(), backupId: b.id }))
+  try {
+    var before = createBackup_('beforeRestore', nowMs)
+    var src = SpreadsheetApp.openById(b.id)
+    var ss = SpreadsheetApp.getActiveSpreadsheet()
+    var restored = []
+    src.getSheets().forEach(function (s) {
+      var name = String(s.getName())
+      if (RESTORE_EXCLUDED_SHEETS.indexOf(name) >= 0) return
+      var range = s.getDataRange()
+      var values = range.getValues()
+      var formats = range.getNumberFormats()
+      var dst = ss.getSheetByName(name) || ss.insertSheet(name)
+      dst.clearContents()
+      if (values.length && values[0].length) {
+        var target = dst.getRange(1, 1, values.length, values[0].length)
+        // 書式(文字として扱う列など)を先に戻し、値が数式として扱われないようにする
+        target.setNumberFormats(formats)
+        target.setValues(values)
+      }
+      restored.push(name)
+    })
+    SpreadsheetApp.flush()
+    forgetSheetGrid_()
+    bumpDataVersion()
+    bumpMemberEmailsVersion_()
+    appendOrgAudit_(actorId, 'restoreBackup', b.name, { backupId: b.id, beforeRestore: before.name, sheets: restored })
+    try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
+    return { restored: restored, beforeRestore: before }
+  } finally {
+    props.deleteProperty(RESTORE_STATE_KEY)
+  }
+}
+
+// ---- 一部のタスクだけ戻す ----
+
+function taskTableOf_(values) {
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var idCol = headers.indexOf('id')
+  var rows = {}
+  values.slice(1).forEach(function (r) {
+    var id = idCol >= 0 ? String(r[idCol]) : ''
+    if (!id) return
+    var o = {}
+    headers.forEach(function (h, i) { o[h] = r[i] })
+    rows[id] = o
+  })
+  return { headers: headers, rows: rows }
+}
+
+function parseJsonList_(v) {
+  try {
+    var list = JSON.parse(String(v || '[]'))
+    return Array.isArray(list) ? list : []
+  } catch (e) {
+    return []
+  }
+}
+
+function listCellText_(v) { return String(v === null || v === undefined ? '' : v).slice(0, 200) }
+
+// バックアップのタスクを名前で探し、今の内容との違いを返す。今は消えているタスクは state: 'missing'(画面は「復元」と出す)
+function searchBackupTasks_(backupId, query) {
+  var b = backupById_(backupId)
+  var q = String(query || '').trim().toLowerCase()
+  if (!q) throw userError_('タスクの名前を入れてください。')
+  var backup = taskTableOf_(SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS).getDataRange().getValues())
+  var current = taskTableOf_(getSheet_(SHEET_TASKS).getDataRange().getValues())
+  var out = []
+  Object.keys(backup.rows).forEach(function (id) {
+    var bt = backup.rows[id]
+    if (out.length >= BACKUP_SEARCH_MAX || String(bt.title || '').toLowerCase().indexOf(q) < 0) return
+    var ct = current.rows[id]
+    var diffs = []
+    if (ct) {
+      backup.headers.forEach(function (h) {
+        if (!h || h === 'id' || h === 'last_activity') return
+        var bv = String(bt[h] === undefined ? '' : bt[h])
+        var cv = String(ct[h] === undefined ? '' : ct[h])
+        if (bv === cv) return
+        if (RESTORE_MERGED_TASK_LISTS.indexOf(h) >= 0) {
+          diffs.push({ field: h, current: parseJsonList_(cv).length + '件', backup: parseJsonList_(bv).length + '件' })
+        } else {
+          diffs.push({ field: h, current: listCellText_(cv), backup: listCellText_(bv) })
+        }
+      })
+    }
+    out.push({ id: id, title: String(bt.title || ''), currentTitle: ct ? String(ct.title || '') : '', state: !ct ? 'missing' : diffs.length ? 'changed' : 'same', diffs: diffs })
+  })
+  return { backup: b, tasks: out }
+}
+
+// 記録の一覧を合わせる: バックアップの内容に、バックアップの後に付いたもの(ID が無いものは中身で比べる)を足す
+function mergeTaskList_(backupList, currentList, newestFirst) {
+  var keyOf = function (e) { return e && e.id ? 'id:' + e.id : 'v:' + JSON.stringify(e) }
+  var seen = {}
+  backupList.forEach(function (e) { seen[keyOf(e)] = true })
+  var added = currentList.filter(function (e) { return !seen[keyOf(e)] })
+  return newestFirst ? added.concat(backupList) : backupList.concat(added)
+}
+
+// 選んだタスクを戻す(代表だけ。ロックを取った書き込みの中で呼ぶ)
+function restoreTasks_(backupId, taskIds, actorId, nowMs) {
+  nowMs = nowMs || Date.now()
+  var b = backupById_(backupId)
+  var ids = []
+  ;(Array.isArray(taskIds) ? taskIds : []).forEach(function (id) { if (id && ids.indexOf(String(id)) < 0) ids.push(String(id)) })
+  if (!ids.length) throw userError_('戻すタスクを選んでください。')
+  if (ids.length > RESTORE_TASKS_MAX) throw userError_('一度に戻せるタスクは ' + RESTORE_TASKS_MAX + ' 件までです。')
+  var srcSheet = SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS)
+  var srcValues = srcSheet.getDataRange().getValues()
+  var backup = taskTableOf_(srcValues)
+  var sheet = getSheet_(SHEET_TASKS)
+  var liveValues = sheet.getDataRange().getValues()
+  var headers = (liveValues[0] || []).map(function (h) { return String(h).trim() })
+  var idCol = headers.indexOf('id')
+  var rowOf = {}
+  for (var i = 1; i < liveValues.length; i++) rowOf[String(liveValues[i][idCol])] = i
+  var label = Utilities.formatDate(new Date(b.at), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+  var done = []
+  ids.forEach(function (id) {
+    var bt = backup.rows[id]
+    if (!bt) return
+    var cur = rowOf[id] !== undefined ? liveValues[rowOf[id]] : null
+    var row = headers.map(function (h, c) {
+      if (RESTORE_MERGED_TASK_LISTS.indexOf(h) < 0) return bt[h] === undefined ? (cur ? cur[c] : '') : bt[h]
+      var merged = mergeTaskList_(parseJsonList_(bt[h]), parseJsonList_(cur ? cur[c] : '[]'), h === 'history_json')
+      if (h === 'history_json') {
+        merged.unshift({ id: 'h-restore-' + Utilities.getUuid(), at: new Date(nowMs).toISOString(), byId: String(actorId), field: 'restored', from: label, to: '' })
+        merged = merged.slice(0, HISTORY_CAP)
+      }
+      return JSON.stringify(merged)
+    })
+    var rowNumber = cur ? rowOf[id] + 1 : sheet.getLastRow() + 1
+    var target = sheet.getRange(rowNumber, 1, 1, headers.length)
+    // 文字として扱う列は、値を書く前に書式を文字にする(数式として扱われないように)
+    protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
+    target.setValues([row])
+    if (!cur) rowOf[id] = rowNumber - 1
+    done.push({ id: id, title: String(bt.title || ''), state: cur ? 'restored' : 'recreated' })
+  })
+  // データの版は、書き込みの後の bumpVersionsAfterWrite_ が上げる
+  forgetSheetGrid_(SHEET_TASKS)
+  appendOrgAudit_(actorId, 'restoreTasks', b.name, { backupId: b.id, tasks: done })
+  return { restored: done }
+}
