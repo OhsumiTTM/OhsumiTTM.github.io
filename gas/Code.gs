@@ -2564,7 +2564,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-11'
+var OHSUMI_GAS_VERSION = '2026.10.01-12'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2825,6 +2825,8 @@ var READ_ONLY_ACTIONS = [
   'getUsageStatus',
   // FSIF に送る集計値の状態・プレビュー・送信の履歴(読み取りだけ)
   'getMetricsStatus',
+  // FSIF からのお知らせ(レジストリから取る。読み取りだけ)
+  'getAnnouncements',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2901,6 +2903,68 @@ function parseSurveys_(list) {
 function surveysStatus_() {
   var state = readContractState_()
   return (state && Array.isArray(state.surveys)) ? state.surveys : []
+}
+
+// ---- FSIF からのお知らせ(PR P) ----------------------------------------------------------
+//
+// 代表・管理者が管理画面を開いた時(getAnnouncements)に、レジストリへ共有鍵の署名で取りに行く(fetchAnnouncements)。
+// 取れたものは10分覚え(CacheService)、レジストリに届かない時は、最後に取れたもの(6時間まで)を出す。
+// 重要度は normal(通常)/ important(重要)/ urgent(緊急)。既読は画面(端末ごと)で覚える
+var ANNOUNCEMENTS_CACHE_SEC = 600
+var ANNOUNCEMENTS_LAST_SEC = 6 * 3600
+var ANNOUNCEMENT_IMPORTANCE = ['normal', 'important', 'urgent']
+
+function parseAnnouncements_(list) {
+  if (!Array.isArray(list)) return []
+  return list.filter(function (v) {
+    return v && typeof v === 'object' && String(v.announcementId || '') && String(v.title || '')
+  }).slice(0, 20).map(function (v) {
+    var iso = function (x) { var t = Date.parse(String(x || '')); return isNaN(t) ? '' : new Date(t).toISOString() }
+    return {
+      announcementId: String(v.announcementId).slice(0, 40),
+      title: String(v.title).slice(0, 100),
+      body: String(v.body || '').slice(0, 1000),
+      importance: ANNOUNCEMENT_IMPORTANCE.indexOf(String(v.importance)) >= 0 ? String(v.importance) : 'normal',
+      publishedAt: iso(v.publishedAt),
+      expiresAt: iso(v.expiresAt),
+    }
+  })
+}
+
+// 返事: { registered: レジストリに登録しているか, announcements, fetchedAt, stale: レジストリに届かず、最後に取れたものを出しているか }
+function announcementsStatus_(nowMs, deps) {
+  deps = deps || {}
+  var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
+  var props = PropertiesService.getScriptProperties()
+  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
+  var orgId = String(props.getProperty('ORG_ID') || '')
+  if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return { registered: false, announcements: [], fetchedAt: '', stale: false }
+  var cache = CacheService.getScriptCache()
+  var cached = null
+  try { cached = JSON.parse(cache.get('announcements:v1') || 'null') } catch (e) { cached = null }
+  if (cached && Array.isArray(cached.announcements)) return { registered: true, announcements: cached.announcements, fetchedAt: String(cached.fetchedAt || ''), stale: false }
+  try {
+    var ts = Math.floor(nowMs / 1000)
+    var sig = base64UrlEncode_(Utilities.computeHmacSha256Signature('announcements.' + orgId + '.' + ts, key))
+    var payload = JSON.stringify({ action: 'fetchAnnouncements', orgId: orgId, ts: ts, sig: sig })
+    var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
+    var res = JSON.parse(r.getContentText())
+    if (!res || !res.ok || !res.result) throw new Error(String((res && res.error) || '応答の形が違います'))
+    var fresh = { announcements: parseAnnouncements_(res.result.announcements), fetchedAt: new Date(nowMs).toISOString() }
+    var text = JSON.stringify(fresh)
+    try {
+      cache.put('announcements:v1', text, ANNOUNCEMENTS_CACHE_SEC)
+      cache.put('announcements:last', text, ANNOUNCEMENTS_LAST_SEC)
+    } catch (e) { /* 覚えられなくても、今回は出せる */ }
+    return { registered: true, announcements: fresh.announcements, fetchedAt: fresh.fetchedAt, stale: false }
+  } catch (e) {
+    console.warn('FSIF からのお知らせを取れませんでした: ' + maskEmailsIn_(String((e && e.message) || e)))
+    var last = null
+    try { last = JSON.parse(cache.get('announcements:last') || 'null') } catch (e2) { last = null }
+    if (last && Array.isArray(last.announcements)) return { registered: true, announcements: last.announcements, fetchedAt: String(last.fetchedAt || ''), stale: true }
+    return { registered: true, announcements: [], fetchedAt: '', stale: true }
+  }
 }
 
 function gasUpdateStatus_() {
@@ -3791,6 +3855,11 @@ function authorizeAction_(acting, action, body) {
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
   var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus', 'getMetricsStatus', 'setMetricsSharing']
   if (opsActions.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
+  // FSIF からのお知らせは、代表・管理者(一般以外の役職)が読める
+  if (action === 'getAnnouncements') {
+    if (isLeader) return
+    throw userError_('FSIF からのお知らせは、代表・管理者だけが見られます。')
+  }
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
@@ -4458,6 +4527,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getUsageStatus', 'reportClientError',
   // FSIF に送る集計値の状態・プレビュー(シートとスクリプトプロパティを読むだけ)
   'getMetricsStatus',
+  // FSIF からのお知らせ(レジストリから取る。読み取りだけ)
+  'getAnnouncements',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -5443,6 +5514,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getGasUpdateStatus':
       result = gasUpdateStatus_()
+      break
+    case 'getAnnouncements':
+      result = announcementsStatus_(Date.now())
       break
     case 'testSlackWebhook':
       result = testSlackWebhook_()

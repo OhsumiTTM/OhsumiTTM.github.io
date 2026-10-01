@@ -254,6 +254,34 @@ describe('FSIF からのアンケート(PR O)', () => {
   })
 })
 
+describe('FSIF からのお知らせ(PR P)', () => {
+  it('代表・管理者が開いた時にレジストリへ取りに行き、10分覚える。届かない時は最後に取れたものを出す', () => {
+    const p = pair()
+    expect(p.reg.post({ action: 'publishAnnouncement', session: p.reg.session, title: '緊急のお知らせ', body: '本文', importance: 'urgent', target: { kind: 'all' } }).ok).toBe(true)
+    const st = p.g.announcementsStatus_(Date.now()) as { registered: boolean; stale: boolean; announcements: { title: string; importance: string }[] }
+    expect(st).toMatchObject({ registered: true, stale: false })
+    expect(st.announcements).toEqual([expect.objectContaining({ title: '緊急のお知らせ', importance: 'urgent' })])
+    const n = p.o.fetches()
+    p.g.announcementsStatus_(Date.now())
+    expect(p.o.fetches()).toBe(n)
+    // 10分を過ぎ、レジストリに届かない時
+    p.o.cache.delete('announcements:v1')
+    const stale = p.g.announcementsStatus_(Date.now(), { fetch: () => { throw new Error('offline') } }) as { stale: boolean; announcements: unknown[] }
+    expect(stale.stale).toBe(true)
+    expect(stale.announcements).toHaveLength(1)
+  })
+
+  it('レジストリに登録していない団体は、取りに行かない。形の違うものは捨てる', () => {
+    const reg = registry()
+    const o = org(reg)
+    expect((o.gas as unknown as Record<string, (n: number) => unknown>).announcementsStatus_(Date.now())).toMatchObject({ registered: false, announcements: [] })
+    expect(o.fetches()).toBe(0)
+    const p = pair()
+    expect(p.g.parseAnnouncements_([{ announcementId: 'a', title: 't', body: 'x'.repeat(2000), importance: 'critical', publishedAt: 'x' }, { title: 'no id' }, null]))
+      .toEqual([{ announcementId: 'a', title: 't', body: 'x'.repeat(1000), importance: 'normal', publishedAt: '', expiresAt: '' }])
+  })
+})
+
 describe('機能停止(restrict)', () => {
   it('作成・編集は断り、アンケートへの回答をお願いする。ログイン・読み取りは受け付ける', () => {
     const p = pair()
