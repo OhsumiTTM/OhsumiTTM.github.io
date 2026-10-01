@@ -231,7 +231,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-2'
+var REGISTRY_VERSION = '2026.10.01-3'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1429,6 +1429,7 @@ function checkIn_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-3', security: false, required: false, note: '退会したメンバー・採用しなかった候補者の個人情報の削除(PR G)' },
   { version: '2026.10.01-2', security: false, required: false, note: '毎日のバックアップと、バックアップから戻す(PR F)' },
   { version: '2026.10.01-1', security: true, required: true,
     note: '通知・タスクの書き換えを GAS が守る修正(PR A)を含む最初の版。メールの上限(PR D)・版の確認(PR E)も含む' },

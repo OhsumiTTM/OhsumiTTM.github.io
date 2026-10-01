@@ -3788,12 +3788,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [reportRemoteError],
   )
 
+  // 退会: メンバーは非表示にして保留する(個人情報は保存期間の後に GAS が消す)。
+  // 未完了のタスクの担当からは外し、完了・確認待ちのタスクの担当は記録として残す(gas/Code.gs の removeMember_)
   const removeMember = useCallback(
     (memberId: string) => {
-      setMembers((prev) => prev.filter((m) => m.id !== memberId))
+      const withdrawnAt = new Date().toISOString()
+      setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, inactive: true, withdrawnAt } : m)))
       setTasks((prev) =>
         prev.map((t) =>
-          t.assigneeIds.includes(memberId)
+          t.assigneeIds.includes(memberId) && t.status !== 'done' && t.status !== 'review'
             ? { ...t, assigneeIds: t.assigneeIds.filter((a) => a !== memberId) }
             : t,
         ),

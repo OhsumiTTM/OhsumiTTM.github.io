@@ -24,6 +24,7 @@
 //   debugNotifyTest                 通知メールの宛先の登録状況を実行ログに出し、テストメールを送る
 //   seedSampleData                  (テスト環境だけ)画面確認用のサンプルのデータを入れる
 //   deleteSampleData                (テスト環境だけ)サンプルのデータを消す
+//   testPersonalDataPurge           (テスト環境だけ)TEST_DAYS_AHEAD 日だけ日付を進めて、個人情報の削除を実行する
 //   measureReadPerformance          読み取りの所要時間とデータ量を計測する
 //   seedPerformanceTestData         (テスト環境だけ)計測用のダミーデータを入れる
 //   deletePerformanceTestData       (テスト環境だけ)計測用のダミーデータを消す
@@ -632,6 +633,27 @@ function deleteSampleData() {
   })
 }
 
+// (テスト環境だけ)個人情報の削除を、期限を待たずに確かめる。スクリプトプロパティ TEST_DAYS_AHEAD(0〜400 の日数。
+// 無ければ 0)だけ日付を進めた日時で、毎日の処理の「個人情報の削除」を実行する。実行ログに、進めた日時の
+// 消す前の人・7日前の知らせ(○人分を○日に消します)・消した人・対応するメンバーがいないメールアドレスの行の数を出す
+// (メールアドレスの行は、ここでも消さない)。手順は gas/README.md の「4.14」
+function testPersonalDataPurge() {
+  assertTestEnvironment_()
+  var raw = PropertiesService.getScriptProperties().getProperty('TEST_DAYS_AHEAD')
+  var days = raw === null || raw === '' ? 0 : Number(raw)
+  if (!(days >= 0 && days <= 400)) throw userError_('TEST_DAYS_AHEAD は 0〜400 の日数にしてください。')
+  var at = Date.now() + days * 24 * 3600 * 1000
+  var before = personalDataStatus_(at)
+  var done = purgeExpiredPersonalDataLocked_(at)
+  var msg = '🧪 ' + days + ' 日後(' + new Date(at).toISOString() + ')として、個人情報の削除を実行しました。\n' +
+    '・消す前の人(実行の前): ' + before.pending.map(function (p) { return p.kind + ':' + p.id + '(' + p.purgeAt + ' に消す)' }).join('、') + '\n' +
+    '・7日前の知らせ: ' + (before.upcoming.map(function (u) { return u.count + '人分を ' + u.date + ' に消します' }).join('、') || 'なし') + '\n' +
+    '・消したメンバー: ' + (done.members.join('、') || 'なし') + ' / 消した候補者: ' + (done.candidates.join('、') || 'なし') + '\n' +
+    '・対応するメンバーがいないメールアドレスの行: ' + before.orphanEmails.length + ' 件(自動では消しません)'
+  console.log(msg)
+  return { at: new Date(at).toISOString(), before: before, done: done }
+}
+
 // 段階①の計測用: Apps Script エディタで実行し、実行ログの結果を確認する。
 // キャッシュなし(シートから読む)とキャッシュあり、それぞれの所要時間と
 // データ量を出力する。実行するとデータの版が新しくなる(全員のキャッシュが
@@ -928,6 +950,8 @@ function dailyMaintenance() {
   if (restoreInProgress_()) return
   // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
   dailyBackup_(Date.now())
+  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
+  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + err) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -1056,6 +1080,11 @@ var MEMBERS_HEADERS = [
   'custom_fields_json',      // 団体ごとのカスタム列（人材DB）の値 {"key":"value"}
   'survey_responses_json',   // item 22/30: このメンバー自身の全アンケート回答履歴 [{"id","submittedAt","answers"}]
   'available_hours_json',    // CAL-009: 日々の稼働可能時間帯（参考情報） {"start":"10:00","end":"18:00"}
+  // 退会と個人情報の削除(「個人情報の削除」)
+  'withdrawn_at',            // 退会した日時(ISO)。空なら在籍
+  'purge_at',                // 個人情報を消す日時を延ばした時の日時(ISO)。空なら 退会の日時 + 保存期間
+  'personal_data_purged_at', // 個人情報を消した日時(ISO)
+  'withdrawal_unassigned_task_ids', // 退会の時に未アサインに戻したタスクの ID(カンマ区切り。退会を取り消した時に一覧を出す)
 ]
 var PROJECTS_HEADERS = [
   'id', 'name', 'description', 'type', 'owner_id', 'member_ids', 'archived', 'parent_id',
@@ -1088,7 +1117,9 @@ var SETTINGS_HEADERS = ['key', 'value']
 var EXPENSES_HEADERS = ['id', 'applicant_id', 'amount', 'category_id', 'receipt_url', 'justification', 'purpose', 'custom_field_answers_json', 'approval_steps_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
 var FORM_SUBMISSIONS_HEADERS = ['id', 'form_id', 'submitter_id', 'answers_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
 var DAILY_REPORTS_HEADERS = ['id', 'member_id', 'type', 'report_date', 'done_text', 'todo_text', 'issues_text', 'created_at']
-var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interview_notes', 'status', 'created_at', 'updated_at']
+var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interview_notes', 'status', 'created_at', 'updated_at',
+  // 採用しなかった日時と、消す日時を延ばした時の日時(「個人情報の削除」)
+  'rejected_at', 'purge_at']
 
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
@@ -2545,7 +2576,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-2'
+var OHSUMI_GAS_VERSION = '2026.10.01-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2798,6 +2829,8 @@ var READ_ONLY_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(戻すのは書き込みなので、機能停止中は断る)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 個人情報の削除の予定(消す・延ばすのは書き込み)
+  'getPersonalDataStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -3199,7 +3232,7 @@ function exchangeIdToken_(body) {
   // (団体名は、Google でログインした後にだけ返す。どの団体に入ろうとしたかを画面に出すため)
   if (!memberId) return { memberId: null, email: google.email, orgName: String(getSettingValue_('org_name') || '') }
   // 休止中のメンバーはログインできない(休止を解除すれば、またログインできる)
-  if (memberIsInactive_(memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
+  if (memberIsInactive_(memberId)) throw userError_(inactiveMessageOf_(memberId))
   var data = getInitialDataForMember_(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
   data.session = timed_('sessionMs', function () { return issueSessionToken_(memberId, body.remember !== false, nowSec_()) })
@@ -3716,6 +3749,9 @@ function authorizeAction_(acting, action, body) {
   // バックアップ(一覧・戻す)は代表だけ(権限の個別の上書きでも渡さない)
   var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks']
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
+  // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
+  var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
+  if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
   // --- 代表のみ ---
   var daihyoOnly = [
@@ -4367,6 +4403,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(バックアップを読むだけ)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 個人情報の削除の予定(シートを読むだけ)
+  'getPersonalDataStatus',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -4497,7 +4535,7 @@ function handlePost_(e, state) {
       var initAuth
       try {
         initAuth = timed_('authMs', function () { return authenticateRequest_(body) })
-        if (memberIsInactive_(initAuth.memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
+        if (memberIsInactive_(initAuth.memberId)) throw userError_(inactiveMessageOf_(initAuth.memberId))
       } catch (initAuthErr) {
         return authFailure_(initAuthErr)
       }
@@ -4535,7 +4573,7 @@ function handlePost_(e, state) {
       auth = authenticateRequest_(body)
       renewedSession = auth.renewed
       actingMember = getActingMember_(auth.memberId, requestAuthAction_(body))
-      if (actingMember.inactive) throw userError_(INACTIVE_MEMBER_MESSAGE)
+      if (actingMember.inactive) throw userError_(inactiveMessageOf_(actingMember.id))
     } catch (authErr) {
       endTiming_('authMs', authStart)
       return authFailure_(authErr)
@@ -4966,7 +5004,7 @@ function runWriteAction_(body, actingMember) {
       break
     case 'removeMember':
       assertTopRemains_({ members: (function () { var m = {}; m[String(body.memberId)] = { removed: true }; return m })() })
-      result = removeMember_(body.memberId)
+      result = removeMember_(body.memberId, actingMember.id, Date.now())
       break
     case 'updateNotify':
       result = updateMemberFields_(body.memberId, {
@@ -5285,6 +5323,24 @@ function runWriteAction_(body, actingMember) {
     case 'restoreTasks':
       result = restoreTasks_(body.backupId, body.taskIds, actingMember.id, Date.now())
       break
+    case 'getPersonalDataStatus':
+      result = personalDataStatus_(Date.now())
+      break
+    case 'setPersonalDataRetention':
+      result = setPersonalDataRetention_(body.days, actingMember.id)
+      break
+    case 'purgePersonalDataNow':
+      result = purgePersonalDataNow_(String(body.kind) === 'candidate' ? 'candidate' : 'member', body.id, actingMember.id, Date.now())
+      break
+    case 'extendPersonalData':
+      result = extendPersonalData_(String(body.kind) === 'candidate' ? 'candidate' : 'member', body.id, actingMember.id, Date.now())
+      break
+    case 'cancelWithdrawal':
+      result = cancelWithdrawal_(body.memberId, actingMember.id)
+      break
+    case 'deleteOrphanEmails':
+      result = deleteOrphanEmails_(body.ids, actingMember.id)
+      break
     case 'getGasUpdateStatus':
       result = gasUpdateStatus_()
       break
@@ -5298,6 +5354,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateMemberInactive':
       if (body.inactive) assertTopRemains_({ members: (function () { var m = {}; m[String(body.memberId)] = { inactive: true }; return m })() })
+      if (!body.inactive && String((findRow_(SHEET_MEMBERS, body.memberId) || {}).withdrawn_at || '')) {
+        throw userError_('退会したメンバーは、休止の解除では戻せません。団体設定の「個人情報の削除」で、退会を取り消してください。')
+      }
       result = updateMemberFields_(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
       // 休止にしたら、そのメンバーのログイン(全端末)を無効にする
       if (body.inactive) bumpSessionGeneration_(String(body.memberId))
@@ -7370,29 +7429,43 @@ function uploadSurveyImage_(dataUrl, filename) {
   return { url: url }
 }
 
-// Deletes the member's row and clears assignee_id (or removes just their
-// id from a multi-assignee list) on every task assigned to them.
-function removeMember_(memberId) {
-  var members = getSheet_(SHEET_MEMBERS)
-  var memberHeaders = headerRow_(members)
-  var idCol = memberHeaders.indexOf('id') + 1
-  var lastRow = members.getLastRow()
-  var ids = idCol > 0 ? members.getRange(2, idCol, Math.max(lastRow - 1, 0), 1).getValues() : []
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === String(memberId)) {
-      members.deleteRow(i + 2)
-      forgetSheetGrid_()
-      break
-    }
-  }
+// Members に列が無ければ、見出しの末尾に足す(setupOhsumi を実行し直していない団体でも、退会を記録できるように)
+function ensureMemberColumns_(names) {
+  var sheet = getSheet_(SHEET_MEMBERS)
+  var headers = headerRow_(sheet)
+  var col = headers.length
+  names.forEach(function (n) {
+    if (headers.indexOf(n) >= 0) return
+    col++
+    sheet.getRange(1, col).setValue(n)
+    headers.push(n)
+  })
+  forgetSheetGrid_(SHEET_MEMBERS)
+}
+
+// 退会: メンバーを非表示にして保留する(個人情報は保存期間の後に消す。「個人情報の削除」)。
+// ログインできなくし(inactive)、未完了のタスクの担当からは外す(完了・確認待ちのタスクの担当は、記録として残す)
+function removeMember_(memberId, actorId, nowMs) {
+  nowMs = nowMs || Date.now()
+  ensureMemberColumns_(['withdrawn_at', 'purge_at', 'personal_data_purged_at', 'withdrawal_unassigned_task_ids'])
+  var member = findRow_(SHEET_MEMBERS, memberId)
+  if (!member) throw userError_('メンバーが見つかりません。')
+  if (String(member.withdrawn_at || '')) return { removed: String(memberId), withdrawnAt: String(member.withdrawn_at) }
 
   var tasks = getSheet_(SHEET_TASKS)
   var taskHeaders = headerRow_(tasks)
   var assigneeCol = taskHeaders.indexOf('assignee_id') + 1
+  var statusCol = taskHeaders.indexOf('status') + 1
+  var taskIdCol = taskHeaders.indexOf('id') + 1
+  var unassigned = []
   if (assigneeCol > 0) {
     var taskLastRow = tasks.getLastRow()
     var assignees = tasks.getRange(2, assigneeCol, Math.max(taskLastRow - 1, 0), 1).getValues()
+    var statuses = statusCol > 0 ? tasks.getRange(2, statusCol, Math.max(taskLastRow - 1, 0), 1).getValues() : []
+    var taskIds = taskIdCol > 0 ? tasks.getRange(2, taskIdCol, Math.max(taskLastRow - 1, 0), 1).getValues() : []
     for (var j = 0; j < assignees.length; j++) {
+      var status = statusCol > 0 ? normalizeCode_('status', statuses[j][0]) : ''
+      if (WITHDRAW_KEEP_ASSIGNEE_STATUSES.indexOf(status) >= 0) continue
       var remaining = String(assignees[j][0] || '')
         .split(',')
         .map(function (s) {
@@ -7403,15 +7476,19 @@ function removeMember_(memberId) {
         })
       if (remaining.length !== String(assignees[j][0] || '').split(',').filter(Boolean).length) {
         tasks.getRange(j + 2, assigneeCol).setValue(remaining.join(','))
+        if (taskIds[j]) unassigned.push(String(taskIds[j][0]))
       }
     }
   }
-
-  // メール行は残るが、ログイン用の対応表のキャッシュは念のため無効にする
+  var withdrawnAt = new Date(nowMs).toISOString()
+  // 未アサインに戻したタスク(退会を取り消した時に、代表に一覧を出す)
+  updateMemberFields_(memberId, { inactive: 'TRUE', withdrawn_at: withdrawnAt, purge_at: '', withdrawal_unassigned_task_ids: unassigned.join(',') })
+  // ログイン用の対応表のキャッシュを無効にし、退会したメンバーのログイン(全端末)を無効にする
   bumpMemberEmailsVersion_()
-  // 削除したメンバーのログイン(全端末)を無効にする
   bumpSessionGeneration_(memberId)
-  return { removed: memberId }
+  var purgeAt = new Date(nowMs + personalDataRetentionDays_() * 24 * 3600 * 1000).toISOString()
+  appendOrgAudit_(actorId, 'removeMember', String(memberId), { withdrawnAt: withdrawnAt, purgeAt: purgeAt })
+  return { removed: String(memberId), withdrawnAt: withdrawnAt, purgeAt: purgeAt }
 }
 
 // ---- Settings (optional key/value sync sheet) ------------------------------
@@ -9064,6 +9141,13 @@ function updateCandidate_(candidateId, fields) {
   if (fields.interviewNotes !== undefined) mapped.interview_notes = fields.interviewNotes
   if (fields.status !== undefined) mapped.status = fields.status
   mapped.updated_at = new Date().toISOString()
+  // 採用しなかった日時(個人情報を消す日の基準)。不採用から変えたら、消す予定も消す
+  if (fields.status !== undefined) {
+    var current = findRow_(SHEET_CANDIDATES, candidateId)
+    var wasRejected = !!current && String(current.status || '') === 'rejected'
+    if (fields.status === 'rejected' && !wasRejected) mapped.rejected_at = mapped.updated_at
+    if (fields.status !== 'rejected') { mapped.rejected_at = ''; mapped.purge_at = '' }
+  }
   return updateRowFields_(SHEET_CANDIDATES, candidateId, mapped)
 }
 
@@ -9218,7 +9302,9 @@ function bumpSnapshotVersion_() {
 var TABLE_WRITE_ACTIONS = {
   expenses: ['submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense'],
   formSubmissions: ['submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
-  candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'],
+  candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember',
+    // バックアップから戻した直後・個人情報の削除で、採用しなかった候補者を消す・延ばす
+    'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
 var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
@@ -9575,6 +9661,10 @@ var READ_POLICY = {
       skill_levels_json: 'all',
       timezone: 'all',
       inactive: 'all',
+      withdrawn_at: 'all',
+      personal_data_purged_at: 'all',
+      purge_at: 'selfOrAdminRole',
+      withdrawal_unassigned_task_ids: 'selfOrAdminRole',
       mentor_id: 'selfOrAdminRole',
       has_management_experience: 'selfOrAdminRole',
       desired_areas: 'selfOrAdminRole',
@@ -10320,6 +10410,8 @@ var CANDIDATES_READ_POLICY = {
     status: 'recruiting',
     created_at: 'recruiting',
     updated_at: 'recruiting',
+    rejected_at: 'recruiting',
+    purge_at: 'recruiting',
   },
 }
 
@@ -12979,6 +13071,8 @@ function restoreBackup_(backupId, actorId, nowMs) {
     bumpDataVersion()
     bumpMemberEmailsVersion_()
     appendOrgAudit_(actorId, 'restoreBackup', b.name, { backupId: b.id, beforeRestore: before.name, sheets: restored })
+    // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す
+    purgeExpiredPersonalData_(nowMs, actorId)
     try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
     return { restored: restored, beforeRestore: before }
   } finally {
@@ -13096,5 +13190,288 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   // データの版は、書き込みの後の bumpVersionsAfterWrite_ が上げる
   forgetSheetGrid_(SHEET_TASKS)
   appendOrgAudit_(actorId, 'restoreTasks', b.name, { backupId: b.id, tasks: done })
+  // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す
+  purgeExpiredPersonalData_(nowMs, actorId)
   return { restored: done }
+}
+
+// ---- 個人情報の削除(退会したメンバー・採用しなかった候補者) -----------------------------------
+//
+// 退会(removeMember)は、押した時点ではメンバーを非表示にして保留する: ログインできなくし(inactive)、
+// 未完了のタスクは未アサインに戻す(完了・確認待ちのタスクの担当は残す)。個人情報は、保存期間
+// (Settings の personal_data_retention_days。既定 30 日、代表が 7〜365 日で変えられる)を過ぎたら、毎日の処理で消す。
+// 期限の前なら、代表は「退会を取り消す」「すぐ消す」「延長」ができる。
+//   - 退会したメンバー: メールアドレス(MemberEmails の行)・プロフィール・Will・スキル・自己申告の実績・1on1 の記録・
+//     ログインの記録を消す。Members の行は ID と役職だけを残し、名前を「退会したメンバー」にする
+//     (タスクの担当・コメント・変更の記録の書いた人は、ID のまま残り、画面には「退会したメンバー」と出る)
+//   - 採用しなかった候補者(Candidates の status が rejected): 行ごと消す
+// 消す PERSONAL_DATA_NOTICE_DAYS 日前から、代表の管理画面に「○人分を○日に消します」と出す(getPersonalDataStatus)。
+// バックアップから戻した直後にも、期限を過ぎた分を消し直す。消したことは操作の記録(AuditLog)に残す
+var PERSONAL_DATA_RETENTION_KEY = 'personal_data_retention_days'
+var PERSONAL_DATA_RETENTION = { min: 7, max: 365, defaultDays: 30 }
+var PERSONAL_DATA_NOTICE_DAYS = 7
+var WITHDRAWN_MEMBER_NAME = '退会したメンバー'
+var WITHDRAWN_MEMBER_MESSAGE = 'このアカウントは退会しています。もう一度使う時は、代表に依頼してください。'
+// 消した後も Members に残す列(これ以外は空にする)
+var MEMBER_COLUMNS_KEPT_AFTER_PURGE = ['id', 'name', 'role', 'inactive', 'withdrawn_at', 'purge_at', 'personal_data_purged_at']
+// 退会の時に担当を残すタスクの状態(それ以外は未アサインに戻す)
+var WITHDRAW_KEEP_ASSIGNEE_STATUSES = ['done', 'review']
+
+function personalDataRetentionDays_() {
+  var n = Math.floor(Number(getSettingValue_(PERSONAL_DATA_RETENTION_KEY)))
+  if (!(n >= PERSONAL_DATA_RETENTION.min && n <= PERSONAL_DATA_RETENTION.max)) return PERSONAL_DATA_RETENTION.defaultDays
+  return n
+}
+
+// ログインできない理由(退会・休止)
+function inactiveMessageOf_(memberId) {
+  var row = null
+  try { row = snapshotRowOrSheet_(SHEET_MEMBERS, memberId) } catch (e) { row = null }
+  return row && String(row.withdrawn_at || '') ? WITHDRAWN_MEMBER_MESSAGE : INACTIVE_MEMBER_MESSAGE
+}
+
+function timeOfCell_(v) {
+  if (v instanceof Date) return v.getTime()
+  var t = Date.parse(String(v || ''))
+  return isFinite(t) ? t : NaN
+}
+
+// 消す日時(ミリ秒)。延長した時は purge_at、それ以外は 退会・不採用の日時 + 保存期間
+function purgeDeadlineOf_(row, kind, days) {
+  var explicit = timeOfCell_(row.purge_at)
+  if (explicit > 0) return explicit
+  var since = kind === 'member' ? timeOfCell_(row.withdrawn_at) : (timeOfCell_(row.rejected_at) > 0 ? timeOfCell_(row.rejected_at) : timeOfCell_(row.updated_at))
+  return since > 0 ? since + days * 24 * 3600 * 1000 : NaN
+}
+
+function sheetRowsAsObjects_(sheetName) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
+  if (!sheet) return []
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  return values.slice(1).map(function (r) {
+    var o = {}
+    headers.forEach(function (h, i) { o[h] = r[i] })
+    return o
+  }).filter(function (o) { return String(o.id || '') })
+}
+
+// 消す前の人の一覧: { kind: member | candidate, id, name, since, purgeAt }
+function pendingPersonalData_(days) {
+  var out = []
+  sheetRowsAsObjects_(SHEET_MEMBERS).forEach(function (m) {
+    if (!String(m.withdrawn_at || '') || String(m.personal_data_purged_at || '')) return
+    var at = purgeDeadlineOf_(m, 'member', days)
+    out.push({ kind: 'member', id: String(m.id), name: String(m.display_name || m.name || ''), since: new Date(timeOfCell_(m.withdrawn_at)).toISOString(),
+      purgeAt: at > 0 ? new Date(at).toISOString() : '', extended: timeOfCell_(m.purge_at) > 0 })
+  })
+  sheetRowsAsObjects_(SHEET_CANDIDATES).forEach(function (c) {
+    if (String(c.status || '') !== 'rejected') return
+    var at = purgeDeadlineOf_(c, 'candidate', days)
+    var since = timeOfCell_(c.rejected_at) > 0 ? timeOfCell_(c.rejected_at) : timeOfCell_(c.updated_at)
+    out.push({ kind: 'candidate', id: String(c.id), name: String(c.name || ''), since: since > 0 ? new Date(since).toISOString() : '',
+      purgeAt: at > 0 ? new Date(at).toISOString() : '', extended: timeOfCell_(c.purge_at) > 0 })
+  })
+  out.sort(function (a, b) { return String(a.purgeAt).localeCompare(String(b.purgeAt)) })
+  return out
+}
+
+// 管理画面(代表): 保存期間・消す前の人・7日以内に消す人数(日ごと)
+function personalDataStatus_(nowMs) {
+  var days = personalDataRetentionDays_()
+  var pending = pendingPersonalData_(days)
+  var tz = Session.getScriptTimeZone()
+  var byDate = {}
+  pending.forEach(function (p) {
+    var at = Date.parse(p.purgeAt)
+    if (!(at > 0) || at - nowMs > PERSONAL_DATA_NOTICE_DAYS * 24 * 3600 * 1000) return
+    var d = Utilities.formatDate(new Date(Math.max(at, nowMs)), tz, 'yyyy-MM-dd')
+    byDate[d] = (byDate[d] || 0) + 1
+  })
+  return {
+    retentionDays: days, min: PERSONAL_DATA_RETENTION.min, max: PERSONAL_DATA_RETENTION.max, noticeDays: PERSONAL_DATA_NOTICE_DAYS,
+    pending: pending,
+    orphanEmails: orphanEmailRows_(),
+    upcoming: Object.keys(byDate).sort().map(function (d) { return { date: d, count: byDate[d] } }),
+  }
+}
+
+function setPersonalDataRetention_(days, actorId) {
+  var n = Math.floor(Number(days))
+  if (!(n >= PERSONAL_DATA_RETENTION.min && n <= PERSONAL_DATA_RETENTION.max)) {
+    throw userError_('保存期間は ' + PERSONAL_DATA_RETENTION.min + '〜' + PERSONAL_DATA_RETENTION.max + ' 日の間で決めてください。')
+  }
+  var before = personalDataRetentionDays_()
+  updateSetting_(PERSONAL_DATA_RETENTION_KEY, String(n))
+  appendOrgAudit_(actorId, 'setPersonalDataRetention', '', { before: before, after: n })
+  return { retentionDays: n }
+}
+
+// 退会したメンバーの個人情報を消す
+function purgeMember_(memberId, nowMs) {
+  var sheet = getSheet_(SHEET_MEMBERS)
+  var headers = headerRow_(sheet)
+  var fields = {}
+  headers.forEach(function (h) {
+    if (!h || MEMBER_COLUMNS_KEPT_AFTER_PURGE.indexOf(h) >= 0) return
+    fields[h] = ''
+  })
+  fields.name = WITHDRAWN_MEMBER_NAME
+  fields.inactive = 'TRUE'
+  fields.purge_at = ''
+  fields.personal_data_purged_at = new Date(nowMs).toISOString()
+  // メールアドレスは、まとめ・キューの片付けに使ってから消す
+  var emails = String(getAllMemberEmails_()[String(memberId)] || '')
+  updateRowFields_(SHEET_MEMBERS, memberId, fields)
+  deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
+  forgetPersonalProps_(memberId, emails)
+  bumpMemberEmailsVersion_()
+}
+
+// メンバーに結び付いたスクリプトプロパティ(通知のキュー・毎日のまとめ・書き込み待ちの最終ログイン)を消す
+function forgetPersonalProps_(memberId, emails) {
+  var props = PropertiesService.getScriptProperties()
+  var keys = Object.keys(props.getProperties())
+  var drop = {}
+  drop['notif_queue_' + memberId] = true
+  splitEmails_([emails]).forEach(function (e) { drop[digestKey_(e)] = true })
+  keys.forEach(function (k) {
+    if (drop[k] || k.indexOf(LAST_LOGIN_PENDING_PREFIX + memberId + '_') === 0) props.deleteProperty(k)
+  })
+}
+
+// 条件に合う行を消す(下の行から)。消した数を返す
+function deleteRowsWhere_(sheetName, test) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
+  if (!sheet) return 0
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var removed = 0
+  for (var i = values.length - 1; i >= 1; i--) {
+    var o = {}
+    headers.forEach(function (h, c) { o[h] = values[i][c] })
+    if (test(o)) {
+      sheet.deleteRow(i + 1)
+      removed++
+    }
+  }
+  if (removed) forgetSheetGrid_(sheetName)
+  return removed
+}
+
+// 期限を過ぎた個人情報を消す(毎日の処理・バックアップから戻した直後)。ロックを取った中で呼ぶ
+function purgeExpiredPersonalData_(nowMs, actorId) {
+  var days = personalDataRetentionDays_()
+  var done = { members: [], candidates: [] }
+  pendingPersonalData_(days).forEach(function (p) {
+    var at = Date.parse(p.purgeAt)
+    if (!(at > 0) || at > nowMs) return
+    if (p.kind === 'member') {
+      purgeMember_(p.id, nowMs)
+      done.members.push(p.id)
+    } else {
+      deleteRowsWhere_(SHEET_CANDIDATES, function (o) { return String(o.id) === p.id })
+      done.candidates.push(p.id)
+    }
+  })
+  // 対応するメンバーがいないメールアドレスの行は、ここでは消さない(代表が一覧を確かめて消す。orphanEmailRows_)
+  if (done.members.length || done.candidates.length) {
+    appendOrgAudit_(actorId || 'system', 'purgePersonalData', '', done)
+    bumpDataVersion()
+  }
+  return done
+}
+
+// 対応するメンバーがいないメールアドレスの行(MemberEmails の ID が、Members に無い・個人情報を消したメンバーのもの)。
+// 以前の退会(行を消していた)で残った行のほか、Orbit からの移行の直後にメンバーID の対応がずれている時にも出る。
+// 今いるメンバーのメールアドレスを消してログインできなくするおそれがあるので、自動では消さない
+// (代表の管理画面に件数と一覧を出し、代表が確かめて「消す」を押した時だけ消す。deleteOrphanEmails_)。
+// Members が読めない(空)時は、何も出さない
+function orphanEmailRows_() {
+  var members = sheetRowsAsObjects_(SHEET_MEMBERS)
+  if (!members.length) return []
+  var active = {}
+  members.forEach(function (m) { if (!String(m.personal_data_purged_at || '')) active[String(m.id)] = true })
+  var out = []
+  sheetRowsAsObjects_(SHEET_MEMBER_EMAILS).forEach(function (o) {
+    if (!active[String(o.id)]) out.push({ id: String(o.id), email: String(o.email || '') })
+  })
+  return out
+}
+
+// 代表: 一覧で確かめた行だけを消す(画面が送った ID のうち、今も対応するメンバーがいないものだけ)
+function deleteOrphanEmails_(ids, actorId) {
+  var wanted = {}
+  ;(Array.isArray(ids) ? ids : []).forEach(function (id) { if (id !== null && id !== undefined && String(id)) wanted[String(id)] = true })
+  if (!Object.keys(wanted).length) throw userError_('消す行を選んでください。')
+  var orphan = {}
+  orphanEmailRows_().forEach(function (o) { orphan[o.id] = true })
+  var targets = Object.keys(wanted).filter(function (id) { return orphan[id] })
+  var removed = targets.length ? deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return targets.indexOf(String(o.id)) >= 0 }) : 0
+  if (removed) {
+    bumpMemberEmailsVersion_()
+    appendOrgAudit_(actorId, 'deleteOrphanEmails', '', { ids: targets, rows: removed })
+  }
+  return { deleted: removed, skipped: Object.keys(wanted).length - targets.length }
+}
+
+// 毎日の処理から(ロックを取る)
+function purgeExpiredPersonalDataLocked_(nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    return purgeExpiredPersonalData_(nowMs, 'system')
+  } finally {
+    SpreadsheetApp.flush()
+    lock.releaseLock()
+  }
+}
+
+function pendingEntryOf_(kind, id) {
+  var found = null
+  pendingPersonalData_(personalDataRetentionDays_()).forEach(function (p) { if (p.kind === kind && p.id === String(id)) found = p })
+  if (!found) throw userError_('消す前の人の一覧に見つかりません。画面を読み直してください。')
+  return found
+}
+
+// 代表: 特定の人だけ、すぐ消す
+function purgePersonalDataNow_(kind, id, actorId, nowMs) {
+  var p = pendingEntryOf_(kind, id)
+  if (kind === 'member') purgeMember_(p.id, nowMs)
+  else deleteRowsWhere_(SHEET_CANDIDATES, function (o) { return String(o.id) === p.id })
+  appendOrgAudit_(actorId, 'purgePersonalDataNow', kind + ':' + p.id, {})
+  return { purged: { kind: kind, id: p.id } }
+}
+
+// 代表: 消す日を、保存期間の分だけ延ばす(今から PERSONAL_DATA_RETENTION.max 日まで)
+function extendPersonalData_(kind, id, actorId, nowMs) {
+  var p = pendingEntryOf_(kind, id)
+  var days = personalDataRetentionDays_()
+  var base = Math.max(Date.parse(p.purgeAt) || nowMs, nowMs)
+  var next = Math.min(base + days * 24 * 3600 * 1000, nowMs + PERSONAL_DATA_RETENTION.max * 24 * 3600 * 1000)
+  var iso = new Date(next).toISOString()
+  if (kind === 'member') updateRowFields_(SHEET_MEMBERS, p.id, { purge_at: iso })
+  else { ensureCandidatesSheet_(); updateRowFields_(SHEET_CANDIDATES, p.id, { purge_at: iso }) }
+  appendOrgAudit_(actorId, 'extendPersonalData', kind + ':' + p.id, { before: p.purgeAt, after: iso })
+  return { purgeAt: iso }
+}
+
+// 代表: 退会を取り消す(個人情報を消す前だけ)。未アサインに戻したタスクは、戻らない。
+// 退会の時に未アサインに戻したタスク(今もあるもの)の一覧を返す(画面が「○件あります」と出す。担当は代表が付け直す)
+function cancelWithdrawal_(memberId, actorId) {
+  var p = pendingEntryOf_('member', memberId)
+  var row = findRow_(SHEET_MEMBERS, p.id) || {}
+  var ids = String(row.withdrawal_unassigned_task_ids || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
+  var tasks = []
+  if (ids.length) {
+    sheetRowsAsObjects_(SHEET_TASKS).forEach(function (t) {
+      if (ids.indexOf(String(t.id)) < 0) return
+      var assignees = String(t.assignee_id || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
+      tasks.push({ id: String(t.id), title: String(t.title || ''), status: normalizeCode_('status', t.status), assigneeIds: assignees })
+    })
+  }
+  updateRowFields_(SHEET_MEMBERS, p.id, { withdrawn_at: '', purge_at: '', inactive: '', withdrawal_unassigned_task_ids: '' })
+  bumpMemberEmailsVersion_()
+  appendOrgAudit_(actorId, 'cancelWithdrawal', p.id, { unassignedTasks: tasks.length })
+  return { restored: p.id, unassignedTasks: tasks }
 }

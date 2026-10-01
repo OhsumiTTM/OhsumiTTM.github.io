@@ -190,6 +190,8 @@ export function AdminMembers() {
     const q = query.trim().toLowerCase()
     const minTenure = minTenureYears.trim() ? Number(minTenureYears) : null
     return members.filter((m) => {
+      // 退会したメンバーは出さない(団体設定の「個人情報の削除」に出る)
+      if (m.withdrawnAt) return false
       if (!showInactive && m.inactive) return false
       if (q) {
         const matchesText = [

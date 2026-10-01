@@ -1,6 +1,7 @@
 // バックアップ(PR F): 毎日のコピー・残す数・失敗の記録・全体を戻す・一部のタスクだけ戻す・戻している間の書き込みの停止
 import { describe, expect, it } from 'vitest'
-import { CODE_GS, FakeSheet, guardHarness, noop, type Cell } from './gas-guard-harness'
+import { CODE_GS, guardHarness, type Cell } from './gas-guard-harness'
+import { withDrive } from './gas-drive-fake'
 
 type H = ReturnType<typeof guardHarness>
 const DAY = 24 * 3600 * 1000
@@ -9,66 +10,6 @@ const writeSomething = (h: H) => h.post({ action: 'updateComments', sessionToken
   comments: [{ id: 'c-old', byId: 'm-lead', text: '前からのコメント', at: '2026-09-01' }, { id: 'c-w' + Math.random(), byId: 'm-base', text: '書き込み' }] })
 const call = (h: H, name: string, ...args: unknown[]) => (h.c[name] as (...a: unknown[]) => unknown)(...args)
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
-
-// 偽の Drive: バックアップのフォルダと、コピーしたスプレッドシート
-function withDrive(h: H, opts: { failCopy?: boolean } = {}) {
-  type File = { id: string; name: string; created: number; trashed: boolean; folder: string; sheets: Record<string, Cell[][]>; editorsRemoved: string[]; sharing: unknown[] }
-  const files: File[] = []
-  const copies: string[] = []
-  let now = Date.parse('2026-10-01T06:00:00+09:00')
-  const handle = (f: File) => noop({
-    getId: () => f.id, getName: () => f.name, getDateCreated: () => new Date(f.created),
-    setTrashed: (v: boolean) => { f.trashed = v },
-    getEditors: () => ['editor@example.com'], getViewers: () => ['viewer@example.com'],
-    removeEditor: (u: string) => { f.editorsRemoved.push(u) }, removeViewer: (u: string) => { f.editorsRemoved.push(u) },
-    setSharing: (...a: unknown[]) => { f.sharing.push(a) },
-  })
-  const folder = noop({
-    getId: () => 'backup-folder',
-    getFiles: () => {
-      const list = files.filter((f) => !f.trashed && f.folder === 'backup-folder')
-      let i = 0
-      return { hasNext: () => i < list.length, next: () => handle(list[i++]) }
-    },
-    getEditors: () => [], getViewers: () => [], setSharing: () => {},
-  })
-  h.c.DriveApp = noop({
-    Access: { PRIVATE: 'PRIVATE' }, Permission: { NONE: 'NONE' },
-    createFolder: () => folder,
-    getFolderById: (id: string) => { if (id !== 'backup-folder') throw new Error('no folder'); return folder },
-    getFileById: (id: string) => {
-      if (id === 'ss') {
-        return noop({
-          makeCopy: (name: string, dest: { getId: () => string }) => {
-            if (opts.failCopy) throw new Error('Drive の容量が足りません')
-            copies.push(id)
-            const f: File = { id: 'bk' + (files.length + 1), name, created: now, trashed: false, folder: dest.getId(), editorsRemoved: [], sharing: [],
-              sheets: Object.fromEntries(Object.entries(h.sheets).map(([n, s]) => [n, s.rows.map((r) => r.slice())])) }
-            files.push(f)
-            return handle(f)
-          },
-        })
-      }
-      const f = files.find((x) => x.id === id)
-      if (!f) throw new Error('no file')
-      return handle(f)
-    },
-  })
-  // バックアップのスプレッドシートを開く
-  const real = h.c.SpreadsheetApp as { getActiveSpreadsheet: () => unknown; flush: () => void }
-  h.c.SpreadsheetApp = noop({
-    flush: () => {},
-    getActiveSpreadsheet: () => real.getActiveSpreadsheet(),
-    openById: (id: string) => {
-      const f = files.find((x) => x.id === id && !x.trashed)
-      if (!f) throw new Error('no file')
-      const sheets = Object.entries(f.sheets).map(([n, rows]) => new FakeSheet(n, rows.map((r) => r.slice())))
-      return noop({ getSheets: () => sheets.map((s) => noop(s)), getSheetByName: (n: string) => { const s = sheets.find((x) => x.name === n); return s ? noop(s) : null } })
-    },
-  })
-  h.props.BACKUP_FOLDER_ID = 'backup-folder'
-  return { files, copies, setNow: (ms: number) => { now = ms }, live: () => files.filter((f) => !f.trashed) }
-}
 
 const rowOf = (h: H, sheet: string, id: string) => {
   const rows = h.sheets[sheet].rows
