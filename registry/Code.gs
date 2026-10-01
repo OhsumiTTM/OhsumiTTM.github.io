@@ -231,7 +231,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-9'
+var REGISTRY_VERSION = '2026.10.01-10'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -249,7 +249,8 @@ var REGISTRY_SHEETS = {
     'daily_job_at', 'hourly_job_at'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
-  Usage: ['org_id', 'date', 'metrics_json'],
+  // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
+  Usage: ['org_id', 'date', 'metrics_json', 'metrics_version', 'received_at'],
   RegistrationCodes: ['code_hash', 'kind', 'target_org_id', 'org_name', 'contact_name', 'contact_email', 'expires_at', 'issued_by', 'issued_at', 'used_at', 'used_org_id', 'revoked_at',
     'code_id', 'revoked_by', 'note'],
   // registry_key は共有鍵そのもの(団体の GAS との確認に使うため、元の値を持つ。保護したシート・誰とも共有しない)。
@@ -271,7 +272,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120 }
 
 // ---- 入口 ----
 
@@ -294,6 +295,7 @@ var REGISTRY_ACTIONS = {
   registerOrg: function (body) { return registerOrg_(body, Date.now()) },
   resolveOrg: function (body) { return resolveOrg_(body, Date.now()) },
   checkIn: function (body) { return checkIn_(body, Date.now()) },
+  reportMetrics: function (body) { return reportMetrics_(body, Date.now()) },
   scheduleSuspension: function (body) { return scheduleSuspension_(body, Date.now()) },
   clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
@@ -1422,7 +1424,64 @@ function checkIn_(body, nowMs) {
   // GAS の版: 更新が要るか(今届いた版で判定する)
   var vs = gasVersionStatus_(merged_(row.values, { gas_version: gasVersion, last_check_at: new Date(nowMs).toISOString() }), gasVersionList_(), nowMs)
   var gasUpdate = { required: vs.versionState === 'updateRequired', outdated: vs.versionState !== 'latest', latest: vs.latest, minimum: vs.minimum, security: vs.security }
-  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate } }
+  // プラン(団体の GAS が、集計値を送るかの決まりに使う。空は未設定)
+  var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
+  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate, plan: plan } }
+}
+
+// ---- 定量データ(団体の GAS が週1回送る集計値) ----
+//   要求: { action: 'reportMetrics', orgId, ts, period('YYYY-MM-DD'。その週の月曜日), metrics: { version, ...数 }, sig }
+//          sig = base64url(HMAC-SHA256(共有鍵, 'metrics.' + orgId + '.' + ts + '.' + period + '.' + JSON.stringify(metrics)))
+//   返事: { ok: true, result: { period, stored: 'new' | 'updated' } }
+// 同じ団体・同じ期間は1行として扱う(送り直しは上書きする)。数は 0 以上の整数だけを受け付け、知らない項目は捨てる
+var METRIC_KEYS = ['members', 'active_7d', 'active_30d', 'logins_7d', 'opens_7d', 'writes_7d', 'tasks', 'tasks_open', 'tasks_done',
+  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d']
+var METRICS_INVALID = '集計値を受け付けられませんでした。'
+
+// 期間の列の値(シートが日付に変えた時も YYYY-MM-DD にそろえる)
+function usageDateKey_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  return String(v === undefined || v === null ? '' : v).slice(0, 10)
+}
+
+function reportMetrics_(body, nowMs) {
+  var orgId = String(body.orgId || '')
+  var ts = Number(body.ts)
+  var period = String(body.period || '')
+  var metrics = body.metrics
+  if (!ORG_ID_PATTERN.test(orgId) || !(ts > 0) || Math.abs(nowSecOf_(nowMs) - ts) > CHECKIN_MAX_SKEW_SEC ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(period) || !metrics || typeof metrics !== 'object' || Array.isArray(metrics)) {
+    countRejected_(nowMs)
+    throw registryError_(METRICS_INVALID, { authError: true })
+  }
+  var secret = findSecretRow_(orgId)
+  var row = findOrgRow_(orgId)
+  var key = secret ? String(secret.values.registry_key || '') : ''
+  var expected = key ? b64url_(Utilities.computeHmacSha256Signature('metrics.' + orgId + '.' + ts + '.' + period + '.' + JSON.stringify(metrics), key)) : ''
+  if (!row || !expected || !safeEquals_(expected, String(body.sig || ''))) {
+    countRejected_(nowMs)
+    throw registryError_(METRICS_INVALID, { authError: true })
+  }
+  var clean = {}
+  METRIC_KEYS.forEach(function (k) {
+    var n = Number(metrics[k])
+    if (isFinite(n) && n >= 0 && n < 1e9) clean[k] = Math.floor(n)
+  })
+  var version = Math.floor(Number(metrics.version)) || 0
+  var values = { org_id: orgId, date: period, metrics_json: JSON.stringify(clean), metrics_version: version, received_at: new Date(nowMs).toISOString() }
+  var lock = LockService.getScriptLock()
+  lock.waitLock(10000)
+  try {
+    var existing = null
+    readRows_('Usage').forEach(function (r) {
+      if (String(r.values.org_id) === orgId && usageDateKey_(r.values.date) === period) existing = r
+    })
+    if (existing) setRowFields_('Usage', existing.row, values)
+    else appendRowByHeaders_('Usage', values)
+    return { ok: true, result: { period: period, stored: existing ? 'updated' : 'new' } }
+  } finally {
+    lock.releaseLock()
+  }
 }
 
 // ---- 団体の GAS の版 ----
@@ -1436,6 +1495,7 @@ function checkIn_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-10', security: false, required: false, note: '個人を特定しない集計値を週1回レジストリに送る(PR N)' },
   { version: '2026.10.01-9', security: false, required: false, note: 'マニフェストに使う許可(oauthScopes)を書き、許可が足りない時の知らせ(PR M)' },
   { version: '2026.10.01-8', security: false, required: false, note: '退会者の削除でカレンダーのゲスト・プロフィール画像も消す、実行ログのメールアドレスを伏せる(PR L)' },
   { version: '2026.10.01-7', security: false, required: false, note: '利用の集計とエラーの記録(PR K)' },
