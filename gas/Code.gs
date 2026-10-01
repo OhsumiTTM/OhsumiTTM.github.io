@@ -990,6 +990,11 @@ function checkContractStatus() {
   } catch (e) {
     console.error('GAS の更新のお知らせを送れませんでした: ' + e)
   }
+  try {
+    sendUrgentAnnouncementMails_(state)
+  } catch (e) {
+    console.error('FSIF からの緊急のお知らせを、代表にメールで送れませんでした: ' + maskEmailsIn_(String(e)))
+  }
 }
 
 // ============================================================================
@@ -2969,6 +2974,51 @@ function announcementsStatus_(nowMs, deps) {
   }
 }
 
+// 緊急のお知らせを、代表にメールで1回だけ送る(1時間ごとの checkContractStatus から)。
+// checkIn で受け取った ID のうち、まだ送っていないものの本文をレジストリから取り(fetchAnnouncements)、1件ずつ送る。
+// 送った ID はスクリプトプロパティ URGENT_ANNOUNCEMENTS_MAILED に残す(直近50件)。メールの上限で送れなかった時は、次の確認で送り直す。
+// 送った ID を返す
+var URGENT_MAILED_KEEP = 50
+
+function sendUrgentAnnouncementMails_(state, deps) {
+  var ids = (state && Array.isArray(state.urgentAnnouncementIds)) ? state.urgentAnnouncementIds : []
+  if (!ids.length) return []
+  var props = PropertiesService.getScriptProperties()
+  var mailed = []
+  try { mailed = JSON.parse(props.getProperty('URGENT_ANNOUNCEMENTS_MAILED') || '[]') } catch (e) { mailed = [] }
+  if (!Array.isArray(mailed)) mailed = []
+  var pending = ids.filter(function (id) { return mailed.indexOf(id) < 0 })
+  if (!pending.length) return []
+  // 覚えている一覧(10分)に無い新しいものがあれば、取り直す
+  var cache = CacheService.getScriptCache()
+  var list = announcementsStatus_(Date.now(), deps).announcements
+  if (pending.some(function (id) { return !list.some(function (a) { return a.announcementId === id }) })) {
+    try { cache.remove('announcements:v1') } catch (e) { /* 取り直せなくても、あるものは送る */ }
+    list = announcementsStatus_(Date.now(), deps).announcements
+  }
+  var emails = getAllMemberEmails_()
+  var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  if (!to.length) {
+    console.warn('緊急のお知らせを知らせる代表のメールアドレスがありません')
+    return []
+  }
+  var orgName = getSettingValue_('org_name') || 'Ohsumi'
+  var sent = []
+  pending.forEach(function (id) {
+    var a = list.filter(function (x) { return x.announcementId === id && x.importance === 'urgent' })[0]
+    if (!a) return
+    var ok = sendMail_({
+      to: to.join(','),
+      subject: '[Ohsumi] ' + orgName + ': FSIF からの緊急のお知らせ「' + a.title + '」',
+      body: orgName + ' 代表の方へ\n\nFSIF から緊急のお知らせがあります。\n\n' + a.title + '\n\n' + a.body +
+        '\n\n(Ohsumi の管理画面の上部にも出しています。このメールは、お知らせごとに1回だけ送ります)',
+    })
+    if (ok) { mailed.push(id); sent.push(id) }
+  })
+  if (sent.length) props.setProperty('URGENT_ANNOUNCEMENTS_MAILED', JSON.stringify(mailed.slice(-URGENT_MAILED_KEEP)))
+  return sent
+}
+
 function gasUpdateStatus_() {
   var state = readContractState_()
   var u = (state && state.gasUpdate) || null
@@ -3079,6 +3129,9 @@ function refreshContractState_(deps) {
     plan: ['cosmo_base', 'ohsumi', 'paid'].indexOf(String(out.plan || '')) >= 0 ? String(out.plan) : '',
     // FSIF からの回答待ちのアンケート(代表の管理画面に出す。古いレジストリは返さない)
     surveys: parseSurveys_(out.surveys),
+    // 掲載中の緊急のお知らせの ID(代表にメールで1回だけ送る)
+    urgentAnnouncementIds: (Array.isArray(out.urgentAnnouncementIds) ? out.urgentAnnouncementIds : [])
+      .map(function (x) { return String(x).slice(0, 40) }).filter(function (x) { return /^an_[A-Za-z0-9]+$/.test(x) }).slice(0, 20),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state

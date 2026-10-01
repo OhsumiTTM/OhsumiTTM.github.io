@@ -51,7 +51,7 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
       setProperty: (k: string, v: string) => { props[k] = v },
       deleteProperty: (k: string) => { delete props[k] },
     }) },
-    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => { cache.set(k, v) }, getAll: () => ({}), putAll() {} }) },
+    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => { cache.set(k, v) }, remove: (k: string) => { cache.delete(k) }, getAll: () => ({}), putAll() {} }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (text: string) => ({ text, setMimeType() { return this } }) },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
