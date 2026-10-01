@@ -12,6 +12,7 @@ import { BackupPanel } from './backup-panel'
 import { PersonalDataPanel } from './personal-data-panel'
 import { UsagePanel } from './usage-panel'
 import { MetricsPanel } from './metrics-panel'
+import { DiagnosticsPanel } from './diagnostics-panel'
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -264,6 +265,12 @@ export function OrgSettingsScreen() {
         {isDaihyo && remoteOk && (
           <Section>
             <MetricsPanel />
+            <AdminAccessNote level="daihyo" className="mt-1.5" />
+          </Section>
+        )}
+        {isDaihyo && remoteOk && (
+          <Section>
+            <DiagnosticsPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}

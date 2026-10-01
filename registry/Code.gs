@@ -233,7 +233,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-12'
+var REGISTRY_VERSION = '2026.10.01-13'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -267,6 +267,8 @@ var REGISTRY_SHEETS = {
   // お知らせ(管理画面から出す)。importance は normal / important / urgent、target_kind は all / plan / orgs
   Announcements: ['announcement_id', 'title', 'body', 'importance', 'target_kind', 'target_plan', 'target_org_ids', 'published_at', 'expires_at', 'created_by',
     'withdrawn_at', 'withdrawn_by'],
+  // 団体の代表が送った診断情報(個人情報を含まない)。receipt_no は受付番号、diag_id は送り直しを見分けるための ID
+  Diagnostics: ['receipt_no', 'org_id', 'diag_id', 'received_at', 'gas_version', 'diagnostics_json'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
   // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
   // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
@@ -282,7 +284,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120, fetchAnnouncements: 300 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120, fetchAnnouncements: 300, receiveDiagnostics: 30 }
 
 // ---- 入口 ----
 
@@ -316,6 +318,8 @@ var REGISTRY_ACTIONS = {
   cancelSurvey: function (body) { return closeSurvey_(body, Date.now(), 'cancelled') },
   scheduleSurveyRestriction: function (body) { return scheduleSurveyRestriction_(body, Date.now()) },
   fetchAnnouncements: function (body) { return fetchAnnouncements_(body, Date.now()) },
+  receiveDiagnostics: function (body) { return receiveDiagnostics_(body, Date.now()) },
+  getDiagnosticsReport: function (body) { return getDiagnosticsReport_(body, Date.now()) },
   publishAnnouncement: function (body) { return publishAnnouncement_(body, Date.now()) },
   withdrawAnnouncement: function (body) { return withdrawAnnouncement_(body, Date.now()) },
 }
@@ -779,6 +783,7 @@ function adminOverview_(body, nowMs) {
       surveyLimits: so.surveyLimits,
       survey12mCounts: so.survey12mCounts,
       announcements: announcementList_(nowMs),
+      diagnostics: diagnosticsList_(),
     },
   }
 }
@@ -2064,6 +2069,110 @@ function withdrawAnnouncement_(body, nowMs) {
   })
 }
 
+// ---- 診断情報(R2: PR Q) ----
+//
+// 団体の代表が管理画面で確かめてから送る、個人情報を含まない診断情報を受け、受付番号を返す。
+//   要求: { action: 'receiveDiagnostics', orgId, ts, diagId, diagnostics(JSON の文字列), sig }
+//          sig = base64url(HMAC-SHA256(共有鍵, 'diagnostics.' + orgId + '.' + ts + '.' + diagId + '.' + diagnostics))。時刻は前後5分まで
+//   返事: { ok: true, result: { receiptNo, receivedAt, duplicate } }
+//   受付番号は「D + 受け付けた日(日本時間の YYMMDD)+ - + 4文字」(電話でも伝えやすい文字だけ)。
+//   同じ団体・同じ診断ID の送り直しは、同じ受付番号を返す。1団体1日に DIAGNOSTICS_DAILY_MAX 件まで。
+//   念のため、文の中のメールアドレスは「(メールアドレス)」に置き換えて残す
+var DIAGNOSTICS_MAX_CHARS = 30000
+var DIAGNOSTICS_DAILY_MAX = 20
+var DIAGNOSTICS_SHOW_MAX = 100
+var DIAGNOSTICS_INVALID = '診断情報を受け付けられませんでした。'
+
+function diagnosticsSummary_(values, orgs) {
+  var orgId = String(values.org_id || '')
+  return {
+    receiptNo: String(values.receipt_no || ''),
+    orgId: orgId,
+    orgName: orgs && orgs[orgId] ? String(orgs[orgId].display_name || '') : '',
+    receivedAt: isoOf_(values.received_at),
+    gasVersion: String(values.gas_version || ''),
+  }
+}
+
+function diagnosticsList_() {
+  var orgs = orgValuesById_()
+  return readRows_('Diagnostics').filter(function (r) { return String(r.values.receipt_no || '') }).slice(-DIAGNOSTICS_SHOW_MAX).reverse()
+    .map(function (r) { return diagnosticsSummary_(r.values, orgs) })
+}
+
+function newReceiptNo_(nowMs, existing) {
+  var day = jstDateKey_(nowMs).replace(/-/g, '').slice(2)
+  for (var i = 0; i < 20; i++) {
+    var bytes = randomBytes_(4)
+    var tail = ''
+    for (var j = 0; j < 4; j++) tail += REGISTRATION_CODE_ALPHABET.charAt((bytes[j] & 0xff) % REGISTRATION_CODE_ALPHABET.length)
+    var no = 'D' + day + '-' + tail
+    if (!existing[no]) return no
+  }
+  throw new Error('受付番号を作れませんでした')
+}
+
+function receiveDiagnostics_(body, nowMs) {
+  var orgId = String(body.orgId || '')
+  var ts = Number(body.ts)
+  var diagId = String(body.diagId || '')
+  var text = typeof body.diagnostics === 'string' ? body.diagnostics : ''
+  if (!ORG_ID_PATTERN.test(orgId) || !(ts > 0) || Math.abs(nowSecOf_(nowMs) - ts) > CHECKIN_MAX_SKEW_SEC || !/^dg_[A-Za-z0-9]{8,40}$/.test(diagId) || !text) {
+    countRejected_(nowMs)
+    throw registryError_(DIAGNOSTICS_INVALID, { authError: true })
+  }
+  var secret = findSecretRow_(orgId)
+  var row = findOrgRow_(orgId)
+  var key = secret ? String(secret.values.registry_key || '') : ''
+  var expected = key ? b64url_(Utilities.computeHmacSha256Signature('diagnostics.' + orgId + '.' + ts + '.' + diagId + '.' + text, key)) : ''
+  if (!row || !expected || !safeEquals_(expected, String(body.sig || ''))) {
+    countRejected_(nowMs)
+    throw registryError_(DIAGNOSTICS_INVALID, { authError: true })
+  }
+  if (text.length > DIAGNOSTICS_MAX_CHARS) throw registryError_('診断情報が大きすぎます。')
+  var parsed
+  try { parsed = JSON.parse(text) } catch (e) { parsed = null }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw registryError_(DIAGNOSTICS_INVALID)
+  var clean = JSON.stringify(parsed).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g, '(メールアドレス)')
+  return withRegistryLock_(function () {
+    var rows = readRows_('Diagnostics')
+    var existing = {}
+    var today = jstDateKey_(nowMs)
+    var todayCount = 0
+    var same = null
+    rows.forEach(function (r) {
+      existing[String(r.values.receipt_no)] = true
+      if (String(r.values.org_id) !== orgId) return
+      if (String(r.values.diag_id) === diagId) same = r
+      if (jstDateKey_(timeOf_(r.values.received_at) || 0) === today) todayCount++
+    })
+    if (same) return { ok: true, result: { receiptNo: String(same.values.receipt_no), receivedAt: isoOf_(same.values.received_at), duplicate: true } }
+    if (todayCount >= DIAGNOSTICS_DAILY_MAX) throw registryError_('今日は、これ以上の診断情報を受け付けられません(1日' + DIAGNOSTICS_DAILY_MAX + '件まで)。明日、もう一度送ってください。')
+    var receiptNo = newReceiptNo_(nowMs, existing)
+    var receivedAt = new Date(nowMs).toISOString()
+    appendRowByHeaders_('Diagnostics', { receipt_no: receiptNo, org_id: orgId, diag_id: diagId, received_at: receivedAt,
+      gas_version: cleanText_(parsed.version, 40), diagnostics_json: clean })
+    appendAudit_({ actor: 'org:' + orgId, action: 'receiveDiagnostics', target: orgId, after: { receiptNo: receiptNo } })
+    return { ok: true, result: { receiptNo: receiptNo, receivedAt: receivedAt, duplicate: false } }
+  })
+}
+
+// 管理画面: 受付番号で、診断情報の中身を見る。{ session, receiptNo }
+function getDiagnosticsReport_(body, nowMs) {
+  var props = registryProps_()
+  verifyAdminSession_(body.session, props, nowMs)
+  var no = String(body.receiptNo || '').trim().toUpperCase()
+  if (!/^D\d{6}-[A-Z0-9]{4}$/.test(no)) throw registryError_('受付番号(D から始まる、例: D261001-AB2C)を入れてください。')
+  var hit = null
+  readRows_('Diagnostics').forEach(function (r) { if (String(r.values.receipt_no) === no) hit = r })
+  if (!hit) throw registryError_('その受付番号の診断情報は見つかりません。')
+  var report
+  try { report = JSON.parse(String(hit.values.diagnostics_json || '{}')) } catch (e) { report = {} }
+  var summary = diagnosticsSummary_(hit.values, orgValuesById_())
+  summary.diagnostics = report
+  return { ok: true, result: summary }
+}
+
 // ---- 団体の GAS の版 ----
 //
 // 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
@@ -2075,6 +2184,7 @@ function withdrawAnnouncement_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-13', security: false, required: false, note: '代表の管理画面から診断情報を FSIF に送り、受付番号を出す(PR Q)' },
   { version: '2026.10.01-12', security: false, required: false, note: 'FSIF からのお知らせを代表・管理者の管理画面に出す(PR P)' },
   { version: '2026.10.01-11', security: false, required: false, note: 'FSIF からのアンケートを代表の管理画面に出す(PR O)' },
   { version: '2026.10.01-10', security: false, required: false, note: '個人を特定しない集計値を週1回レジストリに送る(PR N)' },

@@ -2569,7 +2569,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-12'
+var OHSUMI_GAS_VERSION = '2026.10.01-13'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2832,6 +2832,8 @@ var READ_ONLY_ACTIONS = [
   'getMetricsStatus',
   // FSIF からのお知らせ(レジストリから取る。読み取りだけ)
   'getAnnouncements',
+  // 診断情報の表示・送信(団体のシートは書き換えない。機能停止中も FSIF に問い合わせられるように)
+  'getDiagnostics', 'sendDiagnostics',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -3906,7 +3908,7 @@ function authorizeAction_(acting, action, body) {
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
-  var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus', 'getMetricsStatus', 'setMetricsSharing']
+  var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus', 'getMetricsStatus', 'setMetricsSharing', 'getDiagnostics', 'sendDiagnostics']
   if (opsActions.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
   // FSIF からのお知らせは、代表・管理者(一般以外の役職)が読める
   if (action === 'getAnnouncements') {
@@ -4582,6 +4584,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getMetricsStatus',
   // FSIF からのお知らせ(レジストリから取る。読み取りだけ)
   'getAnnouncements',
+  // 診断情報の表示・送信(団体のシートは書き換えない。機能停止中も FSIF に問い合わせられるように)
+  'getDiagnostics', 'sendDiagnostics',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -5570,6 +5574,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getAnnouncements':
       result = announcementsStatus_(Date.now())
+      break
+    case 'getDiagnostics':
+      result = diagnosticsPreview_(Date.now())
+      break
+    case 'sendDiagnostics':
+      result = sendDiagnostics_(body.diagId, Date.now())
       break
     case 'testSlackWebhook':
       result = testSlackWebhook_()
@@ -14860,4 +14870,165 @@ function setMetricsSharing_(enabled, actorId, nowMs) {
   syncMetricsNotice_(enabled)
   appendOrgAudit_(actorId, 'setMetricsSharing', '', { before: sharing.enabled, after: enabled })
   return metricsStatus_(nowMs)
+}
+
+// ---- 診断情報(PR Q) ----------------------------------------------------------------------
+//
+// 代表の管理画面で、個人情報を含まない診断情報(版・設定の状態・上限の状況・直近のエラーの件数など)を見せ(getDiagnostics)、
+// 確認の後にレジストリへ送って受付番号をもらう(sendDiagnostics)。
+//   - 名前・メールアドレス・メンバーID・タスクの内容・エラーの文は入れない(数・あり/なし・日時・操作の名前だけ)。
+//     念のため、文の中のメールアドレスは「(メールアドレス)」に置き換える
+//   - 見せたものと同じものを送る(見せた時に診断ID を付けて10分覚える。過ぎたら、表示し直してもらう)
+//   - 送り直しは、同じ診断ID なら同じ受付番号になる(レジストリが1件として扱う)
+//   - 送った記録(受付番号・日時)は、スクリプトプロパティ DIAGNOSTICS_HISTORY に直近10件を残す
+var DIAGNOSTICS_CACHE_SEC = 600
+var DIAGNOSTICS_HISTORY_MAX = 10
+var DIAGNOSTICS_MAX_CHARS = 30000
+// スプレッドシートのセルの数の上限(Google の決まり)・スクリプトプロパティの上限(合計の目安)
+var SPREADSHEET_CELL_LIMIT = 10000000
+var SCRIPT_PROPERTIES_LIMIT_BYTES = 500 * 1024
+
+function hideEmails_(text) {
+  return String(text).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+/g, '(メールアドレス)')
+}
+
+// 1つの項目で失敗しても、ほかの項目は出す(失敗した項目には、エラーの種類だけを入れる)
+function diagnosticsPart_(fn) {
+  try {
+    return fn()
+  } catch (e) {
+    return { unavailable: isPermissionError_(e) ? 'permission' : (quotaKind_(e) ? 'quota' : 'error') }
+  }
+}
+
+// Ohsumi が作るシートの名前(診断情報で、名前と行数を出すもの)
+function ohsumiSheetNames_() {
+  return Object.keys(SHEET_HEADERS).concat(['AuditLog', USAGE_SHEET, ERROR_LOG_SHEET])
+}
+
+function diagnosticsSnapshot_(nowMs) {
+  var props = PropertiesService.getScriptProperties()
+  var contract = readContractState_() || {}
+  var snap = {
+    version: OHSUMI_GAS_VERSION,
+    generatedAt: new Date(nowMs).toISOString(),
+    timeZone: diagnosticsPart_(function () { return Session.getScriptTimeZone() }),
+    registry: diagnosticsPart_(function () {
+      return {
+        registered: REGISTRY_URL_PATTERN.test(String(props.getProperty('REGISTRY_URL') || '').trim()) && !!props.getProperty('REGISTRY_SHARED_KEY') && !!props.getProperty('ORG_ID'),
+        plan: String(contract.plan || ''),
+        contractPhase: String(contract.phase || ''),
+        contractKind: String(contract.kind || ''),
+        checkedAt: String(contract.checkedAt || ''),
+        siteOrigins: Array.isArray(contract.siteOrigins) ? contract.siteOrigins.length : 0,
+        openSurveys: Array.isArray(contract.surveys) ? contract.surveys.length : 0,
+      }
+    }),
+    gasUpdate: diagnosticsPart_(function () { var u = gasUpdateStatus_(); return { known: u.known, required: u.required, outdated: u.outdated, latest: u.latest } }),
+    settings: diagnosticsPart_(function () {
+      var w = getWebhookStatus_()
+      var emails = String(getSettingValue_('org_notification_emails') || '').split(/[,\s]+/).filter(Boolean)
+      var sharing = metricsSharing_()
+      return {
+        discordWebhook: !!w.discord.configured,
+        slackWebhook: !!w.slack.configured,
+        orgNotificationEmails: emails.length,
+        metricsSharing: !!sharing.enabled,
+        triggers: diagnosticsPart_(function () { return ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction() }).sort() }),
+      }
+    }),
+    limits: diagnosticsPart_(function () {
+      var q = mailQuotaStatus_()
+      var long = longRecordsNow_()
+      var propsText = JSON.stringify(props.getProperties() || {})
+      var ss = SpreadsheetApp.getActiveSpreadsheet()
+      var cells = 0
+      var rows = {}
+      // Ohsumi が作るシートは名前と行数。それ以外(団体が作ったシート)は名前を入れず、「その他」の枚数と行数の合計にまとめる
+      var other = { sheets: 0, rows: 0 }
+      var ohsumiSheets = ohsumiSheetNames_()
+      ss.getSheets().forEach(function (sh) {
+        cells += (Number(sh.getMaxRows()) || 0) * (Number(sh.getMaxColumns()) || 0)
+        var n = Math.max(0, (Number(sh.getLastRow()) || 0) - 1)
+        var name = String(sh.getName())
+        if (ohsumiSheets.indexOf(name) >= 0) rows[name] = n
+        else { other.sheets++; other.rows += n }
+      })
+      return {
+        mail: { remaining: q.remaining, skippedToday: q.skipped, lastReachedDate: q.lastReachedDate },
+        longRecords: { count: long.groups.reduce(function (n, g) { return n + g.count }, 0), maxLength: long.maxLength, warnAt: long.warnAt, max: long.max },
+        spreadsheetCells: { used: cells, limit: SPREADSHEET_CELL_LIMIT },
+        scriptProperties: { bytes: propsText.length, limit: SCRIPT_PROPERTIES_LIMIT_BYTES, keys: Object.keys(props.getProperties() || {}).length },
+        rows: rows,
+        otherSheets: other,
+      }
+    }),
+    jobs: diagnosticsPart_(function () {
+      var j = jobStatus_(nowMs)
+      return { dailyAt: j.dailyAt, hourlyAt: j.hourlyAt, dailyStale: j.dailyStale, hourlyStale: j.hourlyStale, dailyFailedAt: j.dailyFailedAt, hourlyFailedAt: j.hourlyFailedAt }
+    }),
+    sharing: diagnosticsPart_(function () {
+      var s = readSharingState_()
+      // 誰と共有しているか(detail)は入れない。対象と種類だけ
+      return { checkedAt: s.checkedAt, problems: s.problems.map(function (p) { return p.target + ':' + p.kind }) }
+    }),
+    backup: diagnosticsPart_(function () { var b = backupStatus_(); return { lastSuccessAt: b.lastSuccessAt, failed: b.failed, failedAt: b.failedAt } }),
+    errors: diagnosticsPart_(function () {
+      var u = usageStatus_(nowMs)
+      var byAction = {}
+      u.errors.recent.forEach(function (r) { if (Date.parse(r.at) >= nowMs - 7 * 24 * 3600 * 1000) byAction[r.action] = (byAction[r.action] || 0) + 1 })
+      return { last7Days: u.errors.last7Days, byKind: u.errors.byKind, recentByAction: byAction }
+    }),
+  }
+  return JSON.parse(hideEmails_(JSON.stringify(snap)))
+}
+
+function readDiagnosticsHistory_() {
+  try {
+    var list = JSON.parse(PropertiesService.getScriptProperties().getProperty('DIAGNOSTICS_HISTORY') || '[]')
+    return Array.isArray(list) ? list : []
+  } catch (e) {
+    return []
+  }
+}
+
+// 代表の管理画面: 送る内容を見せる。返事: { diagId, diagnostics, history }
+function diagnosticsPreview_(nowMs) {
+  var diag = diagnosticsSnapshot_(nowMs)
+  var diagId = 'dg_' + Utilities.getUuid().replace(/[^A-Za-z0-9]/g, '').slice(0, 20)
+  try { CacheService.getScriptCache().put('diag:' + diagId, JSON.stringify(diag), DIAGNOSTICS_CACHE_SEC) } catch (e) { /* 送る時に、表示し直してもらう */ }
+  return { diagId: diagId, diagnostics: diag, history: readDiagnosticsHistory_() }
+}
+
+// 代表の管理画面: 見せたものを送り、受付番号を返す。{ diagId }
+function sendDiagnostics_(diagId, nowMs, deps) {
+  deps = deps || {}
+  var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
+  var props = PropertiesService.getScriptProperties()
+  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
+  var orgId = String(props.getProperty('ORG_ID') || '')
+  if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) throw userError_('この団体は、レジストリに登録していないため、診断情報を送れません。表示した内容を FSIF にお伝えください。')
+  if (!/^dg_[A-Za-z0-9]{8,40}$/.test(String(diagId || ''))) throw userError_('送る内容を、もう一度表示してください。')
+  var text = CacheService.getScriptCache().get('diag:' + diagId)
+  if (!text) throw userError_('表示してから10分を過ぎました。送る内容を、もう一度表示してください。')
+  if (text.length > DIAGNOSTICS_MAX_CHARS) throw userError_('診断情報が大きすぎて送れません。FSIF にお問い合わせください。')
+  var ts = Math.floor(nowMs / 1000)
+  var sig = base64UrlEncode_(Utilities.computeHmacSha256Signature('diagnostics.' + orgId + '.' + ts + '.' + diagId + '.' + text, key))
+  var res
+  try {
+    var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', muteHttpExceptions: true, followRedirects: true,
+      payload: JSON.stringify({ action: 'receiveDiagnostics', orgId: orgId, ts: ts, diagId: diagId, diagnostics: text, sig: sig }) })
+    res = JSON.parse(r.getContentText())
+  } catch (e) {
+    throw userError_('FSIF(レジストリ)に送れませんでした。少し待ってから、もう一度送ってください。')
+  }
+  if (!res || !res.ok || !res.result || !/^D\d{6}-[A-Z0-9]{4}$/.test(String(res.result.receiptNo || ''))) {
+    throw userError_('FSIF(レジストリ)が受け付けませんでした(' + String((res && res.error) || '応答の形が違います').slice(0, 100) + ')。')
+  }
+  var entry = { receiptNo: String(res.result.receiptNo), at: new Date(nowMs).toISOString(), diagId: diagId }
+  var history = readDiagnosticsHistory_().filter(function (h) { return h.diagId !== diagId })
+  history.unshift(entry)
+  props.setProperty('DIAGNOSTICS_HISTORY', JSON.stringify(history.slice(0, DIAGNOSTICS_HISTORY_MAX)))
+  return { receiptNo: entry.receiptNo, at: entry.at, history: history.slice(0, DIAGNOSTICS_HISTORY_MAX) }
 }

@@ -167,6 +167,32 @@ export interface Overview {
   survey12mCounts?: Record<string, number>
   // お知らせ(新しい順。古いレジストリでは無い)
   announcements?: AnnouncementSummary[]
+  // 団体から届いた診断情報(新しい順に最大100件。中身は受付番号で読む。古いレジストリでは無い)
+  diagnostics?: DiagnosticsSummary[]
+}
+
+// ---- 診断情報(PR Q) ----
+export interface DiagnosticsSummary {
+  receiptNo: string
+  orgId: string
+  orgName: string
+  receivedAt: string
+  gasVersion: string
+}
+
+export interface DiagnosticsReport extends DiagnosticsSummary {
+  diagnostics: Record<string, unknown>
+}
+
+/** 受付番号の形(D + 日本時間の YYMMDD + - + 4文字)。小文字・前後の空白は直す */
+export function normalizeReceiptNo(input: string): string {
+  return input.trim().toUpperCase()
+}
+export const RECEIPT_NO_PATTERN = /^D\d{6}-[A-Z0-9]{4}$/
+
+/** 受付番号で、診断情報の中身を読む */
+export function getDiagnosticsReport(session: AdminSession, receiptNo: string): Promise<DiagnosticsReport> {
+  return callRegistry<DiagnosticsReport>('getDiagnosticsReport', { session: session.token, receiptNo: normalizeReceiptNo(receiptNo) }, 2)
 }
 
 // ---- お知らせ(PR P) ----

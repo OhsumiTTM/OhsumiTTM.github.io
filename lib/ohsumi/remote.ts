@@ -201,6 +201,22 @@ export interface AnnouncementsStatus {
   stale: boolean
 }
 
+/** 診断情報(gas/Code.gs の diagnosticsPreview_)。diagnostics は個人情報を含まない(版・設定の状態・上限・エラーの件数など) */
+export interface DiagnosticsHistoryEntry {
+  receiptNo: string
+  at: string
+}
+export interface DiagnosticsPreview {
+  diagId: string
+  diagnostics: Record<string, unknown>
+  history: DiagnosticsHistoryEntry[]
+}
+export interface DiagnosticsSent {
+  receiptNo: string
+  at: string
+  history: DiagnosticsHistoryEntry[]
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
@@ -1218,6 +1234,8 @@ export const remoteApi = {
   // FSIF に送る集計値(代表だけ)
   getMetricsStatus: () => postToGas<MetricsStatus>('getMetricsStatus', {}),
   getAnnouncements: () => postToGas<AnnouncementsStatus>('getAnnouncements', {}),
+  getDiagnostics: () => postToGas<DiagnosticsPreview>('getDiagnostics', {}),
+  sendDiagnostics: (diagId: string) => postToGas<DiagnosticsSent>('sendDiagnostics', { diagId }),
   setMetricsSharing: (enabled: boolean) => postToGas<MetricsStatus>('setMetricsSharing', { enabled }),
   reportClientError: (kind: string, errorAction?: string) => postToGas<{ recorded: boolean }>('reportClientError', { kind, errorAction: errorAction ?? '' }),
   // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)

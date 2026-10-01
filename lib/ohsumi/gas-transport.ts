@@ -102,6 +102,8 @@ export const READ_ACTIONS = new Set([
   'getMetricsStatus',
   // FSIF からのお知らせ(代表・管理者)
   'getAnnouncements',
+  // 診断情報の表示(代表だけ)
+  'getDiagnostics',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
@@ -540,6 +542,8 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'recheckSharing',
   // 画面のエラーの記録(ロックを取らない。エラーの記録のシートに1行足すだけ)
   'reportClientError',
+  // 診断情報を FSIF に送る(ロックを取らない。スクリプトプロパティに受付番号を残すだけ)
+  'sendDiagnostics',
 ])
 
 export function isBatchableWrite(action: string): boolean {
