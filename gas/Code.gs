@@ -169,6 +169,19 @@ function setupOhsumi() {
   try { ensureUploadFolder_() }
   catch (e) { console.error('❌ アップロード用フォルダ: ' + e) }
 
+  // --- 毎日・毎時の処理の見張り: ここから数え始める(まだ一度も動いていなくても、26時間は止まったと見なさない) ---
+  try { recordJobsInstalled_(Date.now()) } catch (e) { console.error('❌ 処理の見張り: ' + e) }
+
+  // --- スプレッドシート・フォルダの共有の確認 ---
+  try {
+    var sharing = checkSharing_(Date.now())
+    if (sharing.problems.length) {
+      console.warn('⚠️ 共有を直してください: ' + sharing.problems.map(sharingProblemText_).join(' / '))
+    } else {
+      console.log('✅ 共有: GAS のアカウントだけが編集でき、ほかの人には共有していません(代表の閲覧は許可)')
+    }
+  } catch (e) { console.error('❌ 共有の確認: ' + e) }
+
   console.log('🚀 setupOhsumi 完了')
 }
 
@@ -877,96 +890,30 @@ function regenerateInitialSetupCodeFromMenu() {
 // Time-triggered: send all queued batch notifications.
 // Set up a time-based trigger calling this function every hour.
 function sendBatchNotifications() {
-  // 毎時のトリガーのついでに、書き込み待ちの最終ログイン日時をシートに書く
-  try { flushPendingLastLogins_() } catch (e) { console.error('flushPendingLastLogins failed: ' + e) }
-  // 提供停止中は、通知を送らない(機能停止中は送る)
-  if (contractSuspendedNow_()) return
-  // バックアップから戻している間は、通知のキューを書き換えない
-  if (restoreInProgress_()) return
-  var props = PropertiesService.getScriptProperties()
-  var allProps = props.getProperties()
-  var now = new Date()
-  Object.keys(allProps).forEach(function(key) {
-    if (!key.startsWith('notif_queue_')) return
-    var memberId = key.replace('notif_queue_', '')
-    var queue = JSON.parse(allProps[key] || '[]')
-    if (queue.length === 0) return
-
-    var emails = memberEmailsByIds_([memberId])
-    if (emails.length === 0) {
-      props.deleteProperty(key)
-      return
-    }
-    // このキューは1メンバー分なので、locale判定も1回で済む
-    var locales = localesByEmails_(emails)
-    var loc = locales[emails[0]] || 'ja'
-
-    // Filter by whether enough time has passed for each item based on member frequency
-    var toSend = []
-    var toKeep = []
-    queue.forEach(function(item) {
-      var freq = getNotifyFrequency_(memberId, item.kind)
-      if (freq === 'none') return
-      // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
-      if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
-        var t = item.templates[loc] || item.templates.ja
-        splitEmails_(emails).forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
-        return
-      }
-      if (freq === 'immediate') { toSend.push(item); return }
-      var hours = freq === '3h' ? 3 : freq === '6h' ? 6 : 24
-      var itemTime = new Date(item.ts)
-      var elapsed = (now - itemTime) / 3600000
-      if (elapsed >= hours) { toSend.push(item) } else { toKeep.push(item) }
-    })
-
-    if (toSend.length > 0) {
-      var combined = toSend
-        .map(function(i) {
-          var tpl = i.templates[loc] || i.templates.ja
-          return '【' + tpl.subject + '】\n' + tpl.body
-        })
-        .join('\n\n---\n\n')
-      var subject = loc === 'en'
-        ? 'Ohsumi Notification Summary (' + toSend.length + ')'
-        : 'Ohsumi 通知まとめ (' + toSend.length + '件)'
-      sendMail_({ to: emails.join(','), subject: subject, body: combined })
-    }
-    if (toKeep.length > 0) {
-      props.setProperty(key, JSON.stringify(toKeep))
-    } else {
-      props.deleteProperty(key)
-    }
-  })
+  try {
+    sendBatchNotificationsUnrecorded_()
+  } catch (e) {
+    recordJobRun_('hourly', false, e)
+    throw e
+  }
+  recordJobRun_('hourly', true)
 }
+
 
 // The function the trigger installed by setupDailyTrigger() actually calls.
 // Each step is isolated so a failure in one (e.g. generateRecurringTasksLocked_
 // throwing on a malformed rule) can't also skip the other.
 function dailyMaintenance() {
-  // 提供停止中は、定期の処理を止める(機能停止中は続ける)
-  if (contractSuspendedNow_()) return
-  // バックアップから戻している間は、書き込む処理を止める
-  if (restoreInProgress_()) return
-  // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
-  dailyBackup_(Date.now())
-  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
-  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + err) }
   try {
-    generateRecurringTasksLocked_()
-  } catch (err) {
-    // best-effort — still run the overdue sweep below
+    dailyMaintenanceUnrecorded_()
+  } catch (e) {
+    recordJobRun_('daily', false, e)
+    throw e
   }
-  notifyOverdueTasksToDiscord_()
-  notifyOverdueTasksToAssignees_()
-  // 活動のないメンバーの判定より前に、書き込み待ちの最終ログイン日時を書く
-  try { flushPendingLastLogins_() } catch (err) { }
-  try { notifyInactiveMembers_() } catch (err) { }
-  // 毎日のまとめ(1人1日1通)。上の処理で入れたものも、ここで送る
-  try { flushDailyDigests_() } catch (err) { console.error('毎日のまとめを送れませんでした: ' + err) }
-  // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
-  bumpDataVersion()
+  // 最後まで動いた時刻(止めている時も、トリガーが動いたことは記録する)。レジストリへの確認で伝える
+  recordJobRun_('daily', true)
 }
+
 
 // スプレッドシートを手で変えたときにキャッシュを無効にする(setupOhsumi でインストール型トリガーとして登録する)。
 // スクリプトからの書き込みでは発火しない。変更検知(onChange)には、どのシートが変わったかが入らないため、
@@ -2576,7 +2523,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-3'
+var OHSUMI_GAS_VERSION = '2026.10.01-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2831,6 +2778,8 @@ var READ_ONLY_ACTIONS = [
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
+  // 毎日・毎時の処理と共有の状態(読み取りだけ)
+  'getOpsStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2951,7 +2900,13 @@ function refreshContractState_(deps) {
     var q = mailQuotaStatus_()
     mail = { remaining: q.remaining, skipped: q.skipped, date: q.date, lastReachedDate: q.lastReachedDate }
   } catch (e) { mail = null }
-  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION, mail: mail })
+  // 毎日・毎時の処理が最後に成功した時刻も伝える(止まった団体が、レジストリと監視で分かるように)
+  var jobs = null
+  try {
+    var j = jobStatus_(Date.now())
+    jobs = { dailyAt: j.dailyAt, hourlyAt: j.hourlyAt }
+  } catch (e) { jobs = null }
+  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION, mail: mail, jobs: jobs })
   var res
   try {
     var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
@@ -3750,6 +3705,9 @@ function authorizeAction_(acting, action, body) {
   var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks']
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
+  // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
+  var opsActions = ['getOpsStatus', 'recheckSharing']
+  if (opsActions.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
@@ -4405,6 +4363,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
+  // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
+  'getOpsStatus', 'recheckSharing',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -5340,6 +5300,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'deleteOrphanEmails':
       result = deleteOrphanEmails_(body.ids, actingMember.id)
+      break
+    case 'getOpsStatus':
+      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_() }
+      break
+    case 'recheckSharing':
+      result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()) }
       break
     case 'getGasUpdateStatus':
       result = gasUpdateStatus_()
@@ -9304,7 +9270,7 @@ var TABLE_WRITE_ACTIONS = {
   formSubmissions: ['submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
   candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember',
     // バックアップから戻した直後・個人情報の削除で、採用しなかった候補者を消す・延ばす
-    'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData'],
+    'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
 var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
@@ -13474,4 +13440,225 @@ function cancelWithdrawal_(memberId, actorId) {
   bumpMemberEmailsVersion_()
   appendOrgAudit_(actorId, 'cancelWithdrawal', p.id, { unassignedTasks: tasks.length })
   return { restored: p.id, unassignedTasks: tasks }
+}
+
+// ---- 毎日・毎時の処理の見張り ------------------------------------------------------------
+//
+// dailyMaintenance(毎朝)・sendBatchNotifications(毎時)が最後まで動いた時刻を JOB_STATE に記録する。
+// レジストリへの確認(checkIn)で伝え、毎日の処理が DAILY_JOB_STALE_HOURS 時間以上成功していなければ、
+// 代表の管理画面・レジストリの管理画面・監視の毎朝のまとめに出す(トリガーが消えた・権限が切れた・毎回失敗している時など)。
+// setupOhsumi を実行した時刻から数え始める(installedAt)。どちらも無い団体(この版より前から使っていて、
+// setupOhsumi をまだ実行していない団体)は、判定しない
+var JOB_STATE_KEY = 'JOB_STATE'
+var DAILY_JOB_STALE_HOURS = 26
+var HOURLY_JOB_STALE_HOURS = 3
+
+function readJobState_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(JOB_STATE_KEY) || '{}') || {} } catch (e) { return {} }
+}
+
+function writeJobState_(s) {
+  try { PropertiesService.getScriptProperties().setProperty(JOB_STATE_KEY, JSON.stringify(s)) } catch (e) { console.error('処理の記録を書けませんでした: ' + e) }
+}
+
+function recordJobRun_(kind, ok, err) {
+  var s = readJobState_()
+  var now = new Date().toISOString()
+  if (ok) {
+    s[kind + 'At'] = now
+  } else {
+    s[kind + 'FailedAt'] = now
+    s[kind + 'Error'] = String((err && err.message) || err || '').slice(0, 300)
+  }
+  writeJobState_(s)
+}
+
+function recordJobsInstalled_(nowMs) {
+  var s = readJobState_()
+  s.installedAt = new Date(nowMs).toISOString()
+  writeJobState_(s)
+}
+
+// 画面・レジストリに伝える形。stale: 最後に成功した時刻(無ければ setupOhsumi の時刻)から、決めた時間を過ぎた
+function jobStatus_(nowMs) {
+  var s = readJobState_()
+  var staleOf = function (at, hours) {
+    var base = Math.max(Date.parse(at || '') || 0, Date.parse(s.installedAt || '') || 0)
+    return base > 0 ? nowMs - base > hours * 3600 * 1000 : false
+  }
+  return {
+    dailyAt: String(s.dailyAt || ''), hourlyAt: String(s.hourlyAt || ''), installedAt: String(s.installedAt || ''),
+    dailyFailedAt: String(s.dailyFailedAt || ''), dailyError: String(s.dailyError || ''),
+    hourlyFailedAt: String(s.hourlyFailedAt || ''), hourlyError: String(s.hourlyError || ''),
+    dailyStale: staleOf(s.dailyAt, DAILY_JOB_STALE_HOURS),
+    hourlyStale: staleOf(s.hourlyAt, HOURLY_JOB_STALE_HOURS),
+    staleHours: DAILY_JOB_STALE_HOURS,
+  }
+}
+
+// ---- スプレッドシート・フォルダの共有の確認 ------------------------------------------------
+//
+// setupOhsumi と毎日の処理で、団体のスプレッドシート・アップロード用のフォルダ・バックアップ用のフォルダの共有を確かめる。
+// 許すのは、GAS のアカウント(持ち主)と、代表への「閲覧者」の共有だけ。次の時は SHARING_STATE に残し、代表の管理画面に
+// 警告と直し方を出す(getOpsStatus):
+//   link: リンクを知っている人・組織の全員などに共有している / editor: GAS のアカウント以外が編集者になっている
+//   viewer: 代表以外の人に共有している(閲覧者・コメント可) / unknown: 確かめられなかった
+var SHARING_STATE_KEY = 'SHARING_STATE'
+
+function sharingTargets_() {
+  var props = PropertiesService.getScriptProperties()
+  var out = [{ key: 'spreadsheet', open: function () { return DriveApp.getFileById(SpreadsheetApp.getActiveSpreadsheet().getId()) } }]
+  var uploads = props.getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+  if (uploads) out.push({ key: 'uploads', open: function () { return DriveApp.getFolderById(uploads) } })
+  var backups = props.getProperty(BACKUP_FOLDER_PROPERTY_KEY)
+  if (backups) out.push({ key: 'backups', open: function () { return DriveApp.getFolderById(backups) } })
+  return out
+}
+
+function userEmailOf_(u) {
+  try { return String((u && u.getEmail && u.getEmail()) || '').trim().toLowerCase() } catch (e) { return '' }
+}
+
+// 代表のメールアドレス(小文字。1人が複数持つ時はすべて)
+function topEmailSet_() {
+  var emails = getAllMemberEmails_()
+  var set = {}
+  topMemberIds_().forEach(function (id) {
+    splitEmails_([emails[id] || '']).forEach(function (e) { set[e.toLowerCase()] = true })
+  })
+  return set
+}
+
+function checkSharing_(nowMs) {
+  var me = ''
+  try { me = String(Session.getEffectiveUser().getEmail() || '').toLowerCase() } catch (e) { me = '' }
+  var tops = topEmailSet_()
+  var problems = []
+  sharingTargets_().forEach(function (t) {
+    try {
+      var f = t.open()
+      var access = String(f.getSharingAccess())
+      if (access && access !== 'PRIVATE') problems.push({ target: t.key, kind: 'link', detail: access })
+      f.getEditors().forEach(function (u) {
+        var email = userEmailOf_(u)
+        if (email && email !== me) problems.push({ target: t.key, kind: 'editor', detail: email })
+      })
+      f.getViewers().forEach(function (u) {
+        var email = userEmailOf_(u)
+        if (email && email !== me && !tops[email]) problems.push({ target: t.key, kind: 'viewer', detail: email })
+      })
+    } catch (e) {
+      problems.push({ target: t.key, kind: 'unknown', detail: String((e && e.message) || e).slice(0, 200) })
+    }
+  })
+  var state = { checkedAt: new Date(nowMs).toISOString(), problems: problems }
+  try { PropertiesService.getScriptProperties().setProperty(SHARING_STATE_KEY, JSON.stringify(state)) } catch (e) { console.error('共有の確認の結果を書けませんでした: ' + e) }
+  return state
+}
+
+function readSharingState_() {
+  var s = null
+  try { s = JSON.parse(PropertiesService.getScriptProperties().getProperty(SHARING_STATE_KEY) || 'null') } catch (e) { s = null }
+  return s && Array.isArray(s.problems) ? s : { checkedAt: '', problems: [] }
+}
+
+function sharingProblemText_(p) {
+  var target = { spreadsheet: '団体のスプレッドシート', uploads: 'アップロード用のフォルダ', backups: 'バックアップ用のフォルダ' }[p.target] || p.target
+  if (p.kind === 'link') return target + ': リンクを知っている人などに共有しています(' + p.detail + ')'
+  if (p.kind === 'editor') return target + ': ' + p.detail + ' が編集者です'
+  if (p.kind === 'viewer') return target + ': ' + p.detail + ' に共有しています'
+  return target + ': 共有を確かめられませんでした(' + p.detail + ')'
+}
+
+// ---- 毎日・毎時の処理の中身(dailyMaintenance・sendBatchNotifications が、記録を付けて呼ぶ) ----
+
+function sendBatchNotificationsUnrecorded_() {
+  // 毎時のトリガーのついでに、書き込み待ちの最終ログイン日時をシートに書く
+  try { flushPendingLastLogins_() } catch (e) { console.error('flushPendingLastLogins failed: ' + e) }
+  // 提供停止中は、通知を送らない(機能停止中は送る)
+  if (contractSuspendedNow_()) return
+  // バックアップから戻している間は、通知のキューを書き換えない
+  if (restoreInProgress_()) return
+  var props = PropertiesService.getScriptProperties()
+  var allProps = props.getProperties()
+  var now = new Date()
+  Object.keys(allProps).forEach(function(key) {
+    if (!key.startsWith('notif_queue_')) return
+    var memberId = key.replace('notif_queue_', '')
+    var queue = JSON.parse(allProps[key] || '[]')
+    if (queue.length === 0) return
+
+    var emails = memberEmailsByIds_([memberId])
+    if (emails.length === 0) {
+      props.deleteProperty(key)
+      return
+    }
+    // このキューは1メンバー分なので、locale判定も1回で済む
+    var locales = localesByEmails_(emails)
+    var loc = locales[emails[0]] || 'ja'
+
+    // Filter by whether enough time has passed for each item based on member frequency
+    var toSend = []
+    var toKeep = []
+    queue.forEach(function(item) {
+      var freq = getNotifyFrequency_(memberId, item.kind)
+      if (freq === 'none') return
+      // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
+      if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
+        var t = item.templates[loc] || item.templates.ja
+        splitEmails_(emails).forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
+        return
+      }
+      if (freq === 'immediate') { toSend.push(item); return }
+      var hours = freq === '3h' ? 3 : freq === '6h' ? 6 : 24
+      var itemTime = new Date(item.ts)
+      var elapsed = (now - itemTime) / 3600000
+      if (elapsed >= hours) { toSend.push(item) } else { toKeep.push(item) }
+    })
+
+    if (toSend.length > 0) {
+      var combined = toSend
+        .map(function(i) {
+          var tpl = i.templates[loc] || i.templates.ja
+          return '【' + tpl.subject + '】\n' + tpl.body
+        })
+        .join('\n\n---\n\n')
+      var subject = loc === 'en'
+        ? 'Ohsumi Notification Summary (' + toSend.length + ')'
+        : 'Ohsumi 通知まとめ (' + toSend.length + '件)'
+      sendMail_({ to: emails.join(','), subject: subject, body: combined })
+    }
+    if (toKeep.length > 0) {
+      props.setProperty(key, JSON.stringify(toKeep))
+    } else {
+      props.deleteProperty(key)
+    }
+  })
+}
+
+function dailyMaintenanceUnrecorded_() {
+  // 提供停止中は、定期の処理を止める(機能停止中は続ける)
+  if (contractSuspendedNow_()) return
+  // バックアップから戻している間は、書き込む処理を止める
+  if (restoreInProgress_()) return
+  // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
+  dailyBackup_(Date.now())
+  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
+  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + err) }
+  try {
+    generateRecurringTasksLocked_()
+  } catch (err) {
+    // best-effort — still run the overdue sweep below
+  }
+  notifyOverdueTasksToDiscord_()
+  notifyOverdueTasksToAssignees_()
+  // 活動のないメンバーの判定より前に、書き込み待ちの最終ログイン日時を書く
+  try { flushPendingLastLogins_() } catch (err) { }
+  try { notifyInactiveMembers_() } catch (err) { }
+  // 毎日のまとめ(1人1日1通)。上の処理で入れたものも、ここで送る
+  try { flushDailyDigests_() } catch (err) { console.error('毎日のまとめを送れませんでした: ' + err) }
+  // スプレッドシート・フォルダの共有を確かめる(問題があれば代表の管理画面に出す)
+  try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + err) }
+  // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
+  bumpDataVersion()
 }

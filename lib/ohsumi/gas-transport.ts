@@ -78,6 +78,8 @@ export const READ_ACTIONS = new Set([
   'searchBackupTasks',
   // 個人情報の削除の予定(代表だけ)
   'getPersonalDataStatus',
+  // 毎日・毎時の処理と共有の状態(代表だけ)
+  'getOpsStatus',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
@@ -512,6 +514,8 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   // バックアップから戻す(時間がかかるので、ほかの書き込みとまとめない)
   'restoreBackup',
   'restoreTasks',
+  // 共有を確かめ直す(ロックを取らない。スクリプトプロパティだけを書く)
+  'recheckSharing',
 ])
 
 export function isBatchableWrite(action: string): boolean {

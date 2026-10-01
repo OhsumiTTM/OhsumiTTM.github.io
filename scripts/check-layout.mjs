@@ -106,7 +106,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -142,6 +142,7 @@ export function registryResponse(body) {
           { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], plan: '', channel: 'standard', gasUrl: '', gasVersion: '', mail: { remaining: 8, skipped: 0, date: '2026-10-01', limitDate: '2026-09-28', level: 'low' },
             gasStatus: { current: '', latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, versionState: 'updateRequired', noCheck: true, judgement: 'noCheck' } },
           { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1', mail: { remaining: 0, skipped: 37, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' },
+            jobs: { dailyAt: iso(-3), hourlyAt: iso(-1), reported: true, dailyStale: true },
             gasStatus: { current: 'r1e-1', latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, versionState: 'updateRequired', noCheck: false, judgement: 'updateRequired' } },
           { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
@@ -343,6 +344,15 @@ async function run({ build = true } = {}) {
         case 'sendInviteLinkToMe': inviteBodies.push(body); return { sent: true, count: 1, remaining: 2 }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
         // 管理画面の上部に、メールの上限の知らせを出す
+        // 毎日の処理の止まり・共有の警告
+        case 'getOpsStatus': return {
+          jobs: { dailyAt: '2026-09-28T21:00:00.000Z', hourlyAt: '2026-09-30T23:00:00.000Z', installedAt: '2026-09-01T00:00:00.000Z', dailyFailedAt: '2026-09-30T21:00:00.000Z',
+            dailyError: 'Exception: You do not have permission to call DriveApp.getFileById. Required permissions: https://www.googleapis.com/auth/drive', hourlyFailedAt: '', hourlyError: '', dailyStale: true, hourlyStale: false, staleHours: 26 },
+          sharing: { checkedAt: '2026-09-30T21:00:00.000Z', problems: [
+            { target: 'spreadsheet', kind: 'link', detail: 'ANYONE_WITH_LINK' },
+            { target: 'spreadsheet', kind: 'editor', detail: 'former.leader.with.a.long.address@example.com' },
+            { target: 'uploads', kind: 'viewer', detail: 'member@example.com' },
+          ] } }
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
@@ -693,6 +703,10 @@ async function run({ build = true } = {}) {
           if (!quota.includes('今日はメールの上限に達しました。12件が送れていません')) throw new Error('管理画面に、メールの上限の知らせが出ません: ' + quota)
           const backupBanner = await evaluate(`document.querySelector('[data-backup-banner]')?.textContent ?? ''`)
           if (!backupBanner.includes('のバックアップを作れませんでした(Drive の容量が足りません)')) throw new Error('管理画面に、バックアップを作れなかった知らせが出ません: ' + backupBanner)
+          const ops = await evaluate(`(document.querySelector('[data-ops-jobs]')?.textContent ?? '') + '|' + (document.querySelector('[data-ops-sharing]')?.textContent ?? '')`)
+          for (const want of ['毎日の処理が 26 時間以上成功していません', 'setupOhsumi を実行', 'スプレッドシート・フォルダの共有を直してください(3 件)', '「制限付き」', 'former.leader.with.a.long.address@example.com を外して', '直したので確かめ直す']) {
+            if (!ops.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + ops)
+          }
           const privacyBanner = await evaluate(`document.querySelector('[data-personal-data-banner]')?.textContent ?? ''`)
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
@@ -704,7 +718,7 @@ async function run({ build = true } = {}) {
           await registrySession(); await navigate('/registry-admin/')
           // メールの上限に達した・近い団体が分かる(一覧の上の数と、団体ごとの印)
           const mail = await evaluate(`(document.querySelector('[data-mail-level-summary]')?.textContent ?? '') + '|' + document.body.textContent`)
-          for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8', 'GAS: 更新が要る', 'GAS: 24時間以上確認が無い', 'GAS: 最新', '担当者に更新のお願いを送る…']) {
+          for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8', 'GAS: 更新が要る', 'GAS: 24時間以上確認が無い', 'GAS: 最新', '担当者に更新のお願いを送る…', '毎日の処理が26時間以上成功していない', '毎日・毎時の処理']) {
             if (!mail.includes(want)) throw new Error('レジストリの管理画面に「' + want + '」が出ません')
           }
           // 「更新が要る団体だけ」で絞り込む(24時間以上確認が無くても、最後の版で更新が要る団体は入る)

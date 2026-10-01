@@ -94,7 +94,7 @@ function removeOrphanTriggers_() {
 }
 
 // 監視の GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var MONITOR_VERSION = '2026.10.01-1'
+var MONITOR_VERSION = '2026.10.01-2'
 var BACKUP_STALE_HOURS = 26
 var REJECTED_ALERT = 1000
 var MONITOR_STATE_KEY = 'MONITOR_STATE'
@@ -126,7 +126,8 @@ function heartbeatText_(registryState, summary) {
   if (!summary) return text + '\n団体の GAS の版: 確かめられませんでした'
   return text + '\n団体の GAS(利用中 ' + Number(summary.orgs || 0) + ' 団体。最新の版: ' + (summary.latest || '—') + ')' +
     '\n・更新が要る団体: ' + Number(summary.updateRequired || 0) +
-    '\n・24時間以上確認が無い団体: ' + Number(summary.noCheck || 0)
+    '\n・24時間以上確認が無い団体: ' + Number(summary.noCheck || 0) +
+    (summary.dailyJobStale === undefined ? '' : '\n・毎日の処理が26時間以上成功していない団体: ' + Number(summary.dailyJobStale || 0))
 }
 
 function formatDuration_(ms) {

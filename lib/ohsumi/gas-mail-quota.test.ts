@@ -192,7 +192,7 @@ describe('急ぎの通知と、毎日のまとめ', () => {
   })
 
   it('毎日の処理(dailyMaintenance)の最後に、まとめを送る', () => {
-    const daily = CODE_GS.slice(CODE_GS.indexOf('function dailyMaintenance('), CODE_GS.indexOf('\n}\n', CODE_GS.indexOf('function dailyMaintenance(')))
+    const daily = CODE_GS.slice(CODE_GS.indexOf('function dailyMaintenanceUnrecorded_('), CODE_GS.indexOf('\n}\n', CODE_GS.indexOf('function dailyMaintenanceUnrecorded_(')))
     expect(daily).toContain('flushDailyDigests_()')
     expect(daily.indexOf('notifyInactiveMembers_()')).toBeLessThan(daily.indexOf('flushDailyDigests_()'))
   })

@@ -248,7 +248,7 @@ describe('最終ログイン日時', () => {
     expect(Object.keys(t.props).filter((k) => k.startsWith('LAST_LOGIN_PENDING_'))).toEqual([])
     expect(t.gas.flushPendingLastLogins_()).toBe(0)
     // 毎時・毎日のトリガーから呼ぶ
-    expect(CODE_GS).toMatch(/function sendBatchNotifications\(\) \{\n\s+\/\/.*\n\s+try \{ flushPendingLastLogins_\(\) \}/)
+    expect(CODE_GS).toMatch(/function sendBatchNotificationsUnrecorded_\(\) \{\n\s+\/\/.*\n\s+try \{ flushPendingLastLogins_\(\) \}/)
     expect(CODE_GS).toMatch(/try \{ flushPendingLastLogins_\(\) \} catch \(err\) \{ \}\n\s+try \{ notifyInactiveMembers_\(\) \}/)
   })
 })

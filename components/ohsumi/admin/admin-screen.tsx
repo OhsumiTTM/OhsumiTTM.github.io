@@ -23,6 +23,7 @@ import { MailQuotaBanner } from './mail-quota-banner'
 import { GasUpdateBanner } from './gas-update-banner'
 import { BackupBanner } from './backup-banner'
 import { PersonalDataBanner } from './personal-data-banner'
+import { OpsBanner } from './ops-banner'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { OhsumiMark } from '../primitives'
 import type { AdminSection } from '@/lib/ohsumi/types'
@@ -154,6 +155,7 @@ export function AdminScreen({ section }: { section: Section }) {
         </div>
 
         {isFullAdmin && <GasUpdateBanner />}
+        {isTopRef(currentUser?.role) && <OpsBanner />}
         {isTopRef(currentUser?.role) && <BackupBanner />}
         {isTopRef(currentUser?.role) && <PersonalDataBanner />}
         {isFullAdmin && <MailQuotaBanner />}

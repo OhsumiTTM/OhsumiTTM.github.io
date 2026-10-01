@@ -144,6 +144,26 @@ describe('メールの1日の上限をレジストリに伝える', () => {
   })
 })
 
+describe('毎日・毎時の処理をレジストリに伝える(PR H)', () => {
+  it('checkIn で最後に成功した時刻を伝え、レジストリが覚える。26時間以上たつと、管理画面の一覧で止まったと分かる', () => {
+    const p = pair()
+    const daily = new Date(Date.now() - 30 * 3600 * 1000).toISOString()
+    const hourly = new Date(Date.now() - 3600 * 1000).toISOString()
+    p.o.props.JOB_STATE = JSON.stringify({ dailyAt: daily, hourlyAt: hourly })
+    check(p)
+    expect(p.o.sent.at(-1)!.jobs).toEqual({ dailyAt: daily, hourlyAt: hourly })
+    expect([p.orgValue('daily_job_at'), p.orgValue('hourly_job_at')]).toEqual([daily, hourly])
+    const org = p.reg.post({ action: 'adminOverview', session: p.reg.session }).result.orgs[0]
+    expect(org.jobs).toEqual({ dailyAt: daily, hourlyAt: hourly, reported: true, dailyStale: true })
+    expect(p.reg.post({ action: 'health', key: p.reg.props.HEALTH_KEY, summary: true }).gasVersions.dailyJobStale).toBe(1)
+    // 毎日の処理がまた成功したら、10分を待たずに書き、止まっていない
+    const fresh = new Date().toISOString()
+    p.o.props.JOB_STATE = JSON.stringify({ dailyAt: fresh, hourlyAt: fresh })
+    check(p)
+    expect(p.reg.post({ action: 'adminOverview', session: p.reg.session }).result.orgs[0].jobs.dailyStale).toBe(false)
+  })
+})
+
 describe('この GAS の版の更新(PR E)', () => {
   const mark = (p: Pair, version: string, marks: Record<string, unknown>) =>
     p.reg.post({ action: 'setGasVersionMarks', session: p.reg.session, version, ...marks })

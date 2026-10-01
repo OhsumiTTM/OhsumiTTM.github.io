@@ -108,6 +108,32 @@ export interface UnassignedTask {
   assigneeIds: string[]
 }
 
+/** 毎日・毎時の処理の状態(gas/Code.gs の jobStatus_)。dailyStale: 毎日の処理が26時間以上成功していない */
+export interface JobStatus {
+  dailyAt: string
+  hourlyAt: string
+  installedAt: string
+  dailyFailedAt: string
+  dailyError: string
+  hourlyFailedAt: string
+  hourlyError: string
+  dailyStale: boolean
+  hourlyStale: boolean
+  staleHours: number
+}
+
+/** 共有の問題(gas/Code.gs の checkSharing_)。target: spreadsheet / uploads / backups */
+export interface SharingProblem {
+  target: 'spreadsheet' | 'uploads' | 'backups'
+  kind: 'link' | 'editor' | 'viewer' | 'unknown'
+  detail: string
+}
+
+export interface OpsStatus {
+  jobs: JobStatus
+  sharing: { checkedAt: string; problems: SharingProblem[] }
+}
+
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */
 export interface BackupStatus {
   lastSuccessAt: string
@@ -1062,6 +1088,9 @@ export const remoteApi = {
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // メールの1日の上限の状態(代表・全権管理者だけ)
   getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
+  // 毎日・毎時の処理と共有の状態(代表だけ)・共有を確かめ直す
+  getOpsStatus: () => postToGas<OpsStatus>('getOpsStatus', {}),
+  recheckSharing: () => postToGas<OpsStatus>('recheckSharing', {}),
   // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)
   getPersonalDataStatus: () => postToGas<PersonalDataStatus>('getPersonalDataStatus', {}),
   setPersonalDataRetention: (days: number) => postToGas<{ retentionDays: number }>('setPersonalDataRetention', { days }),

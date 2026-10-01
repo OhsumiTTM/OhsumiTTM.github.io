@@ -140,9 +140,9 @@ describe('監視の毎日のまとめの数(health に summary を付けた時�
     const t = ready()
     expect(t.post({ action: 'health', key: 'hk' }).gasVersions).toBeUndefined()
     // 一度も確認に来ていない(登録したばかり)
-    expect(t.post({ action: 'health', key: 'hk', summary: true }).gasVersions).toEqual({ latest: CURRENT, updateRequired: 1, noCheck: 1, orgs: 1 })
+    expect(t.post({ action: 'health', key: 'hk', summary: true }).gasVersions).toEqual({ latest: CURRENT, updateRequired: 1, noCheck: 1, dailyJobStale: 0, orgs: 1 })
     t.checkIn(CURRENT)
-    expect(t.post({ action: 'health', key: 'hk', summary: true }).gasVersions).toEqual({ latest: CURRENT, updateRequired: 0, noCheck: 0, orgs: 1 })
+    expect(t.post({ action: 'health', key: 'hk', summary: true }).gasVersions).toEqual({ latest: CURRENT, updateRequired: 0, noCheck: 0, dailyJobStale: 0, orgs: 1 })
     // 鍵が無い・違う時は返さない
     expect(t.post({ action: 'health', summary: true }).gasVersions).toBeUndefined()
     expect(t.post({ action: 'health', key: 'x', summary: true }).gasVersions).toBeUndefined()
