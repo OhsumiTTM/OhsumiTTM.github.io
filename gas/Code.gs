@@ -62,7 +62,7 @@ function setupOhsumi() {
   catch (e) { console.error('❌ DriveApp: ' + e) }
 
   try { console.log('✅ MailApp (残り送信数: ' + MailApp.getRemainingDailyQuota() + ')') }
-  catch (e) { console.error('❌ MailApp: ' + e) }
+  catch (e) { console.error('❌ MailApp: ' + maskEmailsIn_(String(e))) }
 
   try { console.log('✅ CalendarApp: ' + CalendarApp.getDefaultCalendar().getName()) }
   catch (e) { console.error('❌ CalendarApp: ' + e) }
@@ -545,7 +545,7 @@ function auditFormulaInjectionRisks(fix) {
 // notifyAdmins_() を実際に一度呼び出してテストメールを送る。
 function debugNotifyTest() {
   console.log('MailAppの残り送信可能数: ' + MailApp.getRemainingDailyQuota())
-  console.log('org_notification_emails: ' + JSON.stringify(orgNotificationEmails_()))
+  console.log('org_notification_emails: ' + maskEmailsIn_(JSON.stringify(orgNotificationEmails_())))
 
   var sheet = getSheet_(SHEET_MEMBERS)
   var headers = headerRow_(sheet)
@@ -570,7 +570,7 @@ function debugNotifyTest() {
         (i + 2) + '行目' +
           ': id=' + mid +
           ', email=' +
-          JSON.stringify(emailMap[mid] || '') +
+          JSON.stringify(maskEmailsIn_(emailMap[mid] || '')) +
           (notifyCol !== -1 ? ', notify_new_task=' + JSON.stringify(r[notifyCol]) : '') +
           (roleCol !== -1 ? ', role=' + JSON.stringify(r[roleCol]) : ''),
       )
@@ -2562,7 +2562,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-7'
+var OHSUMI_GAS_VERSION = '2026.10.01-8'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4384,7 +4384,7 @@ function toErrorMessage_(err) {
     Logger.log('doPost quota exceeded [' + quota + ']')
     return quotaMessage_(quota, false)
   }
-  Logger.log('doPost unexpected error [' + (err && err.name) + ']: ' + ((err && err.stack) || (err && err.message) || err))
+  Logger.log('doPost unexpected error [' + (err && err.name) + ']: ' + maskEmailsIn_(String((err && err.stack) || (err && err.message) || err)))
   return '処理中に問題が発生しました。しばらくしてから再度お試しください。'
 }
 
@@ -5005,7 +5005,7 @@ function runWriteAction_(body, actingMember) {
         notifyAdmins_(willSubject, willBody)
         notifyChat_('💡 ' + willName + 'さんのWillタグが更新されました：' + willTags)
       } catch (err) {
-        console.error('updateWillの通知送信に失敗しました: ' + err)
+        console.error('updateWillの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
       }
       break
     case 'updateTimezone':
@@ -5825,7 +5825,7 @@ function notifyProjectHealthChanged_(projectId, health, note) {
     if (!project) return
     notifyProjectHealthChangedBatch_([{ id: projectId, name: project.name, health: health }], note)
   } catch (err) {
-    console.error('notifyProjectHealthChangedの通知送信に失敗しました: ' + err)
+    console.error('notifyProjectHealthChangedの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -5888,7 +5888,7 @@ function notifyProjectHealthChangedBatch_(projects, note) {
       notifyChat_('❤️‍🩹 ' + projects.length + '件のプロジェクトの健康状態が変わりました\n' + lines.join('\n'))
     }
   } catch (err) {
-    console.error('notifyProjectHealthChangedBatchの通知送信に失敗しました: ' + err)
+    console.error('notifyProjectHealthChangedBatchの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -5956,7 +5956,7 @@ function notifyReview_(taskId) {
     )
     notifyChat_('🔔 「' + task.title + '」が確認待ちになりました。')
   } catch (err) {
-    console.error('notifyReviewの通知送信に失敗しました: ' + err)
+    console.error('notifyReviewの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -6243,7 +6243,7 @@ function sendMailUnmeasured_(options) {
   if (!redirect) {
     console.log(
       '[テスト環境] メールを送信しませんでした(TEST_NOTIFICATION_EMAIL が未設定)。件名: ' + options.subject +
-        ' / 本来の宛先: ' + original,
+        ' / 本来の宛先: ' + maskEmailsIn_(original),
     )
     return
   }
@@ -6257,7 +6257,7 @@ function sendMailUnmeasured_(options) {
   redirected.body = notice + (options.body || '')
   if (options.htmlBody) redirected.htmlBody = '<p>' + notice.trim() + '</p>' + options.htmlBody
   MailApp.sendEmail(redirected)
-  console.log('[テスト環境] メールを ' + redirect + ' に送信しました。件名: ' + options.subject + ' / 本来の宛先: ' + original)
+  console.log('[テスト環境] メールを ' + maskEmailsIn_(redirect) + ' に送信しました。件名: ' + options.subject + ' / 本来の宛先: ' + maskEmailsIn_(original))
 }
 
 // 呼び出し方は2通り:
@@ -6294,7 +6294,7 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
     if (preferredEmails && preferredEmails.length > 0) {
       var to = uniqueEmails_(preferredEmails)
       deliverNotification_(to, templates, urgent)
-      console.log('notifyAdmins: preferredEmailsに' + (urgent ? '送信' : 'まとめに追加') + 'しました ' + to.join(','))
+      console.log('notifyAdmins: preferredEmailsに' + (urgent ? '送信' : 'まとめに追加') + 'しました ' + maskEmailsIn_(to.join(',')))
       return
     }
     // Discord/Slack をつないだ団体では、管理者あてのメールはまとめに回す(evenIfChat: Webhook の変更の知らせなど、
@@ -6349,11 +6349,11 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
     }
 
     deliverNotification_(recipients, templates, urgent)
-    console.log('notifyAdmins: ' + (urgent ? '送信先 ' : 'まとめの宛先 ') + recipients.join(','))
+    console.log('notifyAdmins: ' + (urgent ? '送信先 ' : 'まとめの宛先 ') + maskEmailsIn_(recipients.join(',')))
   } catch (err) {
     // a mail error shouldn't roll back the caller's action, but log it so
     // it's visible in Executions instead of failing completely silently
-    console.error('notifyAdminsの送信に失敗しました: ' + err + (err && err.stack ? '\n' + err.stack : ''))
+    console.error('notifyAdminsの送信に失敗しました: ' + maskEmailsIn_(String(err) + (err && err.stack ? '\n' + err.stack : '')))
   }
 }
 
@@ -6386,7 +6386,7 @@ function reportsToEmails_(assigneeIds) {
       })
       return emails
     } catch (err) {
-      console.error('reportsToEmailsの処理に失敗しました: ' + err)
+      console.error('reportsToEmailsの処理に失敗しました: ' + maskEmailsIn_(String(err)))
       return []
     }
   })
@@ -6404,7 +6404,7 @@ function memberEmailsByIds_(memberIds) {
     })
     return emails
   } catch (err) {
-    console.error('memberEmailsByIdsの処理に失敗しました: ' + err)
+    console.error('memberEmailsByIdsの処理に失敗しました: ' + maskEmailsIn_(String(err)))
     return []
   }
 }
@@ -6450,7 +6450,7 @@ function localesByEmailsUnmeasured_(emails) {
       matched.forEach(function (e) { result[e] = locale })
     })
   } catch (err) {
-    console.error('localesByEmailsの処理に失敗しました: ' + err)
+    console.error('localesByEmailsの処理に失敗しました: ' + maskEmailsIn_(String(err)))
   }
   return result
 }
@@ -6697,7 +6697,7 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
       ids.forEach(function (mid) { queueNotification_(mid, 'mention', templates) })
     })
   } catch (err) {
-    console.error('メンションの通知に失敗しました: ' + err)
+    console.error('メンションの通知に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -6740,7 +6740,7 @@ function notifyTrainingRequest_(memberId, trainingId, actorId) {
     notifyChat_('📚 ' + name + 'さんから研修「' + trainingName + '」の申請がありました。')
     return true
   } catch (err) {
-    console.error('notifyTrainingRequestの通知送信に失敗しました: ' + err)
+    console.error('notifyTrainingRequestの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
     return false
   }
 }
@@ -6776,7 +6776,7 @@ function rejectTask_(taskId, reason) {
       })
     }
   } catch (err) {
-    console.error('タスクの却下の通知に失敗しました: ' + err)
+    console.error('タスクの却下の通知に失敗しました: ' + maskEmailsIn_(String(err)))
   }
   return result
 }
@@ -6803,7 +6803,7 @@ function notifyTrainingDecision_(memberId, trainingId, actorId) {
     })
     return true
   } catch (err) {
-    console.error('notifyTrainingDecisionの通知送信に失敗しました: ' + err)
+    console.error('notifyTrainingDecisionの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
     return false
   }
 }
@@ -6891,11 +6891,11 @@ function notifyScheduleResult_(taskId, actorId) {
       ja: { subject: '[Ohsumi] 日程調整の回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
     })
-    console.log('notifyScheduleResult: 送信先 ' + emails.join(','))
+    console.log('notifyScheduleResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('🗓️ 「' + task.title + '」の日程調整で全員の回答が揃いました。')
     return true
   } catch (err) {
-    console.error('notifyScheduleResultの通知送信に失敗しました: ' + err)
+    console.error('notifyScheduleResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
     return false
   }
 }
@@ -6956,11 +6956,11 @@ function notifyFormResult_(taskId, actorId) {
       ja: { subject: '[Ohsumi] フォームの回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
     })
-    console.log('notifyFormResult: 送信先 ' + emails.join(','))
+    console.log('notifyFormResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('📝 「' + task.title + '」のフォームで全員の回答が揃いました。')
     return true
   } catch (err) {
-    console.error('notifyFormResultの通知送信に失敗しました: ' + err)
+    console.error('notifyFormResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
     return false
   }
 }
@@ -7000,7 +7000,7 @@ function notifyScheduleChange_(taskId) {
       reportsToEmails_(assigneeIds),
     )
   } catch (err) {
-    console.error('notifyScheduleChangeの通知送信に失敗しました: ' + err)
+    console.error('notifyScheduleChangeの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -7037,7 +7037,7 @@ function syncCalendarForTaskUnmeasured_(taskId) {
     try { eventLink = canonicalInviteLink_() } catch (linkErr) { eventLink = '' }
     if (eventLink) eventOptions.description = 'Ohsumi を開く / Open Ohsumi: ' + eventLink
     if (isTestEnvironment_()) {
-      console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + guests.join(','))
+      console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + maskEmailsIn_(guests.join(',')))
     }
 
     var cal = CalendarApp.getDefaultCalendar()
@@ -8706,11 +8706,11 @@ function notifyOverdueTasksToAssignees_() {
         })
       } catch (err) {
         // メンバー1人の通知失敗は他のメンバーの処理に影響させない
-        console.error('notifyOverdueTasksToAssignees: memberId=' + aid + ' の通知に失敗しました: ' + err)
+        console.error('notifyOverdueTasksToAssignees: memberId=' + aid + ' の通知に失敗しました: ' + maskEmailsIn_(String(err)))
       }
     })
   } catch (err) {
-    console.error('notifyOverdueTasksToAssigneesの処理に失敗しました: ' + err)
+    console.error('notifyOverdueTasksToAssigneesの処理に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -8914,7 +8914,7 @@ function translateTexts_(texts, targetLang, actorId) {
     try {
       return LanguageApp.translate(s, '', lang)
     } catch (err) {
-      console.error('translateTexts: "' + s + '" の翻訳に失敗しました: ' + err)
+      console.error('translateTexts: ' + String(s).length + '文字の文の翻訳に失敗しました: ' + maskEmailsIn_(String(err)))
       return s
     }
   })
@@ -13730,6 +13730,57 @@ function purgeMember_(memberId, nowMs) {
   deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
   forgetPersonalProps_(memberId, emails)
   bumpMemberEmailsVersion_()
+  // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)
+  removeCalendarGuest_(emails, nowMs)
+  trashAvatarFiles_(memberId)
+}
+
+// 個人情報を消す時に、カレンダーの予定([Ohsumi] で始まる予定。前後 PURGE_CALENDAR_DAYS 日)のゲストから、そのメールアドレスを外す
+var PURGE_CALENDAR_DAYS = 400
+var PURGE_CALENDAR_MAX_EVENTS = 3000
+function removeCalendarGuest_(emails, nowMs) {
+  var list = splitEmails_([emails]).map(function (e) { return e.toLowerCase() })
+  if (!list.length) return 0
+  var removed = 0
+  try {
+    var cal = CalendarApp.getDefaultCalendar()
+    var span = PURGE_CALENDAR_DAYS * 24 * 3600 * 1000
+    var events = cal.getEvents(new Date(nowMs - span), new Date(nowMs + span), { search: '[Ohsumi]' }) || []
+    events.slice(0, PURGE_CALENDAR_MAX_EVENTS).forEach(function (ev) {
+      if (String(ev.getTitle()).indexOf('[Ohsumi]') !== 0) return
+      list.forEach(function (email) {
+        if (ev.getGuestByEmail(email)) {
+          ev.removeGuest(email)
+          removed++
+        }
+      })
+    })
+  } catch (e) {
+    console.warn('カレンダーの予定のゲストを外せませんでした: ' + maskEmailsIn_(String(e)))
+  }
+  return removed
+}
+
+// 個人情報を消す時に、プロフィール画像のファイル(アップロード用のフォルダの avatar_<メンバーID>_…)をゴミ箱に移す
+// (ゴミ箱のファイルは、Google ドライブが30日後に消す)
+function trashAvatarFiles_(memberId) {
+  var trashed = 0
+  try {
+    var folderId = PropertiesService.getScriptProperties().getProperty(UPLOAD_FOLDER_PROPERTY_KEY)
+    if (!folderId) return 0
+    var prefix = 'avatar_' + memberId + '_'
+    var files = DriveApp.getFolderById(folderId).getFiles()
+    while (files.hasNext()) {
+      var f = files.next()
+      if (String(f.getName()).indexOf(prefix) === 0) {
+        f.setTrashed(true)
+        trashed++
+      }
+    }
+  } catch (e) {
+    console.warn('プロフィール画像のファイルを消せませんでした: ' + maskEmailsIn_(String(e)))
+  }
+  return trashed
 }
 
 // メンバーに結び付いたスクリプトプロパティ(通知のキュー・毎日のまとめ・書き込み待ちの最終ログイン)を消す
@@ -13907,7 +13958,7 @@ function recordJobRun_(kind, ok, err) {
     s[kind + 'At'] = now
   } else {
     s[kind + 'FailedAt'] = now
-    s[kind + 'Error'] = String((err && err.message) || err || '').slice(0, 300)
+    s[kind + 'Error'] = maskEmailsIn_(String((err && err.message) || err || '')).slice(0, 300)
   }
   writeJobState_(s)
 }
@@ -14083,7 +14134,7 @@ function dailyMaintenanceUnrecorded_() {
   // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
   dailyBackup_(Date.now())
   // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
-  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + err) }
+  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -14095,9 +14146,9 @@ function dailyMaintenanceUnrecorded_() {
   try { flushPendingLastLogins_() } catch (err) { }
   try { notifyInactiveMembers_() } catch (err) { }
   // 毎日のまとめ(1人1日1通)。上の処理で入れたものも、ここで送る
-  try { flushDailyDigests_() } catch (err) { console.error('毎日のまとめを送れませんでした: ' + err) }
+  try { flushDailyDigests_() } catch (err) { console.error('毎日のまとめを送れませんでした: ' + maskEmailsIn_(String(err))) }
   // スプレッドシート・フォルダの共有を確かめる(問題があれば代表の管理画面に出す)
-  try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + err) }
+  try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + maskEmailsIn_(String(err))) }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
 }
@@ -14391,4 +14442,11 @@ function usageStatus_(nowMs) {
       recent: recent,
     },
   }
+}
+
+// ---- 実行ログにメールアドレスを出さない ----
+// 文の中のメールアドレスを、先頭の1文字とドメインだけ残して伏せる(a***@example.com)。実行ログ・エラーの記録に使う
+function maskEmailsIn_(text) {
+  return String(text === undefined || text === null ? '' : text)
+    .replace(/([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g, '$1***@$2')
 }

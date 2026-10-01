@@ -55,7 +55,7 @@ import {
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
 // 停止の2つの種類(R1-e)。予告(14日前・7日前・1日前)はどちらも同じ
 // プラン(利用契約書の案 第3条)。有償の団体には、機能停止(②)を入れられない
-export const PLAN_LABELS: Record<Plan | '', string> = { cosmo_base: 'Cosmo Base プラン', ohsumi: 'Ohsumi プラン', paid: '有償プラン', '': '未設定' }
+export const PLAN_LABELS: Record<Plan | '', string> = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン', '': '未設定' }
 export const SUSPEND_KIND_LABELS: Record<SuspendKind, { title: string; description: string }> = {
   suspend: {
     title: '① 提供停止',
