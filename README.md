@@ -177,6 +177,11 @@ GitHub Pages ではレスポンスヘッダーを設定できないため、`pnp
 | `gas/` | Google Apps Script（`Code.gs`）とスプレッドシート連携のセットアップ手順 |
 | `database.xlsx` | シート構成のサンプルスプレッドシート |
 | `docs/onboarding.md` | 新規団体向けの初期化チェックリスト |
+| `docs/features.md` | 機能一覧(リリース機能・開発予定・将来構想) |
+| `docs/release-checklist.md` | リリースのチェックリスト(Go/No-Go。下書き) |
+| `docs/release-e2e.md` | 公開前の通しテスト(自動・手の確かめ) |
+| `docs/brand.md` | ブランドガイドラインの画面への当てはめ(色・ロゴ・アイコン・旧名) |
+| `docs/gas-change-forecast.md` | 公開の後に団体の GAS の更新が要る場面と、減らす仕組みの案(調査) |
 
 ## テスト
 
