@@ -9,8 +9,8 @@ import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS } from '@/lib/ohsumi/types'
 import { sameRole, TOP_ROLE_ID, DEFAULT_TOP_ROLE_NAME } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
-import type { AdminSection, CustomMemberColumn, SkillLevelValue, SurveyQuestion } from '@/lib/ohsumi/types'
-import { SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from '@/lib/ohsumi/utils'
+import type { AdminSection, CustomMemberColumn, SurveyQuestion } from '@/lib/ohsumi/types'
+import { SkillLevelRulesEditor } from '@/components/ohsumi/admin/skill-level-rules-editor'
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 
@@ -180,8 +180,8 @@ export function AdminTags() {
           </div>
         </div>
 
-      {/* SKL-010: スキルレベルアップ閾値 */}
-      <SkillLevelThresholdsEditor />
+      {/* SKL-010・PR Z: スキルのレベルの決め方(点数の一覧と条件) */}
+      <SkillLevelRulesEditor />
 
       {/* item 20: 1on1ワークシート質問項目 */}
       <OneOnOneQuestionsEditor />
@@ -1143,37 +1143,3 @@ function CustomMemberColumnsEditor() {
   )
 }
 
-// SKL-010: スキルレベルの累積ポイント閾値。以前はスキルごとに管理者が
-// 自由な値を設定できる仕組みだった(1閾値×倍数でレベルを算出)が、
-// 「レベルが上がるほど必要ポイントが増える」設計に統一したため、
-// 全スキル共通の固定値[50,150,350,550,750](utils.tsのcomputeSkillLevel)
-// になった。レベル4/5はポイントに加えて資格(認定)の条件も必要なので、
-// ここは編集フォームではなく説明表示のみにしている
-function SkillLevelThresholdsEditor() {
-  const { t } = useI18n()
-  const rows: { level: SkillLevelValue; points: number; extra?: string }[] = [
-    { level: 1, points: SKILL_LEVEL_CUMULATIVE_THRESHOLDS[1] },
-    { level: 2, points: SKILL_LEVEL_CUMULATIVE_THRESHOLDS[2] },
-    { level: 3, points: SKILL_LEVEL_CUMULATIVE_THRESHOLDS[3] },
-    { level: 4, points: SKILL_LEVEL_CUMULATIVE_THRESHOLDS[4], extra: t('admin.tags.skillLevelThresholds.level4Extra') },
-    { level: 5, points: SKILL_LEVEL_CUMULATIVE_THRESHOLDS[5], extra: t('admin.tags.skillLevelThresholds.level5Extra') },
-  ]
-
-  return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.skillLevelThresholds.title')}</SectionLabel>
-      <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.skillLevelThresholds.desc')}</p>
-      <div className="mt-3 flex flex-col gap-1.5">
-        {rows.map((r) => (
-          <div key={r.level} className="flex items-center gap-2 text-sm">
-            <span className="w-16 shrink-0 font-medium">{t('admin.tags.skillLevelThresholds.levelLabel', { level: r.level })}</span>
-            <span className="w-28 shrink-0 tabular-nums text-muted-foreground">
-              {t('admin.tags.skillLevelThresholds.pointsValue', { points: r.points })}
-            </span>
-            {r.extra && <span className="text-xs text-muted-foreground">{r.extra}</span>}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}

@@ -50,6 +50,7 @@ import type {
   SkillPoints,
   SurveyQuestion,
 } from './types'
+import { parseSkillLevelRules, type SkillLevelRules } from './skill-levels'
 import { type TaskVisibility } from './types'
 import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
 import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
@@ -490,6 +491,7 @@ function mapMemberRow(
     desiredSkills: splitTags(r.desired_skills), // DEV-002
     careerHistory: parseJsonArray<CareerHistoryEntry>(r.career_history_json),
     qualifications: parseJsonArray<Qualification>(r.qualifications_json),
+    quizPasses: parseJsonArray<NonNullable<Member['quizPasses']>[number]>(r.quiz_passes_json),
     evaluationHistory: parseJsonArray<EvaluationRecord>(r.evaluation_history_json),
     transferHistory: parseJsonArray<TransferRecord>(r.transfer_history_json),
     skillLevels: parseJsonArray<SkillLevel>(r.skill_levels_json),
@@ -672,6 +674,8 @@ export interface RemoteSettings {
   projectOrder: string[]
   // スキルポイントのレベルアップ閾値 — { "デフォルト": 100, "デザイン": 150 }
   skillLevelThresholds: SkillLevelThresholds
+  // スキルのレベルの決め方(Settings の skill_level_rules。lib/ohsumi/skill-levels.ts)
+  skillLevelRules: SkillLevelRules
   // 検定定義リスト — Settings キー "quiz_definitions"
   quizDefinitions: QuizDefinition[]
   // レーダーチャート軸定義 — Settings キー "radar_axes"
@@ -768,6 +772,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     skillLevelThresholds: (() => {
       try { const r = byKey.get('skill_level_thresholds'); return r ? normalizeThresholdKeys(JSON.parse(r)) : {} } catch { return {} }
     })(),
+    skillLevelRules: parseSkillLevelRules(byKey.get('skill_level_rules') ?? ''),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),

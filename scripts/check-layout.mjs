@@ -84,6 +84,8 @@ export const ADMIN_STEPS = [
   { name: '管理画面(Dashboard)', do: 'admin' },
   ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', 'Org Tree', '検定', '学習コンテンツ',
     'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  // スキルのレベルの決め方(PR Z): 団体の既定を変える欄(5つのレベルの点数・条件)を開いた状態
+  { name: '管理画面(Tags・スキルのレベルの決め方の入力欄)', do: 'skillRules' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -1072,6 +1074,12 @@ async function run({ build = true } = {}) {
           }
         }
         if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }
+        if (step.do === 'skillRules') {
+          await clickText('Tags', 'aside nav button'); await sleep(1200)
+          await clickText('団体の既定を変える', 'button'); await sleep(600)
+          const fields = await evaluate(`document.querySelectorAll('[data-skill-level-rules] [data-skill-rule-level] input').length`)
+          if (fields < 25) throw new Error('スキルのレベルの決め方の入力欄が出ません: ' + fields)
+        }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
           await clickText(step.view); await sleep(800)
