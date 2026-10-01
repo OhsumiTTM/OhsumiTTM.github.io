@@ -123,7 +123,7 @@ describe('担当者への更新のお願い', () => {
     t.checkIn('r1e-2')
     const res = t.post({ action: 'requestGasUpdate', session: t.session, orgId: ORG_A, reason: '安全の修正' })
     expect(res.ok, res.error).toBe(true)
-    expect(res.result).toEqual({ sentTo: 1 })
+    expect(res.result).toEqual({ sentTo: 1, queued: false })
     expect(t.mails.at(-1)).toMatchObject({ to: 'yamada@example.org', subject: '[Ohsumi] テスト団体A: 団体の GAS の更新のお願い' })
     expect(t.mails.at(-1)!.body).toContain('今の版: r1e-2')
     expect(t.mails.at(-1)!.body).toContain('最新の版: ' + CURRENT)

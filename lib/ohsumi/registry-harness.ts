@@ -26,6 +26,7 @@ export class FakeSheet {
     }
   }
   appendRow(values: unknown[]) { this.rows.push(values) }
+  deleteRow(row: number) { this.rows.splice(row - 1, 1) }
   setFrozenRows() {}
   getProtections() { return this.protections }
   protect() {
@@ -58,6 +59,7 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   const logs: string[] = []
   // 送ったメール(停止の予告)
   const mails: { to: string; subject: string; body: string }[] = []
+  const mailQuota = { remaining: 100 }
   const newFile = (name: string, created = Date.now()): DriveFile => ({ name, created, trashed: false, removedEditors: [], removedViewers: [], sharing: [] })
   const driveHandle = (f: DriveFile) => ({
     getName: () => f.name,
@@ -82,7 +84,16 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   const ctx = vm.createContext({
     console: { log: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error() {} },
     Logger: { log() {} },
-    MailApp: { sendEmail: (m: { to: string; subject: string; body: string }) => { mails.push(m) } },
+    // 1日に送れる宛先の残り(mailQuota.remaining。テストで変えられる)。送るたびに宛先の数だけ減る
+    MailApp: {
+      sendEmail: (m: { to: string; subject: string; body: string }) => {
+        const n = String(m.to).split(',').filter(Boolean).length
+        if (mailQuota.remaining < n) throw new Error('Service invoked too many times for one day: email.')
+        mailQuota.remaining -= n
+        mails.push(m)
+      },
+      getRemainingDailyQuota: () => mailQuota.remaining,
+    },
     PropertiesService: { getScriptProperties: () => ({
       getProperties: () => ({ ...props }),
       getProperty: (k: string) => props[k] ?? null,
@@ -139,6 +150,6 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   ctxRef = ctx as unknown as Record<string, unknown>
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
   const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
-  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, mails, post, newFile }
+  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, mails, mailQuota, post, newFile }
 }
 
