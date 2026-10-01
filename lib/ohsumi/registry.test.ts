@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { setup } from './registry-harness'
 
 // 管理者は ADMIN_EMAILS(スクリプトプロパティ)で決めるので、Admins シートは作らない(R1-b から)
-const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'AuditLog', 'GasVersions']
+const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'Surveys', 'AuditLog', 'GasVersions']
 
 describe('シートの用意(setupRegistry)', () => {
   it('すべてのシートを見出し付きで作り、Secrets と AuditLog を保護し、鍵とバックアップのトリガーを作る', () => {
@@ -13,7 +13,7 @@ describe('シートの用意(setupRegistry)', () => {
     expect([...t.sheets.keys()]).toEqual(EXPECTED_SHEETS)
     expect(t.sheets.get('Orgs')!.rows[0]).toEqual(['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
       'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan',
-      'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date', 'daily_job_at', 'hourly_job_at'])
+      'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date', 'daily_job_at', 'hourly_job_at', 'suspend_survey_id'])
     expect(t.sheets.get('Secrets')!.protections).toHaveLength(1)
     expect(t.sheets.get('AuditLog')!.protections).toHaveLength(1)
     expect(t.sheets.get('Orgs')!.protections).toHaveLength(0)
