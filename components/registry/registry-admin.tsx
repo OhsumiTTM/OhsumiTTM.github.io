@@ -78,6 +78,8 @@ import {
   type DiagnosticsReport,
   MAIL_KIND_LABELS,
   type MailQueueStatus,
+  setOrgDemo,
+  type OrgKpis,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -110,6 +112,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   liftSuspension: '停止の解除',
   suspendNow: '当日の提供停止(緊急)',
   setOrgPlan: 'プランの変更',
+  setOrgDemo: 'デモの印の付け外し',
   sendSuspensionNotice: '停止の予告を担当者に送った',
   testSuspendNow: '(テスト)今すぐ停止',
   testScheduleSuspension: '(テスト)停止の予定',
@@ -264,6 +267,7 @@ export function RegistryAdmin() {
         <p className="text-sm text-muted-foreground">{loading ? '読み込み中…' : '一覧を読み込めませんでした。「読み直す」を押してください。'}</p>
       ) : tab === 'orgs' ? (
         <>
+          {overview.kpis && <KpiPanel kpis={overview.kpis} />}
           {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           <OrgList orgs={overview.orgs} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
         </>
@@ -426,9 +430,10 @@ function OrgList({
     {shown.length === 0 && <p className="mb-3 text-sm text-muted-foreground">GAS の更新が要る団体はありません。</p>}
     <ul className="space-y-3">
       {shown.map((o) => (
-        <li key={o.orgId} className="rounded-lg border border-border p-3">
+        <li key={o.orgId} data-org-demo={o.demo ? 'true' : undefined} className={'rounded-lg border p-3 ' + (o.demo ? 'border-dashed border-violet-300 bg-violet-50/40' : 'border-border')}>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="min-w-0 font-medium break-words">{o.displayName || o.orgId}</span>
+            {o.demo && <DemoBadge />}
             <Badge tone={o.state === 'active' ? 'ok' : o.state === 'suspended' ? 'bad' : 'warn'}>{ORG_STATE_LABELS[o.state]}</Badge>
             <Badge tone={o.plan ? 'muted' : 'warn'}>{PLAN_LABELS[o.plan]}</Badge>
             {o.state === 'scheduled' && <Badge tone="warn">{SUSPEND_KIND_LABELS[o.suspendKind].title}</Badge>}
@@ -464,6 +469,7 @@ function OrgList({
             {o.contractNote && <Field label="契約のメモ">{o.contractNote}</Field>}
           </dl>
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
+          <DemoControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           {o.gasStatus && o.gasStatus.versionState !== 'latest' && <GasUpdateRequest org={o} session={session} onAuthError={onAuthError} />}
           <SuspensionControl
             org={o}
@@ -566,6 +572,10 @@ function SuspensionControl({
   }
 
   const inEffect = org.state === 'suspended' || org.state === 'restricted'
+  // デモの団体には、停止の予定を入れない(誤操作で止めないため)。入っている予定の取り消し・停止の解除はできる
+  if (org.demo && !hasPlan) {
+    return <p className="mt-2 text-xs text-muted-foreground" data-demo-no-suspend>デモの団体には、停止の予定を入れられません(止める必要がある時は、先にデモの印を外してください)。</p>
+  }
   if (!open) {
     return (
       <div className="mt-2 flex flex-wrap gap-2">
@@ -1270,10 +1280,10 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
               return (
                 <li key={o.orgId}>
                   <label className="flex min-w-0 items-start gap-1.5">
-                    <input type="checkbox" className="mt-0.5" checked={orgIds.includes(o.orgId)}
+                    <input type="checkbox" className="mt-0.5" checked={orgIds.includes(o.orgId)} disabled={!!o.demo}
                       onChange={(e) => setOrgIds((ids) => (e.target.checked ? [...ids, o.orgId] : ids.filter((x) => x !== o.orgId)))} />
                     <span className="min-w-0 break-all">
-                      {o.displayName || o.orgId}
+                      {o.displayName || o.orgId}{o.demo && <span className="ml-1"><DemoBadge /></span>}
                       <span className="ml-1 text-muted-foreground">({PLAN_LABELS[o.plan]}{limit !== null ? `・直近12か月 ${counts[o.orgId] ?? 0} / ${limit}件` : ''})</span>
                     </span>
                   </label>
@@ -1620,5 +1630,76 @@ function MailQueueNotice({ q }: { q: MailQueueStatus }) {
       翌日以降の毎日の処理で、停止の予告 → リマインド → アンケートの送付の順に送ります。今日の残り: {q.remainingToday}
       {q.oldestAt ? `。いちばん古いもの: ${fmt(q.oldestAt)}` : ''}
     </p>
+  )
+}
+
+// ---- デモの団体と KPI(PR S) ----
+function DemoBadge() {
+  return <span className="inline-block rounded-md bg-violet-100 px-1.5 py-0.5 text-xs whitespace-nowrap text-violet-800" data-demo-badge>デモ</span>
+}
+
+// デモの印を付ける・外す。デモの団体は、定量データの集計・KPI・アンケートの送付・停止の予定から外す
+function DemoControl({ org, session, onChanged, onAuthError }: { org: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  if (org.demo === undefined) return null
+  const save = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      await setOrgDemo(session, org.orgId, !org.demo, reason)
+      setOpen(false)
+      setReason('')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!open) {
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" onClick={() => { setOpen(true); setMessage(null) }}>{org.demo ? 'デモの印を外す…' : 'デモの印を付ける…'}</Button>
+      </div>
+    )
+  }
+  return (
+    <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2 text-xs">
+      <p>
+        {org.demo
+          ? 'デモの印を外すと、この団体を KPI・アンケートの送付・停止の予定の対象に戻します(デモの間に受け取った集計値は、集計に入れません)。'
+          : 'デモの団体は、定量データの集計・KPI の数・アンケートの送付の対象から外し、停止の予定を入れられなくします(解除はできます)。立ち上げのテスト・説明会の団体に付けます。'}
+      </p>
+      <label className="block">
+        理由・メモ(操作の記録に残します)
+        <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy} onClick={() => void save()}>{busy ? '保存しています…' : org.demo ? 'デモの印を外す' : 'デモの印を付ける'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+      </div>
+      {message && <p className="text-sm break-words text-destructive">{message}</p>}
+    </div>
+  )
+}
+
+const KPI_METRIC_LABELS: Record<string, string> = { members: 'メンバー', active_7d: '7日のアクティブ', tasks: 'タスク', tasks_done: '完了したタスク', tasks_overdue: '期限超過', logins_7d: '7日のログイン' }
+
+// KPI(デモの団体を除く)
+function KpiPanel({ kpis }: { kpis: OrgKpis }) {
+  const plans = (['ohsumi', 'cosmo_base', 'paid', ''] as const).map((p) => `${PLAN_LABELS[p]} ${kpis.byPlan[p] ?? 0}`).join('・')
+  const totals = Object.keys(KPI_METRIC_LABELS).filter((k) => kpis.metrics.totals[k] !== undefined).map((k) => `${KPI_METRIC_LABELS[k]} ${kpis.metrics.totals[k].toLocaleString()}`).join('・')
+  return (
+    <section data-kpis className="mb-4 rounded-lg border border-border p-3 text-xs">
+      <h2 className="text-sm font-medium">KPI(デモの団体を除く)</h2>
+      <p className="mt-1">利用中の団体: {kpis.activeOrgs}(プラン別: {plans})。デモの団体: {kpis.demoOrgs}</p>
+      <p className="mt-0.5 break-words text-muted-foreground">
+        定量データ({kpis.metrics.reportingOrgs} 団体{kpis.metrics.latestPeriod ? `・最新の期間 ${kpis.metrics.latestPeriod} の週まで` : ''}): {totals || 'まだありません'}
+      </p>
+    </section>
   )
 }
