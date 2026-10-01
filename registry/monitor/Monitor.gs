@@ -59,13 +59,19 @@ function checkRegistry() {
   return out
 }
 
-// 時間主導のトリガー(毎朝)から呼ぶ。Discord にだけ送る
+// 時間主導のトリガー(毎朝)から呼ぶ。Discord にだけ送る。
+// 毎日のまとめとして、団体の GAS の更新が要る団体の数と、24時間以上確認が無い団体の数も書く
 function monitorHeartbeat() {
   var props = monitorProps_()
   var state = null
   try { state = props[MONITOR_STATE_KEY] ? JSON.parse(props[MONITOR_STATE_KEY]) : null } catch (e) { state = null }
   var now = state && state.down ? '停止中' : '正常'
-  postDiscord_('監視は動いています(レジストリ: ' + now + ')', props)
+  var summary = null
+  if (props.REGISTRY_URL && props.HEALTH_KEY) {
+    var res = fetchHealth_(props, { summary: true })
+    if (res && res.ok && res.keyValid !== false) summary = res.gasVersions || null
+  }
+  postDiscord_(heartbeatText_(now, summary), props)
 }
 
 // ============================================================================
@@ -87,6 +93,8 @@ function removeOrphanTriggers_() {
   return removed
 }
 
+// 監視の GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
+var MONITOR_VERSION = '2026.10.01-1'
 var BACKUP_STALE_HOURS = 26
 var REJECTED_ALERT = 1000
 var MONITOR_STATE_KEY = 'MONITOR_STATE'
@@ -110,6 +118,15 @@ function evaluateHealth_(res, now) {
   if (Number(res.unrecordedEdits) > 0) problems.unrecorded = '記録の無い変更(スプレッドシートの直接の編集)が ' + Number(res.unrecordedEdits) + ' 団体にあります'
   if (Number(res.rejectedLastHour) > REJECTED_ALERT) problems.rejected = '回数の上限で断ったリクエストが、この1時間で ' + Number(res.rejectedLastHour) + ' 回あります(攻撃の疑い)'
   return { reachable: true, problems: problems }
+}
+
+// 毎朝の知らせの文(summary: レジストリの health の gasVersions。受け取れなければ null)
+function heartbeatText_(registryState, summary) {
+  var text = '監視は動いています(レジストリ: ' + registryState + '。監視の版: ' + MONITOR_VERSION + ')'
+  if (!summary) return text + '\n団体の GAS の版: 確かめられませんでした'
+  return text + '\n団体の GAS(利用中 ' + Number(summary.orgs || 0) + ' 団体。最新の版: ' + (summary.latest || '—') + ')' +
+    '\n・更新が要る団体: ' + Number(summary.updateRequired || 0) +
+    '\n・24時間以上確認が無い団体: ' + Number(summary.noCheck || 0)
 }
 
 function formatDuration_(ms) {
@@ -180,7 +197,7 @@ function responseSnippet_(text) {
     .replace(/[A-Za-z0-9_-]{32,}/g, '[伏せた値]').slice(0, 120)
 }
 
-function fetchHealth_(props) {
+function fetchHealth_(props, extra) {
   if (!REGISTRY_URL_PATTERN.test(String(props.REGISTRY_URL || ''))) {
     return { ok: false, error: 'REGISTRY_URL の形が正しくありません(デプロイの「ウェブアプリの URL」…/macros/s/…/exec をそのまま入れてください)' }
   }
@@ -188,7 +205,7 @@ function fetchHealth_(props) {
     var res = UrlFetchApp.fetch(props.REGISTRY_URL, {
       method: 'post',
       contentType: 'text/plain;charset=utf-8',
-      payload: JSON.stringify({ action: 'health', key: props.HEALTH_KEY }),
+      payload: JSON.stringify({ action: 'health', key: props.HEALTH_KEY, summary: !!(extra && extra.summary) }),
       muteHttpExceptions: true,
       followRedirects: true,
     })

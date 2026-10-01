@@ -41,9 +41,16 @@ type DriveFile = { name: string; created: number; trashed: boolean; removedEdito
 export type TokenInfo = Record<string, unknown>
 
 export function setup(opts: { props?: Record<string, string>; now?: number; tokeninfo?: Record<string, TokenInfo> } = {}) {
-  const props: Record<string, string> = { ...(opts.props ?? {}) }
   const sheets = new Map<string, FakeSheet>()
   const cache = new Map<string, string>()
+  // スクリプトプロパティ。テストが直接書き換えた時は、キャッシュに置いた写し(registryProps_)を捨てる
+  // (本物では、エディタで書き換えてから最大5分で反映される)
+  let ctxRef: Record<string, unknown> | null = null
+  const forget = () => { cache.delete('registry:props'); if (ctxRef) ctxRef._registryProps = null }
+  const props: Record<string, string> = new Proxy({ ...(opts.props ?? {}) } as Record<string, string>, {
+    set: (o, k, v) => { o[k as string] = v; forget(); return true },
+    deleteProperty: (o, k) => { delete o[k as string]; forget(); return true },
+  })
   // 覚えた秒数(CacheService.put の3つ目)
   const cacheTtl = new Map<string, number>()
   const triggers: { handler: string; hour?: number }[] = []
@@ -129,6 +136,7 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
     },
   })
   vm.runInContext(CODE, ctx)
+  ctxRef = ctx as unknown as Record<string, unknown>
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
   const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
   return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, mails, post, newFile }

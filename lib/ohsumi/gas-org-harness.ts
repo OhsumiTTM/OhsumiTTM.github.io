@@ -24,7 +24,7 @@ export function registry() {
   r.gas.setupRegistry()
   const session = r.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: 'nonce-secret-a1-0123456789' }).result.session.token
   const issue = (extra: Record<string, unknown> = {}) => r.post({ action: 'issueRegistrationCode', session, orgName: '新しい団体', ...extra }).result
-  return { ...r, issue }
+  return { ...r, issue, session }
 }
 
 export type Reg = ReturnType<typeof registry>

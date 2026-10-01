@@ -78,6 +78,18 @@ export interface MemberInviteResult {
   reason?: 'notChecked' | 'noEmail' | 'mailQuota' | 'limited'
 }
 
+/** この団体の GAS の版の更新(gas/Code.gs の gasUpdateStatus_)。known: レジストリに今の版を判定してもらった */
+export interface GasUpdateStatus {
+  current: string
+  known: boolean
+  required: boolean
+  outdated: boolean
+  latest: string
+  minimum: string
+  security: boolean
+  checkedAt: string
+}
+
 /** メールの1日の上限の状態(gas/Code.gs の mailQuotaStatus_)。skipped: 今日、上限で送れなかった数 */
 export interface MailQuotaStatus {
   remaining: number | null
@@ -987,6 +999,8 @@ export const remoteApi = {
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // メールの1日の上限の状態(代表・全権管理者だけ)
   getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
+  // この団体の GAS の版の更新が要るか(代表・全権管理者だけ)
+  getGasUpdateStatus: () => postToGas<GasUpdateStatus>('getGasUpdateStatus', {}),
   // 保存済みのWebhook URLへ実際にテストメッセージを送信し、HTTPレスポンス
   // コードで成否を判定する(send*Messageと違いここでは失敗を握りつぶさない —
   // 失敗時はGAS側がエラーを投げ、postToGas経由でここもrejectする)

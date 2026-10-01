@@ -43,6 +43,12 @@ import {
   type SuspendKind,
   type SuspensionInput,
   mailLevelCounts,
+  needsGasUpdate,
+  requestGasUpdate,
+  setGasVersionMarks,
+  GAS_JUDGEMENT_LABELS,
+  type GasJudgement,
+  type GasVersionEntry,
   type OrgMailSummary,
 } from '@/lib/registry/admin-api'
 
@@ -214,7 +220,10 @@ export function RegistryAdmin() {
       {!overview ? (
         <p className="text-sm text-muted-foreground">{loading ? '読み込み中…' : '一覧を読み込めませんでした。「読み直す」を押してください。'}</p>
       ) : tab === 'orgs' ? (
-        <OrgList orgs={overview.orgs} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
+        <>
+          {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
+          <OrgList orgs={overview.orgs} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
+        </>
       ) : tab === 'codes' ? (
         <CodesPanel
           session={session}
@@ -346,10 +355,17 @@ function OrgList({
   onChanged: () => void
   onAuthError: (message?: string) => void
 }) {
+  const [onlyUpdate, setOnlyUpdate] = useState(false)
   if (!orgs.length) return <p className="text-sm text-muted-foreground">登録された団体はまだありません。</p>
   const mailCounts = mailLevelCounts(orgs)
+  const updateCount = orgs.filter(needsGasUpdate).length
+  const shown = onlyUpdate ? orgs.filter(needsGasUpdate) : orgs
   return (
     <>
+    <label className="mb-3 flex items-center gap-2 text-sm" data-gas-update-filter>
+      <input type="checkbox" checked={onlyUpdate} onChange={(e) => setOnlyUpdate(e.target.checked)} />
+      GAS の更新が要る団体だけ({updateCount})
+    </label>
     {(mailCounts.reached > 0 || mailCounts.low > 0) && (
       <p data-mail-level-summary className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
         {mailCounts.reached > 0 && `メールの上限に達した団体: ${mailCounts.reached}`}
@@ -358,8 +374,9 @@ function OrgList({
         (GAS を動かすアカウントの1日の上限。続く団体には、Google Workspace のアカウントで GAS を動かすよう勧めてください)
       </p>
     )}
+    {shown.length === 0 && <p className="mb-3 text-sm text-muted-foreground">GAS の更新が要る団体はありません。</p>}
     <ul className="space-y-3">
-      {orgs.map((o) => (
+      {shown.map((o) => (
         <li key={o.orgId} className="rounded-lg border border-border p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className="min-w-0 font-medium break-words">{o.displayName || o.orgId}</span>
@@ -369,10 +386,17 @@ function OrgList({
             {o.checkState !== 'ok' && <Badge tone="warn">{CHECK_STATE_LABELS[o.checkState]}</Badge>}
             {o.mail?.level === 'reached' && <Badge tone="bad">メールの上限に達した</Badge>}
             {o.mail?.level === 'low' && <Badge tone="warn">メールの残り {o.mail.remaining}</Badge>}
+            {o.gasStatus && <Badge tone={GAS_JUDGEMENT_TONES[o.gasStatus.judgement]}>GAS: {GAS_JUDGEMENT_LABELS[o.gasStatus.judgement]}</Badge>}
           </div>
           <dl className="space-y-1">
             <Field label="契約の状態">{CONTRACT_LABELS[o.contractStatus] ?? o.contractStatus}{o.contractUntil ? `(${fmt(o.contractUntil)} まで)` : ''}</Field>
-            <Field label="最後の確認">{fmt(o.lastCheckAt)}{o.gasVersion ? `(GAS の版: ${o.gasVersion})` : ''}</Field>
+            <Field label="最後の確認">{fmt(o.lastCheckAt)}</Field>
+            <Field label="GAS の版">
+              <span data-gas-version>
+                {o.gasVersion || '不明'}
+                {o.gasStatus && `(判定: ${GAS_JUDGEMENT_LABELS[o.gasStatus.judgement]}${o.gasStatus.noCheck && o.gasStatus.versionState !== 'latest' ? `・最後の版では${GAS_JUDGEMENT_LABELS[o.gasStatus.versionState]}` : ''}。最新: ${o.gasStatus.latest || '—'}${o.gasStatus.security ? '。安全の修正あり' : ''})`}
+              </span>
+            </Field>
             <Field label="登録日">{fmt(o.createdAt)}</Field>
             {o.mail && o.mail.level !== 'unknown' && <Field label="メール">{mailText(o.mail)}</Field>}
             {o.suspendAt && (
@@ -389,6 +413,7 @@ function OrgList({
             {o.contractNote && <Field label="契約のメモ">{o.contractNote}</Field>}
           </dl>
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
+          {o.gasStatus && o.gasStatus.versionState !== 'latest' && <GasUpdateRequest org={o} session={session} onAuthError={onAuthError} />}
           <SuspensionControl
             org={o}
             session={session}
@@ -587,6 +612,136 @@ function SuspensionControl({
 }
 
 // 団体のプランを記録する(表示と変更)
+const GAS_JUDGEMENT_TONES: Record<GasJudgement, 'muted' | 'ok' | 'warn' | 'bad'> = { latest: 'ok', outdated: 'muted', updateRequired: 'bad', noCheck: 'warn' }
+
+// 団体の担当者に、GAS の更新をお願いするメールを送る(同じ団体には24時間に1回まで。操作の記録に残る)
+function GasUpdateRequest({ org, session, onAuthError }: { org: OrgSummary; session: AdminSession; onAuthError: (m?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await requestGasUpdate(session, org.orgId, reason)
+      setOpen(false)
+      setReason('')
+      setMessage({ ok: true, text: `担当者 ${res.sentTo} 人に、更新のお願いを送りました。` })
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-2">
+      {!open ? (
+        <Button size="sm" variant="ghost" onClick={() => { setOpen(true); setMessage(null) }} data-gas-update-request>担当者に更新のお願いを送る…</Button>
+      ) : (
+        <form onSubmit={(e) => void send(e)} className="space-y-2 rounded-md bg-muted/50 p-2">
+          <p className="text-xs text-muted-foreground">
+            担当者(登録の時の連絡先)に、今の版・最新の版と更新の手順をメールで送ります。同じ団体には24時間に1回までです。
+          </p>
+          <label className="block text-xs">
+            理由・メモ(操作の記録に残します)
+            <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm" disabled={busy}>{busy ? '送っています…' : '送る'}</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+          </div>
+        </form>
+      )}
+      {message && <p className={`mt-1 text-sm break-words ${message.ok ? 'text-emerald-700' : 'text-destructive'}`}>{message.text}</p>}
+    </div>
+  )
+}
+
+// 団体の GAS の版の一覧と印(安全の修正・これより古ければ更新が要る)。印は付け直せる(操作の記録に残る)
+function GasVersionsPanel({ versions, session, onChanged, onAuthError }: { versions: GasVersionEntry[]; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<{ version: string; security: boolean; required: boolean; note: string; reason: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editing) return
+    setBusy(true)
+    setMessage(null)
+    try {
+      await setGasVersionMarks(session, editing.version.trim(), { security: editing.security, required: editing.required, note: editing.note }, editing.reason)
+      setEditing(null)
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="mb-4 rounded-lg border border-border p-3" data-gas-versions>
+      <button type="button" className="flex w-full items-center justify-between gap-2 text-left text-sm font-medium" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="min-w-0 break-words">団体の GAS の版の一覧(最新: {versions[0]?.version ?? '—'})</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{open ? '閉じる' : '開く'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            「安全の修正」か「これより古ければ更新が要る」の印の付いた一番新しい版より古い団体を、「更新が要る」と判定します。版はコード(registry/Code.gs の KNOWN_GAS_VERSIONS)に足します。
+          </p>
+          <ul className="space-y-1">
+            {versions.map((v) => (
+              <li key={v.version} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono">{v.version}</span>
+                {v.security && <Badge tone="bad">安全の修正</Badge>}
+                {v.required && <Badge tone="warn">これより古ければ更新が要る</Badge>}
+                {v.note && <span className="min-w-0 break-words text-muted-foreground">{v.note}</span>}
+                <Button size="sm" variant="ghost" onClick={() => { setEditing({ version: v.version, security: v.security, required: v.required, note: v.note, reason: '' }); setMessage(null) }}>印を変える…</Button>
+              </li>
+            ))}
+          </ul>
+          {!editing && <Button size="sm" variant="ghost" onClick={() => setEditing({ version: '', security: false, required: false, note: '', reason: '' })}>版を足す…</Button>}
+          {editing && (
+            <form onSubmit={(e) => void save(e)} className="space-y-2 rounded-md bg-muted/50 p-2">
+              <label className="block text-xs">
+                版(YYYY.MM.DD-N)
+                <input className={inputClass} value={editing.version} onChange={(e) => setEditing({ ...editing, version: e.target.value })} maxLength={20} />
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={editing.security} onChange={(e) => setEditing({ ...editing, security: e.target.checked })} />
+                安全の修正
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={editing.required} onChange={(e) => setEditing({ ...editing, required: e.target.checked })} />
+                これより古ければ更新が要る
+              </label>
+              <label className="block text-xs">
+                メモ
+                <input className={inputClass} value={editing.note} onChange={(e) => setEditing({ ...editing, note: e.target.value })} maxLength={500} />
+              </label>
+              <label className="block text-xs">
+                理由(操作の記録に残します)
+                <input className={inputClass} value={editing.reason} onChange={(e) => setEditing({ ...editing, reason: e.target.value })} maxLength={500} />
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" size="sm" disabled={busy}>{busy ? '保存しています…' : '保存する'}</Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(null)}>やめる</Button>
+              </div>
+            </form>
+          )}
+          {message && <p className="text-sm break-words text-destructive">{message}</p>}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function PlanControl({ org, session, onChanged, onAuthError }: { org: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
   const [open, setOpen] = useState(false)
   const [plan, setPlan] = useState<Plan | ''>(org.plan)

@@ -1,0 +1,14 @@
+{
+  "registry/Code.gs": {
+    "version": "2026.10.01-1",
+    "sha256": "c0ce1cbc5bf17af69a52fbd1794b5530c288402a281f89f08d5af5eaa330ddfe"
+  },
+  "registry/monitor/Monitor.gs": {
+    "version": "2026.10.01-1",
+    "sha256": "2f5ae885c4ebffd4c6f14ebbf1de1415b64aa78f474b31e7ca1d2f2bdfa19456"
+  },
+  "gas/Code.gs": {
+    "version": "2026.10.01-1",
+    "sha256": "77b8dc8b41f4941045c29cc2cc20436c8f95875ecbd1e747f905f975016a1b89"
+  }
+}

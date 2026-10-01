@@ -83,6 +83,7 @@ function setupRegistry() {
   }
   backupFolder_()
   ensureAdminSessionKey_(props)
+  forgetRegistryProps_()
   if (!adminEmails_(props.getProperties() || {}).length) {
     console.log('管理者の許可リスト(スクリプトプロパティ ADMIN_EMAILS)が未設定です。管理者の Google アカウントのメールアドレスをカンマ区切りで入れてください')
   }
@@ -107,6 +108,7 @@ function rotateAdminSessionKey() {
   var props = PropertiesService.getScriptProperties()
   props.setProperty('ADMIN_SESSION_KEY', generateSecret_())
   props.setProperty('ADMIN_SESSION_KID', generateSecret_().slice(0, 8))
+  forgetRegistryProps_()
   appendAudit_({ actor: 'editor', action: 'rotateAdminSessionKey' })
   console.log('管理画面のセッションの鍵を作り直しました。ログイン中の管理者は、次の操作でログインし直しになります')
 }
@@ -149,6 +151,9 @@ function doGet() {
 }
 
 function doPost(e) {
+  // スクリプトプロパティ・版の一覧は、リクエストごとに CacheService から読み直す(同じ実行の中では1回だけ)
+  _registryProps = null
+  _gasVersions = null
   try {
     var text = e && e.postData ? String(e.postData.contents || '') : ''
     if (text.length > MAX_BODY_CHARS) return registryJson_({ ok: false, error: 'リクエストが大きすぎます。' })
@@ -185,6 +190,7 @@ function dailyRegistryBackup() {
     var props = PropertiesService.getScriptProperties()
     var unrecorded = findUnrecordedOrgEdits_()
     props.setProperty('LAST_UNRECORDED_EDITS', String(unrecorded.length))
+    forgetRegistryProps_()
     if (unrecorded.length) console.warn('記録の無い変更がある団体: ' + unrecorded.join(', '))
 
     // 停止の予告(14日前・7日前・1日前)を、団体の担当者にメールで送る(失敗してもバックアップは続ける)
@@ -197,6 +203,7 @@ function dailyRegistryBackup() {
     makePrivate_(copy)
     var removed = trashOldBackups_(folder, Date.now())
     props.setProperty('LAST_BACKUP_AT', new Date().toISOString())
+    forgetRegistryProps_()
     console.log('バックアップを作りました: ' + copy.getName() + '(古いコピーを ' + removed + ' 件ゴミ箱へ移しました)')
     return { name: copy.getName(), removed: removed, unrecorded: unrecorded }
   } finally {
@@ -223,7 +230,8 @@ function removeOrphanTriggers_() {
   return removed
 }
 
-var REGISTRY_VERSION = 'r1e-2'
+// レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
+var REGISTRY_VERSION = '2026.10.01-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -247,6 +255,9 @@ var REGISTRY_SHEETS = {
   // 保存した乱数 registerNonce)の SHA-256
   Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_nonce_hash'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
+  // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
+  // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
+  GasVersions: ['version', 'security', 'required', 'note', 'updated_at', 'updated_by'],
 }
 // 管理者は、スクリプトプロパティ ADMIN_EMAILS(カンマ区切り)の許可リストで決める。
 // R1-a で作った Admins シートは使わない(残っていても読まない)
@@ -258,7 +269,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10 }
 
 // ---- 入口 ----
 
@@ -273,7 +284,7 @@ function registryError_(message, flags) {
 
 // 操作の一覧。R1-c 以降で足す
 var REGISTRY_ACTIONS = {
-  health: function (body) { return healthResponse_(body.key) },
+  health: function (body) { return healthResponse_(body.key, body) },
   adminLogin: function (body) { return adminLogin_(body, Date.now()) },
   adminOverview: function (body) { return adminOverview_(body, Date.now()) },
   issueRegistrationCode: function (body) { return issueRegistrationCode_(body, Date.now()) },
@@ -284,6 +295,8 @@ var REGISTRY_ACTIONS = {
   scheduleSuspension: function (body) { return scheduleSuspension_(body, Date.now()) },
   clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
+  setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
+  requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
 }
 
 function registryJson_(obj) {
@@ -295,8 +308,8 @@ function registryJson_(obj) {
 // 鍵(HEALTH_KEY)が無ければ、動いていることだけを返す。監視の GAS は鍵を付けて詳細を受け取る。
 // 鍵を付けて来たのに合わない時は keyValid: false を付ける(監視が「鍵が違う」と分かるように。
 // 鍵を付けない問い合わせには付けない)。団体の情報は返さない
-function healthResponse_(key) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+function healthResponse_(key, body) {
+  var props = registryProps_()
   var res = { ok: true, version: REGISTRY_VERSION, time: new Date().toISOString() }
   var given = String(key || '')
   if (!given) return res
@@ -308,6 +321,8 @@ function healthResponse_(key) {
   res.lastBackupAt = props.LAST_BACKUP_AT || null
   res.unrecordedEdits = Number(props.LAST_UNRECORDED_EDITS || 0)
   res.rejectedLastHour = rejectedCount_(Date.now())
+  // 監視の GAS の毎日のまとめ(summary: true の時だけ。Orgs を読むので、15分ごとの確認では読まない)
+  if (body && body.summary === true) res.gasVersions = gasVersionCounts_(Date.now())
   return res
 }
 
@@ -331,6 +346,40 @@ function rateLimitExceeded_(bucket, limit, now) {
 
 function rejectedCount_(now) {
   return Number(CacheService.getScriptCache().get('rj:' + hourBucket_(now)) || 0)
+}
+
+// ---- スクリプトプロパティ(数分キャッシュに置く) ----
+//
+// 通信のたびに getProperties() を読むと、スクリプトプロパティの1日の上限(読み書き 50,000 回)に近づくので、
+// まとめて CacheService(この GAS だけが読める)に PROPS_CACHE_SEC 秒置く。GAS が書き換えた時は、すぐに捨てる。
+// エディタでスクリプトプロパティを手で変えた時(ADMIN_EMAILS など)は、反映まで最大 PROPS_CACHE_SEC 秒かかる
+var PROPS_CACHE_KEY = 'registry:props'
+var PROPS_CACHE_SEC = 300
+var _registryProps = null
+
+function registryProps_() {
+  if (_registryProps) return _registryProps
+  var cache = CacheService.getScriptCache()
+  var raw = null
+  try { raw = cache.get(PROPS_CACHE_KEY) } catch (e) { raw = null }
+  if (raw) {
+    try { _registryProps = JSON.parse(raw) || {} } catch (e) { _registryProps = null }
+    if (_registryProps) return _registryProps
+  }
+  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var text = JSON.stringify(props)
+  // CacheService の1件の上限(100KB)より十分小さい時だけ置く
+  if (text.length < 90000) {
+    try { cache.put(PROPS_CACHE_KEY, text, PROPS_CACHE_SEC) } catch (e) { /* 置けなくても続ける */ }
+  }
+  _registryProps = props
+  return props
+}
+
+// GAS がスクリプトプロパティを書き換えた後に呼ぶ
+function forgetRegistryProps_() {
+  _registryProps = null
+  try { CacheService.getScriptCache().remove(PROPS_CACHE_KEY) } catch (e) { /* 次の期限で消える */ }
 }
 
 // ---- 値の扱い ----
@@ -422,11 +471,12 @@ function orgFingerprint_(values) {
 // 記録を伴う変更の後に呼ぶ(R1-b 以降の操作で使う)
 function rememberOrgFingerprint_(orgId, values) {
   PropertiesService.getScriptProperties().setProperty(ORG_FINGERPRINT_PREFIX + orgId, orgFingerprint_(values))
+  forgetRegistryProps_()
 }
 
 // 覚えている指紋と違う行・覚えていない行・消えた行の団体ID
 function findUnrecordedOrgEdits_() {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var seen = {}
   var found = []
   readRows_('Orgs').forEach(function (r) {
@@ -458,6 +508,7 @@ function backupFolder_() {
   var folder = DriveApp.createFolder(BACKUP_FOLDER_NAME)
   makePrivate_(folder)
   props.setProperty('BACKUP_FOLDER_ID', folder.getId())
+  forgetRegistryProps_()
   return folder
 }
 
@@ -569,7 +620,7 @@ function verifyAdminSession_(token, props, nowMs) {
 }
 
 function adminLogin_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var google = verifyAdminIdToken_(body.idToken, body.nonceSecret, props, nowMs)
   if (!isAdminEmail_(props, google.email)) {
     appendAudit_({ actor: google.email, action: 'adminLoginDenied', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' })
@@ -630,6 +681,7 @@ function orgSummary_(values, nowMs) {
     gasUrl: String(values.gas_url || ''),
     gasVersion: String(values.gas_version || ''),
     mail: orgMailSummary_(values),
+    gasStatus: gasVersionStatus_(values, gasVersionList_(), nowMs),
   }
 }
 
@@ -682,7 +734,7 @@ var AUDIT_SHOW_MAX = 200
 
 // 管理画面の一覧を1回で返す(団体・登録コード・最近の操作の記録)。通信の回数を減らすため
 function adminOverview_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') }).map(function (r) { return orgSummary_(r.values, nowMs) })
   var codes = readRows_('RegistrationCodes').filter(function (r) { return String(r.values.code_hash || '') }).map(function (r) { return codeSummary_(r.values, nowMs) })
@@ -699,6 +751,7 @@ function adminOverview_(body, nowMs) {
       codes: codes,
       audit: audit,
       codeTtlDays: REGISTRATION_CODE_TTL_DAYS,
+      gasVersions: gasVersionList_(),
     },
   }
 }
@@ -765,7 +818,7 @@ function withRegistryLock_(fn) {
 }
 
 function issueRegistrationCode_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   if (!(nowSecOf_(nowMs) - Number(session.auth) <= ADMIN_REAUTH_SEC)) {
     throw registryError_('登録コードを発行する前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。', { reauth: true })
@@ -826,7 +879,7 @@ function setRowFields_(name, rowNumber, fields) {
 }
 
 function revokeRegistrationCode_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var reason = cleanText_(body.reason, 500)
   return withRegistryLock_(function () {
@@ -1154,7 +1207,7 @@ function sendSuspensionNotices_(nowMs) {
 
 // テスト環境の停止の操作(testSuspendNow・testScheduleSuspension・testLiftSuspension)。mode: now / schedule / lift
 function testSetSuspension_(mode, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   if (String(props.REGISTRY_TEST_MODE || '') !== 'true') {
     throw new Error('テスト環境のレジストリだけで使えます(スクリプトプロパティ REGISTRY_TEST_MODE を true にしたレジストリ)。本番では、管理画面で停止の予定を入れてください。')
   }
@@ -1210,7 +1263,7 @@ function requireAdminReauth_(session, nowMs, what) {
 
 // 管理画面: 停止の予定を入れる(入れ直す)。{ session, orgId, kind: suspend | restrict, suspendAt(ISO), reason }
 function scheduleSuspension_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   requireAdminReauth_(session, nowMs, '停止の予定を入れる')
   var kind = String(body.kind || '')
@@ -1269,7 +1322,7 @@ function scheduleSuspension_(body, nowMs) {
 // 管理画面: 団体のプランを記録する。{ session, orgId, plan: cosmo_base | ohsumi | paid, reason }
 // 有償にする時は、機能停止の予定・機能停止が入っていないこと(有償の団体は機能停止にしない)
 function setOrgPlan_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var plan = String(body.plan || '')
   if (PLANS.indexOf(plan) < 0) throw registryError_('プラン(Cosmo Base・Ohsumi・有償)を選んでください。')
@@ -1295,7 +1348,7 @@ function setOrgPlan_(body, nowMs) {
 
 // 管理画面: 停止の予定を取り消す・停止を解除する(元に戻す)。{ session, orgId, reason }
 function clearSuspension_(body, nowMs) {
-  var props = PropertiesService.getScriptProperties().getProperties() || {}
+  var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var reason = cleanText_(body.reason, 500)
   return withRegistryLock_(function () {
@@ -1359,7 +1412,177 @@ function checkIn_(body, nowMs) {
     setRowFields_('Orgs', row.row, fields)
   }
   var c = contractState_(row.values, nowMs)
-  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_() } }
+  // GAS の版: 更新が要るか(今届いた版で判定する)
+  var vs = gasVersionStatus_(merged_(row.values, { gas_version: gasVersion, last_check_at: new Date(nowMs).toISOString() }), gasVersionList_(), nowMs)
+  var gasUpdate = { required: vs.versionState === 'updateRequired', outdated: vs.versionState !== 'latest', latest: vs.latest, minimum: vs.minimum, security: vs.security }
+  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate } }
+}
+
+// ---- 団体の GAS の版 ----
+//
+// 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
+// 出した版は KNOWN_GAS_VERSIONS に足す(足し忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
+// 印(security: 安全の修正 / required: これより古ければ更新が要る)は、管理画面で付け直せる(GasVersions シート。記録を残す)。
+// 判定(団体ごと):
+//   updateRequired: 印の付いた版(security か required)のうち一番新しいものより古い
+//   outdated: 一覧の一番新しい版より古い / latest: それ以外(一覧より新しい版も含む)
+//   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
+// 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
+var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-1', security: true, required: true,
+    note: '通知・タスクの書き換えを GAS が守る修正(PR A)を含む最初の版。メールの上限(PR D)・版の確認(PR E)も含む' },
+]
+var GAS_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}-\d+$/
+var GAS_CHECK_STALE_HOURS = 24
+var GAS_VERSIONS_CACHE_KEY = 'registry:gasVersions'
+var _gasVersions = null
+
+function gasVersionKey_(v) {
+  var m = String(v || '').match(/^(\d{4})\.(\d{2})\.(\d{2})-(\d+)$/)
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])] : null
+}
+
+// a が b より古ければ負、同じなら 0、新しければ正(日付の形でないものは、どれよりも古い)
+function compareGasVersions_(a, b) {
+  var ka = gasVersionKey_(a)
+  var kb = gasVersionKey_(b)
+  if (!ka || !kb) return (ka ? 1 : 0) - (kb ? 1 : 0)
+  for (var i = 0; i < 4; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i]
+  return 0
+}
+
+function boolCell_(v) { return v === true || /^(true|1|yes)$/i.test(String(v || '')) }
+
+// 版の一覧(新しい順)。コードの一覧に、管理画面で付けた印(GasVersions)を重ねる。数分キャッシュに置く
+function gasVersionList_() {
+  if (_gasVersions) return _gasVersions
+  var cache = CacheService.getScriptCache()
+  try {
+    var raw = cache.get(GAS_VERSIONS_CACHE_KEY)
+    if (raw) { _gasVersions = JSON.parse(raw); return _gasVersions }
+  } catch (e) { /* 読み直す */ }
+  var byVersion = {}
+  KNOWN_GAS_VERSIONS.forEach(function (v) {
+    byVersion[v.version] = { version: v.version, security: !!v.security, required: !!v.required, note: String(v.note || ''), updatedAt: '', updatedBy: '' }
+  })
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('GasVersions')
+  if (sheet) {
+    readRows_('GasVersions').forEach(function (r) {
+      var version = String(r.values.version || '').trim()
+      if (!GAS_VERSION_PATTERN.test(version)) return
+      byVersion[version] = {
+        version: version, security: boolCell_(r.values.security), required: boolCell_(r.values.required),
+        note: String(r.values.note || ''), updatedAt: isoOf_(r.values.updated_at), updatedBy: String(r.values.updated_by || ''),
+      }
+    })
+  }
+  var list = Object.keys(byVersion).map(function (k) { return byVersion[k] })
+  list.sort(function (a, b) { return compareGasVersions_(b.version, a.version) })
+  try { cache.put(GAS_VERSIONS_CACHE_KEY, JSON.stringify(list), PROPS_CACHE_SEC) } catch (e) { /* 置けなくても続ける */ }
+  _gasVersions = list
+  return list
+}
+
+function forgetGasVersions_() {
+  _gasVersions = null
+  try { CacheService.getScriptCache().remove(GAS_VERSIONS_CACHE_KEY) } catch (e) { /* 次の期限で消える */ }
+}
+
+// 団体の GAS の版の判定(純粋な関数)
+function gasVersionStatus_(values, versions, nowMs) {
+  var current = String(values.gas_version || '')
+  var latest = versions.length ? versions[0].version : ''
+  var minimum = ''
+  var security = false
+  versions.forEach(function (v) {
+    if ((v.security || v.required) && !minimum) minimum = v.version
+    if (v.security && compareGasVersions_(current, v.version) < 0) security = true
+  })
+  var versionState = minimum && compareGasVersions_(current, minimum) < 0 ? 'updateRequired'
+    : latest && compareGasVersions_(current, latest) < 0 ? 'outdated' : 'latest'
+  var lastCheck = timeOf_(values.last_check_at)
+  var noCheck = !(lastCheck > 0) || nowMs - lastCheck > GAS_CHECK_STALE_HOURS * 3600 * 1000
+  return {
+    current: current, latest: latest, minimum: minimum, security: security, versionState: versionState,
+    noCheck: noCheck, judgement: noCheck ? 'noCheck' : versionState,
+  }
+}
+
+// 監視の毎日のまとめ: 更新が要る団体・24時間以上確認が無い団体の数(利用停止の団体は数えない)
+function gasVersionCounts_(nowMs) {
+  var versions = gasVersionList_()
+  var out = { latest: versions.length ? versions[0].version : '', updateRequired: 0, noCheck: 0, orgs: 0 }
+  readRows_('Orgs').forEach(function (r) {
+    if (!String(r.values.org_id || '') || String(r.values.status || '') !== 'active') return
+    var st = gasVersionStatus_(r.values, versions, nowMs)
+    out.orgs++
+    if (st.versionState === 'updateRequired') out.updateRequired++
+    if (st.noCheck) out.noCheck++
+  })
+  return out
+}
+
+// 管理画面: 版の印を付け直す。{ session, version, security, required, note, reason }
+function setGasVersionMarks_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var version = String(body.version || '').trim()
+  if (!GAS_VERSION_PATTERN.test(version)) throw registryError_('版は「YYYY.MM.DD-N」の形で入れてください。')
+  var marks = { security: body.security === true, required: body.required === true, note: cleanText_(body.note, 500) }
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var before = null
+    gasVersionList_().forEach(function (v) { if (v.version === version) before = { security: v.security, required: v.required, note: v.note } })
+    var fields = { version: version, security: marks.security, required: marks.required, note: marks.note, updated_at: new Date(nowMs).toISOString(), updated_by: session.sub }
+    var found = null
+    readRows_('GasVersions').forEach(function (r) { if (String(r.values.version || '').trim() === version) found = r })
+    if (found) setRowFields_('GasVersions', found.row, fields)
+    else appendRowByHeaders_('GasVersions', fields)
+    forgetGasVersions_()
+    appendAudit_({ actor: session.sub, action: 'setGasVersionMarks', target: version, before: before, after: marks, reason: reason })
+    return { ok: true, result: { versions: gasVersionList_() } }
+  })
+}
+
+// 管理画面: 団体の担当者(Contacts)に、GAS の更新をお願いするメールを送る。{ session, orgId, reason }
+// 同じ団体には、GAS_UPDATE_REQUEST_INTERVAL_HOURS 時間に1回まで
+var GAS_UPDATE_REQUEST_INTERVAL_HOURS = 24
+function requestGasUpdate_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  var row = findOrgRow_(String(body.orgId || ''))
+  if (!row) throw registryError_('その団体は見つかりません。')
+  var orgId = String(row.values.org_id)
+  var to = contactEmails_()[orgId] || []
+  if (!to.length) throw registryError_('この団体の担当者のメールアドレスがありません。')
+  var cache = CacheService.getScriptCache()
+  var key = 'gasreq:' + orgId
+  if (cache.get(key)) throw registryError_('この団体には、' + GAS_UPDATE_REQUEST_INTERVAL_HOURS + '時間以内に更新のお願いを送っています。')
+  var st = gasVersionStatus_(row.values, gasVersionList_(), nowMs)
+  var text = gasUpdateRequestText_(String(row.values.display_name || orgId), st)
+  MailApp.sendEmail({ to: to.join(','), subject: text.subject, body: text.body })
+  cache.put(key, '1', GAS_UPDATE_REQUEST_INTERVAL_HOURS * 3600)
+  appendAudit_({ actor: session.sub, action: 'requestGasUpdate', target: orgId,
+    after: { current: st.current, latest: st.latest, minimum: st.minimum, security: st.security, sentTo: to.length }, reason: reason })
+  return { ok: true, result: { sentTo: to.length } }
+}
+
+function gasUpdateRequestText_(name, st) {
+  return {
+    subject: '[Ohsumi] ' + name + ': 団体の GAS の更新のお願い',
+    body: name + ' ご担当者さま\n\n' +
+      'Ohsumi の団体の GAS(団体のスプレッドシートの Apps Script)を、新しい版に更新してください。\n\n' +
+      '今の版: ' + (st.current || '不明') + '\n' +
+      '最新の版: ' + (st.latest || '—') + '\n' +
+      (st.minimum && st.versionState === 'updateRequired' ? 'この版より古い GAS は、更新が要ります: ' + st.minimum + '\n' : '') +
+      (st.security ? '新しい版には、安全の修正が含まれます。お早めに更新してください。\n' : '') +
+      '\n更新の手順:\n' +
+      '1. Ohsumi のリポジトリの gas/Code.gs の内容を、Apps Script エディタに貼り替えて保存する\n' +
+      '2. 「デプロイ」→「デプロイを管理」→ ウェブアプリの編集(鉛筆)→「バージョン: 新規」で更新する(URL は変わりません)\n' +
+      '3. エディタで setupOhsumi を実行する\n\n' +
+      '詳しくは gas/README.md の「2. Apps Script のデプロイ」をご覧ください。ご不明な点は FSIF にお問い合わせください。',
+  }
 }
 
 // checkIn で伝えられたメールの上限の状態を、Orgs の列の値にする。
@@ -1393,7 +1616,7 @@ function parseSiteOrigins_(raw) {
 }
 
 function siteOrigins_() {
-  return parseSiteOrigins_(PropertiesService.getScriptProperties().getProperty('SITE_ORIGINS'))
+  return parseSiteOrigins_(registryProps_().SITE_ORIGINS)
 }
 
 // ---- 管理画面のセッションの鍵 ----

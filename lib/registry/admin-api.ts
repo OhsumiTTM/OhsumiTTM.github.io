@@ -56,6 +56,43 @@ export interface OrgSummary {
   gasVersion: string
   // メールの1日の上限(団体の GAS が checkIn で伝えたもの。古いレジストリでは無い)
   mail?: OrgMailSummary
+  // 団体の GAS の版の判定(古いレジストリでは無い)
+  gasStatus?: GasStatus
+}
+
+// 判定: latest 最新 / outdated 古い / updateRequired 更新が要る / noCheck 24時間以上確認が無い
+export type GasJudgement = 'latest' | 'outdated' | 'updateRequired' | 'noCheck'
+export const GAS_JUDGEMENT_LABELS: Record<GasJudgement, string> = {
+  latest: '最新',
+  outdated: '古い',
+  updateRequired: '更新が要る',
+  noCheck: '24時間以上確認が無い',
+}
+
+export interface GasStatus {
+  current: string
+  latest: string
+  // 印(安全の修正・更新が要る)の付いた一番新しい版
+  minimum: string
+  // 今の版より新しい「安全の修正」の版がある
+  security: boolean
+  versionState: 'latest' | 'outdated' | 'updateRequired'
+  noCheck: boolean
+  judgement: GasJudgement
+}
+
+export interface GasVersionEntry {
+  version: string
+  security: boolean
+  required: boolean
+  note: string
+  updatedAt: string
+  updatedBy: string
+}
+
+/** 「更新が要る団体だけ」の絞り込み(24時間以上確認が無くても、最後に伝えられた版で更新が要るものを含む) */
+export function needsGasUpdate(org: Pick<OrgSummary, 'gasStatus'>): boolean {
+  return org.gasStatus?.versionState === 'updateRequired'
 }
 
 // reached: 最後に伝えられた日に上限に達した / low: 残りが少ない / ok / unknown: 伝えられていない
@@ -119,6 +156,8 @@ export interface Overview {
   codes: CodeSummary[]
   audit: AuditEntry[]
   codeTtlDays: number
+  // 団体の GAS の版の一覧(新しい順。古いレジストリでは無い)
+  gasVersions?: GasVersionEntry[]
 }
 
 export interface IssuedCode {
@@ -258,6 +297,16 @@ export function suspendNow(session: AdminSession, orgId: string, reason: string)
 /** 団体のプランを記録する。送り直さない */
 export function setOrgPlan(session: AdminSession, orgId: string, plan: Plan, reason: string): Promise<OrgSummary> {
   return callRegistry<OrgSummary>('setOrgPlan', { session: session.token, orgId, plan, reason })
+}
+
+/** 団体の GAS の版の印(安全の修正・更新が要る)を付け直す。送り直さない */
+export function setGasVersionMarks(session: AdminSession, version: string, marks: { security: boolean; required: boolean; note: string }, reason: string): Promise<{ versions: GasVersionEntry[] }> {
+  return callRegistry<{ versions: GasVersionEntry[] }>('setGasVersionMarks', { session: session.token, version, ...marks, reason })
+}
+
+/** 団体の担当者に、GAS の更新をお願いするメールを送る(同じ団体には24時間に1回まで)。送り直さない */
+export function requestGasUpdate(session: AdminSession, orgId: string, reason: string): Promise<{ sentTo: number }> {
+  return callRegistry<{ sentTo: number }>('requestGasUpdate', { session: session.token, orgId, reason })
 }
 
 /** 停止の予定を取り消す・停止を解除する。送り直さない */
