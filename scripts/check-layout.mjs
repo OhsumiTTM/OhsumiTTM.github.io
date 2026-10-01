@@ -439,8 +439,8 @@ async function run({ build = true } = {}) {
         ] }
         // FSIF に送る集計値(プレビューと履歴)
         case 'getMetricsStatus': return { plan: 'cosmo_base', mandatory: false, defaultOn: true, enabled: true, slot: { dow: 3, hour: 14 },
-          nextAt: '2026-10-07T05:00:00.000Z', definitionsVersion: 1,
-          preview: { version: 1, members: 42, active_7d: 30, active_30d: 38, logins_7d: 120, opens_7d: 900, writes_7d: 450, tasks: 640, tasks_open: 80, tasks_done: 560, tasks_overdue: 7, tasks_created_7d: 25, tasks_completed_7d: 31, projects: 12, errors_7d: 2 },
+          nextAt: '2026-10-07T05:00:00.000Z', definitionsVersion: 2,
+          preview: { version: 2, members: 42, active_7d: 30, active_30d: 38, logins_7d: 120, opens_7d: 900, writes_7d: 450, tasks: 640, tasks_open: 80, tasks_done: 560, tasks_overdue: 7, tasks_created_7d: 25, tasks_completed_7d: 31, projects: 12, errors_7d: 2, members_logged_in: 40, comments_7d: 210, reviews_approved_7d: 18, tasks_overdue_days_avg: 6, skill_points_total: 123456, daily_reports_7d: 95, one_on_ones_30d: 14, expenses_7d: 9, form_submissions_7d: 22, applications_rejected_30d: 3 },
           history: [{ period: '2026-09-28', at: '2026-09-30T05:00:00.000Z', ok: true, error: '', attempt: 1 },
             { period: '2026-09-21', at: '2026-09-23T05:00:00.000Z', ok: false, error: 'レジストリに届きませんでした(とても長いエラーの文がここに入っても、画面の幅からはみ出さないことを確かめます)', attempt: 2 }] }
         // 利用の状況(日ごとの回数・多い操作・エラー)
