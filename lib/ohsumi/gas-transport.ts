@@ -98,6 +98,8 @@ export const READ_ACTIONS = new Set([
   'getOpsStatus',
   // 利用の集計とエラーの件数(代表だけ)
   'getUsageStatus',
+  // FSIF に送る集計値の状態・プレビュー・送信の履歴(代表だけ)
+  'getMetricsStatus',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',

@@ -193,7 +193,7 @@ function LocaleSyncWatcher() {
 }
 
 function Router() {
-  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, remoteRestricted, loadError, retryLoad, refreshing, dataReady, sessionResuming } =
+  const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, remoteRestricted, loadError, retryLoad, refreshing, dataReady, sessionResuming, metricsSharingNotice } =
     useOhsumi()
   const { screen } = useNav()
   const { openTaskId, closeTask } = useTaskDrawer()
@@ -264,6 +264,9 @@ function Router() {
         {screen.name === 'learning' && <LearningContentScreen />}
       </div>
       <footer className="border-t border-border px-4 py-4">
+        {metricsSharingNotice && (
+          <p className="mb-2 text-center text-xs break-words text-muted-foreground" data-metrics-notice>{t('metrics.memberNotice')}</p>
+        )}
         <LegalLinks />
       </footer>
       <TaskDetailDrawer taskId={openTaskId} onClose={closeTask} />

@@ -110,7 +110,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -363,6 +363,12 @@ async function run({ build = true } = {}) {
               { id: 'm1', name: 'とても長い名前のメンバーさん'.repeat(2), length: 47210 }, { id: 'm2', name: '', length: 41000 }] },
             { sheet: 'Tasks', field: 'comments_json', label: 'コメント', count: 1, items: [{ id: 't1', name: 'コメントが多いタスク', length: 40500 }] },
           ] } }
+        // FSIF に送る集計値(プレビューと履歴)
+        case 'getMetricsStatus': return { plan: 'cosmo_base', mandatory: false, defaultOn: true, enabled: true, slot: { dow: 3, hour: 14 },
+          nextAt: '2026-10-07T05:00:00.000Z', definitionsVersion: 1,
+          preview: { version: 1, members: 42, active_7d: 30, active_30d: 38, logins_7d: 120, opens_7d: 900, writes_7d: 450, tasks: 640, tasks_open: 80, tasks_done: 560, tasks_overdue: 7, tasks_created_7d: 25, tasks_completed_7d: 31, projects: 12, errors_7d: 2 },
+          history: [{ period: '2026-09-28', at: '2026-09-30T05:00:00.000Z', ok: true, error: '', attempt: 1 },
+            { period: '2026-09-21', at: '2026-09-23T05:00:00.000Z', ok: false, error: 'レジストリに届きませんでした(とても長いエラーの文がここに入っても、画面の幅からはみ出さないことを確かめます)', attempt: 2 }] }
         // 利用の状況(日ごとの回数・多い操作・エラー)
         case 'getUsageStatus': return {
           days: Array.from({ length: 14 }, (_, i) => ({ date: '2026-09-' + String(18 + i).padStart(2, '0'), login: i, open: i * 3, writes: i * 5 })),
@@ -909,6 +915,11 @@ async function run({ build = true } = {}) {
             const usage = await evaluate(`document.querySelector('[data-usage-panel]')?.textContent ?? ''`)
             for (const want of ['利用の状況', '直近7日: ログイン 70 回・画面の読み込み 210 回・書き込み 350 回', 'updateTaskStatus', '直近7日のエラー: 4 件', 'conflict 3']) {
               if (!usage.includes(want)) throw new Error('利用の状況に「' + want + '」が出ません: ' + usage)
+            }
+            // 同じ画面の「FSIF に送る集計値」: プランと選べるか・次に送る内容・履歴
+            const metrics = await evaluate(`document.querySelector('[data-metrics-panel]')?.textContent ?? ''`)
+            for (const want of ['FSIF に送る集計値', 'Cosmo Baseプラン', '送るかを選べます(初期値は送る)', '今は送っています', 'メンバーの人数', '42', '2026-09-28 の週の分を送りました', '2 回目']) {
+              if (!metrics.includes(want)) throw new Error('FSIF に送る集計値に「' + want + '」が出ません: ' + metrics)
             }
             const text = await evaluate(`document.querySelector('[data-backup-preview]')?.textContent ?? ''`)
             if (!text.includes('Tasks') || !text.includes('12') || !text.includes('10')) throw new Error('戻す前の件数の差が出ません: ' + text)
