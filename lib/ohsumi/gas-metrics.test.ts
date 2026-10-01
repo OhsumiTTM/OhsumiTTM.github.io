@@ -3,6 +3,8 @@
 //   - 送る曜日と時刻は団体ID から決める。失敗したら時間を置いて送り直す
 //   - 代表は管理画面で、次に送る内容(プレビュー)と送信の履歴を見る。メンバーにも送っていることが分かる(Settings)
 import { createHmac } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CODE_GS, guardHarness } from './gas-guard-harness'
 
@@ -107,12 +109,60 @@ describe('代表の管理画面', () => {
     const h = org('ohsumi')
     const res = h.post({ action: 'getMetricsStatus', sessionToken: 'm-top' })
     expect(res.ok, res.error).toBe(true)
-    expect(res.result).toMatchObject({ plan: 'ohsumi', mandatory: true, enabled: true, definitionsVersion: 1 })
-    expect(res.result.preview).toMatchObject({ version: 1, members: 5, tasks: 3, projects: 1 })
+    expect(res.result).toMatchObject({ plan: 'ohsumi', mandatory: true, enabled: true, definitionsVersion: 2 })
+    expect(res.result.preview).toMatchObject({ version: 2, members: 5, tasks: 3, projects: 1 })
     expect(Object.values(res.result.preview).every((v) => typeof v === 'number')).toBe(true)
     expect(JSON.stringify(res.result.preview)).not.toMatch(/@|代表|タスク1/)
     expect(res.result.nextAt).toMatch(/^\d{4}-/)
     expect(h.post({ action: 'getMetricsStatus', sessionToken: 'm-lead' })).toMatchObject({ ok: false, forbidden: true })
+  })
+})
+
+describe('版 2 の指標(PR Y)', () => {
+  it('コメント・確認の承認・期限超過の日数・ポイント・日報・1on1・申請・差し戻し・ログイン済みの人数を、個人を特定しない数で数える', () => {
+    const h = org('ohsumi')
+    const now = Date.now()
+    const ago = (days: number) => new Date(now - days * 86400000).toISOString()
+    const day = (days: number) => ago(days).slice(0, 10)
+    const set = (sheet: string, rowIndex: number, fields: Record<string, unknown>) => {
+      const rows = h.sheets[sheet].rows
+      for (const [k, v] of Object.entries(fields)) {
+        let col = (rows[0] as string[]).indexOf(k)
+        if (col < 0) { (rows[0] as string[]).push(k); col = rows[0].length - 1 }
+        while (rows[rowIndex].length <= col) rows[rowIndex].push('')
+        rows[rowIndex][col] = v as never
+      }
+    }
+    // タスク: コメント(直近2件・古い1件)・確認の承認(直近1件)・期限を10日と4日過ぎた未完了のタスク
+    set('Tasks', 1, { comments_json: JSON.stringify([{ id: 'c1', at: ago(1) }, { id: 'c2', at: ago(2) }, { id: 'c3', at: ago(20) }]), review_approvals_json: JSON.stringify([{ memberId: 'm1', at: ago(1) }]), status: 'todo', due_date: day(10) })
+    set('Tasks', 2, { status: 'todo', due_date: day(4) })
+    // メンバー: ポイント(120 + 30)・1on1(両方の記録に入った同じ ID は1回)
+    set('Members', 1, { skill_points_json: JSON.stringify({ デザイン: 120 }), one_on_ones_json: JSON.stringify([{ id: 'o1', date: day(3) }, { id: 'o0', date: day(90) }]), last_login: ago(1) })
+    set('Members', 2, { skill_points_json: JSON.stringify({ 企画: 30, 壊れた値: 'x' }), one_on_ones_json: JSON.stringify([{ id: 'o1', date: day(3) }]) })
+    h.addSheet('DailyReports', [['id', 'member_id', 'type', 'report_date', 'done_text', 'todo_text', 'issues_text', 'created_at'], ['d1', 'm1', 'daily', day(1), '', '', '', ago(1)], ['d2', 'm1', 'daily', day(9), '', '', '', ago(9)]])
+    h.addSheet('Expenses', [['id', 'status', 'created_at'], ['e1', 'pending', ago(1)], ['e2', 'rejected', ago(10)], ['e3', 'rejected', ago(40)]])
+    h.addSheet('FormSubmissions', [['id', 'status', 'created_at'], ['f1', 'rejected', ago(2)]])
+    h.cache.clear()
+    const m = plain(call(h, 'metricsSnapshot_', now)) as Record<string, number>
+    expect(m).toMatchObject({
+      version: 2, comments_7d: 2, reviews_approved_7d: 1, tasks_overdue_days_avg: 7, skill_points_total: 150, daily_reports_7d: 1,
+      one_on_ones_30d: 1, expenses_7d: 1, form_submissions_7d: 1, applications_rejected_30d: 2,
+    })
+    expect(m.members_logged_in).toBeGreaterThanOrEqual(1)
+    expect(m.members_logged_in).toBeLessThanOrEqual(m.members)
+    expect(Object.values(m).every((v) => Number.isInteger(v) && v >= 0)).toBe(true)
+  })
+
+  it('送る指標は、すべてレジストリが受け付ける(知らない項目として捨てられない)。画面の表示名もある', () => {
+    const reg = readFileSync(join(__dirname, '..', '..', 'registry', 'Code.gs'), 'utf8')
+    const keys = [...(/var METRIC_KEYS = \[([\s\S]*?)\]/.exec(reg)![1].matchAll(/'(\w+)'/g))].map((x) => x[1])
+    const ja = readFileSync(join(__dirname, 'i18n', 'ja.ts'), 'utf8')
+    const m = plain(call(org('ohsumi'), 'metricsSnapshot_', Date.now())) as Record<string, number>
+    for (const k of Object.keys(m).filter((k) => k !== 'version')) {
+      expect(keys, k).toContain(k)
+      expect(ja, k).toContain(`'metrics.key.${k}'`)
+    }
+    expect(keys.length).toBe(Object.keys(m).length - 1)
   })
 })
 

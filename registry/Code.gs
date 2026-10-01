@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.02-4'
+var REGISTRY_VERSION = '2026.10.02-5'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1507,7 +1507,10 @@ function checkIn_(body, nowMs) {
 //   返事: { ok: true, result: { period, stored: 'new' | 'updated' } }
 // 同じ団体・同じ期間は1行として扱う(送り直しは上書きする)。数は 0 以上の整数だけを受け付け、知らない項目は捨てる
 var METRIC_KEYS = ['members', 'active_7d', 'active_30d', 'logins_7d', 'opens_7d', 'writes_7d', 'tasks', 'tasks_open', 'tasks_done',
-  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d']
+  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d',
+  // 版 2(団体の GAS の METRICS_VERSION = 2)
+  'members_logged_in', 'comments_7d', 'reviews_approved_7d', 'tasks_overdue_days_avg', 'skill_points_total', 'daily_reports_7d',
+  'one_on_ones_30d', 'expenses_7d', 'form_submissions_7d', 'applications_rejected_30d']
 var METRICS_INVALID = '集計値を受け付けられませんでした。'
 
 // 期間の列の値(シートが日付に変えた時も YYYY-MM-DD にそろえる)
@@ -2561,7 +2564,8 @@ function orgKpis_(nowMs) {
     if (!m) return
     reporting++
     if (latest[id].date > period) period = latest[id].date
-    METRIC_KEYS.forEach(function (k) { if (typeof m[k] === 'number') totals[k] = (totals[k] || 0) + m[k] })
+    // 平均(_avg)は団体をまたいで足しても意味が無いので、合計に入れない
+    METRIC_KEYS.forEach(function (k) { if (typeof m[k] === 'number' && !/_avg$/.test(k)) totals[k] = (totals[k] || 0) + m[k] })
   })
   return { activeOrgs: active, byPlan: byPlan, demoOrgs: Object.keys(demoIds).length, metrics: { reportingOrgs: reporting, latestPeriod: period, totals: totals } }
 }
@@ -2577,6 +2581,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.02-3', security: false, required: false, note: '定量データの指標を足す(定義の版 2。コメント・日報・1on1・申請など)(PR Y)' },
   { version: '2026.10.02-2', security: false, required: false, note: '回数の上限・しきい値をレジストリから配り、安全な範囲に収めて使う(PR X)' },
   { version: '2026.10.02-1', security: false, required: false, note: 'レジストリから機能を止めるスイッチ(止めた機能の書き込みを断る。ログイン・読み取りは止めない)(PR W)' },
   { version: '2026.10.01-13', security: false, required: false, note: '代表の管理画面から診断情報を FSIF に送り、受付番号を出す(PR Q)' },

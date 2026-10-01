@@ -14,7 +14,10 @@ import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { remoteApi, type MetricsStatus } from '@/lib/ohsumi/remote'
 
 const METRIC_ORDER = ['members', 'active_7d', 'active_30d', 'logins_7d', 'opens_7d', 'writes_7d', 'tasks', 'tasks_open', 'tasks_done',
-  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d'] as const
+  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d',
+  // 版 2
+  'members_logged_in', 'comments_7d', 'reviews_approved_7d', 'tasks_overdue_days_avg', 'skill_points_total', 'daily_reports_7d',
+  'one_on_ones_30d', 'expenses_7d', 'form_submissions_7d', 'applications_rejected_30d'] as const
 const PLAN_KEYS: Record<MetricsStatus['plan'], TranslationKey> = {
   '': 'metrics.plan.unset',
   cosmo_base: 'metrics.plan.cosmo_base',
