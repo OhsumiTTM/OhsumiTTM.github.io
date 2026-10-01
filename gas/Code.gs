@@ -853,6 +853,8 @@ function doPost(e) {
   if (state.contract && state.contract.phase !== 'none' && out) out.contract = contractForClient_(state.contract)
   // 通知の回数の上限を超えて、送らなかった通知があった(操作そのものは済んでいる)
   if (_notifyLimited && out) out.notifyLimited = true
+  // 利用の集計(日ごとの回数だけ。誰の操作かは残さない)
+  noteRequestUsage_(state.body, out)
   // 1つのセルの上限の8割を超えた記録を書いた(書いた人に知らせる。初めて超えた記録は代表にも知らせる)
   if (_longCells.length && out) {
     out.longRecords = _longCells.map(function (c) { return { sheet: c.sheet, id: c.id, name: c.name, field: c.field, length: c.length, max: CELL_MAX_CHARS } })
@@ -919,6 +921,8 @@ function regenerateInitialSetupCodeFromMenu() {
 // Set up a time-based trigger calling this function every hour.
 function sendBatchNotifications() {
   try {
+    // 利用の集計(キャッシュの1時間ごとの回数)を、シートに移す
+    try { flushUsage_(Date.now()) } catch (usageErr) { console.warn('利用の集計を移せませんでした: ' + ((usageErr && usageErr.message) || usageErr)) }
     sendBatchNotificationsUnrecorded_()
   } catch (e) {
     recordJobRun_('hourly', false, e)
@@ -2558,7 +2562,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-6'
+var OHSUMI_GAS_VERSION = '2026.10.01-7'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2815,6 +2819,8 @@ var READ_ONLY_ACTIONS = [
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
+  // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)
+  'getUsageStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -3741,7 +3747,7 @@ function authorizeAction_(acting, action, body) {
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
-  var opsActions = ['getOpsStatus', 'recheckSharing']
+  var opsActions = ['getOpsStatus', 'recheckSharing', 'getUsageStatus']
   if (opsActions.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
@@ -4077,6 +4083,7 @@ function authorizeAction_(acting, action, body) {
     'revokeMySessions',        // 全端末でログアウト(常に acting.id が対象、body の memberId は見ない)
     'getInviteMailStatus',     // ほかの端末で開く: 本人あてのメールを送れるか(常に acting.id が対象)
     'sendInviteLinkToMe',      // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は受け取らない)
+    'reportClientError',       // 画面のエラーの記録(日時・操作の名前・エラーの種類だけ。1人1時間の上限あり)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -4400,6 +4407,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
   'getOpsStatus', 'recheckSharing',
+  // 利用の集計とエラーの件数(読むだけ)・画面のエラーの記録(エラーの記録のシートに1行足すだけ)
+  'getUsageStatus', 'reportClientError',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -4457,6 +4466,7 @@ function handlePost_(e, state) {
   try {
     startRequestTiming_()
     var body = JSON.parse(e.postData.contents)
+    if (state) state.body = body
     // ping: 何もせずにすぐ返す(認証・スクリプトプロパティ・シートを読まない)。
     // 画面の往復時間と GAS の中の時間(timing.totalMs)を比べて、遅さが Google 側・回線側か切り分ける
     if (body.action === 'ping') return ({ ok: true, result: { pong: true } })
@@ -4611,6 +4621,7 @@ function handlePost_(e, state) {
         noteTiming_('lockMs', Date.now() - lockStart)
       } catch (lockErr) {
         noteTiming_('lockMs', Date.now() - lockStart)
+        appendErrorLog_('gas', body.action, 'lockBusy')
         // まだ何も処理していないので、フロントは少し待ってから送り直してよい
         return ({ ok: false, error: '混み合っています。少し待って再度お試しください。', retryLater: true })
       }
@@ -4672,12 +4683,13 @@ function handlePost_(e, state) {
     // が投げるものや、コード内の想定外のバグ)は詳細をLoggerに記録し、
     // フロントには定型メッセージだけを返す(スタックトレース等の内部情報や
     // リクエストの中身・トークンは返さない/ログにも出さない)。
-    return remember_(replayKey, errorResponse_(err))
+    return remember_(replayKey, errorResponse_(err, body && body.action))
   }
 }
 
 // 失敗の応答。1つのセルの上限を超えて断った時は、画面が書いた文章を残せるよう cellTooLong を付ける
-function errorResponse_(err) {
+function errorResponse_(err, action) {
+  logGasError_(err, action)
   var out = { ok: false, error: toErrorMessage_(err) }
   if (err && err.cellTooLong) out.cellTooLong = err.cellTooLong
   if (err && err.conflict) out.conflict = err.conflict
@@ -4891,7 +4903,7 @@ function runBatch_(ops, acting, denied) {
       try {
         results[i] = { ok: true, result: runWriteAction_(ops[i], acting) }
       } catch (err) {
-        results[i] = errorResponse_(err)
+        results[i] = errorResponse_(err, ops[i].action)
       }
       break
     }
@@ -5361,6 +5373,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'deleteOrphanEmails':
       result = deleteOrphanEmails_(body.ids, actingMember.id)
+      break
+    case 'getUsageStatus':
+      result = usageStatus_(Date.now())
+      break
+    case 'reportClientError':
+      result = { recorded: reportClientError_(body, actingMember.id) }
       break
     case 'getOpsStatus':
       result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_() }
@@ -6041,6 +6059,8 @@ var RATE_LIMITS = {
   resultNotify: { limit: 10, windowSec: 3600 },
   // 翻訳する文の数(Google の翻訳の1日の回数は、団体全体で分け合うため)
   translate: { limit: 500, windowSec: 3600 },
+  // 画面のエラーの記録(1人1時間)
+  clientError: { limit: 30, windowSec: 3600 },
 }
 var _requestActorId = null
 var _notifyLimited = false
@@ -13880,6 +13900,7 @@ function writeJobState_(s) {
 }
 
 function recordJobRun_(kind, ok, err) {
+  if (!ok) appendErrorLog_('job', kind === 'daily' ? 'dailyMaintenance' : 'sendBatchNotifications', errorKind_(err))
   var s = readJobState_()
   var now = new Date().toISOString()
   if (ok) {
@@ -14165,4 +14186,209 @@ function readPerformanceVerdict_(m) {
     lines.push('  上限の8割を超えた記録はありません')
   }
   return lines
+}
+
+// ---- 利用の集計とエラーの記録 ----
+//
+// 利用の集計(UsageDaily シート: date, kind, count): ログイン(login)・画面の読み込み(open)・書き込みの操作(操作の名前)の、
+// 日ごとの回数だけを残す。誰の操作かは残さない。団体の外には送らない。
+//   - リクエストごとに、キャッシュの1時間ごとの箱(usage:yyyy-MM-dd-HH)に足し、毎時の処理で前の時間の箱をシートに移す
+//   - 同時に来た読み込みは数え漏れることがある(おおよその回数)
+// エラーの記録(ErrorLog シート: at, source, action, kind): GAS と画面のエラーを、日時・操作の名前・エラーの種類だけ、
+// 直近 ERROR_LOG_KEEP 件まで残す。リクエストの中身・エラーの文・個人情報は残さない。
+var USAGE_SHEET = 'UsageDaily'
+var USAGE_HEADERS = ['date', 'kind', 'count']
+var USAGE_KEEP_DAYS = 400
+var ERROR_LOG_SHEET = 'ErrorLog'
+var ERROR_LOG_HEADERS = ['at', 'source', 'action', 'kind']
+var ERROR_LOG_KEEP = 500
+var USAGE_NOT_COUNTED = ['ping', 'getLoginConfig', 'reportClientError', 'getUsageStatus']
+
+function usageBucketKey_(ms) {
+  return 'usage:' + Utilities.formatDate(new Date(ms), Session.getScriptTimeZone(), 'yyyy-MM-dd-HH')
+}
+
+// このリクエストで数える種類(ログイン・読み込み・成功した書き込みの操作)。送り直しの応答は数えない
+function usageKindsOf_(body, out) {
+  if (!body || !out || out.replayed || !out.ok) return []
+  var a = String(body.action || '')
+  if (USAGE_NOT_COUNTED.indexOf(a) >= 0) return []
+  if (a === 'exchangeIdToken') return out.result && out.result.memberId ? ['login'] : []
+  if (a === 'getInitialData') return ['open']
+  if (a === 'batch') {
+    var results = (out.result && out.result.results) || []
+    return (body.ops || []).filter(function (op, i) { return op && results[i] && results[i].ok }).map(function (op) { return String(op.action) })
+  }
+  if (READ_ONLY_ACTIONS.indexOf(a) >= 0 || LOCK_EXEMPT_ACTIONS.indexOf(a) >= 0) return []
+  return [a]
+}
+
+function noteRequestUsage_(body, out) {
+  try {
+    var kinds = usageKindsOf_(body, out)
+    if (!kinds.length) return
+    var cache = CacheService.getScriptCache()
+    var key = usageBucketKey_(Date.now())
+    var counts = {}
+    try { counts = JSON.parse(cache.get(key) || '{}') || {} } catch (e) { counts = {} }
+    kinds.forEach(function (k) { counts[k] = (Number(counts[k]) || 0) + 1 })
+    cache.put(key, JSON.stringify(counts), 21600)
+  } catch (e) {
+    // 数えられなくても応答は返す
+  }
+}
+
+// 前の時間(今の時間より前、6時間以内)の箱を読む。{ 'yyyy-MM-dd': { kind: n } }
+function pendingUsage_(nowMs, includeCurrent) {
+  var keys = []
+  for (var h = includeCurrent ? 0 : 1; h <= 6; h++) keys.push(usageBucketKey_(nowMs - h * 3600 * 1000))
+  var got = CacheService.getScriptCache().getAll(keys) || {}
+  var byDate = {}
+  Object.keys(got).forEach(function (key) {
+    var date = key.slice('usage:'.length, 'usage:'.length + 10)
+    var counts = {}
+    try { counts = JSON.parse(got[key] || '{}') || {} } catch (e) { counts = {} }
+    var d = byDate[date] || (byDate[date] = {})
+    Object.keys(counts).forEach(function (k) { d[k] = (d[k] || 0) + (Number(counts[k]) || 0) })
+  })
+  return { keys: Object.keys(got), byDate: byDate }
+}
+
+function readUsageSheet_() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(USAGE_SHEET)
+  var map = {}
+  if (!sheet || sheet.getLastRow() < 2) return map
+  var values = sheet.getDataRange().getValues()
+  var headers = values[0].map(String)
+  var dc = headers.indexOf('date'), kc = headers.indexOf('kind'), cc = headers.indexOf('count')
+  for (var i = 1; i < values.length; i++) {
+    var date = values[i][dc] instanceof Date ? Utilities.formatDate(values[i][dc], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(values[i][dc])
+    var d = map[date] || (map[date] = {})
+    d[String(values[i][kc])] = (d[String(values[i][kc])] || 0) + (Number(values[i][cc]) || 0)
+  }
+  return map
+}
+
+// 前の時間の箱をシートに移す(毎時の処理)。シートは日付の新しい順に書き直し、USAGE_KEEP_DAYS より古い日は消す
+function flushUsage_(nowMs) {
+  var pending = pendingUsage_(nowMs, false)
+  if (!pending.keys.length) return 0
+  var map = readUsageSheet_()
+  Object.keys(pending.byDate).forEach(function (date) {
+    var d = map[date] || (map[date] = {})
+    Object.keys(pending.byDate[date]).forEach(function (k) { d[k] = (d[k] || 0) + pending.byDate[date][k] })
+  })
+  var oldest = Utilities.formatDate(new Date(nowMs - USAGE_KEEP_DAYS * 24 * 3600 * 1000), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  var rows = []
+  Object.keys(map).sort().reverse().forEach(function (date) {
+    if (date < oldest) return
+    Object.keys(map[date]).sort().forEach(function (k) { rows.push([date, k, map[date][k]]) })
+  })
+  var sheet = getOrCreateSheet_(USAGE_SHEET, USAGE_HEADERS)
+  sheet.clearContents()
+  sheet.getRange(1, 1, 1, USAGE_HEADERS.length).setValues([USAGE_HEADERS])
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, 1).setNumberFormat('@')
+    sheet.getRange(2, 1, rows.length, USAGE_HEADERS.length).setValues(rows)
+  }
+  CacheService.getScriptCache().removeAll(pending.keys)
+  return rows.length
+}
+
+// エラーの種類(文は残さない)。業務上の断り(userError_)は、競合・長すぎるなどの目印のあるものだけ
+function errorKind_(err) {
+  if (!err) return 'unknown'
+  if (err.conflict) return 'conflict'
+  if (err.cellTooLong) return 'cellTooLong'
+  var quota = quotaKind_(err)
+  if (quota) return 'quota:' + quota
+  if (err.isUserError) return ''
+  return 'unexpected:' + String(err.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40)
+}
+
+function logGasError_(err, action) {
+  var kind = errorKind_(err)
+  if (kind) appendErrorLog_('gas', action, kind)
+}
+
+function appendErrorLog_(source, action, kind) {
+  try {
+    var safeAction = /^[A-Za-z][A-Za-z0-9_]{0,60}$/.test(String(action || '')) ? String(action) : ''
+    var safeKind = String(kind || '').replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 80) || 'unknown'
+    var sheet = getOrCreateSheet_(ERROR_LOG_SHEET, ERROR_LOG_HEADERS)
+    var values = { at: new Date().toISOString(), source: String(source), action: safeAction, kind: safeKind }
+    var headers = headerRow_(sheet)
+    sheet.appendRow(headers.map(function (h) { return values[h] === undefined ? '' : values[h] }))
+    var extra = sheet.getLastRow() - 1 - ERROR_LOG_KEEP
+    // 多くなったら、古い行をまとめて消す(毎回は消さない)
+    if (extra >= 100) sheet.deleteRows(2, extra)
+  } catch (e) {
+    // 記録できなくても、元の処理は続ける
+  }
+}
+
+// 画面のエラーの記録。種類と操作の名前だけを受け取る(文・中身は受け取らない)。1人1時間 RATE_LIMITS.clientError 件まで
+function reportClientError_(body, actorId) {
+  var kind = String((body && body.kind) || '')
+  if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(kind)) throw userError_('エラーの種類の形式が不正です。')
+  if (!takeRateLimit_('clientError', actorId, 1)) return false
+  appendErrorLog_('client', body.errorAction, kind)
+  return true
+}
+
+// 代表の管理画面に出す、利用の集計(直近14日の毎日と、30日の操作の上位)とエラーの件数
+function usageStatus_(nowMs) {
+  var map = readUsageSheet_()
+  var pending = pendingUsage_(nowMs, true).byDate
+  Object.keys(pending).forEach(function (date) {
+    var d = map[date] || (map[date] = {})
+    Object.keys(pending[date]).forEach(function (k) { d[k] = (d[k] || 0) + pending[date][k] })
+  })
+  var tz = Session.getScriptTimeZone()
+  var dayOf = function (back) { return Utilities.formatDate(new Date(nowMs - back * 24 * 3600 * 1000), tz, 'yyyy-MM-dd') }
+  var days = []
+  for (var i = 13; i >= 0; i--) {
+    var date = dayOf(i)
+    var d = map[date] || {}
+    var writes = 0
+    Object.keys(d).forEach(function (k) { if (k !== 'login' && k !== 'open') writes += d[k] })
+    days.push({ date: date, login: d.login || 0, open: d.open || 0, writes: writes })
+  }
+  var since30 = dayOf(29)
+  var actions = {}
+  Object.keys(map).forEach(function (date) {
+    if (date < since30) return
+    Object.keys(map[date]).forEach(function (k) { if (k !== 'login' && k !== 'open') actions[k] = (actions[k] || 0) + map[date][k] })
+  })
+  var topActions = Object.keys(actions).map(function (k) { return { action: k, count: actions[k] } })
+    .sort(function (a, b) { return b.count - a.count }).slice(0, 10)
+  // エラー
+  var recent = []
+  var byKind = {}
+  var last7 = 0
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(ERROR_LOG_SHEET)
+  if (sheet && sheet.getLastRow() >= 2) {
+    var values = sheet.getDataRange().getValues()
+    var h = values[0].map(String)
+    var since7 = nowMs - 7 * 24 * 3600 * 1000
+    for (var r = values.length - 1; r >= 1; r--) {
+      var at = values[r][h.indexOf('at')]
+      var atIso = at instanceof Date ? at.toISOString() : String(at)
+      var row = { at: atIso, source: String(values[r][h.indexOf('source')]), action: String(values[r][h.indexOf('action')]), kind: String(values[r][h.indexOf('kind')]) }
+      if (recent.length < 20) recent.push(row)
+      if (Date.parse(atIso) >= since7) {
+        last7++
+        byKind[row.kind] = (byKind[row.kind] || 0) + 1
+      }
+    }
+  }
+  return {
+    days: days,
+    topActions: topActions,
+    errors: {
+      last7Days: last7,
+      byKind: Object.keys(byKind).map(function (k) { return { kind: k, count: byKind[k] } }).sort(function (a, b) { return b.count - a.count }),
+      recent: recent,
+    },
+  }
 }
