@@ -51,17 +51,18 @@ function main() {
     if (known && known.sha256 === hash && known.version === current) continue
     // 中身が変わった(または版を手で書き換えた)。版が前と同じ・日付の形でなければ、今日の版にする
     let version = current
-    if (!VERSION_PATTERN.test(current) || (known && known.version === current)) {
+    const bump = !VERSION_PATTERN.test(current) || (known && known.version === current)
+    if (bump) {
       version = nextVersion(known?.version ?? current)
       text = text.replace(lineOf(f.name), `var ${f.name} = '${version}'`)
       writeFileSync(file, text)
     }
     lock[f.path] = { version, sha256: hash }
     changed++
-    console.log(`${f.path}: ${current} → ${version}`)
+    console.log(bump ? `${f.path}: ${current} → ${version}` : `${f.path}: ${version} を記録しました(版はそのまま)`)
   }
   writeFileSync(lockFile, JSON.stringify(lock, null, 2) + '\n')
-  console.log(changed ? `${changed} 件の版を上げ、${LOCK_PATH} を書きました` : 'どのファイルも変わっていません')
+  console.log(changed ? `${changed} 件を ${LOCK_PATH} に書きました` : 'どのファイルも変わっていません')
 }
 
 if (process.argv[1] && import.meta.filename === process.argv[1]) main()
