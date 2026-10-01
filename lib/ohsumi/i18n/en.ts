@@ -515,6 +515,7 @@ export const en = {
   'app.loadFailed': 'Failed to load data',
   'app.loadFailedBanner': 'Failed to load data. The data shown may not be up to date.',
   'app.retryLoad': 'Try again',
+  'app.notifyLimited': 'Some notifications were not sent because the hourly limit was reached. Your change was saved.',
   'app.skillCertifiedToast': '{name} was certified in "{skill}"',
   'project.detail.notFound': 'Project not found.',
   'project.detail.ownerLabel': 'Owner:',

@@ -486,9 +486,9 @@ interface OhsumiContextValue extends OhsumiState {
     goals: { careerAspiration: string; desiredFutureRole: string; careerPlan: string },
   ) => void
   updateTrainingHistory: (memberId: string, entries: TrainingRecord[]) => void
-  notifyTrainingRequest: (memberId: string, trainingName: string) => void
+  notifyTrainingRequest: (memberId: string, trainingId: string) => void
   triggerOverdueReminders: () => Promise<void>
-  notifyTrainingDecision: (memberId: string, trainingName: string, approved: boolean) => void
+  notifyTrainingDecision: (memberId: string, trainingId: string) => void
   updateDevelopmentPlan: (memberId: string, entries: DevelopmentPlanEntry[]) => void
   updateOneOnOnes: (memberId: string, entries: OneOnOneRecord[]) => void
   updateDisplayName: (memberId: string, displayName: string) => void
@@ -3482,11 +3482,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   // 承認しない（却下） — 承認待ちタスクを削除し、登録者へメールで通知する。
-  // タスク名は削除前（クライアント側の状態がまだ残っている間）に渡す必要が
-  // あるため、removeTaskとは別に組み立てる
+  // 宛先(登録者)とタスク名は、GAS がシートのタスクから決める(rejectTask)
   const rejectTask = useCallback(
     (id: string, reason?: string) => {
-      const task = tasks.find((t) => t.id === id)
       locallyRejectedTaskIdsRef.current.add(id)
       setTasks((prev) =>
         prev
@@ -3497,12 +3495,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               : t,
           ),
       )
-      if (isRemoteConfigured) {
-        runRemote(remoteApi.removeTask(id))
-        if (task) runRemote(remoteApi.notifyTaskRejected(id, task.createdById, task.name, reason))
-      }
+      if (isRemoteConfigured) runRemote(remoteApi.rejectTask(id, reason))
     },
-    [tasks, runRemote],
+    [runRemote],
   )
 
   const addProject = useCallback(
@@ -3970,14 +3965,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // (追加/承認/却下) は career-tab.tsx から updateTrainingHistory を直接
   // 呼んで行い、こちらは best-effort のメール通知のみを追加で発火する
   const notifyTrainingRequest = useCallback(
-    (memberId: string, trainingName: string) => {
-      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingRequest(memberId, trainingName))
+    (memberId: string, trainingId: string) => {
+      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingRequest(memberId, trainingId))
     },
     [runRemote],
   )
   const notifyTrainingDecision = useCallback(
-    (memberId: string, trainingName: string, approved: boolean) => {
-      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingDecision(memberId, trainingName, approved))
+    (memberId: string, trainingId: string) => {
+      if (isRemoteConfigured) runRemote(remoteApi.notifyTrainingDecision(memberId, trainingId))
     },
     [runRemote],
   )
@@ -4541,12 +4536,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         prev.map((t) => {
           if (t.id !== id) return t
           const next = [...(t.comments ?? []), entry]
-          if (isRemoteConfigured) {
-            runRemote(remoteApi.updateComments(id, next))
-            if (mentionedIds.length > 0) {
-              runRemote(remoteApi.notifyMention(id, trimmed, mentionedIds))
-            }
-          }
+          // メンションの通知は、GAS が保存したコメントから宛先を決めて送る
+          if (isRemoteConfigured) runRemote(remoteApi.updateComments(id, next))
           return { ...t, comments: next }
         }),
       )

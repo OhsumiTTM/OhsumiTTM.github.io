@@ -153,8 +153,8 @@ export function CareerTab({
     info: { university: string; faculty: string; departmentName: string; gradeYear: string },
   ) => void
   updateTrainingHistory: (id: string, entries: TrainingRecord[]) => void
-  notifyTrainingRequest: (memberId: string, trainingName: string) => void
-  notifyTrainingDecision: (memberId: string, trainingName: string, approved: boolean) => void
+  notifyTrainingRequest: (memberId: string, trainingId: string) => void
+  notifyTrainingDecision: (memberId: string, trainingId: string) => void
   updateDevelopmentPlan: (id: string, entries: DevelopmentPlanEntry[]) => void
   updateOneOnOnes: (id: string, entries: OneOnOneRecord[]) => void
   currentUserId: string | null
@@ -1021,11 +1021,13 @@ function TrainingHistorySection({
     const n = name.trim()
     if (!n || !date) return
     const status: TrainingRecord['status'] = isAdmin ? 'approved' : 'pending'
+    const id = rid()
     onSave(member.id, [
       ...items,
-      { id: rid(), name: n, date, provider: provider.trim() || undefined, status },
+      { id, name: n, date, provider: provider.trim() || undefined, status },
     ])
-    if (!isAdmin) onRequest(member.id, n)
+    // 研修の名前・状態は、GAS が保存した記録(id)から読んで知らせる
+    if (!isAdmin) onRequest(member.id, id)
     setName('')
     setDate('')
     setProvider('')
@@ -1037,7 +1039,7 @@ function TrainingHistorySection({
       member.id,
       items.map((x) => (x.id === t.id ? { ...x, status: approved ? 'approved' : 'rejected' } : x)),
     )
-    onDecide(member.id, t.name, approved)
+    onDecide(member.id, t.id)
   }
 
   // LRN-007: 承認済み・開催日が過去のレコードについて、管理者が実際の

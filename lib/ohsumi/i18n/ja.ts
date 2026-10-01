@@ -515,6 +515,7 @@ export const ja = {
   'app.loadFailed': '読み込みに失敗しました',
   'app.loadFailedBanner': '読み込みに失敗しました。表示中のデータが最新でない可能性があります。',
   'app.retryLoad': 'もう一度試す',
+  'app.notifyLimited': '通知の回数の上限(1時間)に達したため、一部の通知を送りませんでした。操作は保存されています。',
   'app.skillCertifiedToast': '{name} さんのスキルに「{skill}」が認定されました',
   'project.detail.notFound': 'プロジェクトが見つかりません。',
   'project.detail.ownerLabel': '責任者:',

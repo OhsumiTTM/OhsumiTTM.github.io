@@ -793,6 +793,8 @@ function doPost(e) {
   // 画面が停止の予定・機能停止を表示できるように、停止の予定・停止中の時だけ状態を付ける
   // (付いていない成功の応答は、停止の予定が無いことを表す)
   if (state.contract && state.contract.phase !== 'none' && out) out.contract = contractForClient_(state.contract)
+  // 通知の回数の上限を超えて、送らなかった通知があった(操作そのものは済んでいる)
+  if (_notifyLimited && out) out.notifyLimited = true
   return jsonOutput_(out)
 }
 
@@ -2085,6 +2087,7 @@ function getActingMemberById_(memberId) {
   var roleCol = headers.indexOf('role')
   var projectIdsCol = headers.indexOf('project_ids')
   var overridesCol = headers.indexOf('permission_overrides_json')
+  var inactiveCol = headers.indexOf('inactive')
   if (idCol < 0) throw userError_('Membersシートの構造が不正です。')
   var data = sheet.getDataRange().getValues()
   for (var i = 1; i < data.length; i++) {
@@ -2098,6 +2101,7 @@ function getActingMemberById_(memberId) {
         role: String(data[i][roleCol] || ''),
         project_ids: String(data[i][projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean),
         permission_overrides: Array.isArray(overrides) ? overrides : [],
+        inactive: inactiveCol >= 0 && isInactiveValue_(data[i][inactiveCol]),
       }
     }
   }
@@ -2124,6 +2128,7 @@ function actingMemberFromTable_(table, memberId) {
   var roleCol = h.indexOf('role')
   var projectIdsCol = h.indexOf('project_ids')
   var overridesCol = h.indexOf('permission_overrides_json')
+  var inactiveCol = h.indexOf('inactive')
   for (var i = 0; i < table.rows.length; i++) {
     var row = table.rows[i]
     if (String(row[idCol]) !== String(memberId)) continue
@@ -2136,6 +2141,7 @@ function actingMemberFromTable_(table, memberId) {
       role: roleCol >= 0 ? String(row[roleCol] || '') : '',
       project_ids: projectIdsCol >= 0 ? String(row[projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) : [],
       permission_overrides: Array.isArray(overrides) ? overrides : [],
+      inactive: inactiveCol >= 0 && isInactiveValue_(row[inactiveCol]),
     }
   }
   return null
@@ -2179,6 +2185,22 @@ var _authSnapshotVersion = null
 // 操作するメンバーを引く。権限そのものを変える操作(SHEET_AUTH_ACTIONS)はシートから、
 // それ以外(読み取り・普通の書き込み)はスナップショットから(役職の設定もそこから)。
 // スナップショットに見つからない・読めない時はシートから
+// ---- 休止中のメンバー --------------------------------------------------------
+// 休止中(Members の inactive が TRUE)のメンバーは、ログインできず、発行済みのセッションも使えない。
+// 休止にした時は、そのメンバーのセッションを無効にする(updateMemberInactive)。シートを直接書き換えて
+// 休止にした時も、次のリクエストで断る(操作するメンバーを引く時に確かめる)。休止を解除すれば、またログインできる
+var INACTIVE_MEMBER_MESSAGE = 'このアカウントは休止中のため、ログインできません。代表に休止の解除を依頼してください。'
+
+function isInactiveValue_(v) {
+  return v === true || String(v || '').trim().toUpperCase() === 'TRUE'
+}
+
+// 休止中か(スナップショットの Members で確かめる。読めなければシート)
+function memberIsInactive_(memberId) {
+  var row = snapshotRowOrSheet_(SHEET_MEMBERS, memberId)
+  return !!row && isInactiveValue_(row.inactive)
+}
+
 function getActingMember_(memberId, action) {
   _authSnapshotVersion = null
   if (SNAPSHOT_AUTH_ACTIONS.indexOf(action) >= 0 || SHEET_AUTH_ACTIONS.indexOf(action) < 0) {
@@ -3016,6 +3038,8 @@ function exchangeIdToken_(body) {
   }
   // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスだけ返す
   if (!memberId) return { memberId: null, email: google.email }
+  // 休止中のメンバーはログインできない(休止を解除すれば、またログインできる)
+  if (memberIsInactive_(memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
   var data = getInitialDataForMember_(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
   data.session = timed_('sessionMs', function () { return issueSessionToken_(memberId, body.remember !== false, nowSec_()) })
@@ -3209,7 +3233,7 @@ var OVERRIDE_SCOPE_BY_ACTION = {
   approveTask: 'task', assignTask: 'task', updateTaskDetails: 'task', updateVisibility: 'task',
   updateReviewer: 'task', updateReviewers: 'task', removeTask: 'task', updatePriority: 'task',
   updateDifficulty: 'task', updateSchedule: 'task', updateDependsOn: 'task', setBlocker: 'task',
-  notifyTaskRejected: 'task',
+  rejectTask: 'task',
   updateProjectDetails: 'project', updateProjectOwner: 'project', updateProjectParent: 'project',
   updateProjectArchived: 'project', updateProjectMembers: 'project', notifyProjectHealth: 'project',
   updateProjectHealthRecord: 'project', updateProjectHealth: 'project',
@@ -3510,7 +3534,14 @@ function isActingFullAdmin_(acting) {
   return isFullAdminRoleRef_(getRoles_(), acting.role)
 }
 
+// 廃止した操作(画面が宛先・本文を送って通知させていたもの)。宛先と本文は GAS が保存したデータから決める:
+//   notifyMention → updateComments の中で、保存したコメントのメンションから通知する
+//   notifyTaskRejected → rejectTask(タスクを消し、シートのタスクの作成者・名前で通知する)
+var REMOVED_ACTIONS = ['notifyMention', 'notifyTaskRejected']
+var REMOVED_ACTION_MESSAGE = 'この操作は使えなくなりました。ページを読み込み直してください。'
+
 function authorizeAction_(acting, action, body) {
+  if (REMOVED_ACTIONS.indexOf(action) >= 0) throw userError_(REMOVED_ACTION_MESSAGE)
   var role = acting.role
   // isLeader: true for any role that is not '一般' (i.e. any admin-level role).
   // We cannot enumerate all possible role names (they are user-configurable in Admin → Tags),
@@ -3587,7 +3618,7 @@ function authorizeAction_(acting, action, body) {
     'updateSchedule',       // 日程設定
     'updateDependsOn',      // 依存関係設定
     'setBlocker',           // ブロッカー設定（班長が管理）
-    'notifyTaskRejected',   // タスク却下通知（管理者が送信）
+    'rejectTask',           // タスクの却下(タスクを消し、作成者に知らせる)
     'notifyProjectHealth',  // item 26: プロジェクト健康状態の自動判定変化通知
     'updateProjectHealthRecord', // item 26(追補): attention回復時の記録更新（通知なし）
     'reportProjectHealth',  // 健康状態の自動判定の結果(複数プロジェクト)の記録と、まとめた通知
@@ -3821,7 +3852,6 @@ function authorizeAction_(acting, action, body) {
     'updateTaskStatus',      // 担当者チェックあり（下記）
     'updateProgress',
     'updateComments',
-    'notifyMention',
     'updateEstimatedHours',
     'updateActualHours',
     'updateRetrospective',
@@ -3912,16 +3942,28 @@ function authorizeAction_(acting, action, body) {
       return
     }
 
-    // F1/F10: これらはタスクに紐づく更新だが anyLoggedIn 扱いだったため、
-    // 無関係な第三者が他人のタスクの履歴・成果物・工数・振り返り・
-    // 日程調整・フォームを書き換えられてしまっていた。担当者・確認者・
-    // 作成者・全権管理者のみに制限する。
-    var taskOwnerScopedActions = [
-      'updateDeliverables', 'updateHistory',
-      'updateEstimatedHours', 'updateActualHours', 'updateRetrospective',
-      'updateTaskSchedule', 'updateTaskForm',
-    ]
-    if (taskOwnerScopedActions.indexOf(action) >= 0) {
+    // 公募への応募: 変えてよいのは、応募者の一覧に自分を足す・自分を外すことだけ(全権管理者は制限なし)
+    if (action === 'applyToOpenBid') {
+      var bidTask = authFindRow_(SHEET_TASKS, String(body.taskId || ''))
+      if (!bidTask) throw userError_('対象のタスクが見つかりません。')
+      if (!isActingFullAdmin_(acting)) {
+        if (normalizeCode_('visibility', bidTask.visibility) === 'leaders' && !isAdminRoleRef_(getRoles_(), acting.role)) {
+          throw userError_('この操作は幹部限定タスクを閲覧できるメンバーのみ実行できます。')
+        }
+        var splitIds = function (v) { return String(v || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) }
+        var beforeIds = splitIds(bidTask.open_bid_applicant_ids)
+        var afterIds = (Array.isArray(body.applicantIds) ? body.applicantIds : []).map(String)
+        var changed = beforeIds.filter(function (x) { return afterIds.indexOf(x) < 0 })
+          .concat(afterIds.filter(function (x) { return beforeIds.indexOf(x) < 0 }))
+        if (changed.some(function (x) { return x !== acting.id })) {
+          throw userError_('公募の応募者は、自分の応募・取り下げだけを変えられます。')
+        }
+      }
+      return
+    }
+
+    // タスクに紐づく更新のうち、担当者・確認者・作成者・全権管理者のみに限るもの(TASK_OWNER_SCOPED_ACTIONS)
+    if (TASK_OWNER_SCOPED_ACTIONS.indexOf(action) >= 0) {
       var tosTask = authFindRow_(SHEET_TASKS, String(body.taskId || ''))
       if (!tosTask) throw userError_('対象のタスクが見つかりません。')
 
@@ -3942,6 +3984,8 @@ function authorizeAction_(acting, action, body) {
       // 他人が記録した既存データを書き換え/削除できないか追加でチェックする
       // (所有者チェックを通っていても対象)。
       if (action === 'updateHistory') validateHistoryUpdate_(tosTask, body.history, acting)
+      // 進捗の記録も配列を丸ごと置き換えるので、他人の記録を変え・消していないか確かめる
+      if (action === 'updateProgress' && body.progressHistory !== undefined) validateProgressHistoryUpdate_(tosTask, body.progressHistory, acting)
     }
 
     return
@@ -3951,6 +3995,60 @@ function authorizeAction_(acting, action, body) {
   if (!isLeader) {
     // コメント: 未分類のactionは代表/班長のみに制限（新機能追加時の安全装置）
     throw userError_('この操作は代表または管理者のみ実行できます。(未分類のaction: ' + action + ')')
+  }
+}
+
+// ---- タスクを書き換える操作の決まり ---------------------------------------------
+// タスクを書き換える操作は、次のどれかでなければならない(lib/ohsumi/gas-notify-guard.test.ts で、全部の操作を
+// 一般のメンバーとして実際に送って確かめる。新しく足した操作も自動で確かめる):
+//   1. TASK_OWNER_SCOPED_ACTIONS: そのタスクの担当者・確認者・作成者・全権管理者だけ
+//   2. TASK_ANY_MEMBER_ACTIONS: ログインしていれば誰でもよい理由がある(理由を書く)
+//   3. 役職で限る操作(代表・管理者だけ。authorizeAction_ の一覧): 一般のメンバーは断られる
+// F1/F10: 以前は anyLoggedIn 扱いで、無関係な第三者が他人のタスクの履歴・成果物・工数・振り返り・
+// 日程調整・フォーム・進捗・保留理由を書き換えられてしまっていた
+var TASK_OWNER_SCOPED_ACTIONS = [
+  'updateDeliverables', 'updateHistory',
+  'updateEstimatedHours', 'updateActualHours', 'updateRetrospective',
+  'updateTaskSchedule', 'updateTaskForm',
+  'updateProgress',   // 進捗のメモ・進捗率・進捗の記録(他人の記録は変えられない: validateProgressHistoryUpdate_)
+  'setHoldReason',    // 保留の理由
+]
+var TASK_ANY_MEMBER_ACTIONS = {
+  createTasks: '新しいタスクの登録。承認待ちとして作られ、既存のタスクは書き換えない',
+  updateTaskStatus: '担当者だけが状態を変えられ、完了にできるのは確認者だけ(authorizeAction_ で確かめる)。担当者の決まっていないタスクは、誰でも着手できる',
+  approveTaskReview: '確認者だけが承認できる(authorizeAction_ で確かめる)',
+  updateComments: 'タスクを見られる人は誰でもコメントできる。他人のコメントは変え・消せない(validateCommentsUpdate_)',
+  applyToOpenBid: '公募への応募・取り下げ。自分の分しか変えられない(authorizeAction_ で確かめる)',
+  checkAndGenerateRecurringTasks: '定期タスクを、保存した規則どおりに作るだけ(内容は画面から受け取らない)',
+}
+
+// updateProgress の進捗の記録(progressHistory)。コメントと同じく、新しい記録の書いた人は本人にそろえ、
+// 他人の記録は変え・消せない(全権管理者は制限なし)
+function validateProgressHistoryUpdate_(task, entries, acting) {
+  if (!Array.isArray(entries)) throw userError_('進捗の記録の形式が不正です。')
+  var old = []
+  try { old = JSON.parse(task.progress_history_json || '[]') } catch (e) { old = [] }
+  if (!Array.isArray(old)) old = []
+  var oldById = {}
+  old.forEach(function (h) { if (h && h.id) oldById[h.id] = h })
+  var newIds = {}
+  var isAdmin = isActingFullAdmin_(acting)
+  entries.forEach(function (h) {
+    if (!h || !h.id) throw userError_('進捗の記録の形式が不正です。')
+    newIds[h.id] = true
+    var before = oldById[h.id]
+    if (before) {
+      if (!isAdmin && before.byId !== acting.id && JSON.stringify(before) !== JSON.stringify(h)) {
+        throw userError_('他のメンバーが書いた進捗の記録は変更できません。')
+      }
+    } else {
+      h.byId = acting.id
+    }
+  })
+  if (!isAdmin) {
+    old.forEach(function (h) {
+      if (h && h.id && !newIds[h.id] && h.byId !== acting.id) throw userError_('他のメンバーが書いた進捗の記録は削除できません。')
+    })
   }
 }
 
@@ -4223,6 +4321,7 @@ function handlePost_(e, state) {
       var initAuth
       try {
         initAuth = timed_('authMs', function () { return authenticateRequest_(body) })
+        if (memberIsInactive_(initAuth.memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
       } catch (initAuthErr) {
         return ({ ok: false, error: toErrorMessage_(initAuthErr), authError: true })
       }
@@ -4260,10 +4359,13 @@ function handlePost_(e, state) {
       auth = authenticateRequest_(body)
       renewedSession = auth.renewed
       actingMember = getActingMember_(auth.memberId, requestAuthAction_(body))
+      if (actingMember.inactive) throw userError_(INACTIVE_MEMBER_MESSAGE)
     } catch (authErr) {
       endTiming_('authMs', authStart)
       return ({ ok: false, error: toErrorMessage_(authErr), authError: true })
     }
+    // 通知・翻訳の回数の上限は、操作したメンバーごとに数える
+    _requestActorId = actingMember.id
     if (body.action === 'batch') {
       batchDenied = authorizeBatch_(actingMember, body.ops)
     } else {
@@ -4424,8 +4526,6 @@ function authorizeBatch_(acting, ops) {
 // skipped: true で返す)。画面は記録・確認タスクなどを変更より先に送ることがあるので、順番もここで入れ替える。
 //   updateHistory(変更の記録)       ← 記録した項目を変える操作(同じタスク)
 //   notifyScheduleResult・notifyFormResult(回答がそろった通知) ← 回答の保存と完了への変更(同じタスク)
-//   notifyMention(メンションの通知)  ← コメントの保存(同じタスク)
-//   notifyTaskRejected(却下の通知)   ← タスクの削除(同じタスク)
 //   updateProjectMembers(担当者をプロジェクトに加える) ← 担当者の変更(そのプロジェクトのタスク)
 //   updateSkillLevels・updateJudgment(完了で付くスキル・認定) ← 完了への変更(そのメンバーが担当のタスク)
 //   createTasks(確認タスクの作成)      ← 確認待ちへの変更(確認タスクの元のタスク)
@@ -4510,12 +4610,6 @@ function batchPrerequisites_(ops, i) {
         break
       case 'notifyFormResult':
         needs = sameId_(other.taskId, op.taskId) && (a === 'updateTaskStatus' || a === 'updateTaskForm')
-        break
-      case 'notifyMention':
-        needs = sameId_(other.taskId, op.taskId) && a === 'updateComments'
-        break
-      case 'notifyTaskRejected':
-        needs = sameId_(other.taskId, op.taskId) && a === 'removeTask'
         break
       case 'updateProjectMembers':
         if (a === 'assignTask') {
@@ -4641,13 +4735,15 @@ function runWriteAction_(body, actingMember) {
       // body.text/body.progressHistoryが無い場合はその列に触れない
       // (updateTaskFields_/updateRowFields_は渡されたキーのみ部分更新する)
       var progressFields = { last_activity: todayStr_() }
+      // 新しい進捗の記録の書いた人は、どの役職でも操作した本人にそろえる
+      if (Array.isArray(body.progressHistory)) stampNewEntries_(body.progressHistory, taskProgressIds_(body.taskId), actingMember.id)
       if (body.text !== undefined) progressFields.progress_note = body.text
       if (body.progressHistory !== undefined) progressFields.progress_history_json = JSON.stringify(body.progressHistory)
       if (body.progressPercent !== undefined) progressFields.progress_percent = body.progressPercent
       result = updateTaskFields_(body.taskId, progressFields)
       break
     case 'translateText':
-      result = translateTexts_(body.texts, body.targetLang)
+      result = translateTexts_(body.texts, body.targetLang, actingMember.id)
       break
     case 'updateWill':
       result = updateMemberFields_(body.memberId, { will_tags: (body.will || []).join(',') })
@@ -4679,10 +4775,9 @@ function runWriteAction_(body, actingMember) {
     case 'approveTask':
       result = updateTaskFields_(body.taskId, { approval_status: sheetCode_('approval', 'approved') })
       break
-    case 'notifyTaskRejected':
-      // body.taskId は authorizeAction_() のスコープチェックで使用済み
-      notifyTaskRejected_(body.creatorId, body.taskName, body.reason)
-      result = { ok: true }
+    case 'rejectTask':
+      // タスクを消し、シートのタスクの作成者・名前で作成者に知らせる(理由は承認する人が書いたもの)
+      result = rejectTask_(body.taskId, body.reason)
       break
     case 'removeTask':
       result = removeTask_(body.taskId)
@@ -4813,13 +4908,14 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateComments':
+      var commentsBefore = taskCommentIds_(body.taskId)
+      // 新しいコメントの投稿者は、どの役職でも操作した本人にそろえる(代表も、ほかの人の名前では書けない)
+      stampNewEntries_(body.comments, commentsBefore, actingMember.id)
       result = updateTaskFields_(body.taskId, {
         comments_json: JSON.stringify(body.comments || []),
       })
-      break
-    case 'notifyMention':
-      notifyMention_(body.taskId, body.commentText, body.memberIds || [])
-      result = { ok: true }
+      // 新しいコメントのメンションに通知する(宛先・本文は、保存したコメントから GAS が決める)
+      notifyNewMentions_(body.taskId, commentsBefore, body.comments || [], actingMember.id)
       break
     case 'updateEstimatedHours':
       result = updateTaskFields_(body.taskId, {
@@ -4842,8 +4938,8 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'notifyScheduleResult':
-      notifyScheduleResult_(body.taskId)
-      result = { ok: true }
+      // 保存した回答が揃っている時だけ、1回だけ送る
+      result = { sent: notifyScheduleResult_(body.taskId, actingMember.id) }
       break
     case 'updateTaskForm':
       result = updateTaskFields_(body.taskId, {
@@ -4851,8 +4947,7 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'notifyFormResult':
-      notifyFormResult_(body.taskId)
-      result = { ok: true }
+      result = { sent: notifyFormResult_(body.taskId, actingMember.id) }
       break
     case 'updateProjectMembers':
       result = updateProjectFields_(body.projectId, {
@@ -5001,6 +5096,8 @@ function runWriteAction_(body, actingMember) {
     case 'updateMemberInactive':
       if (body.inactive) assertTopRemains_({ members: (function () { var m = {}; m[String(body.memberId)] = { inactive: true }; return m })() })
       result = updateMemberFields_(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
+      // 休止にしたら、そのメンバーのログイン(全端末)を無効にする
+      if (body.inactive) bumpSessionGeneration_(String(body.memberId))
       break
     case 'updateMemberDepartmentPath':
       result = updateMemberFields_(body.memberId, { department_path: body.departmentPath || '' })
@@ -5058,12 +5155,11 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'notifyTrainingRequest':
-      notifyTrainingRequest_(body.memberId, body.trainingName)
-      result = { ok: true }
+      // 研修の名前・状態は、保存した研修の記録(trainingId)から読む(画面が送る名前は使わない)
+      result = { sent: notifyTrainingRequest_(body.memberId, body.trainingId, actingMember.id) }
       break
     case 'notifyTrainingDecision':
-      notifyTrainingDecision_(body.memberId, body.trainingName, body.approved)
-      result = { ok: true }
+      result = { sent: notifyTrainingDecision_(body.memberId, body.trainingId, actingMember.id) }
       break
     case 'updateDevelopmentPlan':
       result = updateMemberFields_(body.memberId, {
@@ -5605,6 +5701,7 @@ function getNotifyFrequency_(memberId, kind) {
 function queueNotification_(memberId, kind, templates) {
   var freq = getNotifyFrequency_(memberId, kind)
   if (freq === 'none') return
+  if (freq !== 'immediate' && !allowRequestNotification_('通知のキュー ' + kind)) return
   if (freq === 'immediate') {
     var emails = memberEmailsByIds_([memberId])
     if (emails.length > 0) {
@@ -5631,7 +5728,63 @@ function isTestEnvironment_() {
   return PropertiesService.getScriptProperties().getProperty('TEST_ENVIRONMENT') === 'true'
 }
 
+// ---- 通知・翻訳の回数の上限(1人あたり) -----------------------------------------
+//
+// 画面からのリクエストで送る通知(メール・Discord/Slack・通知のキュー)は、操作したメンバーごとに
+// 1時間に RATE_LIMITS.notify.limit 件まで。超えた分は送らず、応答に notifyLimited: true を付ける
+// (操作そのものは成功させる)。どの操作から送る通知も、ここを通るので数えられる(新しく足した操作も)。
+// 時間主導トリガー(毎日の処理など)から送る通知は、操作したメンバーがいないので数えない。
+// 送った時刻は CacheService に覚える(ロックを取っていない読み取りの操作では、同時のリクエストで
+// 数件多く通ることがある)。
+var RATE_LIMITS = {
+  // メール・Discord/Slack・通知のキュー(1件ずつ数える)
+  notify: { limit: 60, windowSec: 3600 },
+  // コメントのメンションで通知する宛先の数
+  mention: { limit: 30, windowSec: 3600 },
+  // 日程調整・フォームの結果、研修の申請・承認の通知(1回ずつ数える)
+  resultNotify: { limit: 10, windowSec: 3600 },
+  // 翻訳する文の数(Google の翻訳の1日の回数は、団体全体で分け合うため)
+  translate: { limit: 500, windowSec: 3600 },
+}
+var _requestActorId = null
+var _notifyLimited = false
+
+function rateLimitKey_(kind, memberId) {
+  return 'rl:' + kind + ':' + sha256Base64Url_(String(memberId))
+}
+
+// この時間の窓の中で使った回数(送った時刻の一覧)
+function rateLimitTimes_(kind, memberId, nowMs) {
+  var spec = RATE_LIMITS[kind]
+  var times = []
+  try { times = JSON.parse(CacheService.getScriptCache().get(rateLimitKey_(kind, memberId)) || '[]') } catch (e) { times = [] }
+  if (!Array.isArray(times)) times = []
+  return times.filter(function (t) { return typeof t === 'number' && t > nowMs - spec.windowSec * 1000 && t <= nowMs })
+}
+
+/** count 回ぶん使えるなら記録して true。上限を超えるなら記録せずに false */
+function takeRateLimit_(kind, memberId, count, nowMs) {
+  var spec = RATE_LIMITS[kind]
+  nowMs = nowMs || Date.now()
+  count = Math.max(1, Math.floor(count || 1))
+  var times = rateLimitTimes_(kind, memberId, nowMs)
+  if (times.length + count > spec.limit) return false
+  for (var i = 0; i < count; i++) times.push(nowMs)
+  try { CacheService.getScriptCache().put(rateLimitKey_(kind, memberId), JSON.stringify(times), spec.windowSec) } catch (e) { /* 覚えられなくても続ける */ }
+  return true
+}
+
+// 画面からのリクエストで送る通知を1件数える。上限を超えたら送らない(false)
+function allowRequestNotification_(what) {
+  if (!_requestActorId) return true
+  if (takeRateLimit_('notify', _requestActorId, 1)) return true
+  _notifyLimited = true
+  console.warn('通知の上限(1人1時間に' + RATE_LIMITS.notify.limit + '件)を超えたため、送りませんでした: ' + what)
+  return false
+}
+
 function sendMail_(options) {
+  if (!allowRequestNotification_('メール ' + options.subject)) return
   countAction_('mailCount')
   return measureAction_('mailMs', function () { return sendMailUnmeasured_(options) })
 }
@@ -5768,7 +5921,7 @@ function reportsToEmails_(assigneeIds) {
 }
 
 // Resolves member ids to their email addresses (skips members with no
-// email on file). Used by notifyMention.
+// email on file). Used by the notifications (queueNotification_ など).
 function memberEmailsByIds_(memberIds) {
   try {
     var emailMap = getAllMemberEmails_()
@@ -5850,142 +6003,263 @@ function sendLocalizedEmail_(emails, templates) {
   })
 }
 
-// Emails members who were @mentioned in a task comment. commentText is
-// passed straight from the client (not re-read from the sheet) since the
-// comment was just appended in the same request.
-// Respects each member's 'mention' frequency setting via queueNotification_.
-function notifyMention_(taskId, commentText, memberIds) {
+// ---- コメントのメンション ----------------------------------------------------------
+//
+// updateComments で新しく足されたコメント(保存した後の内容)から、「@名前」で書かれたメンバーに通知する。
+// 宛先と本文は GAS が決める(画面から宛先・本文は受け取らない)。
+//   - 宛先: 本文の「@表示名」「@名前」に当たるメンバー(書いた本人・休止中の人を除く)。
+//     幹部限定のタスクは、幹部限定のタスクを見られる役職の人だけ
+//   - 本文: 保存したコメントの文(新しいコメントの投稿者は、validateCommentsUpdate_ が本人にそろえている)
+//   - 1人1時間に RATE_LIMITS.mention.limit 人まで。超えたら通知しない(コメントは保存する)
+var MENTION_NOTIFY_MAX_CHARS = 1000
+
+// タスクに今あるコメントの ID(保存する前に読む。新しいコメントを見分けるため)
+function taskCommentIds_(taskId) {
+  var ids = {}
+  var task = findRow_(SHEET_TASKS, taskId)
+  var list = []
+  try { list = JSON.parse((task && task.comments_json) || '[]') } catch (e) { list = [] }
+  if (Array.isArray(list)) list.forEach(function (c) { if (c && c.id) ids[String(c.id)] = true })
+  return ids
+}
+
+// タスクに今ある進捗の記録の ID
+function taskProgressIds_(taskId) {
+  var ids = {}
+  var task = findRow_(SHEET_TASKS, taskId)
+  var list = []
+  try { list = JSON.parse((task && task.progress_history_json) || '[]') } catch (e) { list = [] }
+  if (Array.isArray(list)) list.forEach(function (h) { if (h && h.id) ids[String(h.id)] = true })
+  return ids
+}
+
+// 新しく足された項目(今ある ID に無いもの)の書いた人(byId)を、操作した本人にする
+function stampNewEntries_(entries, idsBefore, actorId) {
+  if (!Array.isArray(entries)) return
+  entries.forEach(function (e) {
+    if (e && e.id && !idsBefore[String(e.id)]) e.byId = String(actorId)
+  })
+}
+
+// 本文の「@名前」に当たるメンバーの ID(画面の parseMentions と同じ決め方)
+function mentionedMemberIds_(text, members) {
+  var out = []
+  members.forEach(function (m) {
+    var names = [m.display_name, m.name].filter(function (n) { return !!n })
+    if (names.some(function (n) { return text.indexOf('@' + n) >= 0 }) && out.indexOf(m.id) < 0) out.push(m.id)
+  })
+  return out
+}
+
+// スナップショットの Members(id・名前・役職・休止)
+function snapshotMembers_() {
+  var table = loadSnapshot_().data.Members
+  if (!table || !table.headers) return []
+  var h = table.headers
+  return table.rows.map(function (r) {
+    var o = {}
+    h.forEach(function (k, i) { o[k] = r[i] })
+    o.id = String(o.id)
+    return o
+  })
+}
+
+function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
-    if (!task) return
-    if (!memberIds || memberIds.length === 0) return
-    var templates = {
-      ja: {
-        subject: '[Ohsumi] コメントでメンションされました',
-        body: 'タスク「' + task.title + '」のコメントであなたがメンションされました。\n\n' +
-          (commentText || '') +
-          '\n\nOhsumiで確認してください。',
-      },
-      en: {
-        subject: '[Ohsumi] You were mentioned in a comment',
-        body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' +
-          (commentText || '') +
-          '\n\nPlease check Ohsumi for details.',
-      },
-    }
-    memberIds.forEach(function(mid) {
-      queueNotification_(mid, 'mention', templates)
+    var fresh = (Array.isArray(comments) ? comments : []).filter(function (c) {
+      return c && c.id && !commentIdsBefore[String(c.id)] && String(c.byId) === String(actorId) && c.text
     })
-    console.log('notifyMention: 通知キューに登録したmemberIds ' + memberIds.join(','))
+    if (fresh.length === 0) return
+    var task = findRow_(SHEET_TASKS, taskId)
+    if (!task) return
+    var leadersOnly = normalizeCode_('visibility', task.visibility) === 'leaders'
+    var roles = getRoles_()
+    var members = snapshotMembers_().filter(function (m) {
+      if (m.id === String(actorId) || isInactiveValue_(m.inactive)) return false
+      return !leadersOnly || isTopRoleRef_(roles, m.role) || isAdminRoleRef_(roles, m.role)
+    })
+    fresh.forEach(function (c) {
+      var text = String(c.text).slice(0, MENTION_NOTIFY_MAX_CHARS)
+      var ids = mentionedMemberIds_(text, members)
+      if (ids.length === 0) return
+      if (!takeRateLimit_('mention', actorId, ids.length)) {
+        _notifyLimited = true
+        console.warn('メンションの通知の上限(1人1時間に' + RATE_LIMITS.mention.limit + '人)を超えたため、通知しませんでした')
+        return
+      }
+      var templates = {
+        ja: {
+          subject: '[Ohsumi] コメントでメンションされました',
+          body: 'タスク「' + task.title + '」のコメントであなたがメンションされました。\n\n' + text + '\n\nOhsumiで確認してください。',
+        },
+        en: {
+          subject: '[Ohsumi] You were mentioned in a comment',
+          body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
+        },
+      }
+      ids.forEach(function (mid) { queueNotification_(mid, 'mention', templates) })
+    })
   } catch (err) {
-    console.error('notifyMentionの処理に失敗しました: ' + err)
+    console.error('メンションの通知に失敗しました: ' + err)
   }
 }
 
-// 研修申請の承認フロー — a member requesting a training emails their
-// reports_to_id manager (falling back to notifyAdmins_' default 代表 set),
-// mirroring notifyReview_'s routing.
-function notifyTrainingRequest_(memberId, trainingName) {
+// 研修の記録(メンバーの training_history_json)から、ID の記録を探す
+function trainingRecordOf_(memberId, trainingId) {
+  var member = findRow_(SHEET_MEMBERS, memberId)
+  if (!member || !trainingId) return null
+  var list = []
+  try { list = JSON.parse(member.training_history_json || '[]') } catch (e) { list = [] }
+  if (!Array.isArray(list)) return null
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && String(list[i].id) === String(trainingId)) return { member: member, record: list[i] }
+  }
+  return null
+}
+
+// 研修の申請を、報告先(無ければ代表)に知らせる。研修の名前は保存した記録から読み、申請中(pending)の時だけ送る。
+// 送ったら true
+function notifyTrainingRequest_(memberId, trainingId, actorId) {
   try {
-    var member = findRow_(SHEET_MEMBERS, memberId)
-    if (!member) return
-    var name = member.display_name || member.name || '不明'
+    var found = trainingRecordOf_(memberId, trainingId)
+    if (!found || found.record.status !== 'pending') return false
+    if (!takeRateLimit_('resultNotify', actorId, 1)) { _notifyLimited = true; return false }
+    var name = found.member.display_name || found.member.name || '不明'
+    var trainingName = String(found.record.name || '')
     notifyAdmins_(
       {
         ja: {
           subject: '[Ohsumi] 研修申請の承認をお願いします',
-          body: name + 'さんから研修「' + (trainingName || '') + '」の申請がありました。\n\nOhsumiの人材育成タブから承認/却下してください。',
+          body: name + 'さんから研修「' + trainingName + '」の申請がありました。\n\nOhsumiの人材育成タブから承認/却下してください。',
         },
         en: {
           subject: '[Ohsumi] Training request awaiting approval',
-          body: name + ' has requested training "' + (trainingName || '') + '".\n\nPlease approve or reject it from the Ohsumi Training tab.',
+          body: name + ' has requested training "' + trainingName + '".\n\nPlease approve or reject it from the Ohsumi Training tab.',
         },
       },
       reportsToEmails_([memberId]),
     )
-    notifyChat_('📚 ' + name + 'さんから研修「' + (trainingName || '') + '」の申請がありました。')
+    notifyChat_('📚 ' + name + 'さんから研修「' + trainingName + '」の申請がありました。')
+    return true
   } catch (err) {
     console.error('notifyTrainingRequestの通知送信に失敗しました: ' + err)
+    return false
   }
 }
 
-// 承認しない（却下） — 却下されたタスクは removeTask で削除されるため、
-// タスク名は削除前にクライアント側から渡してもらう（削除後だと
-// findRow_で引けなくなるため）。best-effort。
-function notifyTaskRejected_(creatorId, taskName, reason) {
+// タスクの却下(承認しない)。タスクを消し、シートのタスクの作成者に、シートのタスクの名前で知らせる。
+// 宛先・タスクの名前は GAS が決める。理由だけは承認する人が書いたもの(NOTIFY_QUOTED_FIELDS)
+var REJECT_REASON_MAX_CHARS = 500
+// 通知の本文に、画面から受け取った文をそのまま入れる操作と、その項目(ほかの操作は、保存したデータだけで本文を作る。
+// lib/ohsumi/gas-notify-guard.test.ts で確かめる)
+var NOTIFY_QUOTED_FIELDS = {
+  rejectTask: ['reason'],  // 却下の理由(代表・管理者が書く。500字まで。宛先はシートのタスクの作成者)
+}
+
+function rejectTask_(taskId, reason) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task) throw userError_('タスクが見つかりません。')
+  var creatorId = String(task.creator_id || '')
+  var title = String(task.title || '')
+  var result = removeTask_(taskId)
+  var why = String(reason || '').slice(0, REJECT_REASON_MAX_CHARS)
   try {
-    if (!creatorId) return
-    var emails = memberEmailsByIds_([creatorId])
-    if (emails.length === 0) {
-      console.warn('notifyTaskRejected: creatorId ' + creatorId + ' のメール登録がないため送信しませんでした')
-      return
+    var emails = creatorId ? memberEmailsByIds_([creatorId]) : []
+    if (emails.length > 0) {
+      sendLocalizedEmail_(emails, {
+        ja: {
+          subject: '[Ohsumi] タスクが承認されませんでした',
+          body: '登録した「' + title + '」は承認されませんでした。\n\n' + (why ? '理由: ' + why + '\n\n' : '') + 'Ohsumiで確認してください。',
+        },
+        en: {
+          subject: '[Ohsumi] Your task was not approved',
+          body: 'The task "' + title + '" you submitted was not approved.\n\n' + (why ? 'Reason: ' + why + '\n\n' : '') + 'Please check Ohsumi for details.',
+        },
+      })
     }
-    sendLocalizedEmail_(emails, {
-      ja: {
-        subject: '[Ohsumi] タスクが承認されませんでした',
-        body:
-          '登録した「' + (taskName || '') + '」は承認されませんでした。\n\n' +
-          (reason ? '理由: ' + reason + '\n\n' : '') +
-          'Ohsumiで確認してください。',
-      },
-      en: {
-        subject: '[Ohsumi] Your task was not approved',
-        body:
-          'The task "' + (taskName || '') + '" you submitted was not approved.\n\n' +
-          (reason ? 'Reason: ' + reason + '\n\n' : '') +
-          'Please check Ohsumi for details.',
-      },
-    })
-    console.log('notifyTaskRejected: 送信先 ' + emails.join(','))
   } catch (err) {
-    console.error('notifyTaskRejectedの通知送信に失敗しました: ' + err)
+    console.error('タスクの却下の通知に失敗しました: ' + err)
   }
+  return result
 }
 
-// Notifies the requester once their training request is approved/rejected.
-function notifyTrainingDecision_(memberId, trainingName, approved) {
+// 研修の申請の結果を、申請した本人に知らせる。結果(承認・却下)と名前は保存した記録から読む。送ったら true
+function notifyTrainingDecision_(memberId, trainingId, actorId) {
   try {
+    var found = trainingRecordOf_(memberId, trainingId)
+    if (!found || (found.record.status !== 'approved' && found.record.status !== 'rejected')) return false
     var emails = memberEmailsByIds_([memberId])
-    if (emails.length === 0) {
-      console.warn('notifyTrainingDecision: memberId ' + memberId + ' のメール登録がないため送信しませんでした')
-      return
-    }
+    if (emails.length === 0) return false
+    if (!takeRateLimit_('resultNotify', actorId, 1)) { _notifyLimited = true; return false }
+    var approved = found.record.status === 'approved'
+    var trainingName = String(found.record.name || '')
     sendLocalizedEmail_(emails, {
       ja: {
         subject: '[Ohsumi] 研修申請が' + (approved ? '承認' : '却下') + 'されました',
-        body:
-          '研修「' + (trainingName || '') + '」の申請が' + (approved ? '承認' : '却下') + 'されました。\n\nOhsumiで確認してください。',
+        body: '研修「' + trainingName + '」の申請が' + (approved ? '承認' : '却下') + 'されました。\n\nOhsumiで確認してください。',
       },
       en: {
         subject: '[Ohsumi] Your training request was ' + (approved ? 'approved' : 'rejected'),
-        body:
-          'Your request for training "' + (trainingName || '') + '" was ' + (approved ? 'approved' : 'rejected') + '.\n\nPlease check Ohsumi for details.',
+        body: 'Your request for training "' + trainingName + '" was ' + (approved ? 'approved' : 'rejected') + '.\n\nPlease check Ohsumi for details.',
       },
     })
-    console.log('notifyTrainingDecision: 送信先 ' + emails.join(','))
+    return true
   } catch (err) {
     console.error('notifyTrainingDecisionの通知送信に失敗しました: ' + err)
+    return false
   }
 }
 
 // 日程調整ツール — 招待された全員が全候補への回答を終えたタイミングで
 // store.tsx から呼ばれ、作成者へ集計結果をメールする。
-function notifyScheduleResult_(taskId) {
+// 結果の通知は、保存した回答が揃った時に1回だけ送る(同じ回答で2回目は送らない。6時間覚える)
+var RESULT_NOTIFIED_TTL_SEC = 6 * 3600
+
+function resultNotifiedKey_(kind, taskId, responses) {
+  return 'resultNotified:' + kind + ':' + sha256Base64Url_(String(taskId) + '|' + JSON.stringify(responses || {}))
+}
+
+// 送ってよければ true(回答が揃っていて、まだ送っていなくて、回数の上限の中)。送る時の記録もする
+function claimResultNotification_(kind, taskId, responses, actorId) {
+  var cache = CacheService.getScriptCache()
+  var key = resultNotifiedKey_(kind, taskId, responses)
+  if (cache.get(key)) return false
+  if (actorId && !takeRateLimit_('resultNotify', actorId, 1)) { _notifyLimited = true; return false }
+  cache.put(key, '1', RESULT_NOTIFIED_TTL_SEC)
+  return true
+}
+
+function scheduleComplete_(schedule) {
+  if (!schedule || !Array.isArray(schedule.invitedIds) || schedule.invitedIds.length === 0 || !Array.isArray(schedule.candidates)) return false
+  return schedule.invitedIds.every(function (mid) {
+    var r = schedule.responses && schedule.responses[mid]
+    return !!r && schedule.candidates.every(function (c) { return !!r[c.id] })
+  })
+}
+
+function formComplete_(form) {
+  if (!form || !Array.isArray(form.invitedIds) || form.invitedIds.length === 0) return false
+  return form.invitedIds.every(function (mid) { return !!(form.responses && form.responses[mid]) })
+}
+
+// 日程調整の回答が揃ったら、作成者に知らせる。宛先・本文はシートのタスクから決め、揃っていなければ送らない。送ったら true
+function notifyScheduleResult_(taskId, actorId) {
   try {
     var task = requestRow_(SHEET_TASKS, taskId)
-    if (!task || !task.creator_id) return
-    var emails = memberEmailsByIds_([task.creator_id])
-    if (emails.length === 0) {
-      console.warn('notifyScheduleResult: creator_id ' + task.creator_id + ' のメール登録がないため送信しませんでした')
-      return
-    }
-
+    if (!task || !task.creator_id) return false
     var schedule = null
     try {
       schedule = task.schedule_json ? JSON.parse(task.schedule_json) : null
     } catch (e) {
       schedule = null
     }
+    if (!scheduleComplete_(schedule)) return false
+    var emails = memberEmailsByIds_([task.creator_id])
+    if (emails.length === 0) {
+      console.warn('notifyScheduleResult: creator_id ' + task.creator_id + ' のメール登録がないため送信しませんでした')
+      return false
+    }
+    if (!claimResultNotification_('schedule', taskId, schedule.responses, actorId)) return false
 
     var bodyJa = 'タスク「' + task.title + '」の日程調整で全員の回答が揃いました。\n\n'
     var bodyEn = 'All responses are in for the schedule coordination on task "' + task.title + '".\n\n'
@@ -6021,29 +6295,32 @@ function notifyScheduleResult_(taskId) {
     })
     console.log('notifyScheduleResult: 送信先 ' + emails.join(','))
     notifyChat_('🗓️ 「' + task.title + '」の日程調整で全員の回答が揃いました。')
+    return true
   } catch (err) {
     console.error('notifyScheduleResultの通知送信に失敗しました: ' + err)
+    return false
   }
 }
 
 // 汎用フォームツール — 招待された全員が回答を終えたタイミングでstore.tsxから
 // 呼ばれ、作成者へ回答結果をメールする。
-function notifyFormResult_(taskId) {
+function notifyFormResult_(taskId, actorId) {
   try {
     var task = requestRow_(SHEET_TASKS, taskId)
-    if (!task || !task.creator_id) return
-    var emails = memberEmailsByIds_([task.creator_id])
-    if (emails.length === 0) {
-      console.warn('notifyFormResult: creator_id ' + task.creator_id + ' のメール登録がないため送信しませんでした')
-      return
-    }
-
+    if (!task || !task.creator_id) return false
     var form = null
     try {
       form = task.form_json ? JSON.parse(task.form_json) : null
     } catch (e) {
       form = null
     }
+    if (!formComplete_(form)) return false
+    var emails = memberEmailsByIds_([task.creator_id])
+    if (emails.length === 0) {
+      console.warn('notifyFormResult: creator_id ' + task.creator_id + ' のメール登録がないため送信しませんでした')
+      return false
+    }
+    if (!claimResultNotification_('form', taskId, form.responses, actorId)) return false
 
     var bodyJa = 'タスク「' + task.title + '」のフォームで全員の回答が揃いました。\n\n'
     var bodyEn = 'All responses are in for the form on task "' + task.title + '".\n\n'
@@ -6083,8 +6360,10 @@ function notifyFormResult_(taskId) {
     })
     console.log('notifyFormResult: 送信先 ' + emails.join(','))
     notifyChat_('📝 「' + task.title + '」のフォームで全員の回答が揃いました。')
+    return true
   } catch (err) {
     console.error('notifyFormResultの通知送信に失敗しました: ' + err)
+    return false
   }
 }
 
@@ -7018,6 +7297,8 @@ var _timingNested = {}
 
 function startRequestTiming_() {
   _requestTiming = { start: Date.now() }
+  _requestActorId = null
+  _notifyLimited = false
   _requestSnapshot = null
   _requestRows = {}
   _timingDepth = 0
@@ -7575,6 +7856,7 @@ function notifyChat_(content) {
 }
 
 function notifyChatUnmeasured_(content) {
+  if (!allowRequestNotification_('Discord/Slack')) return
   sendDiscordMessage_(content)
   sendSlackMessage_(content)
 }
@@ -7639,9 +7921,14 @@ function testSlackWebhook_() {
 // try/catchし、失敗時はその要素だけ原文を返す。
 // 無料枠のクォータ超過時もLanguageAppは例外を投げるため、同様に原文
 // フォールバックになる。
-function translateTexts_(texts, targetLang) {
+function translateTexts_(texts, targetLang, actorId) {
   var list = Array.isArray(texts) ? texts : []
   var lang = targetLang || 'en'
+  // 翻訳する文の数は、1人1時間に RATE_LIMITS.translate.limit 件まで(団体全体の翻訳の回数を守るため)
+  var count = list.filter(function (t) { return String(t || '').trim() }).length
+  if (actorId && count > 0 && !takeRateLimit_('translate', actorId, count)) {
+    throw userError_('翻訳は1時間に' + RATE_LIMITS.translate.limit + '件までです。しばらくしてから、もう一度お試しください。')
+  }
   return list.map(function (text) {
     var s = String(text || '')
     if (!s.trim()) return s
@@ -8428,8 +8715,8 @@ function bumpSnapshotVersion_() {
 // 一覧は scripts/gas-write-tables.mjs で Code.gs を調べた結果を含むこと(lib/ohsumi/gas-table-versions.test.ts で確かめる)。
 // 一覧に無い操作はスナップショットの版を新しくする(これまでどおり)
 var TABLE_WRITE_ACTIONS = {
-  expenses: ['notifyTaskRejected', 'submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense'],
-  formSubmissions: ['notifyTaskRejected', 'submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
+  expenses: ['submitExpenseApplication', 'approveExpenseStep', 'rejectExpense', 'withdrawExpense', 'returnExpense', 'resubmitExpense'],
+  formSubmissions: ['submitCustomForm', 'approveFormStep', 'rejectFormSubmission'],
   candidates: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
