@@ -11,6 +11,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, Play, LogOut } from 'lucide-react'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
+import { useSiteLinkStatus } from '@/lib/ohsumi/use-site-link-status'
 import { getActiveOrg, inviteLink } from '@/lib/ohsumi/org-directory'
 import { findRole, type RoleDef } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
@@ -100,6 +101,9 @@ export function AdminMembers() {
   const [newEmail, setNewEmail] = useState('')
   const [newAffiliation, setNewAffiliation] = useState('')
   const [newRole, setNewRole] = useState<Role>(baseRoleId)
+  // 招待メールを送る(初期値は送る。レジストリに確かめていない団体では選べない)
+  const [sendInvite, setSendInvite] = useState(true)
+  const inviteMail = useSiteLinkStatus(isDaihyo)
 
   const [csvPreview, setCsvPreview] = useState<{ name: string; email: string; affiliation: string; role: Role }[] | null>(null)
 
@@ -142,7 +146,7 @@ export function AdminMembers() {
     if (!csvPreview) return
     const rows = csvPreview
     setCsvPreview(null)
-    Promise.allSettled(rows.map((r) => addMember(r.name, r.email, r.affiliation, r.role))).then(
+    Promise.allSettled(rows.map((r) => addMember(r.name, r.email, r.affiliation, r.role, sendInvite && inviteMail.available))).then(
       (results) => {
         const failed = results.filter((r) => r.status === 'rejected').length
         if (failed > 0) {
@@ -162,8 +166,12 @@ export function AdminMembers() {
     setNewEmail('')
     setNewAffiliation('')
     setNewRole(baseRoleId)
-    addMember(name, newEmail.trim(), newAffiliation.trim(), newRole)
-      .then(() => toast(t('admin.members.addedToast', { name })))
+    const email = newEmail.trim()
+    addMember(name, email, newAffiliation.trim(), newRole, sendInvite && inviteMail.available && !!email)
+      .then((invite) => {
+        toast(t('admin.members.addedToast', { name }))
+        if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : 'admin.members.invite.mailNotSent'))
+      })
       .catch((err: unknown) => {
         toast(t('admin.members.addFailToast', { error: err instanceof Error ? err.message : String(err) }))
       })
@@ -264,6 +272,22 @@ export function AdminMembers() {
             {t('admin.members.register.submit')}
           </Button>
         </div>
+        {/* 招待メール: 登録したアドレスに、団体の招待リンクを送る(リンクは GAS が作る。レジストリに確かめた団体だけ) */}
+        <label className="mt-3 flex items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={sendInvite && inviteMail.available}
+            disabled={!inviteMail.available}
+            onChange={(e) => setSendInvite(e.target.checked)}
+          />
+          <span>
+            {t('admin.members.invite.mailOption')}
+            <span className="block text-muted-foreground">
+              {inviteMail.available ? t('admin.members.invite.mailHint') : inviteMail.checking ? t('otherDevice.mailChecking') : t('admin.members.invite.mailUnavailable')}
+            </span>
+          </span>
+        </label>
         <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
           <label className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-border-strong px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary">
             <Upload className="size-3.5" />

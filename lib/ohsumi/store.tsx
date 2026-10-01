@@ -12,7 +12,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { NO_CONTRACT, getContract, subscribeContract } from './contract'
-import { extractUnsavedTexts, guardStoreWrites, hasUserActivation, isReadOnlyContract } from './read-only'
+import { clearUnsentTexts, extractUnsavedTexts, guardStoreWrites, hasUserActivation, isReadOnlyContract, keepUnsentTexts, takeUnsentTexts } from './read-only'
 import type {
   AdminSection,
   ApprovalRecord,
@@ -101,6 +101,8 @@ import {
   fetchInitialData,
   exchangeIdToken,
   ContractRestrictedError,
+  ReloadRequiredError,
+  FORBIDDEN_EVENT,
   SESSION_ENDED_EVENT,
   type BackgroundData,
   type InitialData,
@@ -217,8 +219,11 @@ interface OhsumiContextValue extends OhsumiState {
   // 機能停止中(読み取り専用)か。作成・編集の関数は、画面を変える前に止まる(lib/ohsumi/read-only.ts)
   readOnly: boolean
   // 「読み取り専用のため、保存できません」の知らせ(送ろうとした文章をコピーできるように持つ)
-  readOnlyNotice: { texts: string[]; at: number } | null
+  // 保存できなかった時の知らせ(送ろうとした文章をコピーできる)。kind: 機能停止中・ログインが切れた・提供停止・画面が古い
+  readOnlyNotice: { texts: string[]; at: number; kind?: import('./read-only').UnsavedNoticeKind } | null
   closeReadOnlyNotice: () => void
+  // 書きかけ(INPUT の下書き)を残したまま、ログインし直す(ログインの期限が近い時)
+  restartLogin: () => void
   // true once every configured remote source (spreadsheet + optional
   // Settings sheet) has resolved or given up — see store.tsx's dataReady
   dataReady: boolean
@@ -363,7 +368,7 @@ interface OhsumiContextValue extends OhsumiState {
     orgId: string,
     // 初期設定コード(最初の代表が団体に入る時だけ)
     setupCode?: string,
-  ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string }>
+  ) => Promise<{ status: 'ok' | 'notRegistered'; email?: string; orgName?: string }>
   // 保存したセッションで自動的にログインし直している途中(読み込み中の画面を出す)
   sessionResuming: boolean
   // 全端末でログアウト(自分)。この端末もログアウトする
@@ -415,7 +420,7 @@ interface OhsumiContextValue extends OhsumiState {
   setProjectArchived: (projectId: string, archived: boolean) => void
   setProjectOrder: (orderedIds: string[]) => void
   updateProjectHealth: (projectId: string, override: import('./types').ProjectHealthLevel | null) => void
-  addMember: (name: string, email: string, affiliation: string, role: string) => Promise<void>
+  addMember: (name: string, email: string, affiliation: string, role: string, sendInvite?: boolean) => Promise<import('./remote').MemberInviteResult | undefined>
   removeMember: (memberId: string) => void
   updateNotify: (memberId: string, notify: boolean) => void
   updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => void
@@ -589,7 +594,7 @@ interface OhsumiContextValue extends OhsumiState {
     fields: Partial<Pick<import('./types').Candidate, 'name' | 'email' | 'phone' | 'resumeText' | 'interviewNotes' | 'status'>>,
   ) => void
   removeCandidate: (candidateId: string) => void
-  convertCandidateToMember: (candidateId: string, role?: string) => void
+  convertCandidateToMember: (candidateId: string, role?: string, sendInvite?: boolean) => Promise<import('./remote').MemberInviteResult | undefined>
   // ---- アンケート（item 22/30） -------------------------------------------
   surveyResponses: import('./types').SurveyResponse[]
   submitSurveyResponse: (answers: Record<string, number | string>) => void
@@ -639,20 +644,24 @@ const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
 // ログアウト時: 共用PCで次の人に見られないよう、利用者ごとの内容が残る
 // ブラウザ保存データを消す(表示言語・テーマ、初期タスク付与済み/オンボー
 // ディング済みの記録などは残す)
+// INPUT の書きかけ(components/ohsumi/input/input-screen.tsx)
+const INPUT_DRAFT_PREFIX = 'ohsumi-input-draft-'
 const PER_USER_STORAGE_PREFIXES = [
   // 以前の「〇〇さんとして続行」に表示していた名前(残っているブラウザから消す)
   'ohsumi-last-user-name',
-  'ohsumi-input-draft-',
+  INPUT_DRAFT_PREFIX,
   'ohsumi-daily-reports',
   'ohsumi-avatar-url-',
   'ohsumi-org-notification-emails',
 ]
-function clearPerUserBrowserData() {
+// keepDrafts: 書きかけ(INPUT の下書き)は残す(ログインが切れた・ログインし直す時)
+function clearPerUserBrowserData(keepDrafts = false) {
   try {
     const keys: string[] = []
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i)
-      if (key && PER_USER_STORAGE_PREFIXES.some((p) => key.startsWith(p))) keys.push(key)
+      if (!key || (keepDrafts && key.startsWith(INPUT_DRAFT_PREFIX))) continue
+      if (PER_USER_STORAGE_PREFIXES.some((p) => key.startsWith(p))) keys.push(key)
     }
     keys.forEach((k) => window.localStorage.removeItem(k))
   } catch {
@@ -884,8 +893,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 保存に失敗したため、画面の変更を元に戻した(次の保存が成功したら消す)
   const [remoteReverted, setRemoteReverted] = useState(false)
   const [remoteRestricted, setRemoteRestricted] = useState(false)
-  const [readOnlyNotice, setReadOnlyNotice] = useState<{ texts: string[]; at: number } | null>(null)
-  const closeReadOnlyNotice = useCallback(() => setReadOnlyNotice(null), [])
+  const [readOnlyNotice, setReadOnlyNotice] = useState<{ texts: string[]; at: number; kind?: import('./read-only').UnsavedNoticeKind } | null>(null)
+  const closeReadOnlyNotice = useCallback(() => {
+    setReadOnlyNotice(null)
+    clearUnsentTexts()
+  }, [])
+  // ログインが切れた・提供停止で読み込み直す前に残した文章を、読み込み直した画面で出す
+  useEffect(() => {
+    const kept = takeUnsentTexts()
+    if (kept) setReadOnlyNotice({ texts: kept.texts, at: Date.now(), kind: kept.kind })
+  }, [])
   const contract = useSyncExternalStore(subscribeContract, getContract, () => NO_CONTRACT)
   const readOnly = isReadOnlyContract(contract)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -1043,6 +1060,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             setRemoteRestricted(true)
             if (err.texts.length) setReadOnlyNotice({ texts: err.texts, at: Date.now() })
           }
+          // 画面が古い: 書いた文章をコピーできるように出し、読み込み直すよう案内する
+          if (err instanceof ReloadRequiredError) setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'reloadRequired' })
           reportRemoteError(err)
         })
     },
@@ -1305,7 +1324,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await exchangeIdToken(idToken, nonceSecret, remember, setupCode)
         if (!res.memberId || !res.session) {
-          return { status: 'notRegistered' as const, email: res.email }
+          return { status: 'notRegistered' as const, email: res.email, orgName: res.orgName }
         }
         saveSession(orgId, res.session)
         lastLoginRecordedRef.current = res.lastLoginRecorded === true
@@ -1386,6 +1405,19 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       .catch(reportLoadError)
       .finally(() => setRefreshing(false))
   }, [reportLoadError, applyInitialData, applyOrLoadRecords])
+
+  // 権限が足りないと断られた: 役職・担当が変わったかもしれないので、画面のデータを読み直す(30秒に1回まで)
+  const forbiddenRefreshAtRef = useRef(0)
+  useEffect(() => {
+    const onForbidden = () => {
+      const now = Date.now()
+      if (now - forbiddenRefreshAtRef.current < 30000) return
+      forbiddenRefreshAtRef.current = now
+      refreshAll()
+    }
+    window.addEventListener(FORBIDDEN_EVENT, onForbidden)
+    return () => window.removeEventListener(FORBIDDEN_EVENT, onForbidden)
+  }, [refreshAll])
 
   // 機能停止中(読み取り専用)は、作成・編集をしないので GAS への書き込みが無い。解除がすぐ画面に伝わるよう、
   // 3分ごとに読み込み直す(変わっていなければ中身は受け取らない)
@@ -2411,11 +2443,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // （手動でremoveCandidateするまで残る）ため、ローカルstateもここでは消さず
   // statusを'hired'にするだけに留める。
   const convertCandidateToMember = useCallback(
-    (candidateId: string, role?: string) => {
+    (candidateId: string, role?: string, sendInvite = false): Promise<import('./remote').MemberInviteResult | undefined> => {
       setCandidates((prev) =>
         prev.map((c) => (c.id === candidateId ? { ...c, status: 'hired', updatedAt: new Date().toISOString() } : c)),
       )
-      if (isRemoteConfigured) runRemote(remoteApi.convertCandidateToMember(candidateId, role))
+      if (!isRemoteConfigured) return Promise.resolve(undefined)
+      const saving = remoteApi.convertCandidateToMember(candidateId, role, sendInvite)
+      runRemote(saving)
+      return saving.then((r) => r?.invite, () => undefined)
     },
     [runRemote],
   )
@@ -2474,7 +2509,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [projects, runRemote, initialTasksFromSettings],
   )
 
-  const logout = useCallback(() => {
+  // keepDrafts: ログインが切れた・ログインし直す時は、書きかけ(INPUT の下書き)と送れなかった文章を消さない。
+  // 自分でログアウトした時は消す(共有の端末に残さない)
+  const endSession = useCallback((keepDrafts: boolean) => {
     setCurrentUserId(null)
     setCalendarToken(null)
     setLoadError(null)
@@ -2496,26 +2533,39 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     }
     clearFileCache()
     clearTranslateCache()
-    clearPerUserBrowserData()
+    clearPerUserBrowserData(keepDrafts)
+    if (!keepDrafts) clearUnsentTexts()
     // このページで Google のログインを準備済み(initialize を呼んだ)なら、ページを読み込み直して
     // ログイン画面を出す。同じページで initialize を2回呼ぶと、GIS が警告を出し、表示中の
     // 自動ログインが中断されるため(新しい nonce は、読み込み直した後の1回目の initialize で渡す)
     if (isRemoteConfigured && googleSignInInitializedThisPage()) reloadPage()
   }, [])
+  const logout = useCallback(() => endSession(false), [endSession])
+  const restartLogin = useCallback(() => endSession(true), [endSession])
 
-  // セッションが無効になった(期限切れ・全端末でログアウト・鍵の変更など)ら、ログイン画面に戻す
+  // セッションが無効になった(期限切れ・全端末でログアウト・鍵の変更など)ら、ログイン画面に戻す。
+  // 書きかけは消さず、送れなかった文章は読み込み直した画面でコピーできるように残す
   useEffect(() => {
-    const onEnded = () => logout()
+    const onEnded = (e: Event) => {
+      const texts = ((e as CustomEvent<{ texts?: string[] }>).detail?.texts ?? []).filter(Boolean)
+      if (texts.length) {
+        keepUnsentTexts('sessionEnded', texts)
+        setReadOnlyNotice({ texts, at: Date.now(), kind: 'sessionEnded' })
+      }
+      endSession(true)
+    }
     window.addEventListener(SESSION_ENDED_EVENT, onEnded)
     return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded)
-  }, [logout])
+  }, [endSession])
 
   // 今の団体の接続先が変わった・停止した・見つからなくなった(レジストリに裏で確かめ直した結果。
   // org-directory.ts): その団体のログインを終え、知らせを出すログイン画面に読み込み直す
   useEffect(() => {
     const onChanged = (e: Event) => {
-      const { orgId, notice } = (e as CustomEvent<{ orgId: string; notice: LoginNotice }>).detail
+      const { orgId, notice, texts } = (e as CustomEvent<{ orgId: string; notice: LoginNotice; texts?: string[] }>).detail
       if (orgId !== getActiveOrg().orgId) return
+      // 提供停止で断られた時に送ろうとした文章は、読み込み直した画面でコピーできるように残す
+      if (texts?.length) keepUnsentTexts('orgSuspended', texts)
       setLoginNotice(notice)
       clearSession(orgId)
       reloadPage()
@@ -3702,7 +3752,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const addMember = useCallback(
-    (name: string, email: string, affiliation: string, role: string): Promise<void> => {
+    (name: string, email: string, affiliation: string, role: string, sendInvite = false): Promise<import('./remote').MemberInviteResult | undefined> => {
       const tempId = `m-${Math.random().toString(36).slice(2, 9)}`
       const newMember: Member = {
         id: tempId,
@@ -3719,13 +3769,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       }
       setMembers((prev) => [...prev, newMember])
 
-      if (!isRemoteConfigured) return Promise.resolve()
+      if (!isRemoteConfigured) return Promise.resolve(undefined)
 
       return remoteApi
-        .addMember(name, email, affiliation, role)
-        .then(({ id }) => {
+        .addMember(name, email, affiliation, role, sendInvite && !!email)
+        .then(({ id, invite }) => {
           setMembers((prev) => prev.map((m) => (m.id === tempId ? { ...m, id } : m)))
           setRemoteError(null)
+          return invite
         })
         .catch((err: unknown) => {
           // Roll back the optimistic add so the local state stays consistent
@@ -5142,6 +5193,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     readOnly,
     readOnlyNotice,
     closeReadOnlyNotice,
+    restartLogin,
     dataReady,
     refreshing,
     refreshAll,

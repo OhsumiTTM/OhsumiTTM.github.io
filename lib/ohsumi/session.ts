@@ -129,6 +129,11 @@ export function getSessionToken(): string | null {
   return active.session.token
 }
 
+/** 今のセッションの期限(Unix 秒)。セッションが無ければ null(画面が期限の前に知らせるため) */
+export function getSessionExpiry(): number | null {
+  return active ? active.session.exp : null
+}
+
 export function getActiveOrgId(): string | null {
   return active?.orgId ?? null
 }

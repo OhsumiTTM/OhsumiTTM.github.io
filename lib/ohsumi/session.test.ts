@@ -153,6 +153,48 @@ describe('GAS との通信', () => {
     expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: remote.SESSION_ENDED_EVENT }))
   })
 
+  it('ログインが切れた時は、送ろうとした文章をログイン画面に戻す合図に付ける(読み込み直した画面でコピーできる)', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    mockGas([{ ok: false, authError: true, error: '無効です' }])
+    await expect(remote.remoteApi.updateComments('t1', [{ id: 'c1', byId: 'm1', text: '保存できなかったコメントです', at: '2026-10-01' }])).rejects.toThrow(/無効/)
+    const dispatch = (window as unknown as { dispatchEvent: ReturnType<typeof vi.fn> }).dispatchEvent
+    const ev = dispatch.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.type === remote.SESSION_ENDED_EVENT)!
+    expect(ev.detail.texts).toContain('保存できなかったコメントです')
+  })
+
+  it('画面が古いと断られたら、送ろうとした文章を付けた ReloadRequiredError にする', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    mockGas([{ ok: false, reloadRequired: true, error: '画面が古くなりました' }])
+    const err = await remote.remoteApi.updateProgress('t1', '進捗のメモです(送れなかった)', []).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(remote.ReloadRequiredError)
+    expect((err as InstanceType<typeof remote.ReloadRequiredError>).texts).toContain('進捗のメモです(送れなかった)')
+    // セッションは消さない
+    expect(s.loadSession('org_a')).toMatchObject({ token: 'valid' })
+  })
+
+  it('権限が足りないと断られたら、データを読み直す合図を送る', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    mockGas([{ ok: false, forbidden: true, error: '管理者のみです' }])
+    await expect(remote.remoteApi.updateProgress('t1', 'x', [])).rejects.toThrow(/管理者のみ/)
+    const dispatch = (window as unknown as { dispatchEvent: ReturnType<typeof vi.fn> }).dispatchEvent
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: remote.FORBIDDEN_EVENT }))
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: remote.SESSION_ENDED_EVENT }))
+  })
+
+  it('ログインの期限を返す(期限が近づいたら画面が知らせる)', async () => {
+    const s = await import('./session')
+    expect(s.getSessionExpiry()).toBeNull()
+    const exp = nowSec() + 600
+    s.saveSession('org_a', { token: 'valid', exp, remember: false })
+    expect(s.getSessionExpiry()).toBe(exp)
+  })
+
   it('権限が足りない(forbidden)だけなら、保存したトークンは消さず、ログイン画面に戻す合図も送らない', async () => {
     const s = await import('./session')
     const remote = await import('./remote')
@@ -162,7 +204,8 @@ describe('GAS との通信', () => {
     expect(s.loadSession('org_a')).toMatchObject({ token: 'valid' })
     expect(s.getSessionToken()).toBe('valid')
     const dispatch = (window as unknown as { dispatchEvent: ReturnType<typeof vi.fn> }).dispatchEvent
-    expect(dispatch).not.toHaveBeenCalled()
+    // ログイン画面に戻す合図は送らない(データを読み直す合図だけ)
+    expect(dispatch.mock.calls.map((c) => (c[0] as CustomEvent).type)).toEqual([remote.FORBIDDEN_EVENT])
   })
 
   it('送り直しで前回のログイン結果(初期データなし)を受け取ったら、そのセッションで初期データを読み直す', async () => {

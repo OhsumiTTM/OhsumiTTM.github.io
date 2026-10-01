@@ -753,7 +753,8 @@ export function googleCalendarUrl(
     dueTime?: string | null
     description?: string
   },
-  extra: { projectName?: string; department?: string; category?: string } = {},
+  // appLink: 予定からサイトを開くリンク(今の団体の /?org=<団体ID>)
+  extra: { projectName?: string; department?: string; category?: string; appLink?: string } = {},
 ): string | null {
   if (!task.deadline) return null
 
@@ -787,7 +788,7 @@ export function googleCalendarUrl(
     extra.department && `部門: ${extra.department}`,
     extra.category && `カテゴリ: ${extra.category}`,
     task.description,
-    'Ohsumiから追加',
+    extra.appLink ? `Ohsumiから追加: ${extra.appLink}` : 'Ohsumiから追加',
   ]
     .filter(Boolean)
     .join('\n')

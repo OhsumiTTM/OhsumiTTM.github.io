@@ -170,7 +170,7 @@ describe('初期設定コードで最初の代表が入る', () => {
 
   it('初期設定コードを付けないログインは、これまでどおり「登録されていない」を返す', () => {
     const { o } = started()
-    expect(o.login('someone@example.org').result).toEqual({ memberId: null, email: 'someone@example.org' })
+    expect(o.login('someone@example.org').result).toMatchObject({ memberId: null, email: 'someone@example.org' })
   })
 })
 
@@ -217,7 +217,7 @@ describe('すでにメンバーと代表がいる団体の登録', () => {
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/使えなくなっています/)
     expect(o.members).toEqual(members)
-    expect(o.login('stranger@example.org').result).toEqual({ memberId: null, email: 'stranger@example.org' })
+    expect(o.login('stranger@example.org').result).toMatchObject({ memberId: null, email: 'stranger@example.org' })
   })
 
   it('「初期設定コードを作り直す」も、代表がいる団体では作らない', () => {
