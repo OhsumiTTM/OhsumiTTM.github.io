@@ -50,6 +50,20 @@ import {
   type GasJudgement,
   type GasVersionEntry,
   type OrgMailSummary,
+  SURVEY_DUE_DAYS,
+  SURVEY_RESTRICT_DAY,
+  SURVEY_STATE_LABELS,
+  cancelSurvey,
+  markSurveyAnswered,
+  overdueSurveys,
+  saveAdminTab,
+  scheduleSurveyRestriction,
+  sendSurvey,
+  takeAdminTab,
+  todayJst,
+  type SendSurveyResult,
+  type SurveyState,
+  type SurveySummary,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -86,10 +100,17 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   testSuspendNow: '(テスト)今すぐ停止',
   testScheduleSuspension: '(テスト)停止の予定',
   testLiftSuspension: '(テスト)停止の解除',
+  sendSurvey: 'アンケートを送った',
+  sendSurveyMail: 'アンケートを担当者に送った(送付日)',
+  sendSurveyReminder: 'アンケートのリマインドを送った',
+  markSurveyAnswered: 'アンケートを回答済みにした',
+  cancelSurvey: 'アンケートの取り消し',
+  scheduleSurveyRestriction: 'アンケートの未回答で機能停止を入れた(28日目)',
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },
   { id: 'codes', label: '登録コード' },
+  { id: 'surveys', label: 'アンケート' },
   { id: 'audit', label: '操作の記録' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
@@ -155,6 +176,8 @@ export function RegistryAdmin() {
       setTab('codes')
     }
     setSuspendDraft(takeSuspensionDraft())
+    const savedTab = takeAdminTab()
+    if (!d && savedTab && TABS.some((t) => t.id === savedTab)) setTab(savedTab as TabId)
     setSession(s)
     setChecked(true)
     if (s) void load(s)
@@ -198,7 +221,7 @@ export function RegistryAdmin() {
         </div>
       }
     >
-      <nav className="mb-4 flex gap-1 border-b border-border" role="tablist">
+      <nav className="mb-4 flex gap-1 overflow-x-auto border-b border-border" role="tablist">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -234,6 +257,8 @@ export function RegistryAdmin() {
           onChanged={() => void load(session)}
           onAuthError={endSession}
         />
+      ) : tab === 'surveys' ? (
+        <SurveysPanel overview={overview} session={session} onChanged={() => void load(session)} onAuthError={endSession} />
       ) : (
         <AuditList audit={overview.audit} />
       )}
@@ -1037,5 +1062,278 @@ function AuditList({ audit }: { audit: AuditEntry[] }) {
         ))}
       </ul>
     </>
+  )
+}
+
+// ---- アンケート(PR O) ----
+//   - 送る: Google フォームの URL・送付日・対象(全団体・プラン・団体を選ぶ)。プランごとの年間の上限を超える団体には送らない(レジストリが判定)
+//   - 期限を過ぎて回答が無い団体(有償プランを除く): 「28日目に機能停止を入れる」を1回の操作で入れる(自動では入れない)
+//   - 一覧: 状態・送ったメール・「回答済みにする」(リマインドと機能停止を止める)・取り消し
+const SURVEY_STATE_TONES: Record<SurveyState, 'muted' | 'ok' | 'warn' | 'bad'> = { scheduled: 'muted', open: 'warn', overdue: 'bad', answered: 'ok', cancelled: 'muted' }
+
+function SurveysPanel({ overview, session, onChanged, onAuthError }: { overview: Overview; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const surveys = overview.surveys ?? []
+  const overdue = overdueSurveys(surveys)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [filter, setFilter] = useState<'active' | 'all'>('active')
+  if (!overview.surveys) return <p className="text-sm text-muted-foreground">このレジストリは、アンケートに対応していません(registry/Code.gs を更新してください)。</p>
+
+  const restrict = async (ids: string[]) => {
+    // 5分以内の Google でのログインが必要。古ければ、このタブを覚えてログインし直す
+    if (needsReauth(session)) {
+      saveAdminTab('surveys')
+      onAuthError()
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await scheduleSurveyRestriction(session, ids)
+      setMessage(`機能停止を入れました: ${res.scheduled.length} 団体` + (res.skipped.length ? `(入れなかった: ${res.skipped.map((s) => s.reason).join(' / ')})` : ''))
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.reauthRequired) { saveAdminTab('surveys'); onAuthError() }
+      else if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const restrictable = overdue.filter((s) => s.canRestrict)
+  const shown = filter === 'all' ? surveys : surveys.filter((s) => s.state !== 'answered' && s.state !== 'cancelled')
+
+  return (
+    <div className="space-y-5">
+      <SendSurveyForm overview={overview} session={session} onChanged={onChanged} onAuthError={onAuthError} />
+
+      <section data-survey-overdue className="rounded-lg border border-border p-3">
+        <h2 className="text-sm font-medium">期限を過ぎて回答が無い団体({overdue.length})</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          回答期限({SURVEY_DUE_DAYS}日目)を過ぎたアンケートです。有償プランの団体は出しません。「{SURVEY_RESTRICT_DAY}日目に機能停止を入れる」で、送付日から{SURVEY_RESTRICT_DAY}日目の0時(過ぎている時は翌日の0時)に機能停止(読み取り専用)の予定を入れ、担当者にメールで知らせます。自動では入れません。回答済みにすると、止まります。
+        </p>
+        {overdue.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">ありません。</p>
+        ) : (
+          <>
+            <ul className="mt-2 space-y-2">
+              {overdue.map((s) => (
+                <li key={s.surveyId} className="rounded-md bg-muted/50 px-2 py-1.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="min-w-0 font-medium break-all">{s.orgName || s.orgId}</span>
+                    <Badge>{PLAN_LABELS[s.plan]}</Badge>
+                    <span className="text-muted-foreground">{s.day}日目</span>
+                  </div>
+                  <p className="mt-0.5 break-all text-muted-foreground">{s.title}(期限 {s.dueDate})</p>
+                  {s.restrictAt ? (
+                    <p className="mt-0.5 text-red-700">機能停止の予定: {fmt(s.restrictAt)}</p>
+                  ) : s.canRestrict ? (
+                    <Button className="mt-1" size="sm" variant="outline" disabled={busy} onClick={() => void restrict([s.surveyId])}>{SURVEY_RESTRICT_DAY}日目に機能停止を入れる</Button>
+                  ) : (
+                    <p className="mt-0.5 text-muted-foreground">ほかの停止の予定(または停止)が入っています。</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {restrictable.length > 1 && (
+              <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void restrict(restrictable.map((s) => s.surveyId))}>
+                一覧の{restrictable.length}団体すべてに、{SURVEY_RESTRICT_DAY}日目の機能停止を入れる
+              </Button>
+            )}
+          </>
+        )}
+        {message && <p className="mt-2 text-sm break-words">{message}</p>}
+      </section>
+
+      <section>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">送ったアンケート</h2>
+          <label className="flex items-center gap-1.5 text-xs">
+            <input type="checkbox" checked={filter === 'all'} onChange={(e) => setFilter(e.target.checked ? 'all' : 'active')} />
+            回答済み・取り消しも出す
+          </label>
+        </div>
+        {shown.length === 0 ? (
+          <p className="text-xs text-muted-foreground">ありません。</p>
+        ) : (
+          <ul className="space-y-2">
+            {shown.map((s) => <SurveyItem key={s.surveyId} survey={s} session={session} onChanged={onChanged} onAuthError={onAuthError} />)}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overview: Overview; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [title, setTitle] = useState('')
+  const [formUrl, setFormUrl] = useState('')
+  const [sendDate, setSendDate] = useState(() => todayJst())
+  const [kind, setKind] = useState<'all' | 'plan' | 'orgs'>('all')
+  const [plan, setPlan] = useState<Plan>('ohsumi')
+  const [orgIds, setOrgIds] = useState<string[]>([])
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [result, setResult] = useState<SendSurveyResult | null>(null)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  const limits = overview.surveyLimits
+  const counts = overview.surveyYearCounts ?? {}
+  const orgName = (id: string) => overview.orgs.find((o) => o.orgId === id)?.displayName || id
+
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim()) return setMessage('アンケートの名前を入れてください。')
+    if (!/^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/.test(formUrl.trim())) return setMessage('Google フォームの URL(https://docs.google.com/forms/… か https://forms.gle/…)を入れてください。')
+    if (kind === 'orgs' && !orgIds.length) return setMessage('送る団体を選んでください。')
+    setBusy(true)
+    setMessage(null)
+    setResult(null)
+    try {
+      const target = kind === 'plan' ? { kind, plan } : kind === 'orgs' ? { kind, orgIds } : { kind }
+      const res = await sendSurvey(session, { title: title.trim(), formUrl: formUrl.trim(), sendDate, target, reason })
+      setResult(res)
+      if (res.sent.length) { setTitle(''); setFormUrl(''); setOrgIds([]); setReason('') }
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(`${err instanceof Error ? err.message : String(err)}(送られたかどうかは、下の一覧で確かめてください)`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form data-survey-send onSubmit={(e) => void send(e)} className="space-y-2 rounded-lg border border-border p-3">
+      <h2 className="text-sm font-medium">アンケートを送る</h2>
+      <p className="text-xs text-muted-foreground">
+        送付日に、団体の担当者へメールで送り、代表の管理画面に出します。回答期限は送付日から{SURVEY_DUE_DAYS}日目です。リマインドは 7・10・14日目、期限の後は 15・21・26・27日目に自動で送ります。
+      </p>
+      {limits && (
+        <p data-survey-limits className="text-xs text-muted-foreground">
+          年間の上限({overview.surveyYear}年。送付日の年で数え、取り消したものは数えません): {(['ohsumi', 'cosmo_base', 'paid'] as const).map((p) => `${PLAN_LABELS[p]} ${limits[p]}件`).join('・')}。上限に達した団体・プランが未設定の団体には送りません。
+        </p>
+      )}
+      <label className="block text-xs">
+        アンケートの名前(メールの本文と管理画面に出します)
+        <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={100} />
+      </label>
+      <label className="block text-xs">
+        Google フォームの URL
+        <input className={inputClass} type="url" inputMode="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} maxLength={500} placeholder="https://docs.google.com/forms/d/e/…/viewform" />
+      </label>
+      <label className="block text-xs">
+        送付日(日本時間)
+        <input className={inputClass} type="date" value={sendDate} min={todayJst()} onChange={(e) => setSendDate(e.target.value)} />
+      </label>
+      <fieldset className="space-y-1 text-xs">
+        <legend className="mb-1">送る団体</legend>
+        {([['all', '全団体'], ['plan', 'プランを選ぶ'], ['orgs', '団体を選ぶ']] as const).map(([k, label]) => (
+          <label key={k} className="mr-3 inline-flex items-center gap-1">
+            <input type="radio" name="survey-target" checked={kind === k} onChange={() => setKind(k)} />
+            {label}
+          </label>
+        ))}
+        {kind === 'plan' && (
+          <select className={inputClass} value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
+            {(['cosmo_base', 'ohsumi', 'paid'] as const).map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+          </select>
+        )}
+        {kind === 'orgs' && (
+          <ul className="max-h-60 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+            {overview.orgs.map((o) => {
+              const limit = o.plan && limits ? limits[o.plan] : null
+              return (
+                <li key={o.orgId}>
+                  <label className="flex min-w-0 items-start gap-1.5">
+                    <input type="checkbox" className="mt-0.5" checked={orgIds.includes(o.orgId)}
+                      onChange={(e) => setOrgIds((ids) => (e.target.checked ? [...ids, o.orgId] : ids.filter((x) => x !== o.orgId)))} />
+                    <span className="min-w-0 break-all">
+                      {o.displayName || o.orgId}
+                      <span className="ml-1 text-muted-foreground">({PLAN_LABELS[o.plan]}{limit !== null ? `・今年 ${counts[o.orgId] ?? 0} / ${limit}件` : ''})</span>
+                    </span>
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </fieldset>
+      <label className="block text-xs">
+        メモ(操作の記録に残します)
+        <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+      </label>
+      <Button type="submit" size="sm" disabled={busy}>{busy ? '送っています…' : sendDate === todayJst() ? '今日送る' : `${sendDate} に送る予定にする`}</Button>
+      {message && <p className="text-sm break-words text-destructive">{message}</p>}
+      {result && (
+        <div data-survey-result className="rounded-md bg-muted/50 p-2 text-xs">
+          <p>送った団体: {result.sent.length}{result.sent.length ? `(${result.sent.map((s) => orgName(s.orgId)).join('、')})` : ''}</p>
+          {result.skipped.length > 0 && (
+            <ul className="mt-1 space-y-0.5 text-red-700">
+              {result.skipped.map((s) => <li key={s.orgId} className="break-all">送らなかった: {orgName(s.orgId)} — {s.reason}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </form>
+  )
+}
+
+function SurveyItem({ survey: s, session, onChanged, onAuthError }: { survey: SurveySummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [cancelling, setCancelling] = useState(false)
+  const [reason, setReason] = useState('')
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      await fn()
+      setCancelling(false)
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const active = s.state !== 'answered' && s.state !== 'cancelled'
+  return (
+    <li data-survey-item className="rounded-md border border-border px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="min-w-0 font-medium break-all">{s.orgName || s.orgId}</span>
+        <Badge tone={SURVEY_STATE_TONES[s.state]}>{SURVEY_STATE_LABELS[s.state]}</Badge>
+        {s.plan && <Badge>{PLAN_LABELS[s.plan]}</Badge>}
+      </div>
+      <dl className="mt-1 space-y-0.5">
+        <Field label="アンケート">{s.title}</Field>
+        <Field label="フォーム"><a href={s.formUrl} target="_blank" rel="noopener noreferrer" className="underline">{s.formUrl}</a></Field>
+        <Field label="送付日・期限">{s.sendDate} 〜 {s.dueDate}{s.state === 'open' || s.state === 'overdue' ? `(${s.day}日目)` : ''}</Field>
+        <Field label="送ったメール">{s.remindersSent.length ? s.remindersSent.map((d) => (d === 0 ? '送付' : `${d}日目`)).join('・') : 'まだ'}</Field>
+        {s.restrictAt && <Field label="機能停止">{fmt(s.restrictAt)}</Field>}
+        {s.state === 'answered' && <Field label="回答済み">{fmt(s.answeredAt)}({s.answeredBy})</Field>}
+        <Field label="送った人">{s.createdBy}</Field>
+      </dl>
+      {active && !cancelling && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => markSurveyAnswered(session, s.surveyId))}>回答済みにする</Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setCancelling(true)}>取り消す…</Button>
+        </div>
+      )}
+      {active && cancelling && (
+        <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2">
+          <label className="block">
+            取り消す理由(操作の記録に残します。取り消したものは年間の数に数えず、リマインドと機能停止も止めます)
+            <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="destructive" disabled={busy || !reason.trim()} onClick={() => void act(() => cancelSurvey(session, s.surveyId, reason))}>取り消す</Button>
+            <Button size="sm" variant="ghost" onClick={() => setCancelling(false)}>やめる</Button>
+          </div>
+        </div>
+      )}
+      {message && <p className="mt-1 text-sm break-words text-destructive">{message}</p>}
+    </li>
   )
 }

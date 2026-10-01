@@ -171,11 +171,23 @@ export interface MetricsStatus {
   history: { period: string; at: string; ok: boolean; error: string; attempt: number }[]
 }
 
+/** FSIF からの回答待ちのアンケート(レジストリの checkIn が伝えたもの)。restrictAt: 未回答で入る機能停止の日時(無ければ空) */
+export interface PendingSurvey {
+  surveyId: string
+  title: string
+  formUrl: string
+  sendDate: string
+  dueDate: string
+  overdue: boolean
+  restrictAt: string
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
   // 古い GAS は返さない
   longRecords?: LongRecords
+  surveys?: PendingSurvey[]
 }
 
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */

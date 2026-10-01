@@ -4,8 +4,9 @@
 //   - 毎日の処理が26時間以上成功していない: 最後に成功した日時と、最後のエラー・直し方を出す
 //   - スプレッドシート・フォルダの共有に問題がある: 問題ごとに直し方を出し、直した後に「確かめ直す」で消せる
 //   - 1つの記録が上限(5万文字)の8割を超えている: 記録の種類ごとに件数と記録を出す(gas/Code.gs の longRecords_)
+//   - FSIF からの回答待ちのアンケート: 回答のリンク・回答期限・未回答で入る機能停止の日時を出す(gas/Code.gs の surveysStatus_)
 import { useEffect, useState } from 'react'
-import { FileWarning, ShieldAlert, TimerOff } from 'lucide-react'
+import { ClipboardList, ExternalLink, FileWarning, ShieldAlert, TimerOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { isRemoteConfigured, remoteApi, type OpsStatus, type SharingProblem } from '@/lib/ohsumi/remote'
@@ -22,6 +23,9 @@ const KIND_KEYS: Record<SharingProblem['kind'], TranslationKey> = {
   viewer: 'ops.sharing.kind.viewer',
   unknown: 'ops.sharing.kind.unknown',
 }
+// Google フォームの URL だけをリンクにする(GAS とレジストリでも確かめている)
+const FORM_URL = /^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/
+
 const FIX_KEYS: Record<SharingProblem['kind'], TranslationKey> = {
   link: 'ops.sharing.fix.link',
   editor: 'ops.sharing.fix.editor',
@@ -50,13 +54,16 @@ export function OpsBanner() {
   const problems = status.sharing.problems
   const longGroups = status.longRecords?.groups ?? []
   const longCount = longGroups.reduce((n, g) => n + g.count, 0)
-  if (!status.jobs.dailyStale && problems.length === 0 && longCount === 0) return null
+  const surveys = (status.surveys ?? []).filter((s) => FORM_URL.test(s.formUrl))
+  if (!status.jobs.dailyStale && problems.length === 0 && longCount === 0 && surveys.length === 0) return null
+  const fmtDay = (key: string) => new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'medium', timeZone: 'Asia/Tokyo' }).format(new Date(key + 'T00:00:00+09:00'))
 
   const recheck = async () => {
     setBusy(true)
     setError(null)
     try {
-      setStatus(await remoteApi.recheckSharing())
+      const next = await remoteApi.recheckSharing()
+      setStatus((prev) => ({ ...next, longRecords: next.longRecords ?? prev?.longRecords, surveys: next.surveys ?? prev?.surveys }))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -66,6 +73,28 @@ export function OpsBanner() {
 
   return (
     <div className="border-b border-border">
+      {surveys.length > 0 && (
+        <div role="status" data-ops-surveys className={'flex items-start gap-1.5 px-4 py-2 text-xs ' + (surveys.some((s) => s.overdue) ? 'bg-destructive/10 text-destructive' : 'bg-warning-muted text-warning')}>
+          <ClipboardList className="mt-px size-3.5 shrink-0" />
+          <div className="min-w-0 flex-1 break-words">
+            <p className="font-medium">{t('ops.surveys.title', { count: String(surveys.length) })}</p>
+            <ul className="mt-1 space-y-1.5">
+              {surveys.map((s) => (
+                <li key={s.surveyId} data-ops-survey>
+                  <span className="font-medium text-foreground">{s.title}</span>
+                  <span className="block">{s.overdue ? t('ops.surveys.overdue', { date: fmtDay(s.dueDate) }) : t('ops.surveys.due', { date: fmtDay(s.dueDate) })}</span>
+                  {s.restrictAt && <span className="block">{t('ops.surveys.restrict', { at: fmt(s.restrictAt) })}</span>}
+                  <a href={s.formUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 inline-flex items-center gap-1 font-medium text-primary underline underline-offset-2">
+                    {t('ops.surveys.open')}
+                    <ExternalLink className="size-3" />
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 text-foreground/80">{t('ops.surveys.desc')}</p>
+          </div>
+        </div>
+      )}
       {status.jobs.dailyStale && (
         <div role="status" data-ops-jobs className="flex items-start gap-1.5 bg-warning-muted px-4 py-2 text-xs text-warning">
           <TimerOff className="mt-px size-3.5 shrink-0" />
