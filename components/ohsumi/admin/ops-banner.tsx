@@ -3,11 +3,13 @@
 // 毎日の処理の止まりと、共有の警告(管理画面の上部。代表だけ)。gas/Code.gs の jobStatus_・checkSharing_
 //   - 毎日の処理が26時間以上成功していない: 最後に成功した日時と、最後のエラー・直し方を出す
 //   - スプレッドシート・フォルダの共有に問題がある: 問題ごとに直し方を出し、直した後に「確かめ直す」で消せる
+//   - 1つの記録が上限(5万文字)の8割を超えている: 記録の種類ごとに件数と記録を出す(gas/Code.gs の longRecords_)
 import { useEffect, useState } from 'react'
-import { ShieldAlert, TimerOff } from 'lucide-react'
+import { FileWarning, ShieldAlert, TimerOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { isRemoteConfigured, remoteApi, type OpsStatus, type SharingProblem } from '@/lib/ohsumi/remote'
+import { cellFieldLabel } from '@/lib/ohsumi/cell-limits'
 
 const TARGET_KEYS: Record<SharingProblem['target'], TranslationKey> = {
   spreadsheet: 'ops.sharing.target.spreadsheet',
@@ -46,7 +48,9 @@ export function OpsBanner() {
   if (!status) return null
   const fmt = (iso: string) => (iso ? new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso)) : t('ops.jobs.never'))
   const problems = status.sharing.problems
-  if (!status.jobs.dailyStale && problems.length === 0) return null
+  const longGroups = status.longRecords?.groups ?? []
+  const longCount = longGroups.reduce((n, g) => n + g.count, 0)
+  if (!status.jobs.dailyStale && problems.length === 0 && longCount === 0) return null
 
   const recheck = async () => {
     setBusy(true)
@@ -93,6 +97,25 @@ export function OpsBanner() {
               <span className="text-foreground/70">{t('ops.sharing.checkedAt', { at: fmt(status.sharing.checkedAt) })}</span>
             </div>
             {error && <p className="mt-1">{error}</p>}
+          </div>
+        </div>
+      )}
+      {longCount > 0 && (
+        <div role="status" data-ops-long-records className="flex items-start gap-1.5 bg-warning-muted px-4 py-2 text-xs text-warning">
+          <FileWarning className="mt-px size-3.5 shrink-0" />
+          <div className="min-w-0 flex-1 break-words">
+            <p className="font-medium">{t('ops.long.title', { count: String(longCount) })}</p>
+            <p className="mt-0.5 text-foreground/80">{t('ops.long.desc', { max: status.longRecords!.max.toLocaleString() })}</p>
+            <ul className="mt-1 space-y-1">
+              {longGroups.map((g) => (
+                <li key={g.sheet + ':' + g.field}>
+                  <span className="font-medium">{t('ops.long.group', { field: cellFieldLabel(g.field, t), count: String(g.count) })}</span>
+                  <span className="block text-foreground/80">
+                    {g.items.map((it) => t('ops.long.item', { name: it.name || it.id, length: it.length.toLocaleString() })).join(locale === 'en' ? ', ' : '、')}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}

@@ -129,9 +129,27 @@ export interface SharingProblem {
   detail: string
 }
 
+/** 1つのセルの上限の8割を超えている記録(gas/Code.gs の longRecords_)。記録の種類(シートと列)ごと */
+export interface LongRecordGroup {
+  sheet: string
+  field: string
+  label: string
+  count: number
+  items: { id: string; name: string; length: number }[]
+}
+
+export interface LongRecords {
+  warnAt: number
+  max: number
+  maxLength: number
+  groups: LongRecordGroup[]
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
+  // 古い GAS は返さない
+  longRecords?: LongRecords
 }
 
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */
@@ -198,6 +216,17 @@ export interface InviteMailStatus {
 export const SESSION_ENDED_EVENT = 'ohsumi:session-ended'
 // 通知の回数の上限を超えて、GAS が一部の通知を送らなかった時に window に送るイベント(ohsumi-app.tsx が知らせる)
 export const NOTIFY_LIMITED_EVENT = 'ohsumi:notify-limited'
+
+// 1つのセルの上限の8割を超えた記録を書いた時に window に送るイベント(ohsumi-app.tsx が書いた人に知らせる)
+export const LONG_RECORDS_EVENT = 'ohsumi:long-records'
+
+/** 1つのセルの上限(5万文字)を超えるため、GAS が保存を断った。texts: 書いた文章(画面はコピーできるように出す) */
+export class CellTooLongError extends Error {
+  constructor(message: string, readonly texts: string[] = []) {
+    super(message)
+    this.name = 'CellTooLongError'
+  }
+}
 
 /** 画面が古い(移行の後の GAS が、以前の画面からの書き込みを断った)。送ろうとした文章を残して、読み込み直してもらう */
 export class ReloadRequiredError extends Error {
@@ -875,6 +904,7 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
   if (json.session) applyRenewedSession(json.session)
   noteContractResponse(json)
   if (json.notifyLimited && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(NOTIFY_LIMITED_EVENT))
+  if (json.longRecords?.length && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(LONG_RECORDS_EVENT, { detail: json.longRecords }))
 
   // 提供停止中(R1-e): GAS はすべての操作を断る。ログインを終え、「利用を停止しています」を出すログイン画面に戻す
   if (!json.ok && json.orgSuspended) {
@@ -899,6 +929,11 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
 
   // 画面が古い: 書きかけを残したまま、読み込み直すよう案内する
   if (!json.ok && json.reloadRequired) throw new ReloadRequiredError(json.error || '画面が古くなりました。読み込み直してください。', extractUnsavedTexts(payload))
+  // 1つのセルの上限を超える: 書いた文章を残す(GAS が今回書いた文章を返さなかった時は、送った内容から取り出す)
+  if (!json.ok && json.cellTooLong) {
+    const texts = json.cellTooLong.texts ? extractUnsavedTexts(json.cellTooLong.texts) : extractUnsavedTexts(payload)
+    throw new CellTooLongError(json.error || 'この記録は長くなりすぎたため、保存できませんでした。', texts)
+  }
   // 権限が足りない: 役職が変わったかもしれないので、画面のデータを読み直す(store.tsx)
   if (!json.ok && json.forbidden && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(FORBIDDEN_EVENT))
 

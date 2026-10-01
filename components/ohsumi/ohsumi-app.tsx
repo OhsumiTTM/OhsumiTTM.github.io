@@ -8,7 +8,9 @@ import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { ContractBanner } from './contract-banner'
 import { ReadOnlyInputs, ReadOnlyNotice, SessionExpiryBanner } from './read-only-guard'
-import { NOTIFY_LIMITED_EVENT } from '@/lib/ohsumi/remote'
+import { LONG_RECORDS_EVENT, NOTIFY_LIMITED_EVENT } from '@/lib/ohsumi/remote'
+import type { LongRecordWritten } from '@/lib/ohsumi/gas-transport'
+import { cellFieldLabel } from '@/lib/ohsumi/cell-limits'
 import { ToastProvider, useToast } from './toast'
 import { LoginScreen } from './login-screen'
 import { OnboardingScreen } from './onboarding-screen'
@@ -84,6 +86,23 @@ function NotifyLimitedWatcher() {
     const on = () => toast(t('app.notifyLimited'))
     window.addEventListener(NOTIFY_LIMITED_EVENT, on)
     return () => window.removeEventListener(NOTIFY_LIMITED_EVENT, on)
+  }, [toast, t])
+  return null
+}
+
+// 1つの記録が上限(5万文字)の8割を超えた時に、書いた人に知らせる(保存は済んでいる。代表にはまとめのメールで知らせる)
+function LongRecordsWatcher() {
+  const toast = useToast()
+  const { t } = useI18n()
+  useEffect(() => {
+    const on = (e: Event) => {
+      const records = (e as CustomEvent<LongRecordWritten[]>).detail ?? []
+      records.forEach((r) => toast(t('app.longRecordWritten', {
+        name: r.name || r.id, field: cellFieldLabel(r.field, t), length: r.length.toLocaleString(), max: r.max.toLocaleString(),
+      })))
+    }
+    window.addEventListener(LONG_RECORDS_EVENT, on)
+    return () => window.removeEventListener(LONG_RECORDS_EVENT, on)
   }, [toast, t])
   return null
 }
@@ -253,6 +272,7 @@ export function OhsumiApp() {
           <ToastProvider>
             <SkillCertifiedWatcher />
             <NotifyLimitedWatcher />
+            <LongRecordsWatcher />
             <LocaleSyncWatcher />
             <ThemeColorWatcher />
             <NavProvider>

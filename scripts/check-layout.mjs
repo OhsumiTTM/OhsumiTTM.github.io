@@ -71,6 +71,8 @@ export const STEPS = [
   { name: 'ログインが切れた時(送れなかったコメントを出す・書きかけを残す)', do: 'unsaved', fail: 'authError', view: 'リスト', text: '担当者が多いタスク' },
   { name: '画面が古い時(送れなかったコメントを出す・読み込み直す)', do: 'unsaved', fail: 'reloadRequired', view: 'リスト', text: '担当者が多いタスク' },
   { name: '権限が足りない時(データを読み直す)', do: 'unsaved', fail: 'forbidden', view: 'リスト', text: '担当者が多いタスク' },
+  // 1つの記録が長くなりすぎた時(PR I): 断られたコメントをコピーできるように出す
+  { name: '記録が長くなりすぎた時(送れなかったコメントを出す)', do: 'unsaved', fail: 'cellTooLong', view: 'リスト', text: '担当者が多いタスク' },
   { name: 'ログインの期限が近い時の知らせ', do: 'sessionExpiry' },
 ]
 
@@ -352,6 +354,12 @@ async function run({ build = true } = {}) {
             { target: 'spreadsheet', kind: 'link', detail: 'ANYONE_WITH_LINK' },
             { target: 'spreadsheet', kind: 'editor', detail: 'former.leader.with.a.long.address@example.com' },
             { target: 'uploads', kind: 'viewer', detail: 'member@example.com' },
+          ] },
+          // 1つのセルの上限の8割を超えている記録
+          longRecords: { warnAt: 40000, max: 50000, maxLength: 47210, groups: [
+            { sheet: 'Members', field: 'one_on_ones_json', label: '1on1 の記録', count: 2, items: [
+              { id: 'm1', name: 'とても長い名前のメンバーさん'.repeat(2), length: 47210 }, { id: 'm2', name: '', length: 41000 }] },
+            { sheet: 'Tasks', field: 'comments_json', label: 'コメント', count: 1, items: [{ id: 't1', name: 'コメントが多いタスク', length: 40500 }] },
           ] } }
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
@@ -402,7 +410,8 @@ async function run({ build = true } = {}) {
         if (body.action === 'getInitialData') initialDataCalls++
         // 書き込みを断る(ログインが切れた・画面が古い・権限が足りない)
         if (failWrites && !LAYOUT_READ_ACTIONS.includes(body.action)) {
-          return fulfill('application/json', JSON.stringify({ ok: false, [failWrites]: true, error: '断りました(' + failWrites + ')' }))
+          const failValue = failWrites === 'cellTooLong' ? { sheet: 'Tasks', field: 'comments_json', length: 50120, max: 50000, texts: null } : true
+          return fulfill('application/json', JSON.stringify({ ok: false, [failWrites]: failValue, error: '断りました(' + failWrites + ')' }))
         }
         return fulfill('application/json', JSON.stringify({ ok: true, result: gas(body), ...(contract ? { contract } : {}) }))
       }
@@ -707,6 +716,10 @@ async function run({ build = true } = {}) {
           for (const want of ['毎日の処理が 26 時間以上成功していません', 'setupOhsumi を実行', 'スプレッドシート・フォルダの共有を直してください(3 件)', '「制限付き」', 'former.leader.with.a.long.address@example.com を外して', '直したので確かめ直す']) {
             if (!ops.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + ops)
           }
+          const long = await evaluate(`document.querySelector('[data-ops-long-records]')?.textContent ?? ''`)
+          for (const want of ['長くなっている記録があります(3 件)', '1on1 の記録: 2 件', 'コメント: 1 件', '47,210 文字', 'm2(41,000 文字)']) {
+            if (!long.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + long)
+          }
           const privacyBanner = await evaluate(`document.querySelector('[data-personal-data-banner]')?.textContent ?? ''`)
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
@@ -808,6 +821,7 @@ async function run({ build = true } = {}) {
             if (!notice || notice.kind !== wantKind) throw new Error('保存できなかった知らせが出ません(' + JSON.stringify(notice) + ')')
             if (!notice.texts.some((t) => t.includes(comment))) throw new Error('送れなかったコメントが、知らせに残っていません')
             if (step.fail === 'reloadRequired' && !notice.text.includes('読み込み直す')) throw new Error('「読み込み直す」がありません')
+            if (step.fail === 'cellTooLong' && initialDataCalls <= readsBefore) throw new Error('記録が長くなりすぎて断られても、保存されている内容に戻しません')
             if (step.fail === 'authError') {
               if (!(await evaluate(`!!document.querySelector('[data-layout-gsi]')`))) throw new Error('ログイン画面に戻りません')
               if (!(await evaluate(`!!localStorage.getItem('${'${DRAFT_KEY}'}')`.replace('${DRAFT_KEY}', DRAFT_KEY)))) throw new Error('ログインが切れた時に、INPUT の書きかけが消えました')
