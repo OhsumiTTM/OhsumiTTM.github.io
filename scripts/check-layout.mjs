@@ -124,6 +124,8 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(プランを変える)', do: 'registryPlan' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
+  { name: 'レジストリ管理(アンケート)', do: 'click', text: 'アンケート', from: '[role=tab]' },
+  { name: 'レジストリ管理(アンケートの送り先を選ぶ)', do: 'registrySurveys' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
 ]
 
@@ -154,6 +156,18 @@ export function registryResponse(body) {
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
+        surveyLimits: { ohsumi: 24, cosmo_base: 12, paid: 4 },
+        survey12mCounts: { ['org_' + 'x'.repeat(40)]: 12, org_b: 0, org_r: 3, org_c: 4 },
+        surveys: [
+          { surveyId: 'sv_1', orgId: 'org_r', orgName: '機能停止中の団体', plan: 'ohsumi', title: '2026年秋の利用状況のアンケート(とても長い名前の例です)'.repeat(2), formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform',
+            sendDate: '2026-09-01', dueDate: '2026-09-15', state: 'overdue', day: 30, remindersSent: [0, 7, 10, 14, 15, 21, 26, 27], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: iso(2), canRestrict: false },
+          { surveyId: 'sv_2', orgId: 'org_' + 'x'.repeat(40), orgName: long, plan: 'cosmo_base', title: '秋のアンケート', formUrl: 'https://forms.gle/abcdefghijk',
+            sendDate: '2026-09-10', dueDate: '2026-09-24', state: 'overdue', day: 21, remindersSent: [0, 7, 10, 14, 15, 21], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: true },
+          { surveyId: 'sv_3', orgId: 'org_c', orgName: '停止中の団体', plan: 'paid', title: '秋のアンケート', formUrl: 'https://forms.gle/abcdefghijk',
+            sendDate: '2026-09-10', dueDate: '2026-09-24', state: 'overdue', day: 21, remindersSent: [0, 7, 10, 14, 15, 21], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: false },
+          { surveyId: 'sv_4', orgId: 'org_b', orgName: '停止予定の団体', plan: '', title: '冬のアンケート', formUrl: 'https://forms.gle/zzz',
+            sendDate: '2026-10-20', dueDate: '2026-11-03', state: 'scheduled', day: -19, remindersSent: [], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: false },
+        ],
         audit: [
           { at: iso(4), actor: 'registry.admin.with.a.long.address@example.com', action: 'scheduleSuspension', target: 'org_r', before: '', after: JSON.stringify({ kind: 'restrict', suspendAt: iso(2) }), reason: 'アンケートの未回答' },
           { at: iso(3), actor: 'registry.admin.with.a.long.address@example.com', action: 'issueRegistrationCode', target: 'rc_0abcdefghij', before: '', after: JSON.stringify({ orgName: long, contactEmail: 'contact.person.long.address@example.org', expiresAt: iso(14) }), reason: '' },
@@ -362,7 +376,12 @@ async function run({ build = true } = {}) {
             { sheet: 'Members', field: 'one_on_ones_json', label: '1on1 の記録', count: 2, items: [
               { id: 'm1', name: 'とても長い名前のメンバーさん'.repeat(2), length: 47210 }, { id: 'm2', name: '', length: 41000 }] },
             { sheet: 'Tasks', field: 'comments_json', label: 'コメント', count: 1, items: [{ id: 't1', name: 'コメントが多いタスク', length: 40500 }] },
-          ] } }
+          ] },
+          // FSIF からの回答待ちのアンケート(期限を過ぎて、機能停止の予定が入ったもの)
+          surveys: [
+            { surveyId: 'sv_1', title: '2026年秋の利用状況のアンケート(とても長い名前の例です)'.repeat(2), formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: true, restrictAt: '2026-10-07T15:00:00.000Z' },
+            { surveyId: 'sv_2', title: 'javascript の URL は出さない', formUrl: 'javascript:alert(1)', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: false, restrictAt: '' },
+          ] }
         // FSIF に送る集計値(プレビューと履歴)
         case 'getMetricsStatus': return { plan: 'cosmo_base', mandatory: false, defaultOn: true, enabled: true, slot: { dow: 3, hour: 14 },
           nextAt: '2026-10-07T05:00:00.000Z', definitionsVersion: 1,
@@ -735,6 +754,11 @@ async function run({ build = true } = {}) {
           for (const want of ['長くなっている記録があります(3 件)', '1on1 の記録: 2 件', 'コメント: 1 件', '47,210 文字', 'm2(41,000 文字)']) {
             if (!long.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + long)
           }
+          const surveys = await evaluate(`(document.querySelector('[data-ops-surveys]')?.textContent ?? '') + '|' + [...document.querySelectorAll('[data-ops-surveys] a')].map((a) => a.getAttribute('href')).join(',')`)
+          for (const want of ['FSIF からのアンケートへの回答をお願いします(1 件)', '回答期限(2026/09/24)を過ぎています', 'から読み取り専用になります', '回答する', 'https://docs.google.com/forms/d/e/']) {
+            if (!surveys.includes(want)) throw new Error('管理画面に「' + want + '」が出ません: ' + surveys)
+          }
+          if (surveys.includes('javascript')) throw new Error('Google フォームでない URL のアンケートを出しています')
           const privacyBanner = await evaluate(`document.querySelector('[data-personal-data-banner]')?.textContent ?? ''`)
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
@@ -790,6 +814,18 @@ async function run({ build = true } = {}) {
         if (step.do === 'registryPlan') {
           await clickText('プランを変える…'); await sleep(500)
           if (!(await evaluate(`[...document.querySelectorAll('select option')].some((o) => o.textContent === '有償プラン')`))) throw new Error('プランを選ぶ欄が出ません')
+        }
+        if (step.do === 'registrySurveys') {
+          const text = await evaluate(`document.body.textContent`)
+          for (const want of ['アンケートを送る', 'Ohsumiプラン 24件・Cosmo Baseプラン 12件・有償プラン 4件', '期限を過ぎて回答が無い団体(2)', '28日目に機能停止を入れる', '機能停止の予定:', '送付前']) {
+            if (!text.includes(want)) throw new Error('アンケートのタブに「' + want + '」が出ません')
+          }
+          // 有償プランの団体は、期限を過ぎた一覧に出さない
+          if ((await evaluate(`[...document.querySelectorAll('[data-survey-overdue] li')].map((li) => li.textContent).join('|')`)).includes('有償プラン')) throw new Error('有償プランの団体を、期限を過ぎた一覧に出しています')
+          // 団体を選ぶ(今年の数と上限を出す)
+          await evaluate(`[...document.querySelectorAll('[data-survey-send] input[type=radio]')][2].click()`)
+          await sleep(300)
+          if (!(await evaluate(`document.querySelector('[data-survey-send]').textContent`)).includes('直近12か月 12 / 12件')) throw new Error('団体を選ぶ欄に、今年の数と上限が出ません')
         }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)

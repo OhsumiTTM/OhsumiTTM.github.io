@@ -160,6 +160,90 @@ export interface Overview {
   codeTtlDays: number
   // 団体の GAS の版の一覧(新しい順。古いレジストリでは無い)
   gasVersions?: GasVersionEntry[]
+  // アンケート(新しい順)・プランごとの上限(直近12か月)(古いレジストリでは無い)
+  surveys?: SurveySummary[]
+  surveyLimits?: Record<Plan, number>
+  // 団体ごとの直近12か月の数(送付の予定を含む)
+  survey12mCounts?: Record<string, number>
+}
+
+// ---- アンケート(PR O) ----
+// scheduled: 送付日の前 / open: 回答待ち(期限内) / overdue: 期限(14日目)を過ぎて回答が無い / answered: 回答済み / cancelled: 取り消し
+export type SurveyState = 'scheduled' | 'open' | 'overdue' | 'answered' | 'cancelled'
+export const SURVEY_STATE_LABELS: Record<SurveyState, string> = {
+  scheduled: '送付前', open: '回答待ち', overdue: '期限を過ぎて未回答', answered: '回答済み', cancelled: '取り消し',
+}
+// 送付日を0日目として、メールを送る日(0 は送付)。期限は14日目、機能停止は28日目
+export const SURVEY_REMINDER_DAYS = [0, 7, 10, 14, 15, 21, 26, 27]
+export const SURVEY_DUE_DAYS = 14
+export const SURVEY_RESTRICT_DAY = 28
+
+export interface SurveySummary {
+  surveyId: string
+  orgId: string
+  orgName: string
+  plan: Plan | ''
+  title: string
+  formUrl: string
+  sendDate: string // 日本時間の YYYY-MM-DD
+  dueDate: string
+  state: SurveyState
+  // 送付日から何日目か(送付日が0。送付前は負)
+  day: number
+  remindersSent: number[]
+  answeredAt: string
+  answeredBy: string
+  createdBy: string
+  createdAt: string
+  // このアンケートで入れた機能停止の日時(無ければ空)
+  restrictAt: string
+  // 「28日目に機能停止を入れる」を出せるか(期限を過ぎて未回答・有償プランでない・ほかの停止の予定が無い)
+  canRestrict: boolean
+}
+
+export type SurveyTarget = { kind: 'all' } | { kind: 'plan'; plan: Plan } | { kind: 'orgs'; orgIds: string[] }
+
+export interface SurveyInput {
+  title: string
+  formUrl: string
+  sendDate: string
+  target: SurveyTarget
+  reason: string
+}
+
+export interface SendSurveyResult {
+  sent: { orgId: string; surveyId: string; mailed: number }[]
+  skipped: { orgId: string; reason: string }[]
+}
+
+/** 期限を過ぎて回答が無い団体の一覧(有償プランの団体は出さない) */
+export function overdueSurveys(surveys: SurveySummary[]): SurveySummary[] {
+  return surveys.filter((s) => s.state === 'overdue' && s.plan !== 'paid')
+}
+
+/** 日本時間の今日('YYYY-MM-DD') */
+export function todayJst(nowMs = Date.now()): string {
+  return new Date(nowMs + 9 * 3600 * 1000).toISOString().slice(0, 10)
+}
+
+/** アンケートを送る。送り直さない(二重に送らないため。失敗した時は一覧を読み直して確かめる) */
+export function sendSurvey(session: AdminSession, input: SurveyInput): Promise<SendSurveyResult> {
+  return callRegistry<SendSurveyResult>('sendSurvey', { session: session.token, ...input })
+}
+
+/** 回答済みにする(リマインドと、このアンケートで入れた機能停止を止める)。送り直さない */
+export function markSurveyAnswered(session: AdminSession, surveyId: string, reason = ''): Promise<SurveySummary> {
+  return callRegistry<SurveySummary>('markSurveyAnswered', { session: session.token, surveyId, reason })
+}
+
+/** 送ったアンケートを取り消す(送り間違いなど。年間の数に数えない)。送り直さない */
+export function cancelSurvey(session: AdminSession, surveyId: string, reason: string): Promise<SurveySummary> {
+  return callRegistry<SurveySummary>('cancelSurvey', { session: session.token, surveyId, reason })
+}
+
+/** 期限を過ぎて回答が無い団体に、28日目の機能停止を入れる(5分以内の Google でのログインが必要)。送り直さない */
+export function scheduleSurveyRestriction(session: AdminSession, surveyIds: string[], reason = ''): Promise<{ scheduled: { surveyId: string; orgId: string; restrictAt: string }[]; skipped: { surveyId: string; reason: string }[] }> {
+  return callRegistry('scheduleSurveyRestriction', { session: session.token, surveyIds, reason })
 }
 
 export interface IssuedCode {
@@ -374,6 +458,23 @@ export function takeSuspensionDraft(): SuspensionInput | null {
     const raw = tabStorage()?.getItem(SUSPEND_DRAFT_KEY)
     tabStorage()?.removeItem(SUSPEND_DRAFT_KEY)
     return raw ? (JSON.parse(raw) as SuspensionInput) : null
+  } catch {
+    return null
+  }
+}
+
+// ログインし直した後に、同じタブ(アンケートなど)を開く(このタブだけ)
+const TAB_KEY = 'ohsumi-registry-admin-tab'
+
+export function saveAdminTab(tab: string) {
+  try { tabStorage()?.setItem(TAB_KEY, tab) } catch { /* ignore */ }
+}
+
+export function takeAdminTab(): string | null {
+  try {
+    const v = tabStorage()?.getItem(TAB_KEY) ?? null
+    tabStorage()?.removeItem(TAB_KEY)
+    return v
   } catch {
     return null
   }

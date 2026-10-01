@@ -195,6 +195,8 @@ function dailyRegistryBackup() {
 
     // 停止の予告(14日前・7日前・1日前)を、団体の担当者にメールで送る(失敗してもバックアップは続ける)
     try { sendSuspensionNotices_(Date.now()) } catch (noticeErr) { console.error('停止の予告を送れませんでした: ' + noticeErr) }
+    // アンケート: 送付日になったものと、リマインド(7・10・14・15・21・26・27日目)を送る
+    try { sendSurveyMails_(Date.now()) } catch (surveyErr) { console.error('アンケートのメールを送れませんでした: ' + surveyErr) }
 
     var folder = backupFolder_()
     var ss = SpreadsheetApp.getActiveSpreadsheet()
@@ -231,7 +233,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-10'
+var REGISTRY_VERSION = '2026.10.01-11'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -246,7 +248,9 @@ var REGISTRY_SHEETS = {
     // メールの1日の上限(checkIn で団体の GAS が伝える): 残りの数・その日に送れなかった数・その日・最後に上限に達した日
     'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date',
     // 毎日・毎時の処理が最後に成功した時刻(checkIn で団体の GAS が伝える)
-    'daily_job_at', 'hourly_job_at'],
+    'daily_job_at', 'hourly_job_at',
+    // アンケートの未回答で入れた機能停止の、アンケートのID(回答済みにした時に、この停止を止める)
+    'suspend_survey_id'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
@@ -257,6 +261,9 @@ var REGISTRY_SHEETS = {
   // register_nonce_hash は、最後の登録の送り直しを見分けるための値(団体の GAS が作ってスクリプトプロパティに
   // 保存した乱数 registerNonce)の SHA-256
   Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_nonce_hash'],
+  // アンケート(管理画面から送る)。send_date は送付日(日本時間の YYYY-MM-DD)、status は open / answered / cancelled、
+  // reminders_json は送ったメール(送付日から何日目か)の記録
+  Surveys: ['survey_id', 'org_id', 'title', 'form_url', 'send_date', 'status', 'reminders_json', 'answered_at', 'answered_by', 'created_by', 'created_at', 'note'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
   // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
   // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
@@ -301,6 +308,10 @@ var REGISTRY_ACTIONS = {
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
+  sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
+  markSurveyAnswered: function (body) { return closeSurvey_(body, Date.now(), 'answered') },
+  cancelSurvey: function (body) { return closeSurvey_(body, Date.now(), 'cancelled') },
+  scheduleSurveyRestriction: function (body) { return scheduleSurveyRestriction_(body, Date.now()) },
 }
 
 function registryJson_(obj) {
@@ -748,6 +759,7 @@ function adminOverview_(body, nowMs) {
     return { at: isoOf_(r.values.at), actor: String(r.values.actor || ''), action: String(r.values.action || ''), target: String(r.values.target || ''),
       before: String(r.values.before || ''), after: String(r.values.after || ''), reason: String(r.values.reason || '') }
   })
+  var so = surveyOverview_(nowMs)
   return {
     ok: true,
     result: {
@@ -757,6 +769,9 @@ function adminOverview_(body, nowMs) {
       audit: audit,
       codeTtlDays: REGISTRATION_CODE_TTL_DAYS,
       gasVersions: gasVersionList_(),
+      surveys: so.surveys,
+      surveyLimits: so.surveyLimits,
+      survey12mCounts: so.survey12mCounts,
     },
   }
 }
@@ -1234,13 +1249,13 @@ function testSetSuspension_(mode, nowMs) {
     var row = findOrgRow_(orgId)
     if (!row) throw new Error('TEST_ORG_ID の団体(' + orgId + ')が Orgs にありません。')
     var before = contractState_(row.values, nowMs)
-    var fields = mode === 'lift'
+    var fields = unlinkSurvey_(row.values, mode === 'lift'
       ? { status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '' }
       : {
           suspend_at: new Date(mode === 'now' ? nowMs : nowMs + days * 24 * 3600 * 1000).toISOString(), suspend_kind: kind,
           suspend_reason: '(テスト)' + (kind === 'restrict' ? '機能停止' : '提供停止') + 'の確かめ', suspend_scheduled_by: 'editor(test)',
           suspend_notices_json: '[]',
-        }
+        })
     fields.updated_at = new Date(nowMs).toISOString()
     setRowFields_('Orgs', row.row, fields)
     var after = merged_(row.values, fields)
@@ -1297,6 +1312,7 @@ function scheduleSuspension_(body, nowMs) {
       suspend_at: new Date(at).toISOString(), suspend_kind: kind, suspend_reason: reason, suspend_scheduled_by: session.sub,
       suspend_notices_json: '[]', updated_at: new Date(nowMs).toISOString(),
     }
+    unlinkSurvey_(row.values, fields)
     setRowFields_('Orgs', row.row, fields)
     var after = merged_(row.values, fields)
     rememberOrgFingerprint_(orgId, after)
@@ -1366,6 +1382,7 @@ function clearSuspension_(body, nowMs) {
       status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '',
       updated_at: new Date(nowMs).toISOString(),
     }
+    unlinkSurvey_(row.values, fields)
     setRowFields_('Orgs', row.row, fields)
     var after = merged_(row.values, fields)
     rememberOrgFingerprint_(orgId, after)
@@ -1426,7 +1443,9 @@ function checkIn_(body, nowMs) {
   var gasUpdate = { required: vs.versionState === 'updateRequired', outdated: vs.versionState !== 'latest', latest: vs.latest, minimum: vs.minimum, security: vs.security }
   // プラン(団体の GAS が、集計値を送るかの決まりに使う。空は未設定)
   var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
-  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate, plan: plan } }
+  return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate, plan: plan,
+    // 回答待ちのアンケート(代表の管理画面に出す)
+    surveys: openSurveysFor_(orgId, row.values, nowMs) } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -1484,6 +1503,408 @@ function reportMetrics_(body, nowMs) {
   }
 }
 
+// ---- アンケート(R2: PR O) ----
+//
+// 管理画面から、Google フォームの URL と送付日を、対象の団体(全団体・プラン別・団体を選ぶ)に送る。
+//   - 送付日の当日に、担当者(Contacts)へメールで送る(送付日が今日なら、その場で送る)。団体の GAS には checkIn で伝え、代表の管理画面に出す
+//   - 回答期限は送付日から14日目。リマインドは 7・10・14日目、期限の後は 15・21・26・27日目に、毎日の処理(dailyRegistryBackup)から送る
+//     (処理が止まっていた時は、まだ送っていないいちばん新しいものだけを送る)
+//   - プランごとの上限(直近12か月。送付日で数え、どの12か月の間でも超えないようにする。取り消したものは数えない): SURVEY_YEAR_LIMITS。
+//     プランが未設定の団体には送らない
+//   - 回答の確認は、当面 FSIF が管理画面で「回答済み」を押す。押すと、リマインドとこのアンケートで入れた機能停止(予定・停止中とも)を止める
+//   - 期限を過ぎても回答が無い団体(有償プランを除く)は、管理画面の一覧から「28日目に機能停止を入れる」を1回の操作で入れられる(自動では入れない)。
+//     28日目(送付日から28日後の0時・日本時間)を過ぎている時は、翌日の0時にする。入れた時に担当者へ知らせ、停止の予告(14・7・1日前)は送らない
+//     (リマインドで知らせるため)
+// 日付は日本時間の 'YYYY-MM-DD'(Utilities.formatDate を使わない。日本時間に夏時間は無い)
+var SURVEY_YEAR_LIMITS = { ohsumi: 24, cosmo_base: 12, paid: 4 }
+var SURVEY_DUE_DAYS = 14
+var SURVEY_REMINDER_DAYS = [0, 7, 10, 14, 15, 21, 26, 27]
+var SURVEY_RESTRICT_DAY = 28
+var SURVEY_SEND_AHEAD_DAYS = 90
+var SURVEY_STATUSES = ['open', 'answered', 'cancelled']
+var SURVEY_FORM_URL_PATTERN = /^https:\/\/(docs\.google\.com\/forms\/[A-Za-z0-9_\-\/.?=&%]+|forms\.gle\/[A-Za-z0-9_-]+)$/
+var SURVEY_SHOW_MAX = 300
+// フォームの URL の長さ(団体の GAS は、回答待ちのアンケートをスクリプトプロパティに覚える。1つの値は9KBまで)
+var SURVEY_FORM_URL_MAX = 300
+var JST_OFFSET_MS = 9 * 3600 * 1000
+var DAY_MS = 24 * 3600 * 1000
+
+function jstDateKey_(ms) { return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10) }
+// 'YYYY-MM-DD'(日本時間)の0時の時刻
+function jstMidnightMs_(key) { return Date.parse(key + 'T00:00:00Z') - JST_OFFSET_MS }
+function addDaysKey_(key, days) { return jstDateKey_(jstMidnightMs_(key) + days * DAY_MS) }
+function daysBetweenKeys_(from, to) { return Math.round((jstMidnightMs_(to) - jstMidnightMs_(from)) / DAY_MS) }
+function jaDate_(key) { var p = String(key).split('-'); return Number(p[0]) + '年' + Number(p[1]) + '月' + Number(p[2]) + '日' }
+
+// 送付日の列の値(シートが日付に変えた時も、日本時間の 'YYYY-MM-DD' にそろえる)
+function surveyDateKey_(v) {
+  if (v instanceof Date) return jstDateKey_(v.getTime())
+  var s = String(v === undefined || v === null ? '' : v).slice(0, 10)
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : ''
+}
+
+function surveyRemindersSent_(values) {
+  try {
+    var list = JSON.parse(String(values.reminders_json || '[]'))
+    return Array.isArray(list) ? list : []
+  } catch (e) {
+    return []
+  }
+}
+
+// アンケートの状態(Google のサービスを使わない純粋な関数)。
+//   state: scheduled(送付日の前)/ open(回答待ち・期限内)/ overdue(期限を過ぎて回答が無い)/ answered / cancelled
+//   day: 送付日から何日目か(送付日が0)
+function surveyState_(values, nowMs) {
+  var status = SURVEY_STATUSES.indexOf(String(values.status || '')) >= 0 ? String(values.status) : 'open'
+  var sendDate = surveyDateKey_(values.send_date)
+  var day = sendDate ? daysBetweenKeys_(sendDate, jstDateKey_(nowMs)) : 0
+  var state = status !== 'open' ? status : day < 0 ? 'scheduled' : day > SURVEY_DUE_DAYS ? 'overdue' : 'open'
+  return { state: state, day: day, sendDate: sendDate, dueDate: sendDate ? addDaysKey_(sendDate, SURVEY_DUE_DAYS) : '' }
+}
+
+// 送るメール(純粋な関数): まだ送っていない、いちばん新しい送る日。無ければ null
+function dueSurveyReminder_(values, nowMs) {
+  var s = surveyState_(values, nowMs)
+  if (s.state !== 'open' && s.state !== 'overdue') return null
+  var due = SURVEY_REMINDER_DAYS.filter(function (d) { return d <= s.day })
+  if (!due.length) return null
+  var latest = Math.max.apply(null, due)
+  var sent = surveyRemindersSent_(values).map(function (r) { return Number(r.day) })
+  return sent.indexOf(latest) >= 0 ? null : latest
+}
+
+// 28日目に入れる機能停止の時刻(過ぎていれば翌日の0時)
+function surveyRestrictAt_(sendDate, nowMs) {
+  var at = jstMidnightMs_(addDaysKey_(sendDate, SURVEY_RESTRICT_DAY))
+  return at > nowMs ? at : jstMidnightMs_(addDaysKey_(jstDateKey_(nowMs), 1))
+}
+
+function surveyText_(orgName, values, day, restrictAt) {
+  var s = surveyState_(values, Date.now())
+  var title = String(values.title || 'アンケート')
+  var due = jaDate_(s.dueDate)
+  var head = orgName + ' ご担当者さま\n\n'
+  var link = '\n\nアンケート: ' + title + '\n回答はこちら: ' + String(values.form_url || '') + '\n回答期限: ' + due + '\n\n' +
+    'Ohsumi の代表の方の管理画面にも表示しています。ご回答の後、FSIF が確認します。ご不明な点は FSIF にお問い合わせください。'
+  var restrict = restrictAt ? '\n\n回答が確認できない時は、' + Utilities.formatDate(new Date(restrictAt), 'Asia/Tokyo', 'yyyy年M月d日 H:mm') +
+    ' から Ohsumi が読み取り専用になります(閲覧と書き出しはできますが、作成・編集はできなくなります)。回答が確認でき次第、再開します。' : ''
+  if (day === 0) {
+    return { subject: '[Ohsumi] ' + orgName + ': アンケートへのご回答のお願い(回答期限 ' + due + ')',
+      body: head + 'Ohsumi の改善のため、アンケートへのご回答をお願いします。' + link }
+  }
+  if (day <= SURVEY_DUE_DAYS) {
+    return { subject: '[Ohsumi] ' + orgName + ': アンケートへのご回答のお願い' + (day === SURVEY_DUE_DAYS ? '(本日が回答期限です)' : '(回答期限 ' + due + ')'),
+      body: head + (day === SURVEY_DUE_DAYS ? '本日が、アンケートの回答期限です。' : 'アンケートへのご回答が、まだ確認できていません。') + 'ご回答をお願いします。' + restrict + link }
+  }
+  return { subject: '[Ohsumi] ' + orgName + ': アンケートの回答期限(' + due + ')を過ぎています',
+    body: head + 'アンケートの回答期限(' + due + ')を過ぎましたが、ご回答がまだ確認できていません。お早めにご回答をお願いします。' + restrict + link }
+}
+
+// 停止の予定を入れ直す・取り消す時に、アンケートとのつながりも消す(列が無い古いシートでは何もしない)
+function unlinkSurvey_(values, fields) {
+  if ('suspend_survey_id' in values) fields.suspend_survey_id = ''
+  return fields
+}
+
+function findSurveyRow_(surveyId) {
+  var rows = readRows_('Surveys')
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].values.survey_id) === String(surveyId)) return rows[i]
+  return null
+}
+
+// 'YYYY-MM-DD' の months か月後(月末は、その月の最後の日にそろえる)
+function addMonthsKey_(key, months) {
+  var p = key.split('-').map(Number)
+  var y = p[0] + Math.floor((p[1] - 1 + months) / 12)
+  var m = ((p[1] - 1 + months) % 12 + 12) % 12
+  var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate()
+  var pad = function (n) { return (n < 10 ? '0' : '') + n }
+  return y + '-' + pad(m + 1) + '-' + pad(Math.min(p[2], last))
+}
+
+// 団体のアンケートの送付日の一覧(取り消したものは数えない)
+function surveySendDates_(rows, orgId) {
+  return rows.filter(function (r) { return String(r.values.org_id) === orgId && String(r.values.status) !== 'cancelled' })
+    .map(function (r) { return surveyDateKey_(r.values.send_date) }).filter(Boolean)
+}
+
+// 直近12か月の数: 送付日が (day の12か月前, day] のもの
+function surveyCount12m_(dates, day) {
+  var from = addMonthsKey_(day, -12)
+  return dates.filter(function (d) { return d > from && d <= day }).length
+}
+
+// 送付日 day のアンケートを足した時の、day を含むどの12か月の間でも一番多い数(純粋な関数)。
+// 先の送付日の予定もあるため、day を終わりにした12か月だけでなく、day を含む12か月の間をすべて見る
+function surveyPeak12m_(dates, day) {
+  var all = dates.concat([day])
+  var from = addMonthsKey_(day, -12)
+  var starts = all.filter(function (d) { return d > from && d <= day })
+  var peak = 0
+  starts.forEach(function (start) {
+    var end = addMonthsKey_(start, 12)
+    var n = all.filter(function (d) { return d >= start && d < end }).length
+    if (n > peak) peak = n
+  })
+  return peak
+}
+
+// このアンケートで入れた機能停止の時刻(入っていなければ 0)
+function surveyRestrictionOf_(orgValues, surveyId, nowMs) {
+  if (String(orgValues.suspend_survey_id || '') !== String(surveyId)) return 0
+  var c = contractState_(orgValues, nowMs)
+  return c.phase !== 'none' && c.kind === 'restrict' ? timeOf_(c.suspendAt) : 0
+}
+
+function surveySummary_(values, orgValues, nowMs) {
+  var s = surveyState_(values, nowMs)
+  var restrictAt = orgValues ? surveyRestrictionOf_(orgValues, values.survey_id, nowMs) : 0
+  var plan = orgValues && PLANS.indexOf(String(orgValues.plan || '')) >= 0 ? String(orgValues.plan) : ''
+  return {
+    surveyId: String(values.survey_id || ''),
+    orgId: String(values.org_id || ''),
+    orgName: orgValues ? String(orgValues.display_name || '') : '',
+    plan: plan,
+    title: String(values.title || ''),
+    formUrl: String(values.form_url || ''),
+    sendDate: s.sendDate,
+    dueDate: s.dueDate,
+    state: s.state,
+    day: s.day,
+    remindersSent: surveyRemindersSent_(values).map(function (r) { return Number(r.day) }),
+    answeredAt: isoOf_(values.answered_at),
+    answeredBy: String(values.answered_by || ''),
+    createdBy: String(values.created_by || ''),
+    createdAt: isoOf_(values.created_at),
+    restrictAt: restrictAt ? new Date(restrictAt).toISOString() : '',
+    // 「28日目に機能停止を入れる」を出すか: 期限を過ぎて回答が無い・有償プランでない・ほかの停止の予定が無い
+    canRestrict: s.state === 'overdue' && plan !== 'paid' && !!orgValues && contractState_(orgValues, nowMs).phase === 'none',
+  }
+}
+
+function orgValuesById_() {
+  var out = {}
+  readRows_('Orgs').forEach(function (r) { if (String(r.values.org_id || '')) out[String(r.values.org_id)] = r.values })
+  return out
+}
+
+// 管理画面の一覧: アンケート(新しい順)と、プランごとの上限・団体ごとの直近12か月の数
+function surveyOverview_(nowMs) {
+  var orgs = orgValuesById_()
+  var rows = readRows_('Surveys').filter(function (r) { return String(r.values.survey_id || '') })
+  var today = jstDateKey_(nowMs)
+  var counts = {}
+  // 直近12か月の数(送付の予定を含む)
+  Object.keys(orgs).forEach(function (id) {
+    var dates = surveySendDates_(rows, id)
+    counts[id] = surveyCount12m_(dates, today) + dates.filter(function (d) { return d > today }).length
+  })
+  var list = rows.map(function (r) { return surveySummary_(r.values, orgs[String(r.values.org_id)] || null, nowMs) })
+  list.sort(function (a, b) { return b.sendDate.localeCompare(a.sendDate) || b.createdAt.localeCompare(a.createdAt) })
+  return { surveys: list.slice(0, SURVEY_SHOW_MAX), surveyLimits: SURVEY_YEAR_LIMITS, survey12mCounts: counts }
+}
+
+// アンケートのメールを担当者に送り、送ったことを記録する(送れなかった時は記録しない。次の毎日の処理で送り直す)。送った宛先の数を返す
+function sendSurveyMail_(row, orgValues, day, contacts, nowMs) {
+  var orgId = String(row.values.org_id)
+  var to = contacts[orgId] || []
+  var restrictAt = surveyRestrictionOf_(orgValues, row.values.survey_id, nowMs)
+  var text = surveyText_(String(orgValues.display_name || orgId), row.values, day, restrictAt)
+  if (to.length) MailApp.sendEmail({ to: to.join(','), subject: text.subject, body: text.body })
+  var list = surveyRemindersSent_(row.values).concat([{ day: day, at: new Date(nowMs).toISOString(), to: to.length }])
+  setRowFields_('Surveys', row.row, { reminders_json: JSON.stringify(list) })
+  row.values.reminders_json = JSON.stringify(list)
+  return to.length
+}
+
+// 毎日の処理から: 送付日になったアンケートと、リマインドを送る
+function sendSurveyMails_(nowMs) {
+  var orgs = orgValuesById_()
+  var contacts = contactEmails_()
+  var sent = []
+  readRows_('Surveys').forEach(function (row) {
+    var orgValues = orgs[String(row.values.org_id || '')]
+    var day = dueSurveyReminder_(row.values, nowMs)
+    if (!orgValues || day === null) return
+    try {
+      var to = sendSurveyMail_(row, orgValues, day, contacts, nowMs)
+      appendAudit_({ actor: 'registry', action: day === 0 ? 'sendSurveyMail' : 'sendSurveyReminder', target: String(row.values.org_id), after: { surveyId: String(row.values.survey_id), day: day, recipients: to } })
+      sent.push(String(row.values.survey_id))
+    } catch (e) {
+      console.error('アンケートのメールを送れませんでした(' + row.values.survey_id + '): ' + e)
+    }
+  })
+  if (sent.length) console.log('アンケートのメールを送りました: ' + sent.join(', '))
+  return sent
+}
+
+// checkIn で団体の GAS に伝える: 回答待ち(送付日を過ぎ、回答済み・取り消しでない)のアンケート
+function openSurveysFor_(orgId, orgValues, nowMs) {
+  return readRows_('Surveys').filter(function (r) { return String(r.values.org_id) === orgId }).map(function (r) {
+    return surveySummary_(r.values, orgValues, nowMs)
+  }).filter(function (s) { return s.state === 'open' || s.state === 'overdue' }).map(function (s) {
+    return { surveyId: s.surveyId, title: s.title, formUrl: s.formUrl, sendDate: s.sendDate, dueDate: s.dueDate, overdue: s.state === 'overdue', restrictAt: s.restrictAt }
+  })
+}
+
+// 管理画面: アンケートを送る。{ session, title, formUrl, sendDate('YYYY-MM-DD'), target: { kind: all | plan | orgs, plan, orgIds }, reason }
+//   返事: { sent: [{ orgId, surveyId, mailed }], skipped: [{ orgId, reason }] }
+//   上限に達した・プランが未設定・提供停止中・同じフォームを回答待ちの団体は、送らずに skipped で返す(ほかの団体には送る)
+function sendSurvey_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var title = cleanText_(body.title, 100)
+  var formUrl = cleanText_(body.formUrl, 1000)
+  var sendDate = String(body.sendDate || '')
+  var today = jstDateKey_(nowMs)
+  if (!title) throw registryError_('アンケートの名前を入れてください。')
+  if (formUrl.length > SURVEY_FORM_URL_MAX) throw registryError_('フォームの URL は' + SURVEY_FORM_URL_MAX + '文字までにしてください(短い URL https://forms.gle/… が使えます)。')
+  if (!SURVEY_FORM_URL_PATTERN.test(formUrl)) throw registryError_('Google フォームの URL(https://docs.google.com/forms/… か https://forms.gle/…)を入れてください。')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sendDate) || isNaN(jstMidnightMs_(sendDate)) || addDaysKey_(sendDate, 0) !== sendDate) throw registryError_('送付日を入れてください。')
+  if (sendDate < today) throw registryError_('送付日は、今日より後の日にしてください(過ぎた日にすると、リマインドの日がずれます)。')
+  if (daysBetweenKeys_(today, sendDate) > SURVEY_SEND_AHEAD_DAYS) throw registryError_('送付日は、' + SURVEY_SEND_AHEAD_DAYS + '日以内にしてください。')
+  var target = body.target && typeof body.target === 'object' ? body.target : {}
+  var kind = String(target.kind || '')
+  if (['all', 'plan', 'orgs'].indexOf(kind) < 0) throw registryError_('送る団体(全団体・プラン・団体を選ぶ)を選んでください。')
+  if (kind === 'plan' && PLANS.indexOf(String(target.plan || '')) < 0) throw registryError_('送るプランを選んでください。')
+  var orgIds = kind === 'orgs' && Array.isArray(target.orgIds) ? target.orgIds.map(String) : []
+  if (kind === 'orgs' && !orgIds.length) throw registryError_('送る団体を選んでください。')
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var orgRows = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
+    var targets = orgRows.filter(function (r) {
+      if (kind === 'plan') return String(r.values.plan || '') === String(target.plan)
+      if (kind === 'orgs') return orgIds.indexOf(String(r.values.org_id)) >= 0
+      return true
+    })
+    if (kind === 'orgs' && targets.length !== orgIds.length) throw registryError_('選んだ団体のうち、見つからないものがあります。一覧を読み直してください。')
+    if (!targets.length) throw registryError_('送る団体がありません。')
+    var surveys = readRows_('Surveys')
+    var contacts = contactEmails_()
+    var sent = []
+    var skipped = []
+    targets.forEach(function (r) {
+      var orgId = String(r.values.org_id)
+      var plan = String(r.values.plan || '')
+      var skip = ''
+      if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
+      else if (orgDisplayState_(r.values, nowMs).state === 'suspended') skip = '提供停止中です。'
+      else if (surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
+      else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
+        skip = '同じフォームのアンケートを、回答待ちで送っています。'
+      }
+      if (skip) { skipped.push({ orgId: orgId, reason: skip }); return }
+      var surveyId = 'sv_' + generateSecret_().replace(/[^A-Za-z0-9]/g, '').slice(0, 12)
+      var values = { survey_id: surveyId, org_id: orgId, title: title, form_url: formUrl, send_date: sendDate, status: 'open', reminders_json: '[]',
+        created_by: session.sub, created_at: new Date(nowMs).toISOString(), note: reason }
+      appendRowByHeaders_('Surveys', values)
+      var mailed = 0
+      if (sendDate === today) {
+        // 送付日が今日なら、その場で送る(送れなかった時は、毎日の処理で送り直す)
+        try {
+          mailed = sendSurveyMail_({ row: readRows_('Surveys').length + 1, values: values }, r.values, 0, contacts, nowMs)
+        } catch (e) {
+          console.error('アンケートのメールを送れませんでした(' + surveyId + '): ' + e)
+        }
+      }
+      surveys.push({ row: 0, values: values })
+      sent.push({ orgId: orgId, surveyId: surveyId, mailed: mailed })
+    })
+    appendAudit_({ actor: session.sub, action: 'sendSurvey', target: kind === 'plan' ? 'plan:' + target.plan : kind === 'all' ? 'all' : orgIds.join(','),
+      after: { title: title, formUrl: formUrl, sendDate: sendDate, sent: sent.map(function (s) { return s.orgId }), skipped: skipped }, reason: reason })
+    return { ok: true, result: { sent: sent, skipped: skipped } }
+  })
+}
+
+// このアンケートで入れた機能停止を止める(回答済み・取り消しの時)。止めたら true
+function clearSurveyRestriction_(surveyId, nowMs) {
+  var org = null
+  readRows_('Orgs').forEach(function (r) { if (String(r.values.suspend_survey_id || '') === String(surveyId)) org = r })
+  if (!org || !surveyRestrictionOf_(org.values, surveyId, nowMs)) return false
+  var fields = { status: 'active', suspend_at: '', suspend_kind: '', suspend_reason: '', suspend_scheduled_by: '', suspend_notices_json: '', suspend_survey_id: '',
+    updated_at: new Date(nowMs).toISOString() }
+  setRowFields_('Orgs', org.row, fields)
+  var orgId = String(org.values.org_id)
+  rememberOrgFingerprint_(orgId, merged_(org.values, fields))
+  forgetResolvedOrg_(orgId)
+  return true
+}
+
+// 管理画面: 回答済みにする・取り消す。{ session, surveyId, reason }
+function closeSurvey_(body, nowMs, status) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var row = findSurveyRow_(String(body.surveyId || ''))
+    if (!row) throw registryError_('そのアンケートは見つかりません。')
+    var before = String(row.values.status || 'open')
+    if (before === 'answered') throw registryError_('このアンケートは、回答済みです。')
+    if (before === 'cancelled') throw registryError_('このアンケートは、取り消し済みです。')
+    var fields = { status: status }
+    if (status === 'answered') { fields.answered_at = new Date(nowMs).toISOString(); fields.answered_by = session.sub }
+    setRowFields_('Surveys', row.row, fields)
+    var lifted = clearSurveyRestriction_(row.values.survey_id, nowMs)
+    var orgId = String(row.values.org_id)
+    appendAudit_({ actor: session.sub, action: status === 'answered' ? 'markSurveyAnswered' : 'cancelSurvey', target: orgId,
+      before: { surveyId: String(row.values.survey_id), status: before }, after: { status: status, restrictionCleared: lifted }, reason: reason })
+    var orgRow = findOrgRow_(orgId)
+    return { ok: true, result: surveySummary_(merged_(row.values, fields), orgRow ? orgRow.values : null, nowMs) }
+  })
+}
+
+// 管理画面: 期限を過ぎて回答が無いアンケートの団体に、28日目の機能停止を入れる。{ session, surveyIds: [...], reason }
+//   返事: { scheduled: [{ surveyId, orgId, restrictAt }], skipped: [{ surveyId, reason }] }
+function scheduleSurveyRestriction_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '機能停止を入れる')
+  var ids = Array.isArray(body.surveyIds) ? body.surveyIds.map(String).slice(0, 200) : []
+  if (!ids.length) throw registryError_('アンケートを選んでください。')
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var contacts = contactEmails_()
+    var scheduled = []
+    var skipped = []
+    ids.forEach(function (surveyId) {
+      var row = findSurveyRow_(surveyId)
+      var org = row ? findOrgRow_(String(row.values.org_id)) : null
+      var s = row ? surveyState_(row.values, nowMs) : null
+      var skip = !row || !org ? 'アンケートか団体が見つかりません。'
+        : s.state !== 'overdue' ? '回答期限を過ぎて回答が無いアンケートではありません。'
+          : String(org.values.plan || '') === 'paid' ? PAID_RESTRICT_ERROR
+            : contractState_(org.values, nowMs).phase !== 'none' ? 'この団体には、ほかの停止の予定(または停止)が入っています。' : ''
+      if (skip) { skipped.push({ surveyId: surveyId, reason: skip }); return }
+      var orgId = String(org.values.org_id)
+      var at = surveyRestrictAt_(s.sendDate, nowMs)
+      var title = String(row.values.title || 'アンケート')
+      // 停止の予告(14・7・1日前)は送らない(リマインドで知らせる)。印として、送ったことにしておく
+      var covered = SUSPEND_NOTICE_DAYS.map(function (d) { return { days: d, at: new Date(nowMs).toISOString(), to: 0, via: 'survey' } })
+      var fields = { suspend_at: new Date(at).toISOString(), suspend_kind: 'restrict', suspend_reason: 'アンケート「' + title + '」への回答が確認できないため',
+        suspend_scheduled_by: session.sub, suspend_notices_json: JSON.stringify(covered), suspend_survey_id: String(row.values.survey_id), updated_at: new Date(nowMs).toISOString() }
+      setRowFields_('Orgs', org.row, fields)
+      var after = merged_(org.values, fields)
+      rememberOrgFingerprint_(orgId, after)
+      forgetResolvedOrg_(orgId)
+      // 入れたことを、担当者にその場で知らせる(期限の後のリマインドと同じ文面に、停止の日時を入れる)
+      var mailed = 0
+      try {
+        var to = contacts[orgId] || []
+        var text = surveyText_(String(org.values.display_name || orgId), row.values, Math.max(s.day, SURVEY_DUE_DAYS + 1), at)
+        if (to.length) MailApp.sendEmail({ to: to.join(','), subject: text.subject, body: text.body })
+        mailed = to.length
+      } catch (e) {
+        console.error('機能停止の知らせを送れませんでした(' + orgId + '): ' + e)
+      }
+      appendAudit_({ actor: session.sub, action: 'scheduleSurveyRestriction', target: orgId,
+        after: { surveyId: String(row.values.survey_id), kind: 'restrict', suspendAt: fields.suspend_at, recipients: mailed }, reason: reason })
+      scheduled.push({ surveyId: String(row.values.survey_id), orgId: orgId, restrictAt: fields.suspend_at })
+    })
+    return { ok: true, result: { scheduled: scheduled, skipped: skipped } }
+  })
+}
+
 // ---- 団体の GAS の版 ----
 //
 // 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
@@ -1495,6 +1916,7 @@ function reportMetrics_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-11', security: false, required: false, note: 'FSIF からのアンケートを代表の管理画面に出す(PR O)' },
   { version: '2026.10.01-10', security: false, required: false, note: '個人を特定しない集計値を週1回レジストリに送る(PR N)' },
   { version: '2026.10.01-9', security: false, required: false, note: 'マニフェストに使う許可(oauthScopes)を書き、許可が足りない時の知らせ(PR M)' },
   { version: '2026.10.01-8', security: false, required: false, note: '退会者の削除でカレンダーのゲスト・プロフィール画像も消す、実行ログのメールアドレスを伏せる(PR L)' },
