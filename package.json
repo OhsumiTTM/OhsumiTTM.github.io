@@ -8,6 +8,7 @@
     "start": "next start",
     "test": "vitest run",
     "check:layout": "node scripts/check-layout.mjs",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "gas:version": "node scripts/gas-version.mjs"
   },
   "dependencies": {

@@ -50,3 +50,10 @@ jobs:
       # (テスト用の設定でもう一度ビルドし、ランナーの Chrome で開く)
       - name: Layout check (375px)
         run: pnpm check:layout
+
+      # 公開前の通しテスト(画面): check:layout と同じ設定のビルド(out/)を使い、画面からの通信を
+      # 本物の gas/Code.gs・registry/Code.gs(メモリの上)につないで、ログイン・ログアウト・権限・団体の分離・URL の直打ちを確かめる
+      - name: End-to-end (browser)
+        run: pnpm test:e2e
+        env:
+          E2E_SKIP_BUILD: '1'
