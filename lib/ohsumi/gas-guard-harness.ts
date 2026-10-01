@@ -5,6 +5,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
+import { parseListCell, withListOps, type ListActionDef } from './list-diff'
 
 export const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
 
@@ -190,7 +191,16 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
   c.sendDiscordMessage_ = (content: string) => { sent.push({ kind: 'chat', to: 'discord', text: String(content) }) }
   c.sendSlackMessage_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } }
-  const post = (body: Record<string, unknown>) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
+  // 記録の一覧を丸ごと渡したテストは、今の画面と同じく、今のシートの一覧との差分(listOps)にして送る
+  // (丸ごと送る古い画面の動きは postRaw で確かめる)
+  const baseOf = (def: ListActionDef, id: string) => {
+    const rows = sheets[def.sheet]?.rows ?? []
+    const head = (rows[0] ?? []).map(String)
+    const row = rows.slice(1).find((r) => String(r[head.indexOf('id')]) === id)
+    return parseListCell(row?.[head.indexOf(def.column)])
+  }
+  const postRaw = (body: Record<string, unknown>) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
+  const post = (body: Record<string, unknown>) => postRaw(withListOps(body, baseOf))
   // 通知のキュー(まとめて送る設定の人)に入ったもの
   // 毎日のまとめ(急ぎでない通知)に入ったもの(to は宛先のアドレス)
   const queued = (): Sent[] => [
@@ -213,7 +223,7 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     return out
   }
   const addSheet = (name: string, rows: Cell[][]) => add(name, rows)
-  return { c, post, sheets, props, cache, sent, events, allSent, digested, tasksJson, savedText, registeredEmails, addSheet }
+  return { c, post, postRaw, sheets, props, cache, sent, events, allSent, digested, tasksJson, savedText, registeredEmails, addSheet }
 }
 
 // doPost が受け付ける操作: runWriteAction_ の case(新しく足した操作も、自動でここに入る)

@@ -302,7 +302,7 @@ describe('守る処理を外すと、テストが失敗する', () => {
   it('updateProgress・setHoldReason を担当者などに限る一覧から外すと、タスクの決まりのテストが失敗する', () => {
     const code = mutate(/\n {2}'updateProgress', {3}\/\/[^\n]*\n {2}'setHoldReason', {4}\/\/[^\n]*\n/, '\n')
     const v = taskWriteViolations(code).join('\n')
-    expect(v).toMatch(/updateProgress: タスクに関係の無い一般のメンバーが書き換えられた/)
+    expect(v).toMatch(/updateProgress: タスクに関係の無い一般のメンバーが(書き換えられた|権限で断られない)/)
     expect(v).toMatch(/setHoldReason: タスクに関係の無い一般のメンバーが書き換えられた/)
     expect(() => checkProgress(code)).toThrow()
   })

@@ -1060,6 +1060,9 @@ var MEMBERS_HEADERS = [
   'purge_at',                // 個人情報を消す日時を延ばした時の日時(ISO)。空なら 退会の日時 + 保存期間
   'personal_data_purged_at', // 個人情報を消した日時(ISO)
   'withdrawal_unassigned_task_ids', // 退会の時に未アサインに戻したタスクの ID(カンマ区切り。退会を取り消した時に一覧を出す)
+  // 書き込みの競合チェック(「行の版」)
+  'row_version',             // 行の版(内容を変えるたびに新しくなる。画面が開いた時の版と違えば、上書きせずに断る)
+  'row_updated_by',          // 行の内容を最後に変えた人(メンバーID。毎日の処理などは system)
 ]
 var PROJECTS_HEADERS = [
   'id', 'name', 'description', 'type', 'owner_id', 'member_ids', 'archived', 'parent_id',
@@ -1068,6 +1071,7 @@ var PROJECTS_HEADERS = [
   'last_notified_health',  // item 26: 直近に通知した実効健康状態（重複通知防止）
   'start_date', // PRJ-003: プロジェクトの開始日（任意, YYYY-MM-DD）
   'end_date',   // PRJ-003: プロジェクトの終了予定日（任意, YYYY-MM-DD）
+  'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var TASKS_HEADERS = [
   'id', 'project_id', 'title', 'description', 'status', 'assign_type',
@@ -1087,6 +1091,7 @@ var TASKS_HEADERS = [
   'related_review_task_id', // APR-007: このタスクが確認タスクである場合、確認対象の元タスクのid
   'hold_reason_note',  // 保留の理由(ステータスを保留にしたときのメモ)
   'hold_reason_since', // 保留にした日(YYYY-MM-DD)
+  'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
 var EXPENSES_HEADERS = ['id', 'applicant_id', 'amount', 'category_id', 'receipt_url', 'justification', 'purpose', 'custom_field_answers_json', 'approval_steps_json', 'approvals_json', 'current_step_index', 'status', 'created_at', 'rejection_reason']
@@ -2553,7 +2558,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-5'
+var OHSUMI_GAS_VERSION = '2026.10.01-6'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4434,6 +4439,7 @@ function normalizeRequestCodes_(body) {
       break
     case 'updateHistory':
       if (Array.isArray(body.history)) body.history = body.history.map(normalizeHistoryEntry_)
+      if (Array.isArray(body.listOps)) body.listOps.forEach(function (op) { if (op && op.entry) op.entry = normalizeHistoryEntry_(op.entry) })
       break
     case 'updateTaskSchedule':
       if (body.schedule) body.schedule = mapScheduleCodes_(body.schedule, normalizeCode_)
@@ -4570,6 +4576,17 @@ function handlePost_(e, state) {
     }
     // 通知・翻訳の回数の上限は、操作したメンバーごとに数える
     _requestActorId = actingMember.id
+    // 記録の一覧を丸ごと送る古い画面からの保存は断り、読み込み直してもらう(ほかの人が後から足した記録を消さないため)。
+    // 差分(listOps)は、権限の判定のために、スナップショットの一覧に当てた一覧にしておく(ロックを取った後に当て直す)
+    var listOpsList = body.action === 'batch' ? body.ops : [body]
+    if (listOpsList.some(legacyListWrite_)) {
+      endTiming_('authMs', authStart)
+      return ({ ok: false, error: LEGACY_LIST_MESSAGE, reloadRequired: true, session: renewedSession || undefined })
+    }
+    // (形の正しくない差分は、一覧を空(null)にしておく。権限の判定か、ロックを取った後の当て直しで断る)
+    listOpsList.forEach(function (op) {
+      try { expandListOps_(op, false) } catch (listErr) { if (op && LIST_ACTIONS[op.action]) op[LIST_ACTIONS[op.action].param] = null }
+    })
     if (body.action === 'batch') {
       batchDenied = authorizeBatch_(actingMember, body.ops)
     } else {
@@ -4663,6 +4680,7 @@ function handlePost_(e, state) {
 function errorResponse_(err) {
   var out = { ok: false, error: toErrorMessage_(err) }
   if (err && err.cellTooLong) out.cellTooLong = err.cellTooLong
+  if (err && err.conflict) out.conflict = err.conflict
   return out
 }
 
@@ -4891,6 +4909,12 @@ function runBatch_(ops, acting, denied) {
 // 1つの書き込みの操作を実行する(権限の確認・ロック・送り直しの確認は済んでいること)
 function runWriteAction_(body, actingMember) {
   var result
+  // 書き込みの競合チェック: 画面が開いた時点の版。記録の一覧の差分は、今のシートの一覧に当て直し、権限も確かめ直す
+  setExpectedRowVersions_(body)
+  if (body.listOps !== undefined && LIST_ACTIONS[body.action]) {
+    expandListOps_(body, true)
+    revalidateListWrite_(body, actingMember)
+  }
   switch (body.action) {
     case 'createTasks':
       // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
@@ -7740,6 +7764,10 @@ function updateRowFieldsUnmeasured_(sheetName, rowId, fields) {
   // 1つのセルの上限(5万文字)を超える値は、何も書かずに断る。8割を超えた値は、書いた後に知らせる
   var before = grid.values[targetRow - 1] || []
   cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value, before[c.col - 1]) })
+  // 書き込みの競合チェック: 内容を変える書き込みは、画面が開いた時の版と今の版を比べ、ほかの人が先に変えていたら断る。
+  // 通ったら版を新しくする(row_version の列が無い古いシートでは、何もしない)
+  var bump = rowVersionBump_(sheetName, rowId, headers, before, Object.keys(fields))
+  if (bump) bump.forEach(function (c) { cols.push(c) })
   // 隣り合う列は1回の setValues にまとめる。離れた列は、間のセル(数式など)を書き換えないよう別に書く
   // (セルへの書き込みは、Apps Script が書き込みの確定の時にまとめて送る)
   cols.forEach(function (c) { noteLongCell_(sheetName, rowId, recordName_(headers, before), headers[c.col - 1], c.value, before[c.col - 1]) })
@@ -7750,6 +7778,197 @@ function updateRowFieldsUnmeasured_(sheetName, rowId, fields) {
   if (rowValues) cols.forEach(function (c) { rowValues[c.col - 1] = c.value })
 
   return { id: rowId, updated: Object.keys(fields) }
+}
+
+// ---- 書き込みの競合チェック(行の版) ----
+//
+// Members・Projects・Tasks の行は、内容を変えるたびに row_version(行の版)を新しくし、変えた人を row_updated_by に残す。
+// 画面は保存の時に、開いた時点の版(baseVersions: { 'Tasks:t1': 'r…' })を送る。今の版と違い、しかも最後に変えたのが
+// 自分でない時は、ほかの人が先に変えたので、上書きせずに断る(conflict)。自分が続けて保存した時(版は自分が変えた)は通す。
+// 記録の一覧(コメント・1on1 など)は、項目ごとの差分(listOps)で受け取って項目ごとに確かめるので、行の版は使わない。
+// 最後のログイン日時などの記録の列も、版を変えない(ROW_VERSION_IGNORED_FIELDS)
+var ROW_VERSION_SHEETS = ['Members', 'Projects', 'Tasks']
+var ROW_VERSION_IGNORED_FIELDS = [
+  'row_version', 'row_updated_by',
+  // 記録・通知のための列
+  'last_login', 'last_inactive_notified', 'last_notified_health', 'last_activity',
+  // 項目ごとの差分で確かめる記録の一覧と、GAS が足し算でまとめる列
+  'comments_json', 'progress_history_json', 'history_json', 'deliverables_json',
+  'career_history_json', 'qualifications_json', 'evaluation_history_json', 'transfer_history_json',
+  'skill_levels_json', 'competencies_json', 'training_history_json', 'development_plan_json', 'one_on_ones_json',
+  'survey_responses_json', 'skill_points_json', 'awarded_points_json',
+]
+// このリクエスト(batch では操作ごと)で画面が送った、開いた時点の版
+var _expectedRowVersions = null
+
+var CONFLICT_MESSAGE = 'ほかの人が先にこの内容を変えたため、保存しませんでした。最新の内容を読み込み直します。書いた文章は消えていないので、コピーしてもう一度入れてください。'
+
+function conflictError_(sheetName, rowId) {
+  var e = userError_(CONFLICT_MESSAGE)
+  e.conflict = { sheet: String(sheetName), id: String(rowId) }
+  return e
+}
+
+function setExpectedRowVersions_(body) {
+  var v = body && body.baseVersions
+  _expectedRowVersions = v && typeof v === 'object' && !Array.isArray(v) ? v : null
+}
+
+function newRowVersion_() {
+  return 'r' + Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36)
+}
+
+// 内容を変える書き込みなら、版を確かめて、新しい版の列(cols に足すもの)を返す。版の列が無い・記録の列だけの時は null
+function rowVersionBump_(sheetName, rowId, headers, before, keys) {
+  if (ROW_VERSION_SHEETS.indexOf(sheetName) < 0) return null
+  var vCol = headers.indexOf('row_version')
+  var byCol = headers.indexOf('row_updated_by')
+  if (vCol < 0 || byCol < 0) return null
+  if (!keys.some(function (k) { return ROW_VERSION_IGNORED_FIELDS.indexOf(k) < 0 })) return null
+  var actor = _requestActorId ? String(_requestActorId) : 'system'
+  var key = sheetName + ':' + rowId
+  if (_expectedRowVersions && Object.prototype.hasOwnProperty.call(_expectedRowVersions, key)) {
+    var expected = String(_expectedRowVersions[key] || '')
+    var current = String(before[vCol] === undefined || before[vCol] === null ? '' : before[vCol])
+    var lastBy = String(before[byCol] === undefined || before[byCol] === null ? '' : before[byCol])
+    if (current !== expected && lastBy !== actor) throw conflictError_(sheetName, rowId)
+  }
+  return [{ col: vCol + 1, value: newRowVersion_() }, { col: byCol + 1, value: actor }]
+}
+
+// ---- 記録の一覧の差分(listOps) ----
+//
+// コメント・進み具合の記録・変更の記録・成果物と、メンバーの経歴・資格・評価・異動・スキル・コンピテンシー・研修・育成の計画・
+// 1on1 の記録は、1つのセルに一覧(JSON)で持つ。画面は一覧を丸ごと送らず、項目ごとの差分を送る:
+//   { op: 'add', entry }                 足す(同じキーが既にあれば、同じ内容なら何もしない・違えば競合)
+//   { op: 'update', key, before, entry } 変える(今の内容が before と違う・消えていれば競合)
+//   { op: 'remove', key, before }        消す(既に消えていれば何もしない。今の内容が before と違えば競合)
+// GAS は、ロックを取った後に今のセルの一覧へ差分を当てて書く。差分に無い項目(ほかの人が後から足した記録など)は、
+// 管理者の操作でも消えない。一覧を丸ごと送る古い画面からの保存は、読み込み直してもらう(LEGACY_LIST_MESSAGE)
+var LIST_ACTIONS = {
+  updateComments: { sheet: 'Tasks', idParam: 'taskId', column: 'comments_json', param: 'comments', key: 'id' },
+  updateProgress: { sheet: 'Tasks', idParam: 'taskId', column: 'progress_history_json', param: 'progressHistory', key: 'id' },
+  updateHistory: { sheet: 'Tasks', idParam: 'taskId', column: 'history_json', param: 'history', key: 'id', addAt: 'start', cap: 50, addOnly: true },
+  updateDeliverables: { sheet: 'Tasks', idParam: 'taskId', column: 'deliverables_json', param: 'deliverables', key: 'id' },
+  updateCareerHistory: { sheet: 'Members', idParam: 'memberId', column: 'career_history_json', param: 'entries', key: 'id' },
+  updateQualifications: { sheet: 'Members', idParam: 'memberId', column: 'qualifications_json', param: 'entries', key: 'id' },
+  updateEvaluationHistory: { sheet: 'Members', idParam: 'memberId', column: 'evaluation_history_json', param: 'entries', key: 'id' },
+  updateTransferHistory: { sheet: 'Members', idParam: 'memberId', column: 'transfer_history_json', param: 'entries', key: 'id' },
+  updateSkillLevels: { sheet: 'Members', idParam: 'memberId', column: 'skill_levels_json', param: 'levels', key: 'skill' },
+  updateCompetencies: { sheet: 'Members', idParam: 'memberId', column: 'competencies_json', param: 'competencies', key: 'name' },
+  updateTrainingHistory: { sheet: 'Members', idParam: 'memberId', column: 'training_history_json', param: 'entries', key: 'id' },
+  updateDevelopmentPlan: { sheet: 'Members', idParam: 'memberId', column: 'development_plan_json', param: 'entries', key: 'id' },
+  updateOneOnOnes: { sheet: 'Members', idParam: 'memberId', column: 'one_on_ones_json', param: 'entries', key: 'id' },
+}
+var LIST_OPS_MAX = 200
+var LEGACY_LIST_MESSAGE = 'Ohsumi が更新されました。書いた文章をコピーしてから、ページを読み込み直してください。'
+
+// ロックを取った後に、今のシートの一覧で権限を確かめ直す(他人の記録を変え・消していないか。新しい記録の書いた人は本人)
+function revalidateListWrite_(body, acting) {
+  var cfg = LIST_ACTIONS[body.action]
+  if (cfg.sheet !== 'Tasks') return
+  var row = lockedRow_(SHEET_TASKS, String(body.taskId || ''))
+  if (!row) throw userError_('対象のタスクが見つかりません。')
+  if (body.action === 'updateComments') validateCommentsUpdate_(row, body.comments, acting)
+  if (body.action === 'updateProgress') validateProgressHistoryUpdate_(row, body.progressHistory, acting)
+  if (body.action === 'updateHistory') validateHistoryUpdate_(row, body.history, acting)
+}
+
+// 一覧を丸ごと送る古い画面からの保存か(差分 listOps が無く、一覧そのものがある)
+function legacyListWrite_(body) {
+  var cfg = body && LIST_ACTIONS[body.action]
+  return !!cfg && body.listOps === undefined && body[cfg.param] !== undefined
+}
+
+// 比べるための形(キーの順番をそろえ、undefined を除く)
+function canonicalJson_(v) {
+  if (v === null || v === undefined) return 'null'
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson_).join(',') + ']'
+  if (typeof v === 'object') {
+    return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined })
+      .map(function (k) { return JSON.stringify(k) + ':' + canonicalJson_(v[k]) }).join(',') + '}'
+  }
+  return JSON.stringify(v)
+}
+
+function parseListCell_(raw) {
+  var list = []
+  try { list = JSON.parse(raw || '[]') } catch (e) { list = [] }
+  return Array.isArray(list) ? list : []
+}
+
+// 今の一覧(current)に差分(ops)を当てた一覧を返す。strict の時は、競合があれば conflict で断る
+// (ロックを取る前の権限の判定では、スナップショットの一覧に当てるので、競合は見ない)
+function applyListOps_(cfg, current, ops, strict, sheetName, rowId, normalize) {
+  if (!Array.isArray(ops) || ops.length > LIST_OPS_MAX) throw userError_('記録の変更の形式が不正です。')
+  var keyOf = function (e) { return e && typeof e === 'object' ? String(e[cfg.key] === undefined || e[cfg.key] === null ? '' : e[cfg.key]) : '' }
+  var norm = normalize || function (e) { return e }
+  var list = current.slice()
+  var indexOf = function (key) {
+    for (var i = 0; i < list.length; i++) if (keyOf(list[i]) === key) return i
+    return -1
+  }
+  var same = function (a, b) { return canonicalJson_(norm(a)) === canonicalJson_(norm(b)) }
+  var conflict = function () { if (strict) throw conflictError_(sheetName, rowId) }
+  var added = []
+  ops.forEach(function (op) {
+    if (!op || typeof op !== 'object') throw userError_('記録の変更の形式が不正です。')
+    if (op.op === 'add') {
+      var key = keyOf(op.entry)
+      if (!key) throw userError_('記録の変更の形式が不正です。')
+      var at = indexOf(key)
+      if (at >= 0) {
+        if (!same(list[at], op.entry)) conflict()
+        return
+      }
+      if (cfg.addAt === 'start') added.push(op.entry)
+      else list.push(op.entry)
+      return
+    }
+    if (cfg.addOnly) throw userError_('この記録は、足すことだけができます。')
+    var k = String(op.key === undefined || op.key === null ? '' : op.key)
+    if (!k) throw userError_('記録の変更の形式が不正です。')
+    var i = indexOf(k)
+    if (op.op === 'update') {
+      if (!op.entry || keyOf(op.entry) !== k) throw userError_('記録の変更の形式が不正です。')
+      if (i < 0) { conflict(); return }
+      if (!same(list[i], op.before)) { conflict(); if (!strict) return }
+      list[i] = op.entry
+      return
+    }
+    if (op.op === 'remove') {
+      if (i < 0) return
+      if (!same(list[i], op.before)) { conflict(); if (!strict) return }
+      list.splice(i, 1)
+      return
+    }
+    throw userError_('記録の変更の形式が不正です。')
+  })
+  if (added.length) list = added.concat(list)
+  if (cfg.cap && list.length > cfg.cap) list = list.slice(0, cfg.cap)
+  return list
+}
+
+// 差分(listOps)を、今の一覧に当てた一覧(body の一覧の項目: comments・entries など)にする。
+// locked: ロックを取った後(今のシートの値に当て、競合を確かめる)。そうでなければ権限の判定に使うスナップショットに当てる
+function expandListOps_(body, locked) {
+  var cfg = body && LIST_ACTIONS[body.action]
+  if (!cfg || body.listOps === undefined) return
+  var rowId = String(body[cfg.idParam] || '')
+  var row = locked ? lockedRow_(cfg.sheet, rowId) : authFindRow_(cfg.sheet, rowId)
+  if (!row) throw userError_('対象が見つかりません。')
+  var normalize = cfg.column === 'history_json' ? normalizeHistoryEntry_ : null
+  body[cfg.param] = applyListOps_(cfg, parseListCell_(row[cfg.column]), body.listOps, locked, cfg.sheet, rowId, normalize)
+}
+
+// ロックを取った後の、今のシートの行(この実行で書いた値を含む)
+// (シートを1回で読んで覚え、続く書き込み(updateRowFields_)でも使い回す)
+function lockedRow_(sheetName, rowId) {
+  var found = measureAction_('sheetReadMs', function () { return sheetGridRow_(sheetName, rowId) })
+  if (found.row === -1 || !found.grid.values[found.row - 1]) return null
+  var obj = {}
+  found.grid.headers.forEach(function (h, c) { obj[h] = found.grid.values[found.row - 1][c] })
+  return obj
 }
 
 // ---- 1つのセルの長さ ----
@@ -7989,6 +8208,7 @@ function requestReplayValue_(obj) {
   if (obj.ok) stored.result = obj.result
   else stored.error = obj.error
   if (obj.cellTooLong) stored.cellTooLong = obj.cellTooLong
+  if (obj.conflict) stored.conflict = obj.conflict
   var text = JSON.stringify(stored)
   if (text.length <= REQUEST_REPLAY_MAX_CHARS) return text
   // 結果が大きすぎて覚えられない: 処理は済んでいることだけを伝える(やり直さない)
@@ -9825,6 +10045,8 @@ var READ_POLICY = {
       personal_data_purged_at: 'all',
       purge_at: 'selfOrAdminRole',
       withdrawal_unassigned_task_ids: 'selfOrAdminRole',
+      // 書き込みの競合チェック: 版は画面が保存の時に送る。最後に変えた人は画面に渡さない
+      row_version: 'all', row_updated_by: 'none',
       mentor_id: 'selfOrAdminRole',
       has_management_experience: 'selfOrAdminRole',
       desired_areas: 'selfOrAdminRole',
@@ -9862,6 +10084,7 @@ var READ_POLICY = {
       id: 'all', name: 'all', description: 'all', type: 'all', owner_id: 'all',
       member_ids: 'all', archived: 'all', parent_id: 'all', goal: 'all',
       health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all',
+      row_version: 'all', row_updated_by: 'none',
     },
   },
   Tasks: {
@@ -9881,6 +10104,7 @@ var READ_POLICY = {
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
       open_bid_applicant_ids: 'all', related_review_task_id: 'all',
+      row_version: 'all', row_updated_by: 'none',
     },
   },
   Settings: {
