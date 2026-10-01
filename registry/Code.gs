@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.02-5'
+var REGISTRY_VERSION = '2026.10.02-6'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2581,6 +2581,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.02-4', security: false, required: false, note: 'スキルのレベルの決め方(点数の一覧・資格・検定・完了したタスクの条件)を団体ごとに設定する(PR Z)' },
   { version: '2026.10.02-3', security: false, required: false, note: '定量データの指標を足す(定義の版 2。コメント・日報・1on1・申請など)(PR Y)' },
   { version: '2026.10.02-2', security: false, required: false, note: '回数の上限・しきい値をレジストリから配り、安全な範囲に収めて使う(PR X)' },
   { version: '2026.10.02-1', security: false, required: false, note: 'レジストリから機能を止めるスイッチ(止めた機能の書き込みを断る。ログイン・読み取りは止めない)(PR W)' },

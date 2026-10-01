@@ -86,6 +86,13 @@ function prepareWorld() {
   const topId = world.googleLogin(A.org, 'top@a.example').result.memberId
   world.call(A.org, topA, 'createTasks', { tasks: [{ tempId: 't1', title: '団体Aのタスク', projectId: '', department: '', category: '', skills: [], difficulty: 'normal', priority: 'medium', deadline: null, assigneeIds: [topId], creatorId: topId }] })
   world.googleLogin(B.org, 'top@b.example', { setupCode: B.setupCode })
+  // 以前の計算で保存されたレベル: 100点で Lv.2(新しい計算では Lv.1)。画面では Lv.2 のまま出す(PR Z)
+  const members = A.org.sheets.Members.rows
+  const head = members[0].map(String)
+  const top = members.find((r) => String(r[head.indexOf('id')]) === topId)!
+  top[head.indexOf('skill_levels_json')] = JSON.stringify([{ skill: 'デザイン', level: 2, acquiredAt: '2026-01-01' }])
+  top[head.indexOf('skill_points_json')] = JSON.stringify({ デザイン: 100 })
+  A.org.cache.clear()
 }
 
 const orgByUrl = (url: string): Org | null => [...world.orgs.values()].find((o) => url.startsWith(o.gasUrl)) ?? null
@@ -179,6 +186,30 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
     // 団体のデータ(代表あての承認依頼の知らせに、団体Aのタスク)が届き、管理の画面(ADMIN)が出る
     await waitFor(async () => (await allText()).includes('団体Aのタスク'), '団体のデータが出ません')
     await waitFor(async () => (await text()).includes('ADMIN'), '代表に管理の画面(ADMIN)が出ません')
+  })
+
+  it('スキルのレベル: 以前の計算で保存されたレベル(100点で Lv.2)は、そのまま出す。次のレベルまでの進み具合は負にならない', async () => {
+    await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
+    const profileItem = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === 'プロフィール')`
+    await waitFor(() => page.evaluate<boolean>(`!!${profileItem}`), 'アカウントのメニューが開きません')
+    await page.evaluate(`${profileItem}.click(); true`)
+    const careerTab = `[...document.querySelectorAll('button, [role=tab]')].find((b) => b.textContent.trim() === '経歴・キャリア')`
+    await waitFor(() => page.evaluate<boolean>(`!!${careerTab}`), '個人ページが開きません')
+    await page.evaluate(`${careerTab}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-skill-progress="デザイン"]')`), 'スキルの進み具合が出ません')
+    const shown = await page.evaluate<{ level: string; ratio: string; remaining: string; text: string; bar: string }>(`(() => {
+      const p = document.querySelector('[data-skill-progress="デザイン"]')
+      const row = p.closest('li')
+      return { level: row.querySelector('[data-skill-level]').getAttribute('data-skill-level'), ratio: p.getAttribute('data-ratio'),
+        remaining: p.getAttribute('data-remaining'), text: row.textContent, bar: p.querySelector('[aria-hidden] span')?.style.width ?? '' }
+    })()`)
+    expect(shown.level).toBe('2')
+    expect(shown.text).toContain('Lv.2')
+    expect(shown.ratio).toBe('0.000')
+    expect(shown.remaining).toBe('250')
+    expect(shown.bar).toBe('0%')
+    expect(shown.text).toContain('次の Lv.3 まで あと 250 点(累計 100 / 350 点)')
+    expect(shown.text).not.toMatch(/-\d|NaN|Infinity|Lv\.1/)
   })
 
   it('ログアウト: ログイン画面に戻り、読み込み直してもログインしたままにならない', async () => {

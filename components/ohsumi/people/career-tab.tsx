@@ -12,6 +12,8 @@ import { useI18n, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure } from '@/lib/ohsumi/utils'
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
+import { doneTaskCountsOf, levelProgress } from '@/lib/ohsumi/skill-levels'
+import { conditionText } from '@/components/ohsumi/skill-condition-text'
 import { DIFFICULTY_LABEL } from '@/lib/ohsumi/types'
 import { cn } from '@/lib/utils'
 import { X, Plus, GraduationCap, CheckCircle2, Download, Upload } from 'lucide-react'
@@ -455,6 +457,9 @@ function SkillLevelsSection({
   onSave: CareerTabProps['updateSkillLevels']
 }) {
   const levels = member.skillLevels ?? []
+  const { skillLevelRules, tasks } = useOhsumi()
+  const hasPoints = Object.keys(member.skillPoints ?? {}).length > 0
+  const evidence = { qualifications: member.qualifications ?? [], quizPasses: member.quizPasses ?? [], doneTaskCounts: doneTaskCountsOf(member.id, tasks) }
   const [skill, setSkill] = useState('')
   // Lv.1を初期値に — 「やり始めたばかり」であって「何もできない」わけでは
   // ないので、まずは登録してみるハードルを下げる
@@ -482,7 +487,9 @@ function SkillLevelsSection({
             onRemove={() => onSave(member.id, levels.filter((x) => x.skill !== l.skill))}
           >
             <span className="font-medium">{l.skill}</span>
-            <span className="ml-2 text-xs text-muted-foreground">Lv.{l.level}</span>
+            <span className="ml-2 text-xs text-muted-foreground" data-skill-level={l.level}>Lv.{l.level}</span>
+            {/* 点数は本人と管理者だけが読める。読めない時(点数が届いていない時)は出さない */}
+            {hasPoints && <SkillProgress stored={l.level} points={member.skillPoints?.[l.skill] ?? 0} skill={l.skill} evidence={evidence} rules={skillLevelRules} />}
           </EntryRow>
         ))}
       </EntryList>
@@ -518,6 +525,39 @@ function SkillLevelsSection({
         </div>
       )}
     </Section>
+  )
+}
+
+// 次のレベルまでの進み具合。今のレベルは保存されたレベル(計算より高くても下げない)。
+// 点数が今のレベルの点数に届いていない人(以前の計算で上がった人)も、0 から数える(lib/ohsumi/skill-levels.ts の levelProgress)
+function SkillProgress({ stored, points, skill, evidence, rules }: {
+  stored: SkillLevelValue
+  points: number
+  skill: string
+  evidence: Parameters<typeof levelProgress>[3]
+  rules: Parameters<typeof levelProgress>[4]
+}) {
+  const { t } = useI18n()
+  const p = levelProgress(stored, points, skill, evidence, rules)
+  const pts = Math.max(0, Math.floor(points || 0))
+  return (
+    <span className="mt-1 block w-full min-w-0 text-xs text-muted-foreground" data-skill-progress={skill} data-ratio={p.ratio.toFixed(3)} data-remaining={p.remaining}>
+      {p.nextLevel == null ? (
+        t('career.skillLevels.max', { points: pts.toLocaleString() })
+      ) : (
+        <>
+          <span className="block h-1.5 w-full overflow-hidden rounded-full bg-secondary" aria-hidden>
+            <span className="block h-full rounded-full bg-primary" style={{ width: `${Math.round(p.ratio * 100)}%` }} />
+          </span>
+          <span className="mt-0.5 block break-words">
+            {t('career.skillLevels.toNext', { level: p.nextLevel, remaining: p.remaining.toLocaleString(), points: pts.toLocaleString(), next: (p.nextPoints ?? 0).toLocaleString() })}
+          </span>
+          {p.pendingConditions.length > 0 && (
+            <span className="block break-words">{t('career.skillLevels.pending', { conditions: p.pendingConditions.map((c) => conditionText(c, t)).join('・') })}</span>
+          )}
+        </>
+      )}
+    </span>
   )
 }
 

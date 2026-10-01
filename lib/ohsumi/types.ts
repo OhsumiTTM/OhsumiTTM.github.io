@@ -205,6 +205,8 @@ export interface Member {
   // 人材データベース
   careerHistory?: CareerHistoryEntry[]
   qualifications?: Qualification[]
+  // 検定の合格の記録(スキルのレベルの条件「検定の合格」に使う。lib/ohsumi/skill-levels.ts)
+  quizPasses?: { quizId: string; skill: string; level: SkillLevelValue; at: string }[]
   evaluationHistory?: EvaluationRecord[]
   transferHistory?: TransferRecord[]
 

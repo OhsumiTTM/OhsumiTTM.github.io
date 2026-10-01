@@ -1053,6 +1053,7 @@ var MEMBERS_HEADERS = [
   'department_path',          // 例: "事業本部A>事業部1>グループX"
   'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
   'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
+  'quiz_passes_json',         // 検定の合格の記録 [{"quizId","skill","level","at"}](スキルのレベルの条件に使う)
   'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）
   'absent_dates',            // 不在日リスト（カンマ区切り YYYY-MM-DD）
   'last_login',              // 最終ログイン日時（ISO datetime）
@@ -1236,14 +1237,10 @@ function notifyLabel_(kind, locale, value) {
   return Object.prototype.hasOwnProperty.call(labels, code) ? labels[code] : code
 }
 
-// スキルのレベルアップの閾値で、既定値を表すキー(移行前は「デフォルト」)
+// 以前のスキルのレベルアップの閾値(skill_level_thresholds)で、既定値を表すキー(移行前は「デフォルト」)。
+// レベルの計算には使わなくなった(skill_level_rules)が、保存されている値の移行のために残す
 var DEFAULT_THRESHOLD_KEY = '_default'
 var LEGACY_DEFAULT_THRESHOLD_KEY = 'デフォルト'
-
-function defaultSkillThreshold_(thresholds) {
-  thresholds = thresholds || {}
-  return thresholds[DEFAULT_THRESHOLD_KEY] || thresholds[LEGACY_DEFAULT_THRESHOLD_KEY] || 100
-}
 
 // フロントの版。移行の後は、これより古い(または版の無い)リクエストを拒否する。
 // 移行前のコードを読めない古いタブが、ステータスなどを誤って表示・保存するのを防ぐ
@@ -2569,7 +2566,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.02-3'
+var OHSUMI_GAS_VERSION = '2026.10.02-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -3806,24 +3803,6 @@ function checkPermissionOverride_(acting, action, body) {
 }
 
 /**
- * Reads skill_level_thresholds from the Settings sheet.
- * Returns {} when the key is absent or unparseable.
- */
-function getSkillLevelThresholds_() {
-  try {
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SETTINGS)
-    if (!sheet) return {}
-    var data = sheet.getDataRange().getValues()
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][0] === 'skill_level_thresholds') {
-        return JSON.parse(data[i][1] || '{}')
-      }
-    }
-  } catch (_) {}
-  return {}
-}
-
-/**
  * Reads quiz_definitions from the Settings sheet.
  * Returns [] when the key is absent or unparseable.
  */
@@ -3842,35 +3821,163 @@ function getQuizDefinitions_() {
   return []
 }
 
-/**
- * Computes leveled-up skill_levels_json given current levels, cumulative
- * points, and threshold config. Returns the updated levels array.
- *
- * Logic: for each skill with points, check if total >= threshold * level.
- * The threshold is "points needed per level"; e.g. threshold=100 means
- * Lv1→Lv2 at 100pts, Lv2→Lv3 at 200pts, ..., max Lv5.
- */
-function computeAutoLevels_(currentLevels, cumulativePoints, thresholds) {
-  var DEFAULT_THRESHOLD = defaultSkillThreshold_(thresholds)
-  var levels = {}
-  for (var i = 0; i < currentLevels.length; i++) {
-    levels[currentLevels[i].skill] = currentLevels[i].level
+// ---- スキルのレベルの決め方(PR Z) ----------------------------------------------
+//
+// 画面(lib/ohsumi/skill-levels.ts)と同じ決まり(lib/ohsumi/skill-levels.test.ts が、同じ入力で同じ結果になることを確かめる)。
+// レベル L になるのは、累計の点数がそのレベルの点数以上で、そのレベルの条件をすべて満たした時(満たすうちで、いちばん高いレベル)。
+//   点数: スキルごとの一覧 → 団体の既定の一覧 → 組み込みの [50, 150, 350, 550, 750]
+//   条件: レベルごとに、スキルごと → 団体の既定 → 組み込み(Lv.4: 関連する資格1件以上・Lv.5: 外部評価の資格3件以上)
+//   条件の種類: qualification(資格 min 件以上。external で外部評価だけ)・quiz(このスキル・このレベル以上の検定に合格)・
+//               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)
+// 設定は Settings の skill_level_rules(代表・全権管理者が設定の画面で変える)。以前の skill_level_thresholds は使わない。
+// 保存されたレベルは下げない(上がる時だけ書き換える)
+var BUILTIN_LEVEL_POINTS = [50, 150, 350, 550, 750]
+var BUILTIN_LEVEL_CONDITIONS = {
+  '4': [{ type: 'qualification', min: 1 }],
+  '5': [{ type: 'qualification', min: 3, external: true }],
+}
+
+function validLevelPoints_(v) {
+  if (!Array.isArray(v) || v.length !== 5) return false
+  for (var i = 0; i < 5; i++) {
+    var n = v[i]
+    if (typeof n !== 'number' || Math.floor(n) !== n || n < 0 || n > 1000000) return false
+    if (i > 0 && n <= v[i - 1]) return false
   }
-  var skills = Object.keys(cumulativePoints)
-  for (var j = 0; j < skills.length; j++) {
-    var skill = skills[j]
-    var pts = cumulativePoints[skill] || 0
-    var thr = thresholds[skill] || DEFAULT_THRESHOLD
-    var earnedLevel = Math.min(5, Math.floor(pts / thr) + 1)
-    var current = levels[skill] || 1
-    if (earnedLevel > current) levels[skill] = earnedLevel
+  return true
+}
+
+function validLevelCondition_(c) {
+  if (!c || typeof c !== 'object') return false
+  if (c.type === 'quiz') return true
+  if (c.type === 'qualification' || c.type === 'tasksDone') return typeof c.min === 'number' && Math.floor(c.min) === c.min && c.min >= 1 && c.min <= 1000
+  return false
+}
+
+// 設定の JSON を、使える形だけにする(壊れた部分は捨てる)
+function parseSkillLevelRules_(raw) {
+  var obj = raw
+  if (typeof raw === 'string') {
+    try { obj = JSON.parse(raw || '{}') } catch (e) { obj = {} }
   }
-  var result = []
-  var allSkills = Object.keys(levels)
-  for (var k = 0; k < allSkills.length; k++) {
-    result.push({ skill: allSkills[k], level: levels[allSkills[k]] })
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {}
+  var rule = function (r) {
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return null
+    var out = {}
+    if (validLevelPoints_(r.points)) out.points = r.points.slice()
+    if (r.conditions && typeof r.conditions === 'object' && !Array.isArray(r.conditions)) {
+      var conds = {}
+      var any = false
+      ;['1', '2', '3', '4', '5'].forEach(function (l) {
+        var list = r.conditions[l]
+        if (Array.isArray(list)) {
+          conds[l] = list.filter(validLevelCondition_).map(function (c) { return JSON.parse(JSON.stringify(c)) })
+          any = true
+        }
+      })
+      if (any) out.conditions = conds
+    }
+    return out.points || out.conditions ? out : null
+  }
+  var result = {}
+  var d = rule(obj['default'])
+  if (d) result['default'] = d
+  if (obj.skills && typeof obj.skills === 'object' && !Array.isArray(obj.skills)) {
+    var skills = {}
+    var anySkill = false
+    Object.keys(obj.skills).forEach(function (name) {
+      var parsed = rule(obj.skills[name])
+      var key = String(name).trim().slice(0, 100)
+      if (parsed && key) { skills[key] = parsed; anySkill = true }
+    })
+    if (anySkill) result.skills = skills
   }
   return result
+}
+
+function getSkillLevelRules_() {
+  return parseSkillLevelRules_(getSettingValue_('skill_level_rules'))
+}
+
+function levelPointsFor_(rules, skill) {
+  var s = rules.skills && rules.skills[skill]
+  if (s && s.points) return s.points
+  if (rules['default'] && rules['default'].points) return rules['default'].points
+  return BUILTIN_LEVEL_POINTS.slice()
+}
+
+function levelConditionsFor_(rules, skill, level) {
+  var key = String(level)
+  var s = rules.skills && rules.skills[skill]
+  if (s && s.conditions && s.conditions[key]) return s.conditions[key]
+  var d = rules['default']
+  if (d && d.conditions && d.conditions[key]) return d.conditions[key]
+  return BUILTIN_LEVEL_CONDITIONS[key] || []
+}
+
+function levelConditionMet_(c, skill, level, ev) {
+  if (c.type === 'qualification') {
+    var related = (ev.qualifications || []).filter(function (q) {
+      return q && Array.isArray(q.relatedSkills) && q.relatedSkills.indexOf(skill) >= 0 && (!c.external || q.external)
+    })
+    return related.length >= c.min
+  }
+  if (c.type === 'quiz') return (ev.quizPasses || []).some(function (p) { return p && p.skill === skill && Number(p.level) >= level })
+  return ((ev.doneTaskCounts || {})[skill] || 0) >= c.min
+}
+
+// 点数と記録から決まるレベル(どのレベルにも届かなければ 0)
+function skillLevelOf_(points, skill, ev, rules) {
+  rules = rules || {}
+  var table = levelPointsFor_(rules, skill)
+  for (var level = 5; level >= 1; level--) {
+    if (points < table[level - 1]) continue
+    var ok = levelConditionsFor_(rules, skill, level).every(function (c) { return levelConditionMet_(c, skill, level, ev) })
+    if (ok) return level
+  }
+  return 0
+}
+
+function parseJsonListSafe_(v) {
+  try { var a = JSON.parse(String(v || '[]')); return Array.isArray(a) ? a : [] } catch (e) { return [] }
+}
+
+// 条件を確かめるための、その人の記録(資格・検定の合格・担当して完了したタスクの数)
+function skillEvidenceOf_(memberRow, memberId) {
+  var counts = {}
+  try {
+    var t = snapshotTableOrSheet_(SHEET_TASKS)
+    var col = function (name) { return t.headers.indexOf(name) }
+    var aCol = col('assignee_id'), sCol = col('status'), kCol = col('skills')
+    ;(t.rows || []).forEach(function (r) {
+      if (normalizeCode_('status', r[sCol]) !== 'done') return
+      var assignees = String(r[aCol] || '').split(',').map(function (x) { return x.trim() })
+      if (assignees.indexOf(String(memberId)) < 0) return
+      String(r[kCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
+    })
+  } catch (e) { counts = {} }
+  return {
+    qualifications: parseJsonListSafe_(memberRow && memberRow.qualifications_json),
+    quizPasses: parseJsonListSafe_(memberRow && memberRow.quiz_passes_json),
+    doneTaskCounts: counts,
+  }
+}
+
+/**
+ * 累計の点数と記録から、レベルを上げた一覧を返す(下げない。acquiredAt などほかの項目は残す)。
+ * 点数のあるスキルだけを計算し直す
+ */
+function computeAutoLevels_(currentLevels, cumulativePoints, rules, evidence) {
+  var out = (currentLevels || []).map(function (l) { return JSON.parse(JSON.stringify(l)) })
+  Object.keys(cumulativePoints || {}).forEach(function (skill) {
+    var earned = skillLevelOf_(Number(cumulativePoints[skill]) || 0, skill, evidence || {}, rules || {})
+    if (!earned) return
+    var idx = -1
+    for (var i = 0; i < out.length; i++) if (out[i] && out[i].skill === skill) { idx = i; break }
+    if (idx < 0) out.push({ skill: skill, level: earned, acquiredAt: new Date().toISOString() })
+    else if (earned > (Number(out[idx].level) || 0)) out[idx].level = earned
+  })
+  return out
 }
 
 /**
@@ -3897,9 +4004,6 @@ function importPortableRecord_(memberId, skillPoints, qualifications) {
     currentPoints[s] = (currentPoints[s] || 0) + (Number(skillPoints[s]) || 0)
   }
 
-  var thresholds = getSkillLevelThresholds_()
-  var newLevels = computeAutoLevels_(currentLevels, currentPoints, thresholds)
-
   var existingKeys = {}
   for (var j = 0; j < currentQualifications.length; j++) {
     var eq = currentQualifications[j]
@@ -3918,6 +4022,11 @@ function importPortableRecord_(memberId, skillPoints, qualifications) {
       issuer: q.issuer || undefined,
     })
   }
+
+  // 持ち込んだ資格も、レベルの条件に数える
+  var evidence = skillEvidenceOf_(memberRow, memberId)
+  evidence.qualifications = currentQualifications
+  var newLevels = computeAutoLevels_(currentLevels, currentPoints, getSkillLevelRules_(), evidence)
 
   updateMemberFields_(memberId, {
     skill_points_json: JSON.stringify(currentPoints),
@@ -3948,9 +4057,8 @@ function awardSkillPoints_(taskId, memberId, points) {
     currentPoints[s] = (currentPoints[s] || 0) + (points[s] || 0)
   }
 
-  // Compute auto-level-up
-  var thresholds = getSkillLevelThresholds_()
-  var newLevels = computeAutoLevels_(currentLevels, currentPoints, thresholds)
+  // レベルを上げる(skill_level_rules と、資格・検定・完了したタスクの条件で決める)
+  var newLevels = computeAutoLevels_(currentLevels, currentPoints, getSkillLevelRules_(), skillEvidenceOf_(memberRow, memberId))
 
   // Persist
   updateMemberFields_(memberId, {
@@ -3991,32 +4099,30 @@ function submitQuizResult_(quizId, memberId, answers, acting) {
   var newLevel = null
   if (passed) {
     var memberRow = findRow_(SHEET_MEMBERS, memberId)
-    var currentLevels = []
-    try { currentLevels = JSON.parse((memberRow && memberRow.skill_levels_json) || '[]') } catch (_) {}
+    var currentLevels = parseJsonListSafe_(memberRow && memberRow.skill_levels_json)
     var targetSkill = quiz.targetSkill
-    var targetLevel = quiz.targetLevel || 1
+    var targetLevel = Number(quiz.targetLevel) || 1
+    // 合格を記録する(レベルの条件「検定の合格」に使う。同じ検定は最新の1件だけ残す)
+    var passes = parseJsonListSafe_(memberRow && memberRow.quiz_passes_json).filter(function (p) { return p && p.quizId !== quiz.id })
+    passes.push({ quizId: quiz.id, skill: targetSkill, level: targetLevel, at: new Date().toISOString() })
+    var fields = { quiz_passes_json: JSON.stringify(passes.slice(-100)) }
     var existing = currentLevels.find(function(sl) { return sl.skill === targetSkill })
     if (!existing || existing.level < targetLevel) {
-      var nextLevels = currentLevels.filter(function(sl) { return sl.skill !== targetSkill })
-      nextLevels.push({ skill: targetSkill, level: targetLevel })
-      // SKL-009: skill_points_jsonもレベルと整合させる。computeAutoLevels_と
-      // 同じ閾値計算(pts/threshold切り捨て+1=レベル)から逆算すると、
-      // レベルLに達する最低ポイントはthreshold*(L-1)
-      var thresholds = getSkillLevelThresholds_()
-      var defaultThreshold = defaultSkillThreshold_(thresholds)
-      var threshold = thresholds[targetSkill] || defaultThreshold
+      // 検定の合格で、目標のレベルにする(acquiredAt などは残す)
+      var nextLevels = currentLevels.map(function (sl) { return sl.skill === targetSkill ? Object.assign({}, sl, { level: targetLevel }) : sl })
+      if (!existing) nextLevels.push({ skill: targetSkill, level: targetLevel, acquiredAt: new Date().toISOString() })
+      // SKL-009: 累計の点数もレベルにそろえる(そのレベルに必要な点数まで底上げする。画面と同じ)
       var currentPoints = {}
       try { currentPoints = JSON.parse((memberRow && memberRow.skill_points_json) || '{}') } catch (_) {}
-      var minPointsForLevel = threshold * (targetLevel - 1)
+      var minPointsForLevel = levelPointsFor_(getSkillLevelRules_(), targetSkill)[targetLevel - 1]
       if ((currentPoints[targetSkill] || 0) < minPointsForLevel) {
         currentPoints[targetSkill] = minPointsForLevel
       }
-      updateMemberFields_(memberId, {
-        skill_levels_json: JSON.stringify(nextLevels),
-        skill_points_json: JSON.stringify(currentPoints),
-      })
+      fields.skill_levels_json = JSON.stringify(nextLevels)
+      fields.skill_points_json = JSON.stringify(currentPoints)
       newLevel = targetLevel
     }
+    updateMemberFields_(memberId, fields)
   }
   return { ok: true, passed: passed, score: score, newLevel: newLevel }
 }
@@ -8172,7 +8278,7 @@ var ROW_VERSION_IGNORED_FIELDS = [
   'comments_json', 'progress_history_json', 'history_json', 'deliverables_json',
   'career_history_json', 'qualifications_json', 'evaluation_history_json', 'transfer_history_json',
   'skill_levels_json', 'competencies_json', 'training_history_json', 'development_plan_json', 'one_on_ones_json',
-  'survey_responses_json', 'skill_points_json', 'awarded_points_json',
+  'survey_responses_json', 'skill_points_json', 'awarded_points_json', 'quiz_passes_json',
 ]
 // このリクエスト(batch では操作ごと)で画面が送った、開いた時点の版
 var _expectedRowVersions = null
@@ -10433,6 +10539,7 @@ var READ_POLICY = {
       desired_skills: 'selfOrAdminRole',
       career_history_json: 'selfOrAdminRole',
       qualifications_json: 'selfOrAdminRole',
+      quiz_passes_json: 'selfOrAdminRole',
       evaluation_history_json: 'selfOrAdminRole',
       transfer_history_json: 'selfOrAdminRole',
       competencies_json: 'selfOrAdminRole',
@@ -10508,6 +10615,7 @@ var READ_POLICY = {
       project_order: 'all',
       restricted_roles: 'all',
       skill_level_thresholds: 'all',
+      skill_level_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',

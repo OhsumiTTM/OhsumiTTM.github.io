@@ -69,12 +69,6 @@ describe('書く時の形式(sheetCode)', () => {
     expect(legacy.sheetSettingValue_('org_name', 'テスト')).toBe('テスト')
     expect(legacy.sheetSettingValue_('project_templates', '{壊れた')).toBe('{壊れた')
   })
-
-  it('スキルの閾値の既定値は、「デフォルト」・_default のどちらでも読む', () => {
-    expect(legacy.defaultSkillThreshold_({ デフォルト: 150 })).toBe(150)
-    expect(legacy.defaultSkillThreshold_({ _default: 80 })).toBe(80)
-    expect(legacy.defaultSkillThreshold_({})).toBe(100)
-  })
 })
 
 describe('リクエストの値をコードにそろえる(normalizeRequestCodes)', () => {
@@ -299,8 +293,6 @@ describe('VALUE_FORMAT とシートの実際の値が食い違っていても壊
       }
       expect(gas.overridesGrant_([{ targetType: 'department', targetId: '広報', access: 'edit' }], { department: 'pr' }, 1)).toBe(true)
       expect(gas.overridesGrant_([{ targetType: 'department', targetId: 'pr', access: 'edit' }], { department: '広報' }, 1)).toBe(true)
-      expect(gas.defaultSkillThreshold_({ デフォルト: 150 })).toBe(150)
-      expect(gas.defaultSkillThreshold_({ _default: 150 })).toBe(150)
     })
 
     it(`${label}: 変更の記録は、シートがどちらの形式でも本人の追記を受け付ける`, () => {

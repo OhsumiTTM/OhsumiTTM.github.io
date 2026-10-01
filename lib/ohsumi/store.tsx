@@ -119,7 +119,8 @@ import {
 } from './remote'
 import { selectProjectHealthReports } from './project-health-report'
 import { isGoogleCalendarReadEnabled } from './features'
-import { computeProjectAutoHealth, computeSkillLevel, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, SKILL_LEVEL_CUMULATIVE_THRESHOLDS } from './utils'
+import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions } from './utils'
+import { doneTaskCountsOf, levelPointsFor, skillLevelOf, type SkillEvidence, type SkillLevelRules } from './skill-levels'
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setCalendarToken } from './google-sheet-sync'
@@ -444,6 +445,9 @@ interface OhsumiContextValue extends OhsumiState {
   // スキルポイント・検定・レーダーチャート
   skillLevelThresholds: SkillLevelThresholds
   updateSkillLevelThresholds: (thresholds: SkillLevelThresholds) => void
+  // スキルのレベルの決め方(Settings の skill_level_rules。代表・全権管理者が設定の画面で変える)
+  skillLevelRules: SkillLevelRules
+  updateSkillLevelRules: (rules: SkillLevelRules) => void
   quizDefinitions: QuizDefinition[]
   radarAxes: RadarAxis[]
   awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
@@ -1022,6 +1026,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     }
   })
   const [skillLevelThresholds, setSkillLevelThresholds] = useState<SkillLevelThresholds>({})
+  const [skillLevelRules, setSkillLevelRules] = useState<SkillLevelRules>({})
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
   const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
@@ -1233,6 +1238,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     if (s.themeColor) { setThemeColorState(s.themeColor); try { localStorage.setItem(THEME_COLOR_STORAGE_KEY, s.themeColor) } catch {} }
     setProjectOrderState(s.projectOrder)
     if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
+    if (s.skillLevelRules) setSkillLevelRules(s.skillLevelRules)
     if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
     if (s.radarAxes) setRadarAxes(s.radarAxes)
     if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
@@ -1925,9 +1931,26 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
 
+  // スキルのレベルの決め方を変える(代表・全権管理者)。以降のポイント付与・持ち込みのレベル計算に使う
+  const updateSkillLevelRules = useCallback(
+    (rules: SkillLevelRules) => {
+      setSkillLevelRules(rules)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('skill_level_rules', JSON.stringify(rules)))
+    },
+    [runRemote],
+  )
+  // レベルの計算に使う、最新の決め方と、完了したタスク(条件「完了したタスクの数」)
+  const levelInputsRef = useRef<{ rules: SkillLevelRules; tasks: Task[] }>({ rules: {}, tasks: [] })
+  levelInputsRef.current = { rules: skillLevelRules, tasks }
+  const evidenceOf = (m: Member, qualifications = m.qualifications ?? []): SkillEvidence => ({
+    qualifications,
+    quizPasses: m.quizPasses ?? [],
+    doneTaskCounts: doneTaskCountsOf(m.id, levelInputsRef.current.tasks),
+  })
+
   // スキルポイント付与 — タスク完了後に管理者が各スキルに対してポイントを付与。
-  // 累計ポイントが閾値[50,150,350,550,750]を超え、かつレベル4/5は資格
-  // (認定)条件も満たすとスキルレベルが自動で繰り上がる(computeSkillLevel)。
+  // 累計ポイントと、レベルの条件(既定: Lv.4・5 は資格)で、スキルレベルが自動で繰り上がる
+  // (lib/ohsumi/skill-levels.ts。GAS の計算と同じ。レベルは下げない)
   const awardSkillPoints = useCallback(
     (taskId: string, memberId: string, points: SkillPoints) => {
       setMembers((prev) =>
@@ -1937,10 +1960,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           Object.entries(points).forEach(([skill, pts]) => {
             current[skill] = (current[skill] ?? 0) + pts
           })
-          const qualifications = m.qualifications ?? []
+          const evidence = evidenceOf(m)
           const existingLevels = [...(m.skillLevels ?? [])]
           Object.entries(current).forEach(([skill, pts]) => {
-            const earnedLevel = computeSkillLevel(pts, skill, qualifications)
+            const earnedLevel = skillLevelOf(pts, skill, evidence, levelInputsRef.current.rules)
             if (earnedLevel == null) return
             const idx = existingLevels.findIndex((sl) => sl.skill === skill)
             if (idx < 0) {
@@ -1985,7 +2008,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           const mergedQualifications = [...existingQualifications, ...newQualifications]
           const existingLevels = [...(m.skillLevels ?? [])]
           Object.entries(current).forEach(([skill, pts]) => {
-            const earnedLevel = computeSkillLevel(pts, skill, mergedQualifications)
+            const earnedLevel = skillLevelOf(pts, skill, evidenceOf(m, mergedQualifications), levelInputsRef.current.rules)
             if (earnedLevel == null) return
             const idx = existingLevels.findIndex((sl) => sl.skill === skill)
             if (idx < 0) {
@@ -2098,10 +2121,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (isRemoteConfigured) {
         try {
           const result = await remoteApi.submitQuizResult(quizId, memberId, answers)
-          if (result.passed && result.newLevel != null) {
+          if (result.passed) {
             setMembers((prev) =>
               prev.map((m) => {
                 if (m.id !== memberId) return m
+                // 合格を記録する(レベルの条件「検定の合格」。GAS も同じように quiz_passes_json に残す)
+                const quizPasses = [...(m.quizPasses ?? []).filter((p) => p.quizId !== quiz.id), { quizId: quiz.id, skill: quiz.targetSkill, level: quiz.targetLevel, at: new Date().toISOString() }]
+                if (result.newLevel == null) return { ...m, quizPasses }
                 const existing = [...(m.skillLevels ?? [])]
                 const idx = existing.findIndex((sl) => sl.skill === quiz.targetSkill)
                 const nl = result.newLevel as SkillLevelValue
@@ -2110,7 +2136,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                 } else if (nl > existing[idx].level) {
                   existing[idx] = { ...existing[idx], level: nl }
                 }
-                return { ...m, skillLevels: existing }
+                return { ...m, skillLevels: existing, quizPasses }
               }),
             )
           }
@@ -2128,24 +2154,24 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           setMembers((prev) =>
             prev.map((m) => {
               if (m.id !== memberId) return m
+              const quizPasses = [...(m.quizPasses ?? []).filter((p) => p.quizId !== quiz.id), { quizId: quiz.id, skill: quiz.targetSkill, level: quiz.targetLevel, at: new Date().toISOString() }]
               const existing = [...(m.skillLevels ?? [])]
               const idx = existing.findIndex((sl) => sl.skill === quiz.targetSkill)
-              if (idx >= 0 && quiz.targetLevel <= existing[idx].level) return m
+              if (idx >= 0 && quiz.targetLevel <= existing[idx].level) return { ...m, quizPasses }
               if (idx < 0) {
                 existing.push({ skill: quiz.targetSkill, level: quiz.targetLevel })
               } else {
                 existing[idx] = { ...existing[idx], level: quiz.targetLevel }
               }
               // SKL-009: skill_points_jsonもレベルと整合させる。検定合格を
-              // 「認定」の根拠として扱い、累積閾値[50,150,350,550,750]の
-              // targetLevel分まではポイントを底上げする(レベル4/5の資格
-              // 認定条件は検定合格自体で満たされるとみなしチェックしない)
-              const minPointsForLevel = SKILL_LEVEL_CUMULATIVE_THRESHOLDS[quiz.targetLevel]
+              // 「認定」の根拠として扱い、そのスキルの点数の一覧の targetLevel 分まで
+              // ポイントを底上げする(検定の合格で、そのレベルになる。GAS と同じ)
+              const minPointsForLevel = levelPointsFor(levelInputsRef.current.rules, quiz.targetSkill)[quiz.targetLevel - 1]
               const currentPoints = { ...m.skillPoints }
               if ((currentPoints[quiz.targetSkill] ?? 0) < minPointsForLevel) {
                 currentPoints[quiz.targetSkill] = minPointsForLevel
               }
-              return { ...m, skillLevels: existing, skillPoints: currentPoints }
+              return { ...m, skillLevels: existing, skillPoints: currentPoints, quizPasses }
             }),
           )
         }
@@ -5359,6 +5385,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updatePermissionOverrides,
     skillLevelThresholds,
     updateSkillLevelThresholds,
+    skillLevelRules,
+    updateSkillLevelRules,
     quizDefinitions,
     radarAxes,
     awardSkillPoints,

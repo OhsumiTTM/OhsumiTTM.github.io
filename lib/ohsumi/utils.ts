@@ -1,4 +1,5 @@
 import type { Difficulty, Member, Project, ProjectHealthLevel, Qualification, RadarAxis, SkillLevelValue, Task } from './types'
+import { BUILTIN_LEVEL_POINTS, EMPTY_EVIDENCE, skillLevelOf } from './skill-levels'
 import { DIFFICULTY_LABEL } from './types'
 import { todayStrInTz, DEFAULT_TIMEZONE } from './timezone'
 
@@ -323,37 +324,27 @@ export function computeBaseSkillPoints(difficulty: Difficulty, estimatedHours?: 
   return base
 }
 
-// レベルごとの累積ポイント閾値。レベル4/5は累積ポイントに加えて資格
-// (Qualification)による認定条件も満たす必要がある(computeSkillLevel参照)
+// レベルごとの累積ポイント閾値(組み込みの値)。団体の設定(skill_level_rules)が無い時に使う。
+// レベル4/5は累積ポイントに加えて資格(Qualification)による認定条件も満たす必要がある
+// (決め方は lib/ohsumi/skill-levels.ts)
 export const SKILL_LEVEL_CUMULATIVE_THRESHOLDS: Record<SkillLevelValue, number> = {
-  1: 50,
-  2: 150,
-  3: 350,
-  4: 550,
-  5: 750,
+  1: BUILTIN_LEVEL_POINTS[0],
+  2: BUILTIN_LEVEL_POINTS[1],
+  3: BUILTIN_LEVEL_POINTS[2],
+  4: BUILTIN_LEVEL_POINTS[3],
+  5: BUILTIN_LEVEL_POINTS[4],
 }
 
-// 累積ポイント+資格(認定)からスキルレベルを判定する。
-// レベル4「そのスキルにおいてタスク以外で1つ以上認定される」→
-//   relatedSkillsにそのスキルを含む資格が1件以上
-// レベル5「外部での実績や外部検定で3つ以上評価される」→
-//   上記のうちexternal=trueの資格が3件以上
-// 閾値未満(レベル1未満)の場合はundefined(まだこのスキルのレベルを
-// 記録しない — 既存のSkillLevelValue型が1〜5のみで0を表現できないため)
+// 累積ポイント+資格(認定)からスキルレベルを判定する(団体の設定が無い時の決め方)。
+// レベル4「そのスキルにおいてタスク以外で1つ以上認定される」→ relatedSkillsにそのスキルを含む資格が1件以上
+// レベル5「外部での実績や外部検定で3つ以上評価される」→ 上記のうちexternal=trueの資格が3件以上
+// 閾値未満(レベル1未満)の場合はundefined
 export function computeSkillLevel(
   cumulativePoints: number,
   skill: string,
   qualifications: Qualification[],
 ): SkillLevelValue | undefined {
-  const related = qualifications.filter((q) => q.relatedSkills?.includes(skill))
-  const externalCount = related.filter((q) => q.external).length
-
-  if (cumulativePoints >= SKILL_LEVEL_CUMULATIVE_THRESHOLDS[5] && externalCount >= 3) return 5
-  if (cumulativePoints >= SKILL_LEVEL_CUMULATIVE_THRESHOLDS[4] && related.length >= 1) return 4
-  if (cumulativePoints >= SKILL_LEVEL_CUMULATIVE_THRESHOLDS[3]) return 3
-  if (cumulativePoints >= SKILL_LEVEL_CUMULATIVE_THRESHOLDS[2]) return 2
-  if (cumulativePoints >= SKILL_LEVEL_CUMULATIVE_THRESHOLDS[1]) return 1
-  return undefined
+  return skillLevelOf(cumulativePoints, skill, { ...EMPTY_EVIDENCE, qualifications })
 }
 
 export interface TaskPerformanceScore {
