@@ -96,7 +96,7 @@ describe('GAS に断られた時(remote.ts)', () => {
   it('提供停止中に断られたら、ログイン画面に戻して「利用を停止しています」を出す', async () => {
     mockGas({ ok: false, orgSuspended: true, error: 'この団体は、Ohsumi の利用を停止しています。', contract: { phase: 'inEffect', kind: 'suspend' } })
     await expect(remote.fetchInitialData()).rejects.toThrow(/利用を停止しています/)
-    expect(events).toEqual([{ type: 'ohsumi:org-changed', detail: { orgId: TEST_ORG_ID, notice: 'orgSuspended' } }])
+    expect(events).toEqual([{ type: 'ohsumi:org-changed', detail: { orgId: TEST_ORG_ID, notice: 'orgSuspended', texts: [] } }])
   })
 
   it('ログインの設定で停止中と分かる', async () => {

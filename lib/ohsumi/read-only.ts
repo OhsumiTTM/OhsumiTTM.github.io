@@ -82,6 +82,54 @@ function looksLikeText(s: string): boolean {
 }
 
 /** 送ろうとした内容(引数・リクエスト)から、人が書いた文章らしいものを取り出す(重複は除く。長い順) */
+// ---- 保存できなかった文章を、読み込み直しの後まで残す ----------------------------------
+//
+// ログインが切れた・提供停止になった時は、ページを読み込み直してログイン画面に戻す。その時に送れなかった文章を
+// このタブの sessionStorage に残し、読み込み直した画面(ログイン画面・ログインした後)でコピーできるように出す。
+// 閉じれば消す。自分でログアウトした時も消す(共有の端末に残さない)
+export type UnsavedNoticeKind = 'readOnly' | 'sessionEnded' | 'orgSuspended' | 'reloadRequired'
+const UNSENT_KEY = 'ohsumi-unsent-texts'
+
+function tabStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+/** 送れなかった文章を残す(前に残した分に足す) */
+export function keepUnsentTexts(kind: UnsavedNoticeKind, texts: string[]): void {
+  if (!texts.length) return
+  const s = tabStorage()
+  try {
+    const before = takeUnsentTexts()
+    const merged = [...new Set([...(before?.texts ?? []), ...texts])]
+    s?.setItem(UNSENT_KEY, JSON.stringify({ kind, texts: merged }))
+  } catch {
+    /* 残せなくても、画面の知らせは出す */
+  }
+}
+
+/** 残した文章(消さない。閉じた時に clearUnsentTexts で消す) */
+export function takeUnsentTexts(): { kind: UnsavedNoticeKind; texts: string[] } | null {
+  try {
+    const raw = tabStorage()?.getItem(UNSENT_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw) as { kind?: string; texts?: unknown }
+    const texts = Array.isArray(v.texts) ? v.texts.filter((t): t is string => typeof t === 'string' && !!t) : []
+    if (!texts.length) return null
+    const kind = (['sessionEnded', 'orgSuspended', 'reloadRequired', 'readOnly'] as const).find((k) => k === v.kind) ?? 'sessionEnded'
+    return { kind, texts }
+  } catch {
+    return null
+  }
+}
+
+export function clearUnsentTexts(): void {
+  try { tabStorage()?.removeItem(UNSENT_KEY) } catch { /* ignore */ }
+}
+
 export function extractUnsavedTexts(value: unknown, depth = 0): string[] {
   const out: string[] = []
   const visit = (v: unknown, key: string, d: number) => {
