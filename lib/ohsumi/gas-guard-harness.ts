@@ -56,7 +56,7 @@ function noop<T extends object>(target: T): T {
   })
 }
 
-export interface Sent { kind: 'mail' | 'chat' | 'queue'; to: string; text: string }
+export interface Sent { kind: 'mail' | 'chat' | 'queue' | 'digest'; to: string; text: string }
 
 // realCalendar: カレンダーの予定を作る処理を動かし、作った予定を events に記録する
 export function guardHarness(opts: { code?: string; props?: Record<string, string>; realCalendar?: boolean } = {}) {
@@ -190,9 +190,18 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } }
   const post = (body: Record<string, unknown>) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
   // 通知のキュー(まとめて送る設定の人)に入ったもの
-  const queued = (): Sent[] => Object.entries(props).filter(([k]) => k.startsWith('notif_queue_'))
-    .flatMap(([k, v]) => (JSON.parse(v) as { templates: Record<string, { subject: string; body: string }> }[])
-      .map((q) => ({ kind: 'queue' as const, to: k.slice('notif_queue_'.length), text: JSON.stringify(q.templates) })))
+  // 毎日のまとめ(急ぎでない通知)に入ったもの(to は宛先のアドレス)
+  const queued = (): Sent[] => [
+    ...Object.entries(props).filter(([k]) => k.startsWith('notif_queue_'))
+      .flatMap(([k, v]) => (JSON.parse(v) as { templates: Record<string, { subject: string; body: string }> }[])
+        .map((q) => ({ kind: 'queue' as const, to: k.slice('notif_queue_'.length), text: JSON.stringify(q.templates) }))),
+    ...digested(),
+  ]
+  const digested = (): Sent[] => Object.entries(props).filter(([k]) => k.startsWith('notif_digest_'))
+    .flatMap(([, v]) => {
+      const d = JSON.parse(v) as { email: string; items: { s: string; b: string }[] }
+      return d.items.map((i) => ({ kind: 'digest' as const, to: d.email, text: i.s + '\n' + i.b }))
+    })
   const allSent = () => [...sent, ...queued()]
   const tasksJson = () => JSON.stringify(sheets.Tasks.rows)
   const savedText = () => JSON.stringify(Object.fromEntries(Object.entries(sheets).map(([n, s]) => [n, s.rows])))
@@ -202,7 +211,7 @@ export function guardHarness(opts: { code?: string; props?: Record<string, strin
     return out
   }
   const addSheet = (name: string, rows: Cell[][]) => add(name, rows)
-  return { c, post, sheets, props, cache, sent, events, allSent, tasksJson, savedText, registeredEmails, addSheet }
+  return { c, post, sheets, props, cache, sent, events, allSent, digested, tasksJson, savedText, registeredEmails, addSheet }
 }
 
 // doPost が受け付ける操作: runWriteAction_ の case(新しく足した操作も、自動でここに入る)

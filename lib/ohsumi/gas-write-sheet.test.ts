@@ -3,6 +3,7 @@
 //     隣り合う列は1回の setValues にまとめ、離れた列は間のセルを書き換えない
 //   - 通知の準備(日程の変更の通知)は、タスクの行を読み直さず、メンバー・メールアドレス・設定を
 //     スナップショットとキャッシュから引く(シートを読まない)
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
@@ -105,6 +106,11 @@ function setup() {
       ungzip: (b: unknown) => b,
       base64Encode: (bytes: Buffer) => Buffer.from(bytes).toString('base64'),
       base64Decode: (s: string) => Buffer.from(s, 'base64'),
+      // 毎日のまとめの宛先のハッシュ
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      Charset: { UTF_8: 'utf8' },
+      computeDigest: (_a: string, text: string) => Array.from(createHash('sha256').update(String(text)).digest()).map((b) => (b > 127 ? b - 256 : b)),
+      base64EncodeWebSafe: (v: number[]) => Buffer.from(v.map((b) => b & 0xff)).toString('base64url'),
     },
   })
   vm.runInContext(CODE_GS, ctx)
@@ -130,7 +136,13 @@ function setup() {
     calls.length = 0
   }
   const sheetCalls = (name: string) => calls.filter((x) => x.startsWith(name + '.') || x === `getSheetByName(${name})`)
-  return { gas, c, post, sheets, calls, mails, warm, sheetCalls }
+  // 毎日のまとめ(急ぎでない通知)に入ったもの
+  const digests = () => Object.entries(props).filter(([k]) => k.startsWith('notif_digest_'))
+    .flatMap(([, v]) => {
+      const d = JSON.parse(v) as { email: string; items: { s: string; b: string }[] }
+      return d.items.map((i) => ({ to: d.email, subject: i.s, body: i.b }))
+    })
+  return { gas, c, post, sheets, calls, mails, digests, warm, sheetCalls }
 }
 
 describe('行への書き込み', () => {
@@ -184,16 +196,14 @@ describe('行への書き込み', () => {
 })
 
 describe('日程の変更の通知', () => {
-  it('タスクの行を読み直さず、宛先(上長・団体の通知先)と言語をスナップショットとキャッシュから引く', () => {
+  it('タスクの行を読み直さず、宛先(上長)と言語をスナップショットとキャッシュから引く。急ぎではないので毎日のまとめに入れる', () => {
     const t = setup()
     t.warm()
     const res = t.post({ action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '', deadline: '2026-10-10' })
     expect(res.ok, JSON.stringify(res)).toBe(true)
-    // 担当者(m-base)の上長(m-lead)と、団体の通知先に送る。m-lead は英語
-    expect(t.mails.map((m) => [m.to, m.subject]).sort()).toEqual([
-      ['lead@example.com', '[Ohsumi] Task schedule changed'],
-      ['org@example.com', '[Ohsumi] タスクの日程が変更されました'],
-    ])
+    // 担当者(m-base)の上長(m-lead)のまとめに入れる(上長がいるので、団体の通知先には重ねない)。m-lead は英語
+    expect(t.mails).toEqual([])
+    expect(t.digests().map((m) => [m.to, m.subject])).toEqual([['lead@example.com', '[Ohsumi] Task schedule changed']])
     // シートを読んだのは、書き込みの前の Tasks の1回だけ(メンバー・メールアドレス・設定は読まない)
     const reads = t.calls.filter((x) => x.endsWith('.read'))
     expect(reads).toEqual(['Tasks.read'])
@@ -206,15 +216,14 @@ describe('日程の変更の通知', () => {
     t.calls.length = 0
     const res = t.post({ action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '', deadline: '2026-10-10' })
     expect(res.ok, JSON.stringify(res)).toBe(true)
-    expect(t.mails.map((m) => m.to).sort()).toEqual(['lead@example.com', 'org@example.com'])
+    expect(t.digests().map((m) => m.to)).toEqual(['lead@example.com'])
   })
 
   it('通知の本文には、書いたばかりの日程が入る', () => {
     const t = setup()
     t.warm()
-    const bodies: string[] = []
-    t.c.sendMail_ = (m: { body: string }) => { bodies.push(m.body) }
     t.post({ action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '2026-10-01', deadline: '2026-10-10' })
+    const bodies = t.digests().map((m) => m.body)
     expect(bodies.length).toBeGreaterThan(0)
     for (const b of bodies) expect(b).toMatch(/2026-10-01[\s\S]*2026-10-10/)
   })

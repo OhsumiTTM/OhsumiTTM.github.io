@@ -234,9 +234,11 @@ describe('通知を送る操作は、保存したデータだけで送る', () =
     const h = guardHarness()
     const res = h.post({ action: 'rejectTask', sessionToken: 'm-lead', taskId: 't1', reason: '重複しています', creatorId: 'm-victim', taskName: '偽物' })
     expect(res.ok, res.error).toBe(true)
-    expect(h.sent.map((s) => s.to)).toEqual(['lead@example.com'])
-    expect(h.sent[0].text).toContain('「タスク1」')
-    expect(h.sent[0].text).toContain('理由: 重複しています')
+    // 却下の知らせは急ぎではないので、毎日のまとめに入る
+    expect(h.sent).toEqual([])
+    expect(h.digested().map((s) => s.to)).toEqual(['lead@example.com'])
+    expect(h.digested()[0].text).toContain('「タスク1」')
+    expect(h.digested()[0].text).toContain('理由: 重複しています')
     expect(h.sheets.Tasks.rows.some((r) => r[0] === 't1')).toBe(false)
   })
 
@@ -258,7 +260,7 @@ describe('通知を送る操作は、保存したデータだけで送る', () =
     expect(h.post({ action: 'notifyFormResult', sessionToken: 'm-base', taskId: 't1' }).result).toEqual({ sent: true })
     // 回答が揃っていないタスクでは送らない
     expect(h.post({ action: 'notifyScheduleResult', sessionToken: 'm-base', taskId: 't-bid' }).result).toEqual({ sent: false })
-    expect(h.sent.filter((s) => s.kind === 'mail').map((s) => s.to)).toEqual(['lead@example.com', 'lead@example.com'])
+    expect(h.digested().map((s) => s.to)).toEqual(['lead@example.com', 'lead@example.com'])
   })
 })
 

@@ -110,7 +110,7 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
   c.recordLastLogin_ = () => true
   // メール(停止の予告)は送らずに覚える。宛先は opts.emails(メールアドレス → メンバーID)から引く
   const mails: { to: string; subject: string; body: string }[] = []
-  c.sendMail_ = (m: { to: string; subject: string; body: string }) => { mails.push(m) }
+  c.sendMail_ = (m: { to: string; subject: string; body: string }) => { mails.push(m); return true }
   c.getAllMemberEmails_ = () => Object.fromEntries(Object.entries(opts.emails ?? {}).map(([email, id]) => [id, email]))
   c.getSettingValue_ = (key: string) => (key === 'org_name' ? 'テスト団体' : '')
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown>

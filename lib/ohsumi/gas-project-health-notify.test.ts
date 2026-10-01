@@ -1,5 +1,6 @@
 // gas/Code.gs のプロジェクトの健康状態の通知(reportProjectHealth)と、テスト環境の
 // メール送信(sendMail)を、メモリ上の簡易なスプレッドシートで確かめる。
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
@@ -64,11 +65,22 @@ function setup(projects: string[][], props: Record<string, string> = {}) {
     Logger: { log: () => undefined },
     PropertiesService: {
       getScriptProperties: () => ({
+        getProperties: () => ({ ...allProps }),
         getProperty: (k: string) => allProps[k] ?? null,
         setProperty: (k: string, v: string) => {
           allProps[k] = v
         },
+        deleteProperty: (k: string) => {
+          delete allProps[k]
+        },
       }),
+    },
+    // 毎日のまとめの宛先のハッシュ
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'sha256' },
+      Charset: { UTF_8: 'utf8' },
+      computeDigest: (_a: string, text: string) => Array.from(createHash('sha256').update(String(text)).digest()).map((b) => (b > 127 ? b - 256 : b)),
+      base64EncodeWebSafe: (v: number[]) => Buffer.from(v.map((b) => b & 0xff)).toString('base64url'),
     },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => ({ getSheetByName: (n: string) => sheets[n] ?? null }),
@@ -96,30 +108,37 @@ function setup(projects: string[][], props: Record<string, string> = {}) {
     reportProjectHealth_: (items: unknown) => { recorded: string[]; notified: string[] }
     notifyProjectHealth_: (id: string, health: string) => unknown
     sendMail_: (m: Mail) => void
+    flushDailyDigests_: () => void
     syncCalendarForTask_: (id: string) => void
     buildPerformanceTestData_: (seed?: number) => Record<string, Record<string, string>[]>
   }
   const record = (id: string) => sheets.Projects.rows.find((r) => r[0] === id)?.[3]
-  return { gas, sheets, mails, chats, logs, events, record, context }
+  // 健康状態の通知は急ぎではないので、毎日のまとめに入る(宛先・件名・本文の先頭)
+  const digests = (): Mail[] => Object.entries(allProps).filter(([k]) => k.startsWith('notif_digest_'))
+    .flatMap(([, v]) => {
+      const d = JSON.parse(v) as { email: string; items: { s: string; b: string }[] }
+      return d.items.map((i) => ({ to: d.email, subject: i.s, body: i.b }))
+    })
+  return { gas, sheets, mails, digests, chats, logs, events, record, context }
 }
 
 describe('reportProjectHealth', () => {
   it('健康状態が一度も記録されていないプロジェクトは、記録だけして通知しない', () => {
     const projects = Array.from({ length: 20 }, (_, i) => [`perf-p-${i}`, `ダミー${i}`, '', ''])
-    const { gas, mails, chats, record } = setup(projects)
+    const { gas, mails, digests, chats, record } = setup(projects)
     const res = gas.reportProjectHealth_(projects.map(([id]) => ({ projectId: id, health: 'attention' })))
     expect(res.recorded).toHaveLength(20)
     expect(res.notified).toHaveLength(0)
     expect(record('perf-p-0')).toBe('attention')
-    expect(mails).toHaveLength(0)
+    expect(digests()).toHaveLength(0)
     expect(chats).toHaveLength(0)
     // 2回目(記録済み・状態は変わらない)も通知しない
     gas.reportProjectHealth_(projects.map(([id]) => ({ projectId: id, health: 'attention' })))
-    expect(mails).toHaveLength(0)
+    expect(digests()).toHaveLength(0)
   })
 
-  it('複数のプロジェクトが同時に悪化した場合、メール・Discord・Slack とも1通にまとめる', () => {
-    const { gas, mails, chats, record } = setup([
+  it('複数のプロジェクトが同時に悪化した場合、メール(毎日のまとめ)・Discord・Slack とも1件にまとめる', () => {
+    const { gas, mails, digests, chats, record } = setup([
       ['p1', '初回', '', ''],
       ['p2', '良好から悪化', '', 'good'],
       ['p3', '要注意から悪化', '', 'watch'],
@@ -143,12 +162,13 @@ describe('reportProjectHealth', () => {
     expect(record('p5')).toBe('good')
     expect(record('p6')).toBe('good')
 
-    expect(mails).toHaveLength(1)
-    expect(mails[0].to).toBe('boss@example.com')
-    expect(mails[0].subject).toBe('[Ohsumi] 2件のプロジェクトの健康状態が変わりました')
-    expect(mails[0].body).toContain('・「良好から悪化」: 要対応')
-    expect(mails[0].body).toContain('・「要注意から悪化」: 要対応')
-    expect(mails[0].body).not.toContain('初回')
+    expect(digests()).toHaveLength(1)
+    expect(mails).toHaveLength(0)
+    expect(digests()[0].to).toBe('boss@example.com')
+    expect(digests()[0].subject).toBe('[Ohsumi] 2件のプロジェクトの健康状態が変わりました')
+    expect(digests()[0].body).toContain('・「良好から悪化」: 要対応')
+    expect(digests()[0].body).toContain('・「要注意から悪化」: 要対応')
+    expect(digests()[0].body).not.toContain('初回')
 
     expect(chats.map((c) => c.url)).toEqual(['https://discord.example/webhook', 'https://hooks.slack.com/services/x'])
     for (const c of chats) {
@@ -159,17 +179,18 @@ describe('reportProjectHealth', () => {
   })
 
   it('1件だけの場合は、今までと同じ件名で送る', () => {
-    const { gas, mails, chats } = setup([['p1', 'A', '', 'good']])
+    const { gas, mails, digests, chats } = setup([['p1', 'A', '', 'good']])
     gas.reportProjectHealth_([{ projectId: 'p1', health: 'attention' }])
-    expect(mails.map((m) => m.subject)).toEqual(['[Ohsumi] プロジェクト「A」の健康状態: 要対応'])
+    expect(digests().map((m) => m.subject)).toEqual(['[Ohsumi] プロジェクト「A」の健康状態: 要対応'])
     expect(chats).toHaveLength(2)
   })
 
   it('チャットに並べるのは20件までで、残りは件数だけ書く', () => {
     const projects = Array.from({ length: 25 }, (_, i) => [`p${i}`, `P${i}`, '', 'good'])
-    const { gas, chats, mails } = setup(projects)
+    const { gas, chats, mails, digests } = setup(projects)
     gas.reportProjectHealth_(projects.map(([id]) => ({ projectId: id, health: 'attention' })))
-    expect(mails).toHaveLength(1)
+    expect(digests()).toHaveLength(1)
+    expect(mails).toHaveLength(0)
     const text = JSON.parse(chats[0].payload).content as string
     expect(text).toContain('ほか 5 件')
     expect(text.length).toBeLessThan(2000)
@@ -184,7 +205,7 @@ describe('reportProjectHealth', () => {
   })
 
   it('複数の管理者がほぼ同時に送っても(ロックで順番に処理される)、同じ変化は1回だけ通知する', () => {
-    const { gas, mails, chats } = setup([['p1', 'A', '', 'good'], ['p2', 'B', '', 'watch']])
+    const { gas, mails, digests, chats } = setup([['p1', 'A', '', 'good'], ['p2', 'B', '', 'watch']])
     const items = [
       { projectId: 'p1', health: 'attention' },
       { projectId: 'p2', health: 'attention' },
@@ -192,15 +213,17 @@ describe('reportProjectHealth', () => {
     expect(gas.reportProjectHealth_(items).notified).toEqual(['p1', 'p2'])
     // 2人目の画面は古いデータ(good / watch)をもとに同じ内容を送ってくる
     expect(gas.reportProjectHealth_(items)).toEqual({ recorded: [], notified: [] })
-    expect(mails).toHaveLength(1)
+    expect(digests()).toHaveLength(1)
+    expect(mails).toHaveLength(0)
     expect(chats).toHaveLength(2)
   })
 
   it('以前のフロントからの notifyProjectHealth も、記録が既に同じ状態なら通知しない', () => {
-    const { gas, mails } = setup([['p1', 'A', '', 'good']])
+    const { gas, mails, digests } = setup([['p1', 'A', '', 'good']])
     gas.reportProjectHealth_([{ projectId: 'p1', health: 'attention' }])
     gas.notifyProjectHealth_('p1', 'attention')
-    expect(mails).toHaveLength(1)
+    expect(digests()).toHaveLength(1)
+    expect(mails).toHaveLength(0)
   })
 
   it('ロックを放す前に、シートへの書き込みを確定させる', () => {
@@ -213,12 +236,13 @@ describe('reportProjectHealth', () => {
   })
 
   it('以前のフロントからの notifyProjectHealth も、初回の計算では通知しない', () => {
-    const { gas, mails, record } = setup([['p1', 'A', '', ''], ['p2', 'B', '', 'good']])
+    const { gas, mails, digests, record } = setup([['p1', 'A', '', ''], ['p2', 'B', '', 'good']])
     gas.notifyProjectHealth_('p1', 'attention')
     expect(record('p1')).toBe('attention')
-    expect(mails).toHaveLength(0)
+    expect(digests()).toHaveLength(0)
     gas.notifyProjectHealth_('p2', 'attention')
-    expect(mails).toHaveLength(1)
+    expect(digests()).toHaveLength(1)
+    expect(mails).toHaveLength(0)
   })
 })
 
@@ -254,6 +278,8 @@ describe('テスト環境のメール送信', () => {
       TEST_NOTIFICATION_EMAIL: 'tester@example.com',
     })
     gas.reportProjectHealth_([{ projectId: 'p1', health: 'attention' }])
+    // 毎日のまとめを送る時に、テスト用のアドレスに届く
+    gas.flushDailyDigests_()
     expect(mails.map((m) => m.to)).toEqual(['tester@example.com'])
   })
 
