@@ -200,6 +200,13 @@ describe('実行(checkRegistry)', () => {
     expect(t.mails).toHaveLength(0)
   })
 
+  it('毎朝の知らせに、レジストリのメールで送れていない件数を書く', () => {
+    const t = setup()
+    t.setHealth(good({ keyValid: true, gasVersions: { latest: '2026.10.01-1', updateRequired: 0, noCheck: 0, orgs: 5 }, mailQueue: { pending: 12, recipients: 15, remainingToday: 0 } }))
+    t.gas.monitorHeartbeat()
+    expect(t.discord[0]).toContain('レジストリのメールで送れていないもの: 12 通(宛先 15 件。1日の上限のため、翌日以降に送ります)。今日の残り: 0')
+  })
+
   it('Webhook の URL と鍵はコードに書かない', () => {
     expect(CODE).not.toMatch(/discord(app)?\.com\/api\/webhooks/)
     expect(CODE).toMatch(/props\.DISCORD_WEBHOOK_URL/)

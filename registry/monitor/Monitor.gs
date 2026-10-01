@@ -67,11 +67,15 @@ function monitorHeartbeat() {
   try { state = props[MONITOR_STATE_KEY] ? JSON.parse(props[MONITOR_STATE_KEY]) : null } catch (e) { state = null }
   var now = state && state.down ? '停止中' : '正常'
   var summary = null
+  var mailQueue = null
   if (props.REGISTRY_URL && props.HEALTH_KEY) {
     var res = fetchHealth_(props, { summary: true })
-    if (res && res.ok && res.keyValid !== false) summary = res.gasVersions || null
+    if (res && res.ok && res.keyValid !== false) {
+      summary = res.gasVersions || null
+      mailQueue = res.mailQueue || null
+    }
   }
-  postDiscord_(heartbeatText_(now, summary), props)
+  postDiscord_(heartbeatText_(now, summary, mailQueue), props)
 }
 
 // ============================================================================
@@ -94,7 +98,7 @@ function removeOrphanTriggers_() {
 }
 
 // 監視の GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var MONITOR_VERSION = '2026.10.01-2'
+var MONITOR_VERSION = '2026.10.02-1'
 var BACKUP_STALE_HOURS = 26
 var REJECTED_ALERT = 1000
 var MONITOR_STATE_KEY = 'MONITOR_STATE'
@@ -120,9 +124,15 @@ function evaluateHealth_(res, now) {
   return { reachable: true, problems: problems }
 }
 
-// 毎朝の知らせの文(summary: レジストリの health の gasVersions。受け取れなければ null)
-function heartbeatText_(registryState, summary) {
+// 毎朝の知らせの文(summary: レジストリの health の gasVersions。受け取れなければ null。
+// mailQueue: レジストリのメールで、1日の上限のため送れず翌日以降に回したもの。古いレジストリは返さない)
+function heartbeatText_(registryState, summary, mailQueue) {
   var text = '監視は動いています(レジストリ: ' + registryState + '。監視の版: ' + MONITOR_VERSION + ')'
+  if (mailQueue) {
+    text += '\nレジストリのメールで送れていないもの: ' + Number(mailQueue.pending || 0) + ' 通' +
+      (Number(mailQueue.pending || 0) ? '(宛先 ' + Number(mailQueue.recipients || 0) + ' 件。1日の上限のため、翌日以降に送ります)' : '') +
+      '。今日の残り: ' + Number(mailQueue.remainingToday || 0)
+  }
   if (!summary) return text + '\n団体の GAS の版: 確かめられませんでした'
   return text + '\n団体の GAS(利用中 ' + Number(summary.orgs || 0) + ' 団体。最新の版: ' + (summary.latest || '—') + ')' +
     '\n・更新が要る団体: ' + Number(summary.updateRequired || 0) +
