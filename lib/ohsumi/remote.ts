@@ -78,6 +78,37 @@ export interface MemberInviteResult {
   reason?: 'notChecked' | 'noEmail' | 'mailQuota' | 'limited'
 }
 
+/** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */
+export interface BackupStatus {
+  lastSuccessAt: string
+  failed: boolean
+  failedAt: string
+  error: string
+}
+
+/** バックアップ1つ。kind: daily(毎日) / beforeRestore(戻す前に自動で作ったもの) */
+export interface BackupEntry {
+  id: string
+  name: string
+  at: string
+  kind: 'daily' | 'beforeRestore'
+}
+
+/** 全体を戻す前に見せる、シートごとの件数(null はそのシートが無い) */
+export interface RestorePreview {
+  backup: BackupEntry
+  sheets: { name: string; current: number | null; backup: number | null }[]
+}
+
+/** バックアップの中のタスク。state: changed(今と違う) / same / missing(今は消えている。「復元」) */
+export interface BackupTaskMatch {
+  id: string
+  title: string
+  currentTitle: string
+  state: 'changed' | 'same' | 'missing'
+  diffs: { field: string; current: string; backup: string }[]
+}
+
 /** この団体の GAS の版の更新(gas/Code.gs の gasUpdateStatus_)。known: レジストリに今の版を判定してもらった */
 export interface GasUpdateStatus {
   current: string
@@ -999,6 +1030,14 @@ export const remoteApi = {
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // メールの1日の上限の状態(代表・全権管理者だけ)
   getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
+  // バックアップ(代表だけ。gas/Code.gs の「バックアップ」)
+  getBackupStatus: () => postToGas<BackupStatus>('getBackupStatus', {}),
+  listBackups: () => postToGas<{ status: BackupStatus; backups: BackupEntry[]; keep: { daily: number; weekly: number; monthly: number } }>('listBackups', {}),
+  previewRestore: (backupId: string) => postToGas<RestorePreview>('previewRestore', { backupId }),
+  restoreBackup: (backupId: string) => postToGas<{ restored: string[]; beforeRestore: BackupEntry }>('restoreBackup', { backupId }),
+  searchBackupTasks: (backupId: string, query: string) => postToGas<{ backup: BackupEntry; tasks: BackupTaskMatch[] }>('searchBackupTasks', { backupId, query }),
+  restoreTasks: (backupId: string, taskIds: string[]) =>
+    postToGas<{ restored: { id: string; title: string; state: 'restored' | 'recreated' }[] }>('restoreTasks', { backupId, taskIds }),
   // この団体の GAS の版の更新が要るか(代表・全権管理者だけ)
   getGasUpdateStatus: () => postToGas<GasUpdateStatus>('getGasUpdateStatus', {}),
   // 保存済みのWebhook URLへ実際にテストメッセージを送信し、HTTPレスポンス

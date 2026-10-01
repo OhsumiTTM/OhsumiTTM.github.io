@@ -80,6 +80,9 @@ export const ADMIN_STEPS = [
   { name: '管理画面(Dashboard)', do: 'admin' },
   ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', 'Org Tree', '検定', '学習コンテンツ',
     'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
+  { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
+  { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
 ]
 
 // 機能停止中(読み取り専用。R1-e)に、閲覧のための欄・ボタンと書き出しが使えること、書く欄が止まることを確かめる。
@@ -103,7 +106,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -340,6 +343,23 @@ async function run({ build = true } = {}) {
         case 'sendInviteLinkToMe': inviteBodies.push(body); return { sent: true, count: 1, remaining: 2 }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
         // 管理画面の上部に、メールの上限の知らせを出す
+        // バックアップ(作れなかった日・一覧・戻す前の件数・タスクの違い)
+        case 'getBackupStatus': case 'listBackups': {
+          const status = { lastSuccessAt: '2026-09-29T21:00:00.000Z', failed: true, failedAt: '2026-09-30T21:00:00.000Z', error: 'Drive の容量が足りません' }
+          if (body.action === 'getBackupStatus') return status
+          return { status, keep: { daily: 7, weekly: 4, monthly: 3 }, backups: [
+            { id: 'bk2', name: 'Ohsumi バックアップ 2026-09-30 06:00(戻す前)', at: '2026-09-30T09:00:00.000Z', kind: 'beforeRestore' },
+            { id: 'bk1', name: 'Ohsumi バックアップ 2026-09-29 06:00', at: '2026-09-28T21:00:00.000Z', kind: 'daily' },
+          ] }
+        }
+        case 'previewRestore': return { backup: { id: 'bk1', name: 'Ohsumi バックアップ 2026-09-29 06:00', at: '2026-09-28T21:00:00.000Z', kind: 'daily' },
+          sheets: [{ name: 'Tasks', current: 12, backup: 10 }, { name: 'Members', current: 5, backup: 5 }, { name: 'とても長い名前のシート'.repeat(3), current: 3, backup: null }] }
+        case 'searchBackupTasks': return { backup: { id: 'bk1', name: '', at: '2026-09-28T21:00:00.000Z', kind: 'daily' }, tasks: [
+          { id: 't1', title: 'とても長いタスク名の例'.repeat(4), currentTitle: 'とても長いタスク名の例', state: 'changed',
+            diffs: [{ field: 'description', current: 'とても長い説明'.repeat(20), backup: 'https://example.com/' + 'x'.repeat(80) }, { field: 'comments_json', current: '3件', backup: '2件' }] },
+          { id: 't2', title: '消えたタスク', currentTitle: '', state: 'missing', diffs: [] },
+          { id: 't3', title: '同じタスク', currentTitle: '同じタスク', state: 'same', diffs: [] },
+        ] }
         // 管理画面の上部に、GAS の更新が要る知らせを出す
         case 'getGasUpdateStatus': return { current: 'r1e-2', known: true, required: true, outdated: true, latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, checkedAt: '2026-10-01T03:00:00.000Z' }
         case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
@@ -663,6 +683,8 @@ async function run({ build = true } = {}) {
           // メールの1日の上限の知らせ(代表の管理画面の上部。getMailQuotaStatus の偽の答えは「12件が送れていません」)
           const quota = await evaluate(`document.querySelector('[data-mail-quota-banner]')?.textContent ?? ''`)
           if (!quota.includes('今日はメールの上限に達しました。12件が送れていません')) throw new Error('管理画面に、メールの上限の知らせが出ません: ' + quota)
+          const backupBanner = await evaluate(`document.querySelector('[data-backup-banner]')?.textContent ?? ''`)
+          if (!backupBanner.includes('のバックアップを作れませんでした(Drive の容量が足りません)')) throw new Error('管理画面に、バックアップを作れなかった知らせが出ません: ' + backupBanner)
           const gasUpdate = await evaluate(`document.querySelector('[data-gas-update-banner]')?.textContent ?? ''`)
           if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → 最新の版: 2026.10.01-1)') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
         }
@@ -816,6 +838,28 @@ async function run({ build = true } = {}) {
           } else {
             if (!got.mailDisabled) throw new Error('レジストリに未確認の団体なのに、自分のメールに送るボタンが使えます')
             if (!got.note.includes('まだメールで送れません')) throw new Error('メールで送れない理由が表示されません: ' + got.note)
+          }
+        }
+        if (step.do === 'backup') {
+          contract = null
+          await signIn(); await navigate('/')
+          await clickText('あとで設定する').catch(() => {})
+          await sleep(800)
+          await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
+          await sleep(500); await clickText('団体設定'); await sleep(1500)
+          const pick = (id) => evaluate(`(() => { const s = document.querySelector('[data-backup-select]'); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; set.call(s, '${id}'); s.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+          if (!(await evaluate(`!!document.querySelector('[data-backup-panel] [data-backup-select]')`))) throw new Error('団体設定に、バックアップの一覧が出ません')
+          await pick('bk1'); await sleep(800)
+          if (step.mode === 'full') {
+            const text = await evaluate(`document.querySelector('[data-backup-preview]')?.textContent ?? ''`)
+            if (!text.includes('Tasks') || !text.includes('12') || !text.includes('10')) throw new Error('戻す前の件数の差が出ません: ' + text)
+            if (!(await evaluate(`document.querySelector('[data-backup-restore-all]').disabled`))) throw new Error('確かめる前に「このバックアップに戻す」が押せます')
+          } else {
+            await clickText('一部のタスクだけ戻す'); await sleep(400)
+            await evaluate(`(() => { const i = document.querySelector('[data-backup-tasks] input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'タスク'); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+            await sleep(200); await clickText('探す'); await sleep(800)
+            const text = await evaluate(`document.querySelector('[data-backup-tasks]')?.textContent ?? ''`)
+            for (const want of ['復元', '変更あり', '同じ', '今: ']) if (!text.includes(want)) throw new Error('タスクの違いに「' + want + '」が出ません')
           }
         }
         if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }

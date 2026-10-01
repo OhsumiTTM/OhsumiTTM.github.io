@@ -100,6 +100,7 @@ const HISTORY_FIELD_KEY: Record<TaskHistoryEntry['field'], TranslationKey> = {
   difficulty: 'taskDrawer.row.difficulty',
   visibility: 'taskDrawer.edit.visibilityLabel',
   importance: 'taskDrawer.edit.importanceLabel',
+  restored: 'taskDrawer.historyRestored',
 }
 
 function historyValueLabel(
@@ -2274,7 +2275,13 @@ function DrawerBody({
                   <li key={h.id} className="text-xs">
                     <p className="text-muted-foreground">{formatDateTime(h.at)}</p>
                     <p className="mt-0.5">
-                      {t('taskDrawer.historyChangeLine', {
+                      {h.field === 'restored' ? t('taskDrawer.historyRestoredLine', {
+                        who:
+                          members.find((m) => m.id === h.byId)?.displayName ||
+                          members.find((m) => m.id === h.byId)?.name ||
+                          t('taskDrawer.unknown'),
+                        at: h.from,
+                      }) : t('taskDrawer.historyChangeLine', {
                         who:
                           members.find((m) => m.id === h.byId)?.displayName ||
                           members.find((m) => m.id === h.byId)?.name ||

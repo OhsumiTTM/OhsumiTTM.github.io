@@ -71,6 +71,11 @@ export const READ_ACTIONS = new Set([
   'getWebhookStatus',
   'getMailQuotaStatus',
   'getGasUpdateStatus',
+  // バックアップ(代表だけ)
+  'getBackupStatus',
+  'listBackups',
+  'previewRestore',
+  'searchBackupTasks',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
@@ -103,8 +108,17 @@ export const RETRY_DELAYS_MS = [1000, 3000]
 // 超えたら打ち切って送り直す(書き込みは requestId があるので二重にならない)
 export const ATTEMPT_TIMEOUT_MS = { read: 20000, write: 45000 }
 
+// 時間のかかる操作の待ち時間: バックアップから全体を戻す(コピーを作ってから全シートを書き直す)・
+// バックアップのタスクを探す(バックアップのスプレッドシートを開く)
+export const LONG_ACTION_TIMEOUT_MS: Record<string, number> = {
+  restoreBackup: 300000,
+  restoreTasks: 120000,
+  previewRestore: 120000,
+  searchBackupTasks: 60000,
+}
+
 export function attemptTimeoutOf(action: string): number {
-  return isWriteAction(action) ? ATTEMPT_TIMEOUT_MS.write : ATTEMPT_TIMEOUT_MS.read
+  return LONG_ACTION_TIMEOUT_MS[action] ?? (isWriteAction(action) ? ATTEMPT_TIMEOUT_MS.write : ATTEMPT_TIMEOUT_MS.read)
 }
 
 // fetch の設定。Google のログイン情報(Cookie)を送らない・キャッシュしない・転送はたどる
@@ -493,6 +507,9 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'testSlackWebhook',
   // 本人あての招待リンクのメール(ロックを取らない。送り直しは requestId で1通にする)
   'sendInviteLinkToMe',
+  // バックアップから戻す(時間がかかるので、ほかの書き込みとまとめない)
+  'restoreBackup',
+  'restoreTasks',
 ])
 
 export function isBatchableWrite(action: string): boolean {

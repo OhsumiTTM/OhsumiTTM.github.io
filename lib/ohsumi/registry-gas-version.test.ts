@@ -12,6 +12,8 @@ const URL_A = 'https://script.google.com/macros/s/AKfyA/exec'
 const NONCE = 'register-nonce-00000001-abcdefghijklmnopqrstuvwxyz0123'
 const HOUR = 3600 * 1000
 const CURRENT = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8').match(/^var OHSUMI_GAS_VERSION = '([^']+)'$/m)![1]
+// 最初の「安全の修正」の版(PR A を含む)
+const FIRST_SECURITY = '2026.10.01-1'
 
 function ready() {
   const secret = 'nonce-secret-a1-0123456789'
@@ -72,7 +74,9 @@ describe('版の判定', () => {
 
   it('最初の「安全の修正」の版より前の団体は、更新が要る', () => {
     const t = ready()
-    expect(t.gas.gasVersionList_()).toEqual([expect.objectContaining({ version: CURRENT, security: true, required: true })])
+    const list = t.gas.gasVersionList_() as { version: string; security: boolean; required: boolean }[]
+    expect(list[0].version).toBe(CURRENT)
+    expect(list.filter((v) => v.security).at(-1)).toMatchObject({ version: FIRST_SECURITY, security: true, required: true })
     expect(status(t, 'r1e-2', HOUR).versionState).toBe('updateRequired')
     expect(status(t, CURRENT, HOUR).versionState).toBe('latest')
   })
@@ -81,9 +85,9 @@ describe('版の判定', () => {
 describe('checkIn と管理画面の一覧', () => {
   it('checkIn の返事で「更新が要る」を伝える。管理画面の一覧に版と判定を出す', () => {
     const t = ready()
-    expect(t.checkIn('r1e-2').result.gasUpdate).toEqual({ required: true, outdated: true, latest: CURRENT, minimum: CURRENT, security: true })
+    expect(t.checkIn('r1e-2').result.gasUpdate).toEqual({ required: true, outdated: true, latest: CURRENT, minimum: FIRST_SECURITY, security: true })
     expect(t.org().gasStatus).toMatchObject({ current: 'r1e-2', judgement: 'updateRequired', latest: CURRENT })
-    expect(t.checkIn(CURRENT).result.gasUpdate).toEqual({ required: false, outdated: false, latest: CURRENT, minimum: CURRENT, security: false })
+    expect(t.checkIn(CURRENT).result.gasUpdate).toEqual({ required: false, outdated: false, latest: CURRENT, minimum: FIRST_SECURITY, security: false })
     expect(t.org().gasStatus.judgement).toBe('latest')
     t.orgsRow().set('last_check_at', new Date(Date.now() - 30 * HOUR).toISOString())
     expect(t.org().gasStatus.judgement).toBe('noCheck')
@@ -101,9 +105,9 @@ describe('checkIn と管理画面の一覧', () => {
     expect(audit).toContainEqual(['admin@example.com', 'setGasVersionMarks', '2099.01.01-1'])
     // コードの一覧にある版の印も外せる
     t.mark('2099.01.01-1', {})
-    t.mark(CURRENT, { security: false, required: false })
+    t.mark(FIRST_SECURITY, { security: false, required: false })
     expect(t.org().gasStatus.versionState).toBe('outdated')
-    expect(t.post({ action: 'adminOverview', session: t.session }).result.gasVersions.map((v: { version: string }) => v.version)).toEqual(['2099.01.01-1', CURRENT])
+    expect(t.post({ action: 'adminOverview', session: t.session }).result.gasVersions.map((v: { version: string }) => v.version)[0]).toBe('2099.01.01-1')
   })
 
   it('形の違う版・ログインしていない人は断る', () => {
