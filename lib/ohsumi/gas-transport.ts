@@ -55,6 +55,8 @@ export interface GasResponse<T = unknown> {
   notifyLimited?: boolean
   // 1つのセルの上限(5万文字)を超えるため、保存を断った。texts: 今回書いた文章(分からない時は null)
   cellTooLong?: { sheet: string; field: string; length: number; max: number; texts?: string[] | null }
+  // ほかの人が先に同じ行・記録を変えたため、上書きせずに断った(書き込みの競合チェック)
+  conflict?: { sheet: string; id: string }
   // 1つのセルの上限の8割を超えた記録を書いた(保存は済んでいる)
   longRecords?: LongRecordWritten[]
   // GAS が同じ requestId の処理をまだ実行中(少し待ってから送り直す)

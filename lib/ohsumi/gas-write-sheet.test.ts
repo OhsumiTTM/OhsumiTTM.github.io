@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
+import { parseListCell, withListOps, type ListActionDef } from './list-diff'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
 
@@ -129,7 +130,14 @@ function setup() {
   c.isTestEnvironment_ = () => false
   c.syncCalendarForTask_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } } & Record<string, (...a: unknown[]) => unknown>
-  const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
+  // 記録の一覧は、今の画面と同じく、今のシートの一覧との差分(listOps)にして送る
+  const baseOf = (def: ListActionDef, id: string) => {
+    const rows = sheets[def.sheet]?.rows ?? []
+    const head = (rows[0] ?? []).map(String)
+    const row = rows.slice(1).find((r) => String(r[head.indexOf('id')]) === id)
+    return parseListCell(row?.[head.indexOf(def.column)])
+  }
+  const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(withListOps(body as Record<string, unknown>, baseOf)) } }).text)
   // 読み取り(ログイン後の状態): スナップショットとメールアドレスのキャッシュができる
   const warm = () => {
     post({ action: 'getBackgroundData', sessionToken: 'm-top' })

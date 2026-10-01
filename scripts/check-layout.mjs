@@ -73,6 +73,8 @@ export const STEPS = [
   { name: '権限が足りない時(データを読み直す)', do: 'unsaved', fail: 'forbidden', view: 'リスト', text: '担当者が多いタスク' },
   // 1つの記録が長くなりすぎた時(PR I): 断られたコメントをコピーできるように出す
   { name: '記録が長くなりすぎた時(送れなかったコメントを出す)', do: 'unsaved', fail: 'cellTooLong', view: 'リスト', text: '担当者が多いタスク' },
+  // ほかの人が先に変えていた時(PR J): 書いたコメントをコピーできるように出し、最新の内容に読み直す
+  { name: 'ほかの人が先に変えていた時(送れなかったコメントを出す・読み直す)', do: 'unsaved', fail: 'conflict', view: 'リスト', text: '担当者が多いタスク' },
   { name: 'ログインの期限が近い時の知らせ', do: 'sessionExpiry' },
 ]
 
@@ -410,7 +412,8 @@ async function run({ build = true } = {}) {
         if (body.action === 'getInitialData') initialDataCalls++
         // 書き込みを断る(ログインが切れた・画面が古い・権限が足りない)
         if (failWrites && !LAYOUT_READ_ACTIONS.includes(body.action)) {
-          const failValue = failWrites === 'cellTooLong' ? { sheet: 'Tasks', field: 'comments_json', length: 50120, max: 50000, texts: null } : true
+          const failValue = failWrites === 'cellTooLong' ? { sheet: 'Tasks', field: 'comments_json', length: 50120, max: 50000, texts: null }
+            : failWrites === 'conflict' ? { sheet: 'Tasks', id: 't1' } : true
           return fulfill('application/json', JSON.stringify({ ok: false, [failWrites]: failValue, error: '断りました(' + failWrites + ')' }))
         }
         return fulfill('application/json', JSON.stringify({ ok: true, result: gas(body), ...(contract ? { contract } : {}) }))
@@ -822,6 +825,7 @@ async function run({ build = true } = {}) {
             if (!notice.texts.some((t) => t.includes(comment))) throw new Error('送れなかったコメントが、知らせに残っていません')
             if (step.fail === 'reloadRequired' && !notice.text.includes('読み込み直す')) throw new Error('「読み込み直す」がありません')
             if (step.fail === 'cellTooLong' && initialDataCalls <= readsBefore) throw new Error('記録が長くなりすぎて断られても、保存されている内容に戻しません')
+            if (step.fail === 'conflict' && initialDataCalls <= readsBefore) throw new Error('ほかの人が先に変えていたと断られても、最新の内容を読み直しません')
             if (step.fail === 'authError') {
               if (!(await evaluate(`!!document.querySelector('[data-layout-gsi]')`))) throw new Error('ログイン画面に戻りません')
               if (!(await evaluate(`!!localStorage.getItem('${'${DRAFT_KEY}'}')`.replace('${DRAFT_KEY}', DRAFT_KEY)))) throw new Error('ログインが切れた時に、INPUT の書きかけが消えました')

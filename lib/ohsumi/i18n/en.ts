@@ -224,6 +224,8 @@ export const en = {
   'ops.sharing.checkedAt': 'Last checked: {at}',
   'app.cellTooLongNoticeTitle': 'Not saved because this record is too long',
   'app.cellTooLongNoticeBody': 'This record exceeded the maximum length of one record (50,000 characters). You can copy what you wrote below. The screen has been reset to what is saved. Ask the representative about tidying up old entries.',
+  'app.conflictNoticeTitle': 'Not saved because someone else changed this first',
+  'app.conflictNoticeBody': 'Someone else changed this after you opened it. To avoid overwriting their change, your save was stopped and the latest content has been loaded. You can copy what you wrote below; check the latest content, then enter it again.',
   'app.longRecordWritten': 'This record is getting long ({name}, {field}: {length} / {max} characters). Once it exceeds the limit it can no longer be saved, so ask the representative about tidying up old entries.',
   'ops.long.title': 'Some records are getting long ({count})',
   'ops.long.desc': 'These are over 80% of the maximum length of one record ({max} characters). Once a record exceeds the limit, nothing more can be saved to it. Tidy up old entries (delete ones you no longer need, or copy them elsewhere).',

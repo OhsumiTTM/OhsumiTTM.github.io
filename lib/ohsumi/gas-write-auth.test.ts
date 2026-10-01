@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parseListCell, withListOps, type ListActionDef } from './list-diff'
 import { sendToGas, setGasTransportDepsForTest } from './gas-transport'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
@@ -94,6 +95,12 @@ function setup() {
     if (!row) throw userError('メンバー登録が見つかりません。')
     return { id, role: row[2], project_ids: [], permission_overrides: [] }
   }
+  // ロックを取った後の行(記録の一覧の差分を当てる)も、書き込みと同じくシートの読み込みに数えない(書き込みが同じ読み込みを使い回す)
+  c.lockedRow_ = (name: string, id: string) => {
+    const tb = sheet[name]
+    const row = tb?.rows.find((r) => r[0] === id)
+    return row ? Object.fromEntries(tb.headers.map((h, i) => [h, row[i]])) : null
+  }
   c.findRowUnmeasured_ = (name: string, id: string) => {
     calls.push('sheet:' + name)
     const t = sheet[name]
@@ -112,7 +119,13 @@ function setup() {
   c.assertTopRemains_ = () => {}
   c.requireKnownRole_ = () => {}
   const gas = ctx as unknown as { doPost: (e: object) => { text: string } } & Record<string, unknown>
-  const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(body) } }).text)
+  // 記録の一覧は、今の画面と同じく、今のシートの一覧との差分(listOps)にして送る
+  const baseOf = (def: ListActionDef, id: string) => {
+    const t = sheet[def.sheet]
+    const row = t?.rows.find((r) => r[t.headers.indexOf('id')] === id)
+    return parseListCell(row?.[t?.headers.indexOf(def.column) ?? -1])
+  }
+  const post = (body: object) => JSON.parse(gas.doPost({ postData: { contents: JSON.stringify(withListOps(body as Record<string, unknown>, baseOf)) } }).text)
   // スナップショットのキャッシュを作っておく(読み取り・ログインの後の状態)
   const warm = () => { post({ action: 'getBackgroundData', sessionToken: 'm-base' }); calls.length = 0 }
   const setRole = (id: string, role: string) => { sheet.Members.rows.find((r) => r[0] === id)![2] = role }
@@ -288,7 +301,7 @@ describe('まとめて送られた書き込み(batch)', () => {
       action: 'batch',
       sessionToken: 'm-lead',
       ops: [
-        { action: 'updateHistory', taskId: 't1', history: 'not-an-array' },
+        { action: 'updateHistory', taskId: 't1', listOps: 'not-an-array' },
         { action: 'updateSchedule', taskId: 't1', startDate: '', deadline: '2026-10-10' },
       ],
     })
@@ -564,7 +577,7 @@ describe('まとめた書き込みの重複防止(requestId。PR #28)', () => {
     const sent = connect(t, [false, true])
     const history = [{ id: 'h1', at: '2026-10-01', byId: 'm-lead', field: 'deadline', from: '', to: '2026-10-10' }]
     const [a, b] = await Promise.all([
-      sendToGas(URL, { action: 'updateHistory', sessionToken: 'm-lead', taskId: 't1', history }),
+      sendToGas(URL, { action: 'updateHistory', sessionToken: 'm-lead', taskId: 't1', listOps: history.map((entry) => ({ op: 'add', entry })) }),
       sendToGas(URL, { action: 'updateSchedule', sessionToken: 'm-lead', taskId: 't1', startDate: '', deadline: '2026-10-10' }),
     ])
     // 同じ batch(同じ requestId)を2回送った

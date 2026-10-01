@@ -87,7 +87,7 @@ function looksLikeText(s: string): boolean {
 // ログインが切れた・提供停止になった時は、ページを読み込み直してログイン画面に戻す。その時に送れなかった文章を
 // このタブの sessionStorage に残し、読み込み直した画面(ログイン画面・ログインした後)でコピーできるように出す。
 // 閉じれば消す。自分でログアウトした時も消す(共有の端末に残さない)
-export type UnsavedNoticeKind = 'readOnly' | 'sessionEnded' | 'orgSuspended' | 'reloadRequired' | 'cellTooLong'
+export type UnsavedNoticeKind = 'readOnly' | 'sessionEnded' | 'orgSuspended' | 'reloadRequired' | 'cellTooLong' | 'conflict'
 const UNSENT_KEY = 'ohsumi-unsent-texts'
 
 function tabStorage(): Storage | null {
@@ -119,7 +119,7 @@ export function takeUnsentTexts(): { kind: UnsavedNoticeKind; texts: string[] } 
     const v = JSON.parse(raw) as { kind?: string; texts?: unknown }
     const texts = Array.isArray(v.texts) ? v.texts.filter((t): t is string => typeof t === 'string' && !!t) : []
     if (!texts.length) return null
-    const kind = (['sessionEnded', 'orgSuspended', 'reloadRequired', 'readOnly', 'cellTooLong'] as const).find((k) => k === v.kind) ?? 'sessionEnded'
+    const kind = (['sessionEnded', 'orgSuspended', 'reloadRequired', 'readOnly', 'cellTooLong', 'conflict'] as const).find((k) => k === v.kind) ?? 'sessionEnded'
     return { kind, texts }
   } catch {
     return null
