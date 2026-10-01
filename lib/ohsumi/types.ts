@@ -768,6 +768,8 @@ export interface TaskHistoryEntry {
     | 'difficulty'
     | 'visibility'
     | 'importance'
+    // バックアップから戻した(from はバックアップの日時。gas/Code.gs の restoreTasks_)
+    | 'restored'
   from: string
   to: string
 }

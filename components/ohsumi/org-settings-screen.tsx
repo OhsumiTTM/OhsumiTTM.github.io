@@ -8,6 +8,7 @@ import { Tag, SectionLabel, AdminAccessNote, StoredImage } from '@/components/oh
 import { Button } from '@/components/ui/button'
 import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
+import { BackupPanel } from './backup-panel'
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -41,7 +42,11 @@ export function OrgSettingsScreen() {
     removeOrgNotificationEmail,
     isFullAdmin,
     refreshWebhookStatus,
+    isTopRef,
+    currentUser,
   } = useOhsumi()
+  // バックアップから戻すのは代表だけ(gas/Code.gs の authorizeAction_)
+  const isDaihyo = isTopRef(currentUser?.role)
   const toast = useToast()
   const { t } = useI18n()
 
@@ -160,7 +165,7 @@ export function OrgSettingsScreen() {
           <p className="mt-1 text-xs text-muted-foreground">
             {t('orgSettings.themeColor.desc')}
           </p>
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <input
               type="color"
               value={themeColorValid ? themeColorDraft : '#6366f1'}
@@ -184,7 +189,7 @@ export function OrgSettingsScreen() {
               <button
                 type="button"
                 onClick={() => { setThemeColor(''); setThemeColorDraft('') }}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive"
+                className="flex items-center gap-1 text-xs whitespace-nowrap text-muted-foreground hover:text-destructive"
               >
                 <X className="size-3.5" />{t('orgSettings.themeColor.reset')}
               </button>
@@ -234,6 +239,13 @@ export function OrgSettingsScreen() {
 
         <WebhookSection kind="discord" remoteOk={remoteOk} placeholder="https://discord.com/api/webhooks/..." />
         <WebhookSection kind="slack" remoteOk={remoteOk} placeholder="https://hooks.slack.com/services/..." />
+
+        {isDaihyo && remoteOk && (
+          <Section>
+            <BackupPanel />
+            <AdminAccessNote level="daihyo" className="mt-1.5" />
+          </Section>
+        )}
       </div>
     </div>
   )

@@ -21,6 +21,7 @@ import { AdminRecruiting } from './admin-recruiting'
 import { AdminDailyReports } from './admin-daily-reports'
 import { MailQuotaBanner } from './mail-quota-banner'
 import { GasUpdateBanner } from './gas-update-banner'
+import { BackupBanner } from './backup-banner'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { OhsumiMark } from '../primitives'
 import type { AdminSection } from '@/lib/ohsumi/types'
@@ -53,7 +54,7 @@ function buildNav(t: (key: TranslationKey) => string): { key: Section; label: st
 export function AdminScreen({ section }: { section: Section }) {
   const { go } = useNav()
   const { t } = useI18n()
-  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser } = useOhsumi()
+  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser, isTopRef } = useOhsumi()
   // 採用（recruiting）はrolePermissions/visibleAdminSectionsのロール単位制御
   // とは独立に、permission_overrides(targetType:'recruiting')を個別に持つ
   // メンバーだけがアクセスできる（ロール自体には一切依存しない）
@@ -152,6 +153,7 @@ export function AdminScreen({ section }: { section: Section }) {
         </div>
 
         {isFullAdmin && <GasUpdateBanner />}
+        {isTopRef(currentUser?.role) && <BackupBanner />}
         {isFullAdmin && <MailQuotaBanner />}
         <div className="bg-background">
           {section === 'dashboard' && <AdminDashboard />}
