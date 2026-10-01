@@ -72,6 +72,10 @@ import {
   withdrawAnnouncement,
   type AnnouncementImportance,
   type AnnouncementSummary,
+  RECEIPT_NO_PATTERN,
+  getDiagnosticsReport,
+  normalizeReceiptNo,
+  type DiagnosticsReport,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -116,12 +120,14 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   scheduleSurveyRestriction: 'アンケートの未回答で機能停止を入れた(28日目)',
   publishAnnouncement: 'お知らせを出した',
   withdrawAnnouncement: 'お知らせの取り下げ',
+  receiveDiagnostics: '団体から診断情報が届いた',
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },
   { id: 'codes', label: '登録コード' },
   { id: 'surveys', label: 'アンケート' },
   { id: 'announcements', label: 'お知らせ' },
+  { id: 'diagnostics', label: '診断情報' },
   { id: 'audit', label: '操作の記録' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
@@ -268,6 +274,8 @@ export function RegistryAdmin() {
           onChanged={() => void load(session)}
           onAuthError={endSession}
         />
+      ) : tab === 'diagnostics' ? (
+        <DiagnosticsTab overview={overview} session={session} onAuthError={endSession} />
       ) : tab === 'announcements' ? (
         <AnnouncementsPanel overview={overview} session={session} onChanged={() => void load(session)} onAuthError={endSession} />
       ) : tab === 'surveys' ? (
@@ -1526,5 +1534,75 @@ function AnnouncementItem({ a, targetText, session, onChanged, onAuthError }: { 
       )}
       {message && <p className="mt-1 text-sm break-words text-destructive">{message}</p>}
     </li>
+  )
+}
+
+// ---- 診断情報(PR Q) ----
+//   団体の代表が確かめてから送った、個人情報を含まない診断情報。受付番号(問い合わせで伝えられる)で中身を読む
+function DiagnosticsTab({ overview, session, onAuthError }: { overview: Overview; session: AdminSession; onAuthError: (m?: string) => void }) {
+  const [input, setInput] = useState('')
+  const [report, setReport] = useState<DiagnosticsReport | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  if (!overview.diagnostics) return <p className="text-sm text-muted-foreground">このレジストリは、診断情報に対応していません(registry/Code.gs を更新してください)。</p>
+
+  const open = async (no: string) => {
+    const n = normalizeReceiptNo(no)
+    if (!RECEIPT_NO_PATTERN.test(n)) return setMessage('受付番号(D から始まる、例: D261001-AB2C)を入れてください。')
+    setBusy(true)
+    setMessage(null)
+    try {
+      setReport(await getDiagnosticsReport(session, n))
+      setInput(n)
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else { setReport(null); setMessage(err instanceof Error ? err.message : String(err)) }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <form data-diagnostics-lookup onSubmit={(e) => { e.preventDefault(); void open(input) }} className="space-y-2 rounded-lg border border-border p-3">
+        <h2 className="text-sm font-medium">受付番号で探す</h2>
+        <p className="text-xs text-muted-foreground">団体の代表が、管理画面(団体の設定の「診断情報」)で確かめてから送ったものです。個人情報(名前・メールアドレス・タスクの内容・エラーの文)は含みません。</p>
+        <div className="flex min-w-0 gap-2">
+          <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 font-mono text-sm" value={input} onChange={(e) => setInput(e.target.value)} placeholder="D261001-AB2C" maxLength={20} />
+          <Button type="submit" size="sm" disabled={busy}>{busy ? '探しています…' : '開く'}</Button>
+        </div>
+        {message && <p className="text-sm break-words text-destructive">{message}</p>}
+      </form>
+      {report && (
+        <section data-diagnostics-report className="rounded-lg border border-border p-3 text-xs">
+          <dl className="space-y-0.5">
+            <Field label="受付番号"><span className="font-mono">{report.receiptNo}</span></Field>
+            <Field label="団体">{report.orgName || report.orgId}</Field>
+            <Field label="受け付けた日時">{fmt(report.receivedAt)}</Field>
+            <Field label="GAS の版">{report.gasVersion || '—'}</Field>
+          </dl>
+          <pre className="mt-2 max-h-[60vh] overflow-auto rounded-md bg-muted/60 p-2 text-[11px] leading-snug break-all whitespace-pre-wrap">{JSON.stringify(report.diagnostics, null, 2)}</pre>
+        </section>
+      )}
+      <section>
+        <h2 className="mb-2 text-sm font-medium">届いた診断情報(新しい順に最大100件)</h2>
+        {overview.diagnostics.length === 0 ? (
+          <p className="text-xs text-muted-foreground">まだありません。</p>
+        ) : (
+          <ul className="space-y-1">
+            {overview.diagnostics.map((d) => (
+              <li key={d.receiptNo}>
+                <button type="button" className="flex w-full min-w-0 flex-wrap items-center gap-x-2 rounded-md border border-border px-3 py-1.5 text-left text-xs" onClick={() => void open(d.receiptNo)}>
+                  <span className="font-mono font-medium">{d.receiptNo}</span>
+                  <span className="min-w-0 break-all">{d.orgName || d.orgId}</span>
+                  <span className="text-muted-foreground">{fmt(d.receivedAt)}</span>
+                  <span className="text-muted-foreground">{d.gasVersion}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   )
 }

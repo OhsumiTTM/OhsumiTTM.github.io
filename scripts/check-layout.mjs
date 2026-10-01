@@ -110,7 +110,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -128,6 +128,8 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(アンケートの送り先を選ぶ)', do: 'registrySurveys' },
   { name: 'レジストリ管理(お知らせ)', do: 'click', text: 'お知らせ', from: '[role=tab]' },
   { name: 'レジストリ管理(お知らせの出す団体を選ぶ)', do: 'registryAnnouncements' },
+  { name: 'レジストリ管理(診断情報)', do: 'click', text: '診断情報', from: '[role=tab]' },
+  { name: 'レジストリ管理(診断情報の中身)', do: 'registryDiagnostics' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
 ]
 
@@ -158,6 +160,9 @@ export function registryResponse(body) {
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
+        diagnostics: [
+          { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13' },
+        ],
         announcements: [
           { announcementId: 'an_1', title: 'とても長い題のお知らせ'.repeat(3), body: '1行目\n' + 'とても長い本文の例です。'.repeat(10), importance: 'urgent', targetKind: 'orgs', targetPlan: '', targetOrgIds: ['org_' + 'x'.repeat(40), 'org_b'],
             publishedAt: iso(1), expiresAt: iso(31), createdBy: 'registry.admin.with.a.long.address@example.com', state: 'active', withdrawnAt: '', withdrawnBy: '' },
@@ -183,6 +188,9 @@ export function registryResponse(body) {
           { at: iso(2), actor: 'stranger@example.com', action: 'adminLoginDenied', target: '', before: '', after: '', reason: '許可リスト(ADMIN_EMAILS)に無いアカウント' },
         ],
       }
+    case 'getDiagnosticsReport':
+      return { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13',
+        diagnostics: { version: '2026.10.01-13', settings: { triggers: ['sendBatchNotifications'.repeat(4)] }, limits: { rows: { Tasks: 1200 } } } }
     case 'issueRegistrationCode':
       return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName }
     default:
@@ -391,6 +399,15 @@ async function run({ build = true } = {}) {
             { surveyId: 'sv_1', title: '2026年秋の利用状況のアンケート(とても長い名前の例です)'.repeat(2), formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: true, restrictAt: '2026-10-07T15:00:00.000Z' },
             { surveyId: 'sv_2', title: 'javascript の URL は出さない', formUrl: 'javascript:alert(1)', sendDate: '2026-09-10', dueDate: '2026-09-24', overdue: false, restrictAt: '' },
           ] }
+        // 診断情報(長い値・入れ子で、はみ出しを確かめる)
+        case 'getDiagnostics': return { diagId: 'dg_layoutcheck0001', history: [{ receiptNo: 'D260930-AB2C', at: '2026-09-30T03:00:00.000Z' }], diagnostics: {
+          version: '2026.10.01-13', generatedAt: '2026-10-01T03:00:00.000Z', timeZone: 'Asia/Tokyo',
+          registry: { registered: true, plan: 'ohsumi', contractPhase: 'none', checkedAt: '2026-10-01T02:00:00.000Z' },
+          settings: { discordWebhook: true, slackWebhook: false, orgNotificationEmails: 2, triggers: ['checkContractStatus', 'dailyMaintenance', 'sendBatchNotifications'.repeat(3)] },
+          limits: { mail: { remaining: 87, skippedToday: 0 }, spreadsheetCells: { used: 123456, limit: 10000000 }, rows: { Members: 42, Tasks: 1200, VeryLongSheetNameForLayoutCheck: 3 } },
+          errors: { last7Days: 4, byKind: [{ kind: 'conflict', count: 3 }] },
+        } }
+        case 'sendDiagnostics': return { receiptNo: 'D261001-XY7Z', at: '2026-10-01T03:01:00.000Z', history: [{ receiptNo: 'D261001-XY7Z', at: '2026-10-01T03:01:00.000Z' }, { receiptNo: 'D260930-AB2C', at: '2026-09-30T03:00:00.000Z' }] }
         // FSIF からのお知らせ(緊急・重要・通常。長い題と本文で、はみ出しを確かめる)
         case 'getAnnouncements': return { registered: true, stale: false, fetchedAt: '2026-10-01T03:00:00.000Z', announcements: [
           { announcementId: 'an_1', title: '通常のお知らせ', body: '通常の本文', importance: 'normal', publishedAt: '2026-09-20T00:00:00.000Z', expiresAt: '2026-10-20T00:00:00.000Z' },
@@ -854,6 +871,11 @@ async function run({ build = true } = {}) {
           await evaluate(`[...document.querySelectorAll('[data-announcement-form] input[name=announcement-target]')][2].click()`)
           await sleep(300)
         }
+        if (step.do === 'registryDiagnostics') {
+          await evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.includes('D261001-AB2C')).click()`)
+          await sleep(600)
+          if (!(await evaluate(`document.querySelector('[data-diagnostics-report]')?.textContent ?? ''`)).includes('2026.10.01-13')) throw new Error('受付番号から診断情報の中身が出ません')
+        }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
           await evaluate(`(() => {
@@ -984,6 +1006,16 @@ async function run({ build = true } = {}) {
             for (const want of ['FSIF に送る集計値', 'Cosmo Baseプラン', '送るかを選べます(初期値は送る)', '今は送っています', 'メンバーの人数', '42', '2026-09-28 の週の分を送りました', '2 回目']) {
               if (!metrics.includes(want)) throw new Error('FSIF に送る集計値に「' + want + '」が出ません: ' + metrics)
             }
+            // 同じ画面の「診断情報」: 表示 → 確認して送る → 受付番号
+            await evaluate(`document.querySelector('[data-diagnostics-panel] [data-diagnostics-show]').click()`)
+            await sleep(600)
+            const diag = await evaluate(`document.querySelector('[data-diagnostics-panel]')?.textContent ?? ''`)
+            for (const want of ['診断情報', '2026.10.01-13', 'D260930-AB2C', 'FSIF に送る']) {
+              if (!diag.includes(want)) throw new Error('診断情報に「' + want + '」が出ません: ' + diag)
+            }
+            await evaluate(`document.querySelector('[data-diagnostics-panel] [data-diagnostics-send]').click()`)
+            await sleep(600)
+            if (!(await evaluate(`document.querySelector('[data-diagnostics-receipt]')?.textContent ?? ''`)).includes('D261001-XY7Z')) throw new Error('診断情報を送った後に、受付番号が出ません')
             const text = await evaluate(`document.querySelector('[data-backup-preview]')?.textContent ?? ''`)
             if (!text.includes('Tasks') || !text.includes('12') || !text.includes('10')) throw new Error('戻す前の件数の差が出ません: ' + text)
             if (!(await evaluate(`document.querySelector('[data-backup-restore-all]').disabled`))) throw new Error('確かめる前に「このバックアップに戻す」が押せます')
