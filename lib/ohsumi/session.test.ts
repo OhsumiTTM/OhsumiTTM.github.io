@@ -178,6 +178,25 @@ describe('GAS との通信', () => {
     expect((fallback as InstanceType<typeof remote.CellTooLongError>).texts).toEqual(expect.arrayContaining(['今回書いたコメントです', '前からのコメントです']))
   })
 
+  it('書き込みには開いた時の行の版を付け、コメントは読み込んだ一覧との差分で送る。ほかの人が先に変えていたら ConflictError にする', async () => {
+    const s = await import('./session')
+    const remote = await import('./remote')
+    const sync = await import('./sync-state')
+    s.saveSession('org_a', { token: 'valid', exp: nowSec() + 100, remember: true })
+    const old = { id: 'c0', byId: 'm2', text: '前からのコメントです', at: '2026-09-01' }
+    sync.rememberServerRows({ Tasks: [{ id: 't1', row_version: 'r1', comments_json: JSON.stringify([old]) }] })
+    const mine = { id: 'c1', byId: 'm1', text: '今回書いたコメントです', at: '2026-10-01' }
+    const bodies = mockGas([
+      { ok: true, result: {} },
+      { ok: false, error: 'ほかの人が先に', conflict: { sheet: 'Tasks', id: 't1' } },
+    ])
+    await remote.remoteApi.updateComments('t1', [old, mine])
+    expect(bodies[0]).toMatchObject({ action: 'updateComments', taskId: 't1', baseVersions: { 'Tasks:t1': 'r1' }, listOps: [{ op: 'add', entry: mine }] })
+    expect(bodies[0]).not.toHaveProperty('comments')
+    const err = await remote.remoteApi.updatePriority('t1', 'high').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(remote.ConflictError)
+  })
+
   it('8割を超えた記録を書いた時は、書いた人に知らせる合図を送る', async () => {
     const s = await import('./session')
     const remote = await import('./remote')

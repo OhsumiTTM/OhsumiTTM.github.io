@@ -64,10 +64,12 @@ import {
   normalizeThresholdKeys,
 } from './code-normalize'
 import { activateSession, applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
-import { GasTransportError, pingGas, sendToGas, type GasResponse } from './gas-transport'
+import { GasTransportError, READ_ACTIONS, pingGas, sendToGas, type GasResponse } from './gas-transport'
 import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
 import { noteContractResponse } from './contract'
 import { extractUnsavedTexts } from './read-only'
+import { baseVersionsFor, listOpsFor, rememberServerRows } from './sync-state'
+import { LIST_ACTIONS } from './list-diff'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
 // store.tsx がログイン画面に戻す
@@ -219,6 +221,14 @@ export const NOTIFY_LIMITED_EVENT = 'ohsumi:notify-limited'
 
 // 1つのセルの上限の8割を超えた記録を書いた時に window に送るイベント(ohsumi-app.tsx が書いた人に知らせる)
 export const LONG_RECORDS_EVENT = 'ohsumi:long-records'
+
+/** ほかの人が先に同じ内容を変えたため、GAS が上書きせずに断った(書き込みの競合チェック)。texts: 書いた文章 */
+export class ConflictError extends Error {
+  constructor(message: string, readonly texts: string[] = []) {
+    super(message)
+    this.name = 'ConflictError'
+  }
+}
 
 /** 1つのセルの上限(5万文字)を超えるため、GAS が保存を断った。texts: 書いた文章(画面はコピーできるように出す) */
 export class CellTooLongError extends Error {
@@ -764,6 +774,8 @@ function toInitialData(res: InitialDataResponse): InitialData {
   }
   const { Members, Projects, Tasks, Settings } = res.sheets
   const settings = parseSettings(tableToRecords(Settings))
+  // 書き込みの競合チェックのために、行の版と記録の一覧を覚える(sync-state.ts)
+  rememberServerRows({ Members: tableToRecords(Members), Projects: tableToRecords(Projects), Tasks: tableToRecords(Tasks) })
   return {
     ...extra,
     memberId: res.memberId,
@@ -899,7 +911,9 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
 
   // 1本ずつ順番に送り、JSON が返らなければ送り直す(書き込みは requestId で二重に処理されない。
   // gas-transport.ts)。何度送っても JSON が返らない場合は GasTransportError を投げる
-  const json = await sendToGas<T>(gasUrl, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload })
+  // 書き込みには、開いた時点の行の版を付ける(ほかの人が先に変えていたら、GAS が断る)
+  const baseVersions = READ_ACTIONS.has(action) ? undefined : baseVersionsFor(payload)
+  const json = await sendToGas<T>(gasUrl, { action, sessionToken, clientVersion: CLIENT_VERSION, ...payload, ...(baseVersions ? { baseVersions } : {}) })
 
   if (json.session) applyRenewedSession(json.session)
   noteContractResponse(json)
@@ -929,6 +943,8 @@ async function postToGas<T = unknown>(action: string, payload: Record<string, un
 
   // 画面が古い: 書きかけを残したまま、読み込み直すよう案内する
   if (!json.ok && json.reloadRequired) throw new ReloadRequiredError(json.error || '画面が古くなりました。読み込み直してください。', extractUnsavedTexts(payload))
+  // ほかの人が先に変えていた: 書いた文章を残し、最新の内容に読み直す(store.tsx)
+  if (!json.ok && json.conflict) throw new ConflictError(json.error || 'ほかの人が先にこの内容を変えたため、保存しませんでした。', extractUnsavedTexts(payload))
   // 1つのセルの上限を超える: 書いた文章を残す(GAS が今回書いた文章を返さなかった時は、送った内容から取り出す)
   if (!json.ok && json.cellTooLong) {
     const texts = json.cellTooLong.texts ? extractUnsavedTexts(json.cellTooLong.texts) : extractUnsavedTexts(payload)
@@ -955,6 +971,19 @@ export interface WebhookConnectionStatus {
 export interface WebhookStatus {
   discord: WebhookConnectionStatus
   slack: WebhookConnectionStatus
+}
+
+// 記録の一覧(コメント・1on1 など)の保存: 丸ごとではなく、画面が知っている一覧との差分(listOps)で送る。
+// ほかの人が後から足した記録は、差分に入らないので消えない(gas/Code.gs の「記録の一覧の差分」)
+async function postListOps<T = unknown>(action: string, id: string, next: readonly unknown[], extra: Record<string, unknown> = {}): Promise<T> {
+  const def = LIST_ACTIONS[action]
+  const { listOps, restore } = listOpsFor(action, id, next)
+  try {
+    return await postToGas<T>(action, { [def.idParam]: id, ...extra, listOps })
+  } catch (err) {
+    restore()
+    throw err
+  }
 }
 
 export const remoteApi = {
@@ -1003,7 +1032,7 @@ export const remoteApi = {
       requiredSkillLevels: details.requiredSkillLevels,
     }),
   updateProgress: (taskId: string, text: string, progressHistory: ProgressEntry[]) =>
-    postToGas('updateProgress', { taskId, text, progressHistory }),
+    postListOps('updateProgress', taskId, progressHistory, { text }),
   // TSK-010: 既存のupdateProgressアクションに相乗りし、progressPercentのみを
   // 送る(text/progressHistoryは省略— GAS側は渡された列だけを部分更新する)
   updateProgressPercent: (taskId: string, percent: number) =>
@@ -1200,9 +1229,9 @@ export const remoteApi = {
   setHoldReason: (taskId: string, note: string | null, since: string | null) =>
     postToGas('setHoldReason', { taskId, note, since }),
   updateDeliverables: (taskId: string, deliverables: TaskDeliverable[]) =>
-    postToGas('updateDeliverables', { taskId, deliverables }),
+    postListOps('updateDeliverables', taskId, deliverables),
   updateHistory: (taskId: string, history: TaskHistoryEntry[]) =>
-    postToGas('updateHistory', { taskId, history }),
+    postListOps('updateHistory', taskId, history),
   updateProjectMembers: (projectId: string, memberIds: string[]) =>
     postToGas('updateProjectMembers', { projectId, memberIds }),
   updateProjectOwner: (projectId: string, ownerId: string | null) =>
@@ -1229,7 +1258,7 @@ export const remoteApi = {
   reportProjectHealth: (items: { projectId: string; health: import('./types').ProjectHealthLevel }[]) =>
     postToGas('reportProjectHealth', { items }),
   updateComments: (taskId: string, comments: TaskComment[]) =>
-    postToGas('updateComments', { taskId, comments }),
+    postListOps('updateComments', taskId, comments),
   updateEstimatedHours: (taskId: string, hours: number | null) =>
     postToGas('updateEstimatedHours', { taskId, hours }),
   updateActualHours: (taskId: string, hours: number | null) =>
@@ -1252,32 +1281,32 @@ export const remoteApi = {
     },
   ) => postToGas('updateSearchProfile', { memberId, ...profile }),
   updateCareerHistory: (memberId: string, entries: CareerHistoryEntry[]) =>
-    postToGas('updateCareerHistory', { memberId, entries }),
+    postListOps('updateCareerHistory', memberId, entries),
   updateQualifications: (memberId: string, entries: Qualification[]) =>
-    postToGas('updateQualifications', { memberId, entries }),
+    postListOps('updateQualifications', memberId, entries),
   updateEvaluationHistory: (memberId: string, entries: EvaluationRecord[]) =>
-    postToGas('updateEvaluationHistory', { memberId, entries }),
+    postListOps('updateEvaluationHistory', memberId, entries),
   updateTransferHistory: (memberId: string, entries: TransferRecord[]) =>
-    postToGas('updateTransferHistory', { memberId, entries }),
+    postListOps('updateTransferHistory', memberId, entries),
   updateSkillLevels: (memberId: string, levels: SkillLevel[]) =>
-    postToGas('updateSkillLevels', { memberId, levels }),
+    postListOps('updateSkillLevels', memberId, levels),
   updateCompetencies: (memberId: string, competencies: Competency[]) =>
-    postToGas('updateCompetencies', { memberId, competencies }),
+    postListOps('updateCompetencies', memberId, competencies),
   updateCareerGoals: (
     memberId: string,
     goals: { careerAspiration: string; desiredFutureRole: string; careerPlan: string },
   ) => postToGas('updateCareerGoals', { memberId, ...goals }),
   updateTrainingHistory: (memberId: string, entries: TrainingRecord[]) =>
-    postToGas('updateTrainingHistory', { memberId, entries }),
+    postListOps('updateTrainingHistory', memberId, entries),
   // 研修の名前・状態は、GAS が保存した記録(trainingId)から読む
   notifyTrainingRequest: (memberId: string, trainingId: string) =>
     postToGas('notifyTrainingRequest', { memberId, trainingId }),
   notifyTrainingDecision: (memberId: string, trainingId: string) =>
     postToGas('notifyTrainingDecision', { memberId, trainingId }),
   updateDevelopmentPlan: (memberId: string, entries: DevelopmentPlanEntry[]) =>
-    postToGas('updateDevelopmentPlan', { memberId, entries }),
+    postListOps('updateDevelopmentPlan', memberId, entries),
   updateOneOnOnes: (memberId: string, entries: OneOnOneRecord[]) =>
-    postToGas('updateOneOnOnes', { memberId, entries }),
+    postListOps('updateOneOnOnes', memberId, entries),
   updatePermissionOverrides: (memberId: string, overrides: PermissionOverride[]) =>
     postToGas('updatePermissionOverrides', { memberId, overrides }),
   // ---- スキルポイント付与 ----

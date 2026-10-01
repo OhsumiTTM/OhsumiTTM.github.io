@@ -101,6 +101,7 @@ import {
   fetchInitialData,
   exchangeIdToken,
   CellTooLongError,
+  ConflictError,
   ContractRestrictedError,
   ReloadRequiredError,
   FORBIDDEN_EVENT,
@@ -1069,6 +1070,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           // 1つの記録が長くなりすぎて断られた: 書いた文章をコピーできるように出し、画面を保存されている内容に戻す
           if (err instanceof CellTooLongError) {
             setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'cellTooLong' })
+            refreshAllRef.current()
+          }
+          // ほかの人が先に変えていた: 書いた文章をコピーできるように出し、最新の内容に読み直す
+          if (err instanceof ConflictError) {
+            setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'conflict' })
             refreshAllRef.current()
           }
           reportRemoteError(err)
