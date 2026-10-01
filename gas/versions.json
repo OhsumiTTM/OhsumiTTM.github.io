@@ -1,14 +1,14 @@
 {
   "registry/Code.gs": {
-    "version": "2026.10.02-3",
-    "sha256": "4357d30f6dfc0c3acbf3dc88ce59ee97c172561c7c59aa8dbf6316b359b1e388"
+    "version": "2026.10.02-4",
+    "sha256": "dad57af49948486ada01bf2acfd159573d701702b4b87d0188cf04af9fc7db67"
   },
   "registry/monitor/Monitor.gs": {
     "version": "2026.10.02-2",
     "sha256": "bda48f8b17a2c020c87c74f2a5952fe21876874a7414b65c8850008e4b683100"
   },
   "gas/Code.gs": {
-    "version": "2026.10.02-1",
-    "sha256": "f6d8c3257af4ade71148612d510867e30cd6cbbf64e62e32db7e73ea92b98901"
+    "version": "2026.10.02-2",
+    "sha256": "45dd285573f6ab888aa2ef9e19b1d6d5e031915c54d23420d76244617bf99aa2"
   }
 }

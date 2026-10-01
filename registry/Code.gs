@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.02-3'
+var REGISTRY_VERSION = '2026.10.02-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -262,7 +262,9 @@ var REGISTRY_SHEETS = {
     // デモの団体(TRUE)。定量データの集計・KPI の数・アンケートの送付・停止の予定から外す(PR S)
     'demo',
     // この団体だけ止めている機能の ID(カンマ区切り。機能のスイッチ。PR W)
-    'disabled_features'],
+    'disabled_features',
+    // この団体だけの上限・しきい値(JSON。全団体の値より優先。PR X)
+    'tunables_json'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
@@ -329,6 +331,7 @@ var REGISTRY_ACTIONS = {
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
   setOrgDemo: function (body) { return setOrgDemo_(body, Date.now()) },
   setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
+  setTunables: function (body) { return setTunables_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
   sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
@@ -733,6 +736,8 @@ function orgSummary_(values, nowMs) {
     demo: isDemoOrg_(values),
     // この団体だけ止めている機能(全団体の分は含めない)
     disabledFeatures: parseFeatureList_(values.disabled_features),
+    // この団体だけの上限・しきい値(全団体の値は含めない)
+    tunables: parseTunableValues_(values.tunables_json),
   }
 }
 
@@ -813,6 +818,8 @@ function adminOverview_(body, nowMs) {
       kpis: orgKpis_(nowMs),
       // 機能のスイッチ: 止められる機能の一覧と、全団体で止めている機能
       features: { catalog: featureCatalog_(), globalDisabled: globalDisabledFeatures_() },
+      // 上限・しきい値: 項目の一覧(既定・範囲)と、全団体の値
+      tunables: { catalog: tunableCatalog_(), global: globalTunables_() },
     },
   }
 }
@@ -1489,7 +1496,9 @@ function checkIn_(body, nowMs) {
     // 掲載中の緊急のお知らせの ID(団体の GAS が、自分の団体の代表に1回だけメールで送る。本文は fetchAnnouncements で取る)
     urgentAnnouncementIds: announcementsFor_(orgId, plan, nowMs).filter(function (a) { return a.importance === 'urgent' }).map(function (a) { return a.announcementId }),
     // 止めている機能(機能のスイッチ。全団体の分と、この団体の分)
-    disabledFeatures: disabledFeaturesFor_(row.values) } }
+    disabledFeatures: disabledFeaturesFor_(row.values),
+    // 上限・しきい値(全団体の値に、この団体の値を重ねたもの。団体の GAS は範囲に収めて使う)
+    tunables: tunablesFor_(row.values) } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -2420,6 +2429,107 @@ function setFeatureSwitches_(body, nowMs) {
   })
 }
 
+// ---- 上限・しきい値(団体の GAS に配る。PR X) ----
+//
+// 回数の上限・しきい値を、団体の GAS を更新し直さずに変える。checkIn の返事の tunables で伝える。
+//   全団体: スクリプトプロパティ TUNABLES(JSON)  団体ごと: Orgs の tunables_json 列(JSON。全団体の値より優先)
+// 範囲(min〜max)は、団体の GAS の TUNABLES と同じにする(テストで確かめる)。団体の GAS も、届いた値を範囲に収めて使う。
+// 管理画面で範囲の外の値を入れた時は、保存せずに断る(どの値になるか分かりにくくしないため)
+var TUNABLE_RANGES = {
+  notifyPerHour: { def: 60, min: 10, max: 300, label: '通知(1人1時間)' },
+  mentionPerHour: { def: 30, min: 5, max: 100, label: 'メンションの通知の宛先(1人1時間)' },
+  resultNotifyPerHour: { def: 10, min: 3, max: 50, label: '結果の通知(1人1時間)' },
+  translatePerHour: { def: 500, min: 50, max: 2000, label: '翻訳する文(1人1時間)' },
+  clientErrorPerHour: { def: 30, min: 5, max: 100, label: '画面のエラーの記録(1人1時間)' },
+  inviteMailPerHour: { def: 3, min: 1, max: 10, label: '本人あての招待リンクのメール(1人1時間)' },
+  digestMailReserve: { def: 10, min: 5, max: 50, label: 'まとめて送る分に回すメールの残り' },
+  dailyJobStaleHours: { def: 26, min: 25, max: 72, label: '毎日の処理が止まったとみなす時間' },
+  hourlyJobStaleHours: { def: 3, min: 2, max: 24, label: '毎時の処理が止まったとみなす時間' },
+  personalDataNoticeDays: { def: 7, min: 3, max: 30, label: '個人情報を消す前に知らせる日数' },
+  metricsRetryMaxHours: { def: 24, min: 6, max: 72, label: '集計値の送り直しの間隔の上限(時間)' },
+  contractRecheckIdleSec: { def: 600, min: 120, max: 1800, label: '書き込みの前にレジストリへ確かめ直す間隔(秒)' },
+  announcementsCacheSec: { def: 600, min: 60, max: 3600, label: 'お知らせを覚えておく時間(秒)' },
+}
+
+// 保存してある JSON を、知っているキー・範囲の中の整数だけにする(壊れた値は捨てる)
+function parseTunableValues_(raw) {
+  var obj = raw
+  if (typeof raw === 'string') {
+    try { obj = JSON.parse(raw || '{}') } catch (e) { obj = {} }
+  }
+  var out = {}
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out
+  Object.keys(TUNABLE_RANGES).forEach(function (k) {
+    var v = obj[k]
+    var r = TUNABLE_RANGES[k]
+    if (typeof v === 'number' && isFinite(v) && Math.round(v) === v && v >= r.min && v <= r.max) out[k] = v
+  })
+  return out
+}
+
+function globalTunables_() {
+  return parseTunableValues_(registryProps_().TUNABLES)
+}
+
+// 団体に伝える値(全団体の値に、団体ごとの値を重ねたもの)
+function tunablesFor_(values) {
+  var out = globalTunables_()
+  var own = parseTunableValues_(values && values.tunables_json)
+  Object.keys(own).forEach(function (k) { out[k] = own[k] })
+  return out
+}
+
+function tunableCatalog_() {
+  return Object.keys(TUNABLE_RANGES).map(function (k) {
+    var r = TUNABLE_RANGES[k]
+    return { key: k, label: r.label, def: r.def, min: r.min, max: r.max }
+  })
+}
+
+// 管理画面から届いた値を確かめる。{ キー: 数 }(空・null のキーは既定に戻す)。知らないキー・範囲の外は断る
+function checkTunableInput_(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw registryError_('値の形が正しくありません。')
+  var out = {}
+  Object.keys(input).forEach(function (k) {
+    var r = TUNABLE_RANGES[k]
+    if (!r) throw registryError_('知らない項目です: ' + String(k).slice(0, 40))
+    var v = input[k]
+    if (v === null || v === '' || v === undefined) return
+    v = Number(v)
+    if (!isFinite(v) || Math.round(v) !== v || v < r.min || v > r.max) throw registryError_(r.label + 'は、' + r.min + '〜' + r.max + 'の整数で入れてください。')
+    out[k] = v
+  })
+  return out
+}
+
+// 管理画面: 上限・しきい値を変える。{ session, scope: 'global' | 'org', orgId, values: { キー: 数 }, reason }
+// values は、その範囲(全団体・団体)の値をまるごと置き換える(入れなかったキーは既定・全団体の値に戻る)
+function setTunables_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '上限・しきい値を変える')
+  var values = checkTunableInput_(body.values)
+  var reason = cleanText_(body.reason, 500)
+  if (!reason) throw registryError_('理由を書いてください(操作の記録に残します)。')
+  return withRegistryLock_(function () {
+    if (body.scope === 'global') {
+      var before = globalTunables_()
+      PropertiesService.getScriptProperties().setProperty('TUNABLES', JSON.stringify(values))
+      forgetRegistryProps_()
+      appendAudit_({ actor: session.sub, action: 'setTunables', target: '(全団体)', before: before, after: values, reason: reason })
+      return { ok: true, result: { scope: 'global', values: values } }
+    }
+    if (!registrySheetHasColumn_('Orgs', 'tunables_json')) throw registryError_('Orgs に tunables_json の列がありません。レジストリのエディタで setupRegistry を実行してください。')
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var beforeOrg = parseTunableValues_(row.values.tunables_json)
+    var fields = { tunables_json: Object.keys(values).length ? JSON.stringify(values) : '', updated_at: new Date(nowMs).toISOString() }
+    setRowFields_('Orgs', row.row, fields)
+    appendAudit_({ actor: session.sub, action: 'setTunables', target: orgId, before: beforeOrg, after: values, reason: reason })
+    return { ok: true, result: orgSummary_(merged_(row.values, fields), nowMs) }
+  })
+}
 // 管理画面の KPI(デモの団体を除く): 利用中の団体の数・プラン別の数・直近の週の集計値の合計
 function orgKpis_(nowMs) {
   var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
@@ -2467,6 +2577,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.02-2', security: false, required: false, note: '回数の上限・しきい値をレジストリから配り、安全な範囲に収めて使う(PR X)' },
   { version: '2026.10.02-1', security: false, required: false, note: 'レジストリから機能を止めるスイッチ(止めた機能の書き込みを断る。ログイン・読み取りは止めない)(PR W)' },
   { version: '2026.10.01-13', security: false, required: false, note: '代表の管理画面から診断情報を FSIF に送り、受付番号を出す(PR Q)' },
   { version: '2026.10.01-12', security: false, required: false, note: 'FSIF からのお知らせを代表・管理者の管理画面に出す(PR P)' },

@@ -2569,7 +2569,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.02-1'
+var OHSUMI_GAS_VERSION = '2026.10.02-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2920,6 +2920,80 @@ function disabledFeaturesForClient_() {
   return disabledFeatures_().map(function (id) { return { id: id, label: FEATURE_SWITCHES[id].label } })
 }
 
+// ---- 上限・しきい値(レジストリから配る。PR X) --------------------------------------
+//
+// 回数の上限・しきい値を、この GAS を更新し直さずに変えられるようにする。レジストリの checkIn が tunables
+// ({ キー: 数 })を返し、CONTRACT_STATE に覚える。値は、ここに書いた安全な範囲(min〜max)に必ず収める
+// (レジストリが範囲の外の値を送っても、範囲の端の値を使う)。届いていないキー・数でない値は、既定の値(def)を使う。
+// キーと範囲は、レジストリの TUNABLE_RANGES と同じにする(テストで確かめる)
+var TUNABLES = {
+  // 1人1時間の回数の上限(RATE_LIMITS)
+  notifyPerHour: { def: 60, min: 10, max: 300, label: '通知(1人1時間)' },
+  mentionPerHour: { def: 30, min: 5, max: 100, label: 'メンションの通知の宛先(1人1時間)' },
+  resultNotifyPerHour: { def: 10, min: 3, max: 50, label: '結果の通知(1人1時間)' },
+  translatePerHour: { def: 500, min: 50, max: 2000, label: '翻訳する文(1人1時間)' },
+  clientErrorPerHour: { def: 30, min: 5, max: 100, label: '画面のエラーの記録(1人1時間)' },
+  inviteMailPerHour: { def: 3, min: 1, max: 10, label: '本人あての招待リンクのメール(1人1時間)' },
+  // メールの1日の残りがこの数以下になったら、急ぎでない通知をまとめて送る分に回す
+  digestMailReserve: { def: 10, min: 5, max: 50, label: 'まとめて送る分に回すメールの残り' },
+  // 毎日・毎時の処理が止まったとみなす時間
+  dailyJobStaleHours: { def: 26, min: 25, max: 72, label: '毎日の処理が止まったとみなす時間' },
+  hourlyJobStaleHours: { def: 3, min: 2, max: 24, label: '毎時の処理が止まったとみなす時間' },
+  // 個人情報を消す何日前から、代表の管理画面に出すか
+  personalDataNoticeDays: { def: 7, min: 3, max: 30, label: '個人情報を消す前に知らせる日数' },
+  // 集計値を送れなかった時の、送り直しの間隔の上限(時間)
+  metricsRetryMaxHours: { def: 24, min: 6, max: 72, label: '集計値の送り直しの間隔の上限(時間)' },
+  // 停止の予定が無い時に、書き込みの前にレジストリへ確かめ直す間隔(秒)。止めてから効くまでの時間にもなる
+  contractRecheckIdleSec: { def: 600, min: 120, max: 1800, label: '書き込みの前にレジストリへ確かめ直す間隔(秒)' },
+  // FSIF からのお知らせを覚えておく時間(秒)
+  announcementsCacheSec: { def: 600, min: 60, max: 3600, label: 'お知らせを覚えておく時間(秒)' },
+}
+var _tunablesFrom = null
+var _tunablesValue = null
+
+// 届いた値を、安全な範囲の整数にする(届いていない・数でない値は null)
+function clampTunable_(key, v) {
+  var t = TUNABLES[key]
+  if (!t || typeof v !== 'number' || !isFinite(v)) return null
+  return Math.min(t.max, Math.max(t.min, Math.round(v)))
+}
+
+// レジストリから届いた値(範囲に収めたもの。届いていないキーは入れない)
+function parseTunables_(given) {
+  var out = {}
+  if (!given || typeof given !== 'object' || Array.isArray(given)) return out
+  Object.keys(TUNABLES).forEach(function (key) {
+    var v = clampTunable_(key, given[key])
+    if (v !== null) out[key] = v
+  })
+  return out
+}
+
+function receivedTunables_() {
+  var raw = requestProps_().CONTRACT_STATE || ''
+  if (_tunablesValue && _tunablesFrom === raw) return _tunablesValue
+  var state = null
+  try { state = JSON.parse(raw || 'null') } catch (e) { state = null }
+  _tunablesValue = parseTunables_(state && state.tunables)
+  _tunablesFrom = raw
+  return _tunablesValue
+}
+
+// 今使う値。fallback を渡すと、届いていない時は def の代わりに使う(RATE_LIMITS の値など)
+function tunable_(key, fallback) {
+  var got = receivedTunables_()
+  if (Object.prototype.hasOwnProperty.call(got, key)) return got[key]
+  return fallback !== undefined ? fallback : TUNABLES[key].def
+}
+
+// 診断情報に入れる、既定と違う値の一覧
+function tunablesForClient_() {
+  var got = receivedTunables_()
+  return Object.keys(got).filter(function (k) { return got[k] !== TUNABLES[k].def }).map(function (k) {
+    return { key: k, label: TUNABLES[k].label, value: got[k], def: TUNABLES[k].def }
+  })
+}
+
 function readContractState_() {
   try {
     var state = JSON.parse(PropertiesService.getScriptProperties().getProperty('CONTRACT_STATE') || 'null')
@@ -3038,7 +3112,7 @@ function announcementsStatus_(nowMs, deps) {
     var fresh = { announcements: parseAnnouncements_(res.result.announcements), fetchedAt: new Date(nowMs).toISOString() }
     var text = JSON.stringify(fresh)
     try {
-      cache.put('announcements:v1', text, ANNOUNCEMENTS_CACHE_SEC)
+      cache.put('announcements:v1', text, tunable_('announcementsCacheSec', ANNOUNCEMENTS_CACHE_SEC))
       cache.put('announcements:last', text, ANNOUNCEMENTS_LAST_SEC)
     } catch (e) { /* 覚えられなくても、今回は出せる */ }
     return { registered: true, announcements: fresh.announcements, fetchedAt: fresh.fetchedAt, stale: false }
@@ -3211,6 +3285,8 @@ function refreshContractState_(deps) {
       .map(function (x) { return String(x).slice(0, 40) }).filter(function (x) { return /^an_[A-Za-z0-9]+$/.test(x) }).slice(0, 20),
     // レジストリから止めている機能(機能のスイッチ。古いレジストリは返さない)
     disabledFeatures: parseDisabledFeatures_(out.disabledFeatures),
+    // 上限・しきい値(安全な範囲に収めたもの。古いレジストリは返さない)
+    tunables: parseTunables_(out.tunables),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -3226,7 +3302,7 @@ function currentContract_(nowMs, writing) {
   if (c.phase !== 'inEffect' && !writing) return c
   var cache = CacheService.getScriptCache()
   if (cache.get('contract:recheck')) return c
-  cache.put('contract:recheck', '1', c.phase === 'none' ? CONTRACT_RECHECK_IDLE_SEC : CONTRACT_RECHECK_SEC)
+  cache.put('contract:recheck', '1', c.phase === 'none' ? tunable_('contractRecheckIdleSec', CONTRACT_RECHECK_IDLE_SEC) : CONTRACT_RECHECK_SEC)
   var fresh = refreshContractState_()
   return fresh ? effectiveContract_(fresh, nowMs) : c
 }
@@ -3350,7 +3426,7 @@ function registeredEmailsOf_(memberId) {
 
 /** 本人あてのメールを送れるか({ available, reason?, remaining, retryAt? }) */
 function inviteMailStatus_(memberId, nowMs) {
-  var remaining = Math.max(0, INVITE_MAIL_LIMIT - inviteMailSentTimes_(memberId, nowMs).length)
+  var remaining = Math.max(0, tunable_('inviteMailPerHour', INVITE_MAIL_LIMIT) - inviteMailSentTimes_(memberId, nowMs).length)
   if (inviteSiteOrigins_().length === 0) return { available: false, reason: 'notChecked', remaining: remaining }
   if (registeredEmailsOf_(memberId).length === 0) return { available: false, reason: 'noEmail', remaining: remaining }
   if (remaining === 0) {
@@ -3400,8 +3476,8 @@ function sendInviteLinkToMe_(memberId, body, nowMs) {
   var times
   try {
     times = inviteMailSentTimes_(memberId, nowMs)
-    if (times.length >= INVITE_MAIL_LIMIT) {
-      throw userError_('メールで送れるのは1時間に' + INVITE_MAIL_LIMIT + '回までです。しばらくしてから、もう一度お試しください。')
+    if (times.length >= tunable_('inviteMailPerHour', INVITE_MAIL_LIMIT)) {
+      throw userError_('メールで送れるのは1時間に' + tunable_('inviteMailPerHour', INVITE_MAIL_LIMIT) + '回までです。しばらくしてから、もう一度お試しください。')
     }
     times.push(nowMs)
     CacheService.getScriptCache().put(inviteMailKey_(memberId), JSON.stringify(times), INVITE_MAIL_WINDOW_SEC)
@@ -3412,7 +3488,7 @@ function sendInviteLinkToMe_(memberId, body, nowMs) {
   var mailed = sendMailChecked_({ to: emails.join(','), subject: text.subject, body: text.body })
   if (mailed === 'quota') throw userError_(quotaMessage_('email', false) + 'QR コードかリンクのコピーを使ってください。')
   if (mailed === 'limited') throw userError_('通知の回数の上限に達しました。しばらくしてから、もう一度お試しください。')
-  return { sent: true, count: emails.length, remaining: Math.max(0, INVITE_MAIL_LIMIT - times.length) }
+  return { sent: true, count: emails.length, remaining: Math.max(0, tunable_('inviteMailPerHour', INVITE_MAIL_LIMIT) - times.length) }
 }
 
 // 停止の予告のメールの文面
@@ -6326,15 +6402,20 @@ function isTestEnvironment_() {
 // 数件多く通ることがある)。
 var RATE_LIMITS = {
   // メール・Discord/Slack・通知のキュー(1件ずつ数える)
-  notify: { limit: 60, windowSec: 3600 },
+  notify: { limit: 60, windowSec: 3600, tunable: 'notifyPerHour' },
   // コメントのメンションで通知する宛先の数
-  mention: { limit: 30, windowSec: 3600 },
+  mention: { limit: 30, windowSec: 3600, tunable: 'mentionPerHour' },
   // 日程調整・フォームの結果、研修の申請・承認の通知(1回ずつ数える)
-  resultNotify: { limit: 10, windowSec: 3600 },
+  resultNotify: { limit: 10, windowSec: 3600, tunable: 'resultNotifyPerHour' },
   // 翻訳する文の数(Google の翻訳の1日の回数は、団体全体で分け合うため)
-  translate: { limit: 500, windowSec: 3600 },
+  translate: { limit: 500, windowSec: 3600, tunable: 'translatePerHour' },
   // 画面のエラーの記録(1人1時間)
-  clientError: { limit: 30, windowSec: 3600 },
+  clientError: { limit: 30, windowSec: 3600, tunable: 'clientErrorPerHour' },
+}
+// 今の上限(レジストリから届いた値。届いていなければ RATE_LIMITS の limit)
+function rateLimitOf_(kind) {
+  var spec = RATE_LIMITS[kind]
+  return spec.tunable ? tunable_(spec.tunable, spec.limit) : spec.limit
 }
 var _requestActorId = null
 var _notifyLimited = false
@@ -6358,7 +6439,7 @@ function takeRateLimit_(kind, memberId, count, nowMs) {
   nowMs = nowMs || Date.now()
   count = Math.max(1, Math.floor(count || 1))
   var times = rateLimitTimes_(kind, memberId, nowMs)
-  if (times.length + count > spec.limit) return false
+  if (times.length + count > rateLimitOf_(kind)) return false
   for (var i = 0; i < count; i++) times.push(nowMs)
   try { CacheService.getScriptCache().put(rateLimitKey_(kind, memberId), JSON.stringify(times), spec.windowSec) } catch (e) { /* 覚えられなくても続ける */ }
   return true
@@ -6369,7 +6450,7 @@ function allowRequestNotification_(what) {
   if (!_requestActorId) return true
   if (takeRateLimit_('notify', _requestActorId, 1)) return true
   _notifyLimited = true
-  console.warn('通知の上限(1人1時間に' + RATE_LIMITS.notify.limit + '件)を超えたため、送りませんでした: ' + what)
+  console.warn('通知の上限(1人1時間に' + rateLimitOf_('notify') + '件)を超えたため、送りませんでした: ' + what)
   return false
 }
 
@@ -6838,7 +6919,7 @@ function flushDailyDigests_() {
     var d = readDigest_(all[key])
     if (!d || !d.email || !d.items.length) { props.deleteProperty(key); return }
     var remaining = mailRemainingQuota_()
-    if (remaining !== null && remaining <= DIGEST_MAIL_RESERVE) {
+    if (remaining !== null && remaining <= tunable_('digestMailReserve', DIGEST_MAIL_RESERVE)) {
       stopped = true
       console.warn('メールの残りが少ないため、毎日のまとめの残り(' + (keys.length) + '人分まで)を明日に回しました')
       return
@@ -6955,7 +7036,7 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
       if (ids.length === 0) return
       if (!takeRateLimit_('mention', actorId, ids.length)) {
         _notifyLimited = true
-        console.warn('メンションの通知の上限(1人1時間に' + RATE_LIMITS.mention.limit + '人)を超えたため、通知しませんでした')
+        console.warn('メンションの通知の上限(1人1時間に' + rateLimitOf_('mention') + '人)を超えたため、通知しませんでした')
         return
       }
       var templates = {
@@ -9185,7 +9266,7 @@ function translateTexts_(texts, targetLang, actorId) {
   // 翻訳する文の数は、1人1時間に RATE_LIMITS.translate.limit 件まで(団体全体の翻訳の回数を守るため)
   var count = list.filter(function (t) { return String(t || '').trim() }).length
   if (actorId && count > 0 && !takeRateLimit_('translate', actorId, count)) {
-    throw userError_('翻訳は1時間に' + RATE_LIMITS.translate.limit + '件までです。しばらくしてから、もう一度お試しください。')
+    throw userError_('翻訳は1時間に' + rateLimitOf_('translate') + '件までです。しばらくしてから、もう一度お試しください。')
   }
   return list.map(function (text) {
     var s = String(text || '')
@@ -13969,12 +14050,12 @@ function personalDataStatus_(nowMs) {
   var byDate = {}
   pending.forEach(function (p) {
     var at = Date.parse(p.purgeAt)
-    if (!(at > 0) || at - nowMs > PERSONAL_DATA_NOTICE_DAYS * 24 * 3600 * 1000) return
+    if (!(at > 0) || at - nowMs > tunable_('personalDataNoticeDays', PERSONAL_DATA_NOTICE_DAYS) * 24 * 3600 * 1000) return
     var d = Utilities.formatDate(new Date(Math.max(at, nowMs)), tz, 'yyyy-MM-dd')
     byDate[d] = (byDate[d] || 0) + 1
   })
   return {
-    retentionDays: days, min: PERSONAL_DATA_RETENTION.min, max: PERSONAL_DATA_RETENTION.max, noticeDays: PERSONAL_DATA_NOTICE_DAYS,
+    retentionDays: days, min: PERSONAL_DATA_RETENTION.min, max: PERSONAL_DATA_RETENTION.max, noticeDays: tunable_('personalDataNoticeDays', PERSONAL_DATA_NOTICE_DAYS),
     pending: pending,
     orphanEmails: orphanEmailRows_(),
     upcoming: Object.keys(byDate).sort().map(function (d) { return { date: d, count: byDate[d] } }),
@@ -14261,9 +14342,9 @@ function jobStatus_(nowMs) {
     dailyAt: String(s.dailyAt || ''), hourlyAt: String(s.hourlyAt || ''), installedAt: String(s.installedAt || ''),
     dailyFailedAt: String(s.dailyFailedAt || ''), dailyError: String(s.dailyError || ''),
     hourlyFailedAt: String(s.hourlyFailedAt || ''), hourlyError: String(s.hourlyError || ''),
-    dailyStale: staleOf(s.dailyAt, DAILY_JOB_STALE_HOURS),
-    hourlyStale: staleOf(s.hourlyAt, HOURLY_JOB_STALE_HOURS),
-    staleHours: DAILY_JOB_STALE_HOURS,
+    dailyStale: staleOf(s.dailyAt, tunable_('dailyJobStaleHours', DAILY_JOB_STALE_HOURS)),
+    hourlyStale: staleOf(s.hourlyAt, tunable_('hourlyJobStaleHours', HOURLY_JOB_STALE_HOURS)),
+    staleHours: tunable_('dailyJobStaleHours', DAILY_JOB_STALE_HOURS),
   }
 }
 
@@ -14907,7 +14988,7 @@ function sendMetricsNow_(nowMs, period, state, deps) {
     state.sent[period] = at
     delete state.retry
   } else {
-    var waitHours = Math.min(METRICS_RETRY_MAX_HOURS, Math.pow(2, attempts - 1))
+    var waitHours = Math.min(tunable_('metricsRetryMaxHours', METRICS_RETRY_MAX_HOURS), Math.pow(2, attempts - 1))
     state.retry = { period: period, attempts: attempts, nextAt: nowMs + waitHours * 3600000 }
     appendErrorLog_('job', 'reportMetrics', 'metricsFailed')
   }
@@ -15010,6 +15091,9 @@ function diagnosticsSnapshot_(nowMs) {
         checkedAt: String(contract.checkedAt || ''),
         siteOrigins: Array.isArray(contract.siteOrigins) ? contract.siteOrigins.length : 0,
         openSurveys: Array.isArray(contract.surveys) ? contract.surveys.length : 0,
+        // レジストリから止めている機能・既定と違う上限としきい値(PR W・X)
+        disabledFeatures: disabledFeatures_(),
+        tunables: tunablesForClient_().map(function (t) { return t.key + '=' + t.value }),
       }
     }),
     gasUpdate: diagnosticsPart_(function () { var u = gasUpdateStatus_(); return { known: u.known, required: u.required, outdated: u.outdated, latest: u.latest } }),

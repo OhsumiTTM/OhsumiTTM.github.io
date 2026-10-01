@@ -308,7 +308,7 @@ describe('守る処理を外すと、テストが失敗する', () => {
   })
 
   it('回数の上限を外すと、回数の上限のテストが失敗する', () => {
-    const code = mutate('  if (times.length + count > spec.limit) return false\n', '')
+    const code = mutate('  if (times.length + count > rateLimitOf_(kind)) return false\n', '')
     expect(() => checkRateLimits(code)).toThrow()
   })
 
