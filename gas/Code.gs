@@ -14901,6 +14901,11 @@ function diagnosticsPart_(fn) {
   }
 }
 
+// Ohsumi が作るシートの名前(診断情報で、名前と行数を出すもの)
+function ohsumiSheetNames_() {
+  return Object.keys(SHEET_HEADERS).concat(['AuditLog', USAGE_SHEET, ERROR_LOG_SHEET])
+}
+
 function diagnosticsSnapshot_(nowMs) {
   var props = PropertiesService.getScriptProperties()
   var contract = readContractState_() || {}
@@ -14939,9 +14944,15 @@ function diagnosticsSnapshot_(nowMs) {
       var ss = SpreadsheetApp.getActiveSpreadsheet()
       var cells = 0
       var rows = {}
+      // Ohsumi が作るシートは名前と行数。それ以外(団体が作ったシート)は名前を入れず、「その他」の枚数と行数の合計にまとめる
+      var other = { sheets: 0, rows: 0 }
+      var ohsumiSheets = ohsumiSheetNames_()
       ss.getSheets().forEach(function (sh) {
         cells += (Number(sh.getMaxRows()) || 0) * (Number(sh.getMaxColumns()) || 0)
-        rows[String(sh.getName())] = Math.max(0, (Number(sh.getLastRow()) || 0) - 1)
+        var n = Math.max(0, (Number(sh.getLastRow()) || 0) - 1)
+        var name = String(sh.getName())
+        if (ohsumiSheets.indexOf(name) >= 0) rows[name] = n
+        else { other.sheets++; other.rows += n }
       })
       return {
         mail: { remaining: q.remaining, skippedToday: q.skipped, lastReachedDate: q.lastReachedDate },
@@ -14949,6 +14960,7 @@ function diagnosticsSnapshot_(nowMs) {
         spreadsheetCells: { used: cells, limit: SPREADSHEET_CELL_LIMIT },
         scriptProperties: { bytes: propsText.length, limit: SCRIPT_PROPERTIES_LIMIT_BYTES, keys: Object.keys(props.getProperties() || {}).length },
         rows: rows,
+        otherSheets: other,
       }
     }),
     jobs: diagnosticsPart_(function () {

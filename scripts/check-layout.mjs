@@ -403,7 +403,7 @@ async function run({ build = true } = {}) {
           version: '2026.10.01-13', generatedAt: '2026-10-01T03:00:00.000Z', timeZone: 'Asia/Tokyo',
           registry: { registered: true, plan: 'ohsumi', contractPhase: 'none', checkedAt: '2026-10-01T02:00:00.000Z' },
           settings: { discordWebhook: true, slackWebhook: false, orgNotificationEmails: 2, triggers: ['checkContractStatus', 'dailyMaintenance', 'sendBatchNotifications'.repeat(3)] },
-          limits: { mail: { remaining: 87, skippedToday: 0 }, spreadsheetCells: { used: 123456, limit: 10000000 }, rows: { Members: 42, Tasks: 1200, VeryLongSheetNameForLayoutCheck: 3 } },
+          limits: { mail: { remaining: 87, skippedToday: 0 }, spreadsheetCells: { used: 123456, limit: 10000000 }, rows: { Members: 42, Tasks: 1200, FormSubmissions: 3 }, otherSheets: { sheets: 2, rows: 31 } },
           errors: { last7Days: 4, byKind: [{ kind: 'conflict', count: 3 }] },
         } }
         case 'sendDiagnostics': return { receiptNo: 'D261001-XY7Z', at: '2026-10-01T03:01:00.000Z', history: [{ receiptNo: 'D261001-XY7Z', at: '2026-10-01T03:01:00.000Z' }, { receiptNo: 'D260930-AB2C', at: '2026-09-30T03:00:00.000Z' }] }

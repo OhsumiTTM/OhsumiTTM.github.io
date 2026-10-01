@@ -61,11 +61,19 @@ describe('診断情報(団体の GAS)', () => {
 
   it('代表だけが使える。機能停止中も使える(読み取りの一覧)', () => {
     const h = guardHarness()
+    // 団体が作ったシート(名前に個人の情報が入りうる)
+    h.addSheet('山田さんの連絡先メモ', [['a'], ['1'], ['2']])
     const top = h.post({ action: 'getDiagnostics', sessionToken: 'm-top' })
     expect(top.ok).toBe(true)
     // 上限の状況(メールの残り・長い記録・セルの数・スクリプトプロパティの大きさ・シートの行数)
     expect(top.result.diagnostics.limits).toMatchObject({ mail: expect.any(Object), longRecords: expect.any(Object), spreadsheetCells: { limit: 10000000 }, scriptProperties: { limit: 512000 } })
-    expect(top.result.diagnostics.limits.rows).toEqual(expect.any(Object))
+    // Ohsumi が作るシートは名前と行数、それ以外は「その他」の枚数と行数の合計だけ(名前は送らない)
+    const names = Object.keys(top.result.diagnostics.limits.rows)
+    expect(names.length).toBeGreaterThan(0)
+    for (const n of names) expect(['Members', 'Projects', 'Tasks', 'Settings', 'MemberEmails', 'Expenses', 'FormSubmissions', 'DailyReports', 'Candidates', 'AuditLog', 'UsageDaily', 'ErrorLog']).toContain(n)
+    expect(top.result.diagnostics.limits.otherSheets.sheets).toBeGreaterThanOrEqual(1)
+    expect(top.result.diagnostics.limits.otherSheets.rows).toBeGreaterThanOrEqual(2)
+    expect(JSON.stringify(top.result.diagnostics)).not.toContain('山田')
     expect(h.post({ action: 'getDiagnostics', sessionToken: 'm-lead' })).toMatchObject({ ok: false, forbidden: true })
     expect(h.post({ action: 'sendDiagnostics', sessionToken: 'm-lead', diagId: 'dg_x', requestId: 'diag-1' })).toMatchObject({ ok: false, forbidden: true })
     for (const list of ['READ_ONLY_ACTIONS', 'LOCK_EXEMPT_ACTIONS']) {
