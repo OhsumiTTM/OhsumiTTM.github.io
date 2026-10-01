@@ -10,6 +10,7 @@ import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } fr
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { BackupPanel } from './backup-panel'
 import { PersonalDataPanel } from './personal-data-panel'
+import { UsagePanel } from './usage-panel'
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -250,6 +251,12 @@ export function OrgSettingsScreen() {
         {isDaihyo && remoteOk && (
           <Section>
             <PersonalDataPanel />
+            <AdminAccessNote level="daihyo" className="mt-1.5" />
+          </Section>
+        )}
+        {isDaihyo && remoteOk && (
+          <Section>
+            <UsagePanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}

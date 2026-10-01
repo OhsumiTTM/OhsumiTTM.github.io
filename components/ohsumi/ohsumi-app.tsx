@@ -8,7 +8,8 @@ import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { ContractBanner } from './contract-banner'
 import { ReadOnlyInputs, ReadOnlyNotice, SessionExpiryBanner } from './read-only-guard'
-import { LONG_RECORDS_EVENT, NOTIFY_LIMITED_EVENT } from '@/lib/ohsumi/remote'
+import { LONG_RECORDS_EVENT, NOTIFY_LIMITED_EVENT, isRemoteConfigured, remoteApi } from '@/lib/ohsumi/remote'
+import { installClientErrorReporter } from '@/lib/ohsumi/error-report'
 import type { LongRecordWritten } from '@/lib/ohsumi/gas-transport'
 import { cellFieldLabel } from '@/lib/ohsumi/cell-limits'
 import { ToastProvider, useToast } from './toast'
@@ -87,6 +88,12 @@ function NotifyLimitedWatcher() {
     window.addEventListener(NOTIFY_LIMITED_EVENT, on)
     return () => window.removeEventListener(NOTIFY_LIMITED_EVENT, on)
   }, [toast, t])
+  return null
+}
+
+// 画面のエラーを、団体のエラーの記録に送る(種類と操作の名前だけ。lib/ohsumi/error-report.ts)
+function ClientErrorReporter() {
+  useEffect(() => (isRemoteConfigured ? installClientErrorReporter(remoteApi.reportClientError) : undefined), [])
   return null
 }
 
@@ -273,6 +280,7 @@ export function OhsumiApp() {
             <SkillCertifiedWatcher />
             <NotifyLimitedWatcher />
             <LongRecordsWatcher />
+            <ClientErrorReporter />
             <LocaleSyncWatcher />
             <ThemeColorWatcher />
             <NavProvider>

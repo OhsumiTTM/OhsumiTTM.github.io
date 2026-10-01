@@ -147,6 +147,17 @@ export interface LongRecords {
   groups: LongRecordGroup[]
 }
 
+/** 利用の集計とエラーの件数(gas/Code.gs の usageStatus_。代表だけ) */
+export interface UsageStatus {
+  days: { date: string; login: number; open: number; writes: number }[]
+  topActions: { action: string; count: number }[]
+  errors: {
+    last7Days: number
+    byKind: { kind: string; count: number }[]
+    recent: { at: string; source: string; action: string; kind: string }[]
+  }
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
@@ -1155,6 +1166,9 @@ export const remoteApi = {
   // 毎日・毎時の処理と共有の状態(代表だけ)・共有を確かめ直す
   getOpsStatus: () => postToGas<OpsStatus>('getOpsStatus', {}),
   recheckSharing: () => postToGas<OpsStatus>('recheckSharing', {}),
+  // 利用の集計とエラーの件数(代表だけ)・画面のエラーの記録(種類と操作の名前だけ。文は送らない)
+  getUsageStatus: () => postToGas<UsageStatus>('getUsageStatus', {}),
+  reportClientError: (kind: string, errorAction?: string) => postToGas<{ recorded: boolean }>('reportClientError', { kind, errorAction: errorAction ?? '' }),
   // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)
   getPersonalDataStatus: () => postToGas<PersonalDataStatus>('getPersonalDataStatus', {}),
   setPersonalDataRetention: (days: number) => postToGas<{ retentionDays: number }>('setPersonalDataRetention', { days }),
