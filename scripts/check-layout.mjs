@@ -103,7 +103,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -131,8 +131,8 @@ export function registryResponse(body) {
         codeTtlDays: 14,
         orgs: [
           { orgId: 'org_' + 'x'.repeat(40), displayName: long, status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: iso(31), contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'cosmo_base', channel: 'standard', gasUrl: 'https://script.google.com/macros/s/' + 'A'.repeat(70) + '/exec', gasVersion: 'r1e-1' },
-          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], plan: '', channel: 'standard', gasUrl: '', gasVersion: '' },
-          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1' },
+          { orgId: 'org_b', displayName: '停止予定の団体', status: 'active', state: 'scheduled', checkState: 'stale', contractStatus: 'ending', contractUntil: '', contractNote: '契約の更新なし', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(15), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7], plan: '', channel: 'standard', gasUrl: '', gasVersion: '', mail: { remaining: 8, skipped: 0, date: '2026-10-01', limitDate: '2026-09-28', level: 'low' } },
+          { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1', mail: { remaining: 0, skipped: 37, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' } },
           { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
@@ -332,6 +332,8 @@ async function run({ build = true } = {}) {
         case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
         case 'sendInviteLinkToMe': inviteBodies.push(body); return { sent: true, count: 1, remaining: 2 }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
+        // 管理画面の上部に、メールの上限の知らせを出す
+        case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
         default: return {}
       }
     }
@@ -649,9 +651,19 @@ async function run({ build = true } = {}) {
           await clickText('あとで設定する').catch(() => {})
           await sleep(800)
           await clickText('ADMIN'); await sleep(1500)
+          // メールの1日の上限の知らせ(代表の管理画面の上部。getMailQuotaStatus の偽の答えは「12件が送れていません」)
+          const quota = await evaluate(`document.querySelector('[data-mail-quota-banner]')?.textContent ?? ''`)
+          if (!quota.includes('今日はメールの上限に達しました。12件が送れていません')) throw new Error('管理画面に、メールの上限の知らせが出ません: ' + quota)
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
-        if (step.do === 'registry') { await registrySession(); await navigate('/registry-admin/') }
+        if (step.do === 'registry') {
+          await registrySession(); await navigate('/registry-admin/')
+          // メールの上限に達した・近い団体が分かる(一覧の上の数と、団体ごとの印)
+          const mail = await evaluate(`(document.querySelector('[data-mail-level-summary]')?.textContent ?? '') + '|' + document.body.textContent`)
+          for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8']) {
+            if (!mail.includes(want)) throw new Error('レジストリの管理画面に「' + want + '」が出ません')
+          }
+        }
         if (step.do === 'registrySuspend') {
           await clickText('停止の予定を入れる…'); await sleep(500)
           const shown = await evaluate(`!!document.querySelector('input[type=datetime-local]')`)

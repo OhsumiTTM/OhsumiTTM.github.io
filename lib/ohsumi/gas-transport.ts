@@ -69,6 +69,7 @@ export const READ_ACTIONS = new Set([
   'getFiles',
   'getMyEmails',
   'getWebhookStatus',
+  'getMailQuotaStatus',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
@@ -88,6 +89,7 @@ export const BACKGROUND_ACTIONS = new Set([
   'getCandidates',
   'getMyEmails',
   'getWebhookStatus',
+  'getMailQuotaStatus',
   'checkAndGenerateRecurringTasks',
 ])
 

@@ -74,7 +74,17 @@ import { extractUnsavedTexts } from './read-only'
 /** 新しいメンバーへの招待メールの結果(gas/Code.gs の sendMemberInvite_)。notChecked: レジストリに確かめていない団体 */
 export interface MemberInviteResult {
   sent: boolean
-  reason?: 'notChecked' | 'noEmail'
+  // mailQuota: メールの1日の上限 / limited: 1人あたりの通知の回数の上限
+  reason?: 'notChecked' | 'noEmail' | 'mailQuota' | 'limited'
+}
+
+/** メールの1日の上限の状態(gas/Code.gs の mailQuotaStatus_)。skipped: 今日、上限で送れなかった数 */
+export interface MailQuotaStatus {
+  remaining: number | null
+  date: string
+  skipped: number
+  reachedAt: string
+  lastReachedDate: string
 }
 
 /** 本人あての招待リンクのメールを送れるか(gas/Code.gs の inviteMailStatus_) */
@@ -975,6 +985,8 @@ export const remoteApi = {
   updateSlackWebhookUrl: (url: string) => postToGas('updateSlackWebhookUrl', { url }),
   // 連携状態(設定済みかどうかと最後のテスト送信の結果・日時)。URLそのものは返らない
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
+  // メールの1日の上限の状態(代表・全権管理者だけ)
+  getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
   // 保存済みのWebhook URLへ実際にテストメッセージを送信し、HTTPレスポンス
   // コードで成否を判定する(send*Messageと違いここでは失敗を握りつぶさない —
   // 失敗時はGAS側がエラーを投げ、postToGas経由でここもrejectする)

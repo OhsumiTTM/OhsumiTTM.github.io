@@ -170,7 +170,7 @@ export function AdminMembers() {
     addMember(name, email, newAffiliation.trim(), newRole, sendInvite && inviteMail.available && !!email)
       .then((invite) => {
         toast(t('admin.members.addedToast', { name }))
-        if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : 'admin.members.invite.mailNotSent'))
+        if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : invite.reason === 'mailQuota' ? 'admin.members.invite.mailQuota' : 'admin.members.invite.mailNotSent'))
       })
       .catch((err: unknown) => {
         toast(t('admin.members.addFailToast', { error: err instanceof Error ? err.message : String(err) }))
