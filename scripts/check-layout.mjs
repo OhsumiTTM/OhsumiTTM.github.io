@@ -154,12 +154,14 @@ export function registryResponse(body) {
           { orgId: 'org_r', displayName: '機能停止中の団体', status: 'active', state: 'restricted', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: iso(2), suspendReason: 'アンケートの未回答'.repeat(4), suspendKind: 'restrict', suspendScheduledBy: 'registry.admin.with.a.long.address@example.com', noticesSent: [14, 7, 1], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: 'r1e-1', mail: { remaining: 0, skipped: 37, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' },
             jobs: { dailyAt: iso(-3), hourlyAt: iso(-1), reported: true, dailyStale: true },
             gasStatus: { current: 'r1e-1', latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, versionState: 'updateRequired', noCheck: false, judgement: 'updateRequired' } },
+          { orgId: 'org_demo', displayName: 'デモ団体(立ち上げのテスト)', status: 'active', state: 'active', checkState: 'ok', contractStatus: 'active', contractUntil: '', contractNote: '', lastCheckAt: iso(1), createdAt: iso(1), suspendAt: '', suspendReason: '', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [], plan: 'ohsumi', channel: 'standard', gasUrl: '', gasVersion: '2026.10.01-1', demo: true },
           { orgId: 'org_c', displayName: '停止中の団体', status: 'suspended', state: 'suspended', checkState: 'never', contractStatus: 'ended', contractUntil: '', contractNote: '', lastCheckAt: '', createdAt: iso(1), suspendAt: iso(1), suspendReason: '契約の終了', suspendKind: 'suspend', suspendScheduledBy: '', noticesSent: [0], plan: 'paid', channel: '', gasUrl: '', gasVersion: '' },
         ],
         codes: ['unused', 'used', 'expired', 'revoked'].map((state, i) => ({
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
+        kpis: { activeOrgs: 3, byPlan: { ohsumi: 1, cosmo_base: 1, paid: 0, '': 1 }, demoOrgs: 1, metrics: { reportingOrgs: 2, latestPeriod: '2026-09-28', totals: { members: 52, active_7d: 31, tasks: 1240, tasks_done: 980, tasks_overdue: 12 } } },
         mailQueue: { pending: 23, recipients: 31, byKind: { reminder: 15, send: 8 }, oldestAt: iso(1), remainingToday: 0 },
         diagnostics: [
           { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13' },
@@ -807,6 +809,10 @@ async function run({ build = true } = {}) {
           // メールの上限に達した・近い団体が分かる(一覧の上の数と、団体ごとの印)
           const mail = await evaluate(`(document.querySelector('[data-mail-level-summary]')?.textContent ?? '') + '|' + document.body.textContent`)
           if (!(await evaluate(`document.querySelector('[data-mail-queue]')?.textContent ?? ''`)).includes('1日の上限のため送れていないもの: 23 通')) throw new Error('レジストリのメールで送れていない件数が出ません')
+          // デモの団体: 印が出て、停止の予定を入れるボタンが無い。KPI はデモを除く
+          const demo = await evaluate(`document.querySelector('[data-org-demo]')?.textContent ?? ''`)
+          if (!demo.includes('デモ') || !demo.includes('デモの団体には、停止の予定を入れられません') || demo.includes('停止の予定を入れる…') || !demo.includes('デモの印を外す…')) throw new Error('デモの団体の表示が違います: ' + demo)
+          if (!(await evaluate(`document.querySelector('[data-kpis]')?.textContent ?? ''`)).includes('利用中の団体: 3(プラン別: Ohsumiプラン 1・Cosmo Baseプラン 1・有償プラン 0・未設定 1)。デモの団体: 1')) throw new Error('KPI が出ません')
           for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8', 'GAS: 更新が要る', 'GAS: 24時間以上確認が無い', 'GAS: 最新', '担当者に更新のお願いを送る…', '毎日の処理が26時間以上成功していない', '毎日・毎時の処理']) {
             if (!mail.includes(want)) throw new Error('レジストリの管理画面に「' + want + '」が出ません')
           }

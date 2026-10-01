@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.02-1'
+var REGISTRY_VERSION = '2026.10.02-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -258,11 +258,15 @@ var REGISTRY_SHEETS = {
     // 毎日・毎時の処理が最後に成功した時刻(checkIn で団体の GAS が伝える)
     'daily_job_at', 'hourly_job_at',
     // アンケートの未回答で入れた機能停止の、アンケートのID(回答済みにした時に、この停止を止める)
-    'suspend_survey_id'],
+    'suspend_survey_id',
+    // デモの団体(TRUE)。定量データの集計・KPI の数・アンケートの送付・停止の予定から外す(PR S)
+    'demo'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
-  Usage: ['org_id', 'date', 'metrics_json', 'metrics_version', 'received_at'],
+  Usage: ['org_id', 'date', 'metrics_json', 'metrics_version', 'received_at',
+    // 受け取った時にデモの団体だったか(TRUE。後で印を外しても、その時の集計値はデモのまま集計から外す)
+    'demo'],
   RegistrationCodes: ['code_hash', 'kind', 'target_org_id', 'org_name', 'contact_name', 'contact_email', 'expires_at', 'issued_by', 'issued_at', 'used_at', 'used_org_id', 'revoked_at',
     'code_id', 'revoked_by', 'note'],
   // registry_key は共有鍵そのもの(団体の GAS との確認に使うため、元の値を持つ。保護したシート・誰とも共有しない)。
@@ -321,6 +325,7 @@ var REGISTRY_ACTIONS = {
   scheduleSuspension: function (body) { return scheduleSuspension_(body, Date.now()) },
   clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
+  setOrgDemo: function (body) { return setOrgDemo_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
   sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
@@ -722,6 +727,7 @@ function orgSummary_(values, nowMs) {
     mail: orgMailSummary_(values),
     gasStatus: gasVersionStatus_(values, gasVersionList_(), nowMs),
     jobs: orgJobSummary_(values, nowMs),
+    demo: isDemoOrg_(values),
   }
 }
 
@@ -799,6 +805,7 @@ function adminOverview_(body, nowMs) {
       announcements: announcementList_(nowMs),
       diagnostics: diagnosticsList_(),
       mailQueue: mailQueueStatus_(),
+      kpis: orgKpis_(nowMs),
     },
   }
 }
@@ -1331,6 +1338,7 @@ function scheduleSuspension_(body, nowMs) {
   return withRegistryLock_(function () {
     var row = findOrgRow_(String(body.orgId || ''))
     if (!row) throw registryError_('その団体は見つかりません。')
+    if (isDemoOrg_(row.values)) throw registryError_(DEMO_SUSPEND_ERROR)
     if (kind === 'restrict' && String(row.values.plan || '') === 'paid') throw registryError_(PAID_RESTRICT_ERROR)
     if (contractState_(row.values, nowMs).phase === 'inEffect') throw registryError_('この団体は停止中です。先に停止を解除してください。')
     var orgId = String(row.values.org_id)
@@ -1515,6 +1523,8 @@ function reportMetrics_(body, nowMs) {
   })
   var version = Math.floor(Number(metrics.version)) || 0
   var values = { org_id: orgId, date: period, metrics_json: JSON.stringify(clean), metrics_version: version, received_at: new Date(nowMs).toISOString() }
+  // 列が無い古いシート(setupRegistry を実行し直していない)では書かない
+  if (registrySheetHasColumn_('Usage', 'demo')) values.demo = isDemoOrg_(row.values) ? 'TRUE' : ''
   var lock = LockService.getScriptLock()
   lock.waitLock(10000)
   try {
@@ -1706,7 +1716,8 @@ function surveySummary_(values, orgValues, nowMs) {
     createdAt: isoOf_(values.created_at),
     restrictAt: restrictAt ? new Date(restrictAt).toISOString() : '',
     // 「28日目に機能停止を入れる」を出すか: 期限を過ぎて回答が無い・有償プランでない・ほかの停止の予定が無い
-    canRestrict: s.state === 'overdue' && plan !== 'paid' && !!orgValues && contractState_(orgValues, nowMs).phase === 'none',
+    canRestrict: s.state === 'overdue' && plan !== 'paid' && !!orgValues && !isDemoOrg_(orgValues) && contractState_(orgValues, nowMs).phase === 'none',
+    demo: !!orgValues && isDemoOrg_(orgValues),
   }
 }
 
@@ -1815,7 +1826,8 @@ function sendSurvey_(body, nowMs) {
       var orgId = String(r.values.org_id)
       var plan = String(r.values.plan || '')
       var skip = ''
-      if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
+      if (isDemoOrg_(r.values)) skip = 'デモの団体です(アンケートは送りません)。'
+      else if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
       else if (orgDisplayState_(r.values, nowMs).state === 'suspended') skip = '提供停止中です。'
       else if (surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
       else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
@@ -1900,6 +1912,7 @@ function scheduleSurveyRestriction_(body, nowMs) {
       var s = row ? surveyState_(row.values, nowMs) : null
       var skip = !row || !org ? 'アンケートか団体が見つかりません。'
         : s.state !== 'overdue' ? '回答期限を過ぎて回答が無いアンケートではありません。'
+          : isDemoOrg_(org.values) ? DEMO_SUSPEND_ERROR
           : String(org.values.plan || '') === 'paid' ? PAID_RESTRICT_ERROR
             : contractState_(org.values, nowMs).phase !== 'none' ? 'この団体には、ほかの停止の予定(または停止)が入っています。' : ''
       if (skip) { skipped.push({ surveyId: surveyId, reason: skip }); return }
@@ -2277,6 +2290,86 @@ function mailQueueStatus_() {
   return { pending: pending.length, recipients: recipients, byKind: byKind, oldestAt: oldest, remainingToday: mailRemaining_() }
 }
 
+// ---- デモの団体(PR S) ----
+//
+// 立ち上げのテスト・説明会で使う団体に「デモ」の印(Orgs の demo 列)を付ける。デモの団体は:
+//   - 定量データの集計・KPI の数(プラン別の契約数・利用中の団体の数)から外す(受け取った集計値には、その時の印を Usage に残す)
+//   - アンケートの送付の対象から外す(団体を選んで送っても送らない)
+//   - 停止の予定(提供停止・機能停止・当日の提供停止・アンケートの28日目の機能停止)を入れられない(誤操作で止めないため)。解除・取り消しはできる
+//     テスト環境の関数(testSuspendNow など。REGISTRY_TEST_MODE の時だけ)は、停止の確かめのため、デモの団体でも動く
+// 本番・テスト環境のどちらのレジストリでも、管理画面の「デモの印を付ける」で付け外しする(操作の記録に残す)
+var DEMO_SUSPEND_ERROR = 'デモの団体には、停止の予定を入れられません(誤操作で止めないため)。止める必要がある時は、先にデモの印を外してください。'
+
+function isDemoOrg_(values) {
+  return boolCell_(values && values.demo)
+}
+
+function registrySheetHasColumn_(name, col) {
+  var sheet = registrySheet_(name)
+  return sheet.getRange(1, 1, 1, Math.max(1, sheet.getLastColumn())).getValues()[0].map(String).indexOf(col) >= 0
+}
+
+// 管理画面: デモの印を付ける・外す。{ session, orgId, demo: true | false, reason }
+// 停止の予定(停止中)がある団体には、先に取り消す・解除してから付ける
+function setOrgDemo_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var demo = body.demo === true
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    if (!registrySheetHasColumn_('Orgs', 'demo')) throw registryError_('Orgs に demo の列がありません。レジストリのエディタで setupRegistry を実行してください。')
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var before = isDemoOrg_(row.values)
+    if (before === demo) return { ok: true, result: orgSummary_(row.values, nowMs) }
+    if (demo && contractState_(row.values, nowMs).phase !== 'none') {
+      throw registryError_('この団体には停止の予定(または停止)が入っています。デモの印を付ける前に、取り消す・解除してください。')
+    }
+    var fields = { demo: demo ? 'TRUE' : '', updated_at: new Date(nowMs).toISOString() }
+    setRowFields_('Orgs', row.row, fields)
+    var after = merged_(row.values, fields)
+    appendAudit_({ actor: session.sub, action: 'setOrgDemo', target: orgId, before: { demo: before }, after: { demo: demo }, reason: reason })
+    return { ok: true, result: orgSummary_(after, nowMs) }
+  })
+}
+
+// 管理画面の KPI(デモの団体を除く): 利用中の団体の数・プラン別の数・直近の週の集計値の合計
+function orgKpis_(nowMs) {
+  var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
+  var real = orgs.filter(function (r) { return !isDemoOrg_(r.values) })
+  var demoIds = {}
+  orgs.forEach(function (r) { if (isDemoOrg_(r.values)) demoIds[String(r.values.org_id)] = true })
+  var byPlan = { cosmo_base: 0, ohsumi: 0, paid: 0, '': 0 }
+  var active = 0
+  real.forEach(function (r) {
+    if (orgDisplayState_(r.values, nowMs).state === 'suspended') return
+    active++
+    var plan = PLANS.indexOf(String(r.values.plan || '')) >= 0 ? String(r.values.plan) : ''
+    byPlan[plan]++
+  })
+  // 定量データ: 団体ごとに一番新しい期間の集計値を足す(デモの団体・デモの時に受け取った集計値は入れない)
+  var latest = {}
+  readRows_('Usage').forEach(function (r) {
+    var id = String(r.values.org_id || '')
+    if (!id || demoIds[id] || boolCell_(r.values.demo)) return
+    var d = usageDateKey_(r.values.date)
+    if (!latest[id] || d > latest[id].date) latest[id] = { date: d, json: String(r.values.metrics_json || '{}') }
+  })
+  var totals = {}
+  var reporting = 0
+  var period = ''
+  Object.keys(latest).forEach(function (id) {
+    var m
+    try { m = JSON.parse(latest[id].json) } catch (e) { m = null }
+    if (!m) return
+    reporting++
+    if (latest[id].date > period) period = latest[id].date
+    METRIC_KEYS.forEach(function (k) { if (typeof m[k] === 'number') totals[k] = (totals[k] || 0) + m[k] })
+  })
+  return { activeOrgs: active, byPlan: byPlan, demoOrgs: Object.keys(demoIds).length, metrics: { reportingOrgs: reporting, latestPeriod: period, totals: totals } }
+}
+
 // ---- 団体の GAS の版 ----
 //
 // 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
@@ -2386,7 +2479,9 @@ function gasVersionCounts_(nowMs) {
   readRows_('Orgs').forEach(function (r) {
     if (!String(r.values.org_id || '') || String(r.values.status || '') !== 'active') return
     var st = gasVersionStatus_(r.values, versions, nowMs)
-    out.orgs++
+    // 利用中の団体の数(KPI)には、デモの団体を入れない(版・確認・毎日の処理の数は、動かしている団体として数える)
+    if (isDemoOrg_(r.values)) out.demo = (out.demo || 0) + 1
+    else out.orgs++
     if (st.versionState === 'updateRequired') out.updateRequired++
     if (st.noCheck) out.noCheck++
     if (orgJobSummary_(r.values, nowMs).dailyStale) out.dailyJobStale++

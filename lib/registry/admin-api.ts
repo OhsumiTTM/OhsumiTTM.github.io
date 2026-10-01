@@ -60,6 +60,8 @@ export interface OrgSummary {
   gasStatus?: GasStatus
   // 毎日・毎時の処理が最後に成功した時刻(団体の GAS が checkIn で伝えたもの)。dailyStale: 26時間以上成功していない
   jobs?: { dailyAt: string; hourlyAt: string; reported: boolean; dailyStale: boolean }
+  // デモの団体(定量データの集計・KPI・アンケート・停止の予定から外す。古いレジストリでは無い)
+  demo?: boolean
 }
 
 // 判定: latest 最新 / outdated 古い / updateRequired 更新が要る / noCheck 24時間以上確認が無い
@@ -171,6 +173,23 @@ export interface Overview {
   diagnostics?: DiagnosticsSummary[]
   // レジストリのメールで、1日の上限のため送れず翌日以降に回したもの(古いレジストリでは無い)
   mailQueue?: MailQueueStatus
+  // KPI(デモの団体を除く。古いレジストリでは無い)
+  kpis?: OrgKpis
+}
+
+// ---- デモの団体と KPI(PR S) ----
+export interface OrgKpis {
+  // 利用中の団体(提供停止中・デモを除く)とプラン別の数('' は未設定)
+  activeOrgs: number
+  byPlan: Record<Plan | '', number>
+  demoOrgs: number
+  // 団体ごとの一番新しい期間の集計値の合計(デモの団体・デモの時に受け取ったものを除く)
+  metrics: { reportingOrgs: number; latestPeriod: string; totals: Record<string, number> }
+}
+
+/** デモの印を付ける・外す。送り直さない */
+export function setOrgDemo(session: AdminSession, orgId: string, demo: boolean, reason: string): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('setOrgDemo', { session: session.token, orgId, demo, reason })
 }
 
 // ---- レジストリのメールの1日の上限(PR R) ----
@@ -283,8 +302,9 @@ export interface SurveySummary {
   createdAt: string
   // このアンケートで入れた機能停止の日時(無ければ空)
   restrictAt: string
-  // 「28日目に機能停止を入れる」を出せるか(期限を過ぎて未回答・有償プランでない・ほかの停止の予定が無い)
+  // 「28日目に機能停止を入れる」を出せるか(期限を過ぎて未回答・有償プランでない・デモでない・ほかの停止の予定が無い)
   canRestrict: boolean
+  demo?: boolean
 }
 
 export type SurveyTarget = { kind: 'all' } | { kind: 'plan'; plan: Plan } | { kind: 'orgs'; orgIds: string[] }
@@ -302,9 +322,9 @@ export interface SendSurveyResult {
   skipped: { orgId: string; reason: string }[]
 }
 
-/** 期限を過ぎて回答が無い団体の一覧(有償プランの団体は出さない) */
+/** 期限を過ぎて回答が無い団体の一覧(有償プラン・デモの団体は出さない) */
 export function overdueSurveys(surveys: SurveySummary[]): SurveySummary[] {
-  return surveys.filter((s) => s.state === 'overdue' && s.plan !== 'paid')
+  return surveys.filter((s) => s.state === 'overdue' && s.plan !== 'paid' && !s.demo)
 }
 
 /** 日本時間の今日('YYYY-MM-DD') */
