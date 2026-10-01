@@ -1,0 +1,67 @@
+// GAS(団体の GAS・レジストリ・監視)の版を上げる: pnpm gas:version
+//
+// 版は日付の形「YYYY.MM.DD-N」(日本の日付。同じ日に2回目なら -2)。各ファイルの中身(版の行を除く)の
+// SHA-256 と版を gas/versions.json に覚えておき、中身が変わったファイルだけ版を上げる。
+// テスト(lib/ohsumi/gas-version.test.ts)は、中身が変わったのに版を上げていなければ失敗する
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const ROOT = join(import.meta.dirname, '..')
+export const GAS_VERSION_FILES = [
+  { path: 'gas/Code.gs', name: 'OHSUMI_GAS_VERSION' },
+  { path: 'registry/Code.gs', name: 'REGISTRY_VERSION' },
+  { path: 'registry/monitor/Monitor.gs', name: 'MONITOR_VERSION' },
+]
+export const LOCK_PATH = 'gas/versions.json'
+export const VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}-\d+$/
+
+const lineOf = (name) => new RegExp(`^var ${name} = '([^']*)'$`, 'm')
+
+/** ファイルの版(見つからなければ null) */
+export function readVersion(text, name) {
+  const m = text.match(lineOf(name))
+  return m ? m[1] : null
+}
+
+/** 版の行を除いた中身の SHA-256(改行は LF にそろえる) */
+export function contentHash(text, name) {
+  return createHash('sha256').update(text.replace(/\r\n/g, '\n').replace(lineOf(name), `var ${name} = ''`)).digest('hex')
+}
+
+/** 今日(日本の日付)の次の版。前の版が今日なら番号を1つ上げる */
+export function nextVersion(previous, now = new Date()) {
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now).replace(/-/g, '.')
+  const m = String(previous || '').match(/^(\d{4}\.\d{2}\.\d{2})-(\d+)$/)
+  return `${day}-${m && m[1] === day ? Number(m[2]) + 1 : 1}`
+}
+
+function main() {
+  const lockFile = join(ROOT, LOCK_PATH)
+  let lock = {}
+  try { lock = JSON.parse(readFileSync(lockFile, 'utf8')) } catch { lock = {} }
+  let changed = 0
+  for (const f of GAS_VERSION_FILES) {
+    const file = join(ROOT, f.path)
+    let text = readFileSync(file, 'utf8')
+    const current = readVersion(text, f.name)
+    if (current === null) throw new Error(`${f.path} に「var ${f.name} = '…'」の行がありません`)
+    const hash = contentHash(text, f.name)
+    const known = lock[f.path]
+    if (known && known.sha256 === hash && known.version === current) continue
+    // 中身が変わった(または版を手で書き換えた)。版が前と同じ・日付の形でなければ、今日の版にする
+    let version = current
+    if (!VERSION_PATTERN.test(current) || (known && known.version === current)) {
+      version = nextVersion(known?.version ?? current)
+      text = text.replace(lineOf(f.name), `var ${f.name} = '${version}'`)
+      writeFileSync(file, text)
+    }
+    lock[f.path] = { version, sha256: hash }
+    changed++
+    console.log(`${f.path}: ${current} → ${version}`)
+  }
+  writeFileSync(lockFile, JSON.stringify(lock, null, 2) + '\n')
+  console.log(changed ? `${changed} 件の版を上げ、${LOCK_PATH} を書きました` : 'どのファイルも変わっていません')
+}
+
+if (process.argv[1] && import.meta.filename === process.argv[1]) main()
