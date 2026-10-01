@@ -228,7 +228,7 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 | `suspend_at`・`suspend_reason`・`suspend_scheduled_by` | 停止の予定日時・理由・予定を入れた管理者 | R1-e |
 | `suspend_notices_json` | 停止の予告を送った記録(14日前・7日前・1日前) | R1-e |
 | `suspend_kind` | 停止の種類: `suspend`(① 提供停止)/ `restrict`(② 機能停止)。空は `suspend` とみなす | R1-e |
-| `plan` | プラン: `cosmo_base`(Cosmo Base プラン)/ `ohsumi`(Ohsumi プラン)/ `paid`(有償プラン)。空は未設定。管理画面で変え、操作の記録に残す | R1-f |
+| `plan` | プラン: `cosmo_base`(Cosmo Baseプラン)/ `ohsumi`(Ohsumiプラン)/ `paid`(有償プラン)。空は未設定。管理画面で変え、操作の記録に残す | R1-f |
 | `last_check_at`・`gas_version` | 団体の GAS が最後に契約状態を確認に来た時刻・その版 | R1-e |
 | `contract_status`・`contract_until`・`contract_note` | 契約の状態(`active` 契約中 / `ending` 終了予定 / `ended` 終了)・終了日・メモ | R1-e |
 | `updated_at` | 最後に変えた時刻 | R1-c〜 |
