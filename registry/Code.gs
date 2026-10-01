@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.02-2'
+var REGISTRY_VERSION = '2026.10.02-3'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -260,7 +260,9 @@ var REGISTRY_SHEETS = {
     // アンケートの未回答で入れた機能停止の、アンケートのID(回答済みにした時に、この停止を止める)
     'suspend_survey_id',
     // デモの団体(TRUE)。定量データの集計・KPI の数・アンケートの送付・停止の予定から外す(PR S)
-    'demo'],
+    'demo',
+    // この団体だけ止めている機能の ID(カンマ区切り。機能のスイッチ。PR W)
+    'disabled_features'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
@@ -326,6 +328,7 @@ var REGISTRY_ACTIONS = {
   clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
   setOrgDemo: function (body) { return setOrgDemo_(body, Date.now()) },
+  setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
   sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
@@ -728,6 +731,8 @@ function orgSummary_(values, nowMs) {
     gasStatus: gasVersionStatus_(values, gasVersionList_(), nowMs),
     jobs: orgJobSummary_(values, nowMs),
     demo: isDemoOrg_(values),
+    // この団体だけ止めている機能(全団体の分は含めない)
+    disabledFeatures: parseFeatureList_(values.disabled_features),
   }
 }
 
@@ -806,6 +811,8 @@ function adminOverview_(body, nowMs) {
       diagnostics: diagnosticsList_(),
       mailQueue: mailQueueStatus_(),
       kpis: orgKpis_(nowMs),
+      // 機能のスイッチ: 止められる機能の一覧と、全団体で止めている機能
+      features: { catalog: featureCatalog_(), globalDisabled: globalDisabledFeatures_() },
     },
   }
 }
@@ -1480,7 +1487,9 @@ function checkIn_(body, nowMs) {
     // 回答待ちのアンケート(代表の管理画面に出す)
     surveys: openSurveysFor_(orgId, row.values, nowMs),
     // 掲載中の緊急のお知らせの ID(団体の GAS が、自分の団体の代表に1回だけメールで送る。本文は fetchAnnouncements で取る)
-    urgentAnnouncementIds: announcementsFor_(orgId, plan, nowMs).filter(function (a) { return a.importance === 'urgent' }).map(function (a) { return a.announcementId }) } }
+    urgentAnnouncementIds: announcementsFor_(orgId, plan, nowMs).filter(function (a) { return a.importance === 'urgent' }).map(function (a) { return a.announcementId }),
+    // 止めている機能(機能のスイッチ。全団体の分と、この団体の分)
+    disabledFeatures: disabledFeaturesFor_(row.values) } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -2334,6 +2343,83 @@ function setOrgDemo_(body, nowMs) {
   })
 }
 
+// ---- 機能のスイッチ(団体の GAS の機能を止める。PR W) ----
+//
+// 不具合が見つかった時に、団体の GAS を更新し直す前に、その機能だけを止める。checkIn の返事の disabledFeatures で伝え、
+// 団体の GAS は書き込みの前の確かめ直し(10分に1回まで)と1時間ごとの確認で受け取る(止めてから効くまで最大10分ほど)。
+//   全団体: スクリプトプロパティ DISABLED_FEATURES(カンマ区切り)  団体ごと: Orgs の disabled_features 列(カンマ区切り)
+// 団体に伝えるのは、この2つを合わせたもの。ログインと読み取りは、団体の GAS の側で止められないようにしている。
+// ID は団体の GAS(gas/Code.gs)の FEATURE_SWITCHES と同じにする(テストで確かめる)。知らない ID は捨てる。
+// 変えるのは管理画面から(5分以内の Google でのログインが必要。操作の記録に残す)
+var FEATURE_IDS = {
+  uploads: 'ファイルのアップロード',
+  expenses: '経費の申請・承認',
+  forms: 'フォーム・アンケートの回答と承認',
+  schedule: '日程調整',
+  dailyReports: '日報の提出',
+  recruiting: '採用の候補者',
+  skills: 'スキル・ポイント・クイズ',
+  projectHealth: 'プロジェクトの健康状態',
+  training: '研修の申請',
+  memberSurvey: 'メンバーのアンケートの回答',
+  restore: 'バックアップから戻す',
+  personalData: '個人情報の削除の操作',
+  webhookSettings: 'Discord・Slack の設定と接続テスト',
+  chatNotify: 'Discord・Slack への通知',
+  calendarSync: 'Google カレンダーへの登録',
+  recurringTasks: '定期タスクの作成',
+  metricsSend: 'FSIF への集計値の送信',
+}
+
+// カンマ区切り・配列を、知っている ID だけの一覧にする(FEATURE_IDS の順)
+function parseFeatureList_(v) {
+  var raw = Array.isArray(v) ? v.map(String) : String(v || '').split(',')
+  var set = {}
+  raw.forEach(function (x) { set[String(x).trim()] = true })
+  return Object.keys(FEATURE_IDS).filter(function (id) { return set[id] })
+}
+
+function globalDisabledFeatures_() {
+  return parseFeatureList_(registryProps_().DISABLED_FEATURES)
+}
+
+// 団体に伝える一覧(全団体の分と、その団体の分を合わせたもの)
+function disabledFeaturesFor_(values) {
+  return parseFeatureList_(globalDisabledFeatures_().concat(parseFeatureList_(values && values.disabled_features)))
+}
+
+function featureCatalog_() {
+  return Object.keys(FEATURE_IDS).map(function (id) { return { id: id, label: FEATURE_IDS[id] } })
+}
+
+// 管理画面: 止める機能を変える。{ session, scope: 'global' | 'org', orgId(scope が org の時), features: [ID...], reason }
+function setFeatureSwitches_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '機能を止める・再開する')
+  var features = parseFeatureList_(Array.isArray(body.features) ? body.features : [])
+  var reason = cleanText_(body.reason, 500)
+  if (!reason) throw registryError_('理由を書いてください(操作の記録に残し、あとで再開する時の目安にします)。')
+  return withRegistryLock_(function () {
+    if (body.scope === 'global') {
+      var before = globalDisabledFeatures_()
+      PropertiesService.getScriptProperties().setProperty('DISABLED_FEATURES', features.join(','))
+      forgetRegistryProps_()
+      appendAudit_({ actor: session.sub, action: 'setFeatureSwitches', target: '(全団体)', before: { disabled: before }, after: { disabled: features }, reason: reason })
+      return { ok: true, result: { scope: 'global', disabled: features } }
+    }
+    if (!registrySheetHasColumn_('Orgs', 'disabled_features')) throw registryError_('Orgs に disabled_features の列がありません。レジストリのエディタで setupRegistry を実行してください。')
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var beforeOrg = parseFeatureList_(row.values.disabled_features)
+    var fields = { disabled_features: features.join(','), updated_at: new Date(nowMs).toISOString() }
+    setRowFields_('Orgs', row.row, fields)
+    appendAudit_({ actor: session.sub, action: 'setFeatureSwitches', target: orgId, before: { disabled: beforeOrg }, after: { disabled: features }, reason: reason })
+    return { ok: true, result: orgSummary_(merged_(row.values, fields), nowMs) }
+  })
+}
+
 // 管理画面の KPI(デモの団体を除く): 利用中の団体の数・プラン別の数・直近の週の集計値の合計
 function orgKpis_(nowMs) {
   var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
@@ -2381,6 +2467,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.02-1', security: false, required: false, note: 'レジストリから機能を止めるスイッチ(止めた機能の書き込みを断る。ログイン・読み取りは止めない)(PR W)' },
   { version: '2026.10.01-13', security: false, required: false, note: '代表の管理画面から診断情報を FSIF に送り、受付番号を出す(PR Q)' },
   { version: '2026.10.01-12', security: false, required: false, note: 'FSIF からのお知らせを代表・管理者の管理画面に出す(PR P)' },
   { version: '2026.10.01-11', security: false, required: false, note: 'FSIF からのアンケートを代表の管理画面に出す(PR O)' },
