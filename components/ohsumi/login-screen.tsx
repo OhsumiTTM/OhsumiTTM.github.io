@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { OhsumiMark } from './primitives'
+import { OhsumiLogo } from './primitives'
 import { Loader2, TriangleAlert } from 'lucide-react'
 import { isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
 import { fetchLoginConfig, isRemoteConfigured } from '@/lib/ohsumi/remote'
@@ -267,7 +267,7 @@ export function LoginScreen() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
-      {/* subtle ellipse accent */}
+      {/* 背景の円(ロゴのシンボルと同じ円。回転などの効果は付けない) */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
         <svg
           className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-border"
@@ -276,16 +276,13 @@ export function LoginScreen() {
           viewBox="0 0 760 760"
           fill="none"
         >
-          <ellipse cx="380" cy="380" rx="220" ry="120" stroke="currentColor" strokeWidth="1" transform="rotate(-24 380 380)" />
-          <ellipse cx="380" cy="380" rx="330" ry="180" stroke="currentColor" strokeWidth="1" transform="rotate(-24 380 380)" opacity="0.6" />
+          <circle cx="380" cy="380" r="200" stroke="currentColor" strokeWidth="1" />
+          <circle cx="380" cy="380" r="320" stroke="currentColor" strokeWidth="1" opacity="0.6" />
         </svg>
       </div>
 
       <div className="relative z-10 flex w-full max-w-sm flex-col items-center text-center">
-        <div className="flex items-center gap-2">
-          <OhsumiMark size={30} />
-          <span className="text-2xl font-semibold tracking-tight">Ohsumi</span>
-        </div>
+        <OhsumiLogo size={30} />
         <p className="mt-4 text-[15px] leading-relaxed text-muted-foreground text-balance">
           {t('login.tagline')}
         </p>

@@ -297,7 +297,16 @@ export function SimilarTaskSummary({ task }: { task: Task }) {
   )
 }
 
+// Ohsumi のロゴ(ブランドガイドライン v0.4)。docs/brand.md
+//   - シンボル: 円形(縦横比 1:1)。輪と、右側の点。Ohsumi Blue(--ohsumi-blue)
+//   - 文字: 「Ohsumi」。Ohsumi Navy(暗い表示では白。--ohsumi-wordmark)
+//   - どの大きさでも縦横比を変えない(width と height を同じにし、縮まないようにする)。回転・影などの効果は付けない
+//   - 団体のテーマの色(--primary の上書き)では変えない(--primary ではなく、ブランドの変数を使う)
+// 輪と点の形は app/icon.svg・scripts/brand-icons.mjs と同じ
+export const OHSUMI_SYMBOL_PATHS = { ring: { cx: 11, cy: 12, r: 8.4, strokeWidth: 2.1 }, dot: { cx: 19.4, cy: 12, r: 2.7 } }
+
 export function OhsumiMark({ size = 22 }: { size?: number }) {
+  const { ring, dot } = OHSUMI_SYMBOL_PATHS
   return (
     <svg
       width={size}
@@ -305,20 +314,29 @@ export function OhsumiMark({ size = 22 }: { size?: number }) {
       viewBox="0 0 24 24"
       fill="none"
       aria-hidden
-      className="text-primary"
+      data-ohsumi-symbol
+      style={{ width: size, height: size, minWidth: size, flexShrink: 0, aspectRatio: '1 / 1', color: 'var(--ohsumi-blue)' }}
     >
-      <ellipse
-        cx="12"
-        cy="12"
-        rx="10"
-        ry="5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        transform="rotate(-30 12 12)"
-      />
-      <circle cx="12" cy="12" r="3" fill="currentColor" />
-      <circle cx="20.2" cy="6.6" r="1.6" fill="currentColor" />
+      <circle cx={ring.cx} cy={ring.cy} r={ring.r} stroke="currentColor" strokeWidth={ring.strokeWidth} />
+      <circle cx={dot.cx} cy={dot.cy} r={dot.r} fill="currentColor" />
     </svg>
+  )
+}
+
+/** シンボル + 「Ohsumi」の文字。text: 文字を出すか('sm' は幅の広い画面だけ) */
+export function OhsumiLogo({ size = 22, text = true, className = '' }: { size?: number; text?: boolean | 'sm'; className?: string }) {
+  return (
+    <span className={'inline-flex shrink-0 items-center ' + className} style={{ gap: Math.round(size * 0.36) }} data-ohsumi-logo>
+      <OhsumiMark size={size} />
+      {text && (
+        <span
+          className={(text === 'sm' ? 'hidden sm:inline ' : '') + 'font-bold leading-none tracking-tight'}
+          style={{ fontSize: Math.round(size * 0.82), color: 'var(--ohsumi-wordmark)' }}
+        >
+          Ohsumi
+        </span>
+      )}
+    </span>
   )
 }
 

@@ -6,6 +6,7 @@
 // 判定はすべてレジストリの GAS が行い、この画面は表示と入力だけを受け持つ。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { OhsumiLogo } from '@/components/ohsumi/primitives'
 import { waitForGIS } from '@/lib/ohsumi/google-sheet-sync'
 import { inviteLink } from '@/lib/ohsumi/org-directory'
 import {
@@ -298,7 +299,7 @@ function Shell({ children, right }: { children: React.ReactNode; right?: React.R
   return (
     <main className="mx-auto min-h-screen w-full max-w-4xl bg-background px-4 py-6 sm:px-6">
       <header className="mb-5 flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-base font-semibold">Ohsumi レジストリ 管理画面</h1>
+        <h1 className="flex items-center gap-2 text-base font-semibold"><OhsumiLogo size={20} /><span>レジストリ 管理画面</span></h1>
         {right}
       </header>
       {children}
