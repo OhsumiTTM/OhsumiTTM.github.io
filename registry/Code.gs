@@ -231,7 +231,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.01-8'
+var REGISTRY_VERSION = '2026.10.01-9'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1436,6 +1436,7 @@ function checkIn_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.01-9', security: false, required: false, note: 'マニフェストに使う許可(oauthScopes)を書き、許可が足りない時の知らせ(PR M)' },
   { version: '2026.10.01-8', security: false, required: false, note: '退会者の削除でカレンダーのゲスト・プロフィール画像も消す、実行ログのメールアドレスを伏せる(PR L)' },
   { version: '2026.10.01-7', security: false, required: false, note: '利用の集計とエラーの記録(PR K)' },
   { version: '2026.10.01-6', security: false, required: false, note: '書き込みの競合チェック(行の版と、記録の一覧の差分。PR J)' },
