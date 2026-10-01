@@ -7517,7 +7517,9 @@ function updateSetting_(key, value) {
       // ない上、setupOhsumi()が初期キーを書式設定なしでappendRowするため、
       // Tasks等と違い「行作成時に必ず保護済み」という前提が成り立たない。
       // よって更新のたびに設定する。
-      assertCellLength_(SHEET_SETTINGS, 'value', value)
+      if (typeof value === 'string' && value.length > CELL_MAX_CHARS) {
+        assertCellLength_(SHEET_SETTINGS, 'value', value, sheet.getRange(i + 2, valueCol).getValue())
+      }
       // 前の値は、8割を超える時だけ読む(初めて超えたかを確かめるため)
       if (typeof value === 'string' && value.length > CELL_WARN_CHARS) {
         noteLongCell_(SHEET_SETTINGS, String(key), String(key), 'value', value, sheet.getRange(i + 2, valueCol).getValue())
@@ -7736,8 +7738,8 @@ function updateRowFieldsUnmeasured_(sheetName, rowId, fields) {
     )
   }
   // 1つのセルの上限(5万文字)を超える値は、何も書かずに断る。8割を超えた値は、書いた後に知らせる
-  cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value) })
   var before = grid.values[targetRow - 1] || []
+  cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value, before[c.col - 1]) })
   // 隣り合う列は1回の setValues にまとめる。離れた列は、間のセル(数式など)を書き換えないよう別に書く
   // (セルへの書き込みは、Apps Script が書き込みの確定の時にまとめて送る)
   cols.forEach(function (c) { noteLongCell_(sheetName, rowId, recordName_(headers, before), headers[c.col - 1], c.value, before[c.col - 1]) })
@@ -7762,19 +7764,41 @@ var CELL_WARN_CHARS = 40000
 // このリクエストで書いた、8割を超えた記録 [{ sheet, id, name, field, length, crossed }]
 var _longCells = []
 
-function cellTooLongError_(sheetName, field, length) {
+function cellTooLongError_(sheetName, field, value, before) {
+  var length = value.length
   var e = userError_('この記録は長くなりすぎたため、保存できませんでした(' + length + '文字。1つの記録は' + CELL_MAX_CHARS +
     '文字まで)。書いた文章は消えていないので、コピーして残してください。古い記録の整理は代表に相談してください。')
-  e.cellTooLong = { sheet: String(sheetName), field: String(field), length: length, max: CELL_MAX_CHARS }
+  e.cellTooLong = { sheet: String(sheetName), field: String(field), length: length, max: CELL_MAX_CHARS, texts: newCellTexts_(value, before) }
   return e
 }
 
-function assertCellLength_(sheetName, field, value) {
-  if (typeof value === 'string' && value.length > CELL_MAX_CHARS) throw cellTooLongError_(sheetName, field, value.length)
+// 断った値のうち、前の値に無かった文章(書いた人が今回書いたもの)。画面はこれをコピーできるように出す
+// (記録の一覧を丸ごと送る保存なので、前からの記録は除く)。前の値が分からない時は null(画面が送った内容から取り出す)
+function newCellTexts_(value, before) {
+  if (before === undefined || before === null) return null
+  var leaves = function (v, out) {
+    if (typeof v === 'string') out.push(v)
+    else if (Array.isArray(v)) v.forEach(function (x) { leaves(x, out) })
+    else if (v && typeof v === 'object') Object.keys(v).forEach(function (k) { leaves(v[k], out) })
+    return out
+  }
+  var parse = function (text) { try { return JSON.parse(text) } catch (e) { return text } }
+  var old = {}
+  leaves(parse(String(before)), []).forEach(function (t) { old[t] = true })
+  var seen = {}
+  return leaves(parse(value), []).filter(function (t) {
+    if (old[t] || seen[t] || !String(t).trim()) return false
+    seen[t] = true
+    return true
+  }).slice(0, 20)
+}
+
+function assertCellLength_(sheetName, field, value, before) {
+  if (typeof value === 'string' && value.length > CELL_MAX_CHARS) throw cellTooLongError_(sheetName, field, value, before)
 }
 
 function assertRowCellLengths_(sheetName, headers, row) {
-  row.forEach(function (v, i) { assertCellLength_(sheetName, headers[i], v) })
+  row.forEach(function (v, i) { assertCellLength_(sheetName, headers[i], v, '') })
 }
 
 // 記録の名前(タスクの題名・メンバーの名前・設定のキー)。知らせと一覧に出す
@@ -7964,16 +7988,22 @@ function requestReplayValue_(obj) {
   var stored = { ok: obj.ok, replayed: true }
   if (obj.ok) stored.result = obj.result
   else stored.error = obj.error
+  if (obj.cellTooLong) stored.cellTooLong = obj.cellTooLong
   var text = JSON.stringify(stored)
   if (text.length <= REQUEST_REPLAY_MAX_CHARS) return text
   // 結果が大きすぎて覚えられない: 処理は済んでいることだけを伝える(やり直さない)
-  return JSON.stringify({
+  // (1つのセルの上限で断った時は、文章を除いて覚える。画面は送った内容から文章を取り出す)
+  var small = {
     ok: false,
     replayed: true,
     error: obj.ok
       ? 'この操作は完了しています。「情報更新」で最新の状態を読み込んでください。'
       : obj.error,
-  })
+  }
+  if (!obj.ok && obj.cellTooLong) {
+    small.cellTooLong = { sheet: obj.cellTooLong.sheet, field: obj.cellTooLong.field, length: obj.cellTooLong.length, max: obj.cellTooLong.max, texts: null }
+  }
+  return JSON.stringify(small)
 }
 
 // ---- 処理時間の内訳 ----------------------------------------------------------

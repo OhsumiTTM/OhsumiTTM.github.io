@@ -26,6 +26,20 @@ describe('上限(5万文字)を超える保存', () => {
     expect(res.cellTooLong).toMatchObject({ sheet: 'Tasks', field: 'comments_json', max: 50_000 })
     expect(res.cellTooLong.length).toBeGreaterThan(50_000)
     expect(h.tasksJson()).toBe(before)
+    // 今回書いた文章だけを返す(前からのコメントは除く)
+    expect(res.cellTooLong.texts).toContain('あ'.repeat(50_001))
+    expect(res.cellTooLong.texts).not.toContain('前からのコメント')
+  })
+
+  it('送り直しで前回の結果を返す時も、cellTooLong を付ける', () => {
+    const h = guardHarness()
+    const body = { action: 'updateComments', sessionToken: 'm-base', taskId: 't1', comments: comments(50_001), requestId: 'same-request-1' }
+    expect(h.post(body).cellTooLong).toBeTruthy()
+    expect(h.post(body)).toMatchObject({ ok: false, replayed: true, cellTooLong: { field: 'comments_json' } })
+    // 文章が大きく覚えきれない時は、文章を除いて覚える(画面は送った内容から取り出す)
+    const big = { ...body, comments: comments(95_000), requestId: 'same-request-2' }
+    expect(h.post(big).cellTooLong.texts).toHaveLength(4)
+    expect(h.post(big)).toMatchObject({ ok: false, replayed: true, cellTooLong: { field: 'comments_json', texts: null } })
   })
 
   it('まとめて送った時(batch)も、その操作の結果に cellTooLong を付ける', () => {
@@ -130,7 +144,7 @@ describe('守る処理を外すと失敗する', () => {
   }
 
   it('行の更新の確かめを外すと、上限を超える値を書こうとする', () => {
-    const h = guardHarness({ code: mutated('  cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value) })\n', '') })
+    const h = guardHarness({ code: mutated('  cols.forEach(function (c) { assertCellLength_(sheetName, headers[c.col - 1], c.value, before[c.col - 1]) })\n', '') })
     const res = save(h, 50_001)
     expect(res.ok).toBe(true)
     expect(res.cellTooLong).toBeUndefined()
