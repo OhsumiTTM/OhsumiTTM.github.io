@@ -338,10 +338,15 @@ OhsumiTTM/OhsumiTTM.github.io の「Settings」→「Secrets and variables」→
 - **取り消し・解除:** 予定の取り消し(`cancelSuspension`)・停止の解除(`liftSuspension`)は、いつでもできます。理由は操作の記録に残します。
   送った予告の取り消しは、担当者に別に連絡してください。
 - **団体の GAS の確認(`checkIn`):**
-  - 要求は `{ action: 'checkIn', orgId, ts, gasVersion, sig }` です。`sig` は、共有鍵で `'checkIn.' + orgId + '.' + ts` に付けた HMAC-SHA256 の署名(base64url)です。時刻 `ts`(Unix 秒)は前後5分までです。共有鍵そのものは送りません。
+  - 要求は `{ action: 'checkIn', orgId, ts, gasVersion, mail, sig }` です。`sig` は、共有鍵で `'checkIn.' + orgId + '.' + ts` に付けた HMAC-SHA256 の署名(base64url)です。時刻 `ts`(Unix 秒)は前後5分までです。共有鍵そのものは送りません。
   - 返事は `{ ok: true, result: { phase: 'none' | 'scheduled' | 'inEffect', kind, suspendAt, reason, checkedAt, siteOrigins } }` です。
   - `siteOrigins` は、サイトの origin の一覧です(下の「1.9.3」)。団体の GAS は、本人あての招待リンクのメールに使います。
   - 最後に確認に来た時刻と GAS の版を、Orgs の `last_check_at`・`gas_version` に書きます(10分に1回まで)。回数は1分に300回までです。
+  - 要求の `mail`(`{ remaining, skipped, date, lastReachedDate }`)は、団体の GAS のメールの1日の上限の状態です
+    (残りの数・その日に上限で送れなかった数・その日・最後に上限に達した日。gas/README.md の「4.12」)。
+    Orgs の `mail_remaining`・`mail_skipped`・`mail_date`・`mail_limit_date` に、上と同じ時に書きます(送れなかった数が変わった時は、10分を待たずに書きます)。
+    指紋(記録の無い変更の検出)には入れません。列が無い時(`setupRegistry` を実行し直していない時)は書きません。
+    管理画面の団体の一覧に「メールの上限に達した」(最後に伝えられた日に上限に達した)・「メールの残り n」(残りが20件以下)を出し、一覧の上にその団体の数を出します
   - 団体の GAS は、1時間ごとに確かめます。リクエストの時にも確かめ直します。
     - 停止中(予定の日時を過ぎた時も): 解除がすぐ効くように、どの操作でも1分に1回まで。
     - 停止の予定がある時: 書き込み(読み取りの一覧に無い操作)の前に、1分に1回まで。

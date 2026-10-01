@@ -54,6 +54,33 @@ export interface OrgSummary {
   channel: string
   gasUrl: string
   gasVersion: string
+  // メールの1日の上限(団体の GAS が checkIn で伝えたもの。古いレジストリでは無い)
+  mail?: OrgMailSummary
+}
+
+// reached: 最後に伝えられた日に上限に達した / low: 残りが少ない / ok / unknown: 伝えられていない
+export type MailLevel = 'reached' | 'low' | 'ok' | 'unknown'
+
+export interface OrgMailSummary {
+  // 最後の確認の時の残りの数(分からなければ null)
+  remaining: number | null
+  // その日(date)に上限で送れなかった数
+  skipped: number
+  date: string
+  // 最後に上限に達した日
+  limitDate: string
+  level: MailLevel
+}
+
+/** メールの上限に達した・近い団体の数(一覧の上に出す) */
+export function mailLevelCounts(orgs: Pick<OrgSummary, 'mail'>[]): { reached: number; low: number } {
+  let reached = 0
+  let low = 0
+  for (const o of orgs) {
+    if (o.mail?.level === 'reached') reached++
+    else if (o.mail?.level === 'low') low++
+  }
+  return { reached, low }
 }
 
 export interface CodeSummary {

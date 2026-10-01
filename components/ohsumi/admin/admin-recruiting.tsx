@@ -180,7 +180,7 @@ export function AdminRecruiting() {
     const sendInvite = !!c.email && confirm(t('admin.recruiting.confirmInvite'))
     toast(t('admin.recruiting.convertedToast', { name: c.name }))
     convertCandidateToMember(c.id, undefined, sendInvite).then((invite) => {
-      if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : 'admin.members.invite.mailNotSent'))
+      if (invite) toast(t(invite.sent ? 'admin.members.invite.mailSent' : invite.reason === 'mailQuota' ? 'admin.members.invite.mailQuota' : 'admin.members.invite.mailNotSent'))
     })
   }
 

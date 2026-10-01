@@ -158,3 +158,11 @@ describe('管理画面の置き方', () => {
     expect(linking).toEqual([])
   })
 })
+
+describe('mailLevelCounts', () => {
+  it('メールの上限に達した団体・残りが少ない団体を数える(伝えられていない団体は数えない)', async () => {
+    const { mailLevelCounts } = await import('./admin-api')
+    const m = (level: 'reached' | 'low' | 'ok' | 'unknown') => ({ mail: { remaining: null, skipped: 0, date: '', limitDate: '', level } })
+    expect(mailLevelCounts([m('reached'), m('low'), m('low'), m('ok'), m('unknown'), {}])).toEqual({ reached: 1, low: 2 })
+  })
+})

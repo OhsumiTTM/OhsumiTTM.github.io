@@ -19,6 +19,7 @@ import { AdminMemberDb } from './admin-member-db'
 import { AdminLeadership } from './admin-leadership'
 import { AdminRecruiting } from './admin-recruiting'
 import { AdminDailyReports } from './admin-daily-reports'
+import { MailQuotaBanner } from './mail-quota-banner'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { OhsumiMark } from '../primitives'
 import type { AdminSection } from '@/lib/ohsumi/types'
@@ -149,6 +150,7 @@ export function AdminScreen({ section }: { section: Section }) {
           ))}
         </div>
 
+        {isFullAdmin && <MailQuotaBanner />}
         <div className="bg-background">
           {section === 'dashboard' && <AdminDashboard />}
           {section === 'approvals' && <AdminApprovals />}

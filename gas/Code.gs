@@ -564,7 +564,7 @@ function debugNotifyTest() {
   }
 
   console.log('--- ここから notifyAdmins() を実行します（実際にメールが送信されます）---')
-  notifyAdmins_('[Ohsumi] テスト通知', 'これは debugNotifyTest() からのテストメールです。届いていれば設定は正常です。')
+  notifyAdmins_('[Ohsumi] テスト通知', 'これは debugNotifyTest() からのテストメールです。届いていれば設定は正常です。', null, { urgent: true })
   console.log('debugNotifyTest: 完了 — 上記の宛先の受信トレイ（迷惑メールフォルダも）を確認してください')
 }
 
@@ -883,6 +883,12 @@ function sendBatchNotifications() {
     queue.forEach(function(item) {
       var freq = getNotifyFrequency_(memberId, item.kind)
       if (freq === 'none') return
+      // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
+      if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
+        var t = item.templates[loc] || item.templates.ja
+        splitEmails_(emails).forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
+        return
+      }
       if (freq === 'immediate') { toSend.push(item); return }
       var hours = freq === '3h' ? 3 : freq === '6h' ? 6 : 24
       var itemTime = new Date(item.ts)
@@ -926,6 +932,8 @@ function dailyMaintenance() {
   // 活動のないメンバーの判定より前に、書き込み待ちの最終ログイン日時を書く
   try { flushPendingLastLogins_() } catch (err) { }
   try { notifyInactiveMembers_() } catch (err) { }
+  // 毎日のまとめ(1人1日1通)。上の処理で入れたものも、ここで送る
+  try { flushDailyDigests_() } catch (err) { console.error('毎日のまとめを送れませんでした: ' + err) }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
 }
@@ -2116,6 +2124,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
+  'getMailQuotaStatus',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2770,6 +2779,8 @@ var READ_ONLY_ACTIONS = [
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
   'getInviteMailStatus', 'sendInviteLinkToMe',
+  // メールの1日の上限の状態(代表の管理画面に出す)
+  'getMailQuotaStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2817,7 +2828,13 @@ function refreshContractState_(deps) {
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return null
   var ts = nowSec_()
   var sig = base64UrlEncode_(Utilities.computeHmacSha256Signature('checkIn.' + orgId + '.' + ts, key))
-  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION })
+  // メールの1日の上限の状態も伝える(レジストリの管理画面で、上限に近い団体が分かるように)
+  var mail = null
+  try {
+    var q = mailQuotaStatus_()
+    mail = { remaining: q.remaining, skipped: q.skipped, date: q.date, lastReachedDate: q.lastReachedDate }
+  } catch (e) { mail = null }
+  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION, mail: mail })
   var res
   try {
     var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
@@ -2945,7 +2962,7 @@ function sendMemberInvite_(memberId) {
   var emails = registeredEmailsOf_(memberId)
   if (emails.length === 0) return { sent: false, reason: 'noEmail' }
   var orgName = getSettingValue_('org_name') || 'Ohsumi'
-  sendMail_({
+  var mailed = sendMailChecked_({
     to: emails.join(','),
     subject: '[Ohsumi] ' + orgName + ' の Ohsumi に招待されました',
     body: orgName + ' の Ohsumi(タスク・メンバーの管理)に招待されました。\n\n' +
@@ -2953,6 +2970,9 @@ function sendMemberInvite_(memberId) {
       '\n\nスマホでは、開いた後に「ホーム画面に追加」をすると、次からすぐに開けます。' +
       '\n\n---\nYou have been invited to ' + orgName + ' on Ohsumi. Open the link above and sign in with the Google account for this email address.',
   })
+  // メールの1日の上限・通知の回数の上限で送れなかった時は、画面に伝える(メンバーの追加はそのまま)
+  if (mailed === 'quota') return { sent: false, reason: 'mailQuota' }
+  if (mailed === 'limited') return { sent: false, reason: 'limited' }
   return { sent: true }
 }
 
@@ -3034,7 +3054,9 @@ function sendInviteLinkToMe_(memberId, body, nowMs) {
     lock.releaseLock()
   }
   var text = inviteMailText_(getSettingValue_('org_name'), link, body && body.locale === 'en' ? 'en' : 'ja')
-  sendMail_({ to: emails.join(','), subject: text.subject, body: text.body })
+  var mailed = sendMailChecked_({ to: emails.join(','), subject: text.subject, body: text.body })
+  if (mailed === 'quota') throw userError_(quotaMessage_('email', false) + 'QR コードかリンクのコピーを使ってください。')
+  if (mailed === 'limited') throw userError_('通知の回数の上限に達しました。しばらくしてから、もう一度お試しください。')
   return { sent: true, count: emails.length, remaining: Math.max(0, INVITE_MAIL_LIMIT - times.length) }
 }
 
@@ -3070,7 +3092,8 @@ function sendContractNotices_(state, nowMs) {
   var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
   if (to.length) {
     var text = contractNoticeText_(getSettingValue_('org_name'), { kind: c.kind, suspendAt: c.suspendAt, reason: state && state.reason }, days)
-    sendMail_({ to: to.join(','), subject: text.subject, body: text.body })
+    // メールの1日の上限で送れなかった時は、送ったことにしない(次の確認で送り直す)
+    if (!sendMail_({ to: to.join(','), subject: text.subject, body: text.body })) return null
   } else {
     console.warn('停止の予告を送る代表のメールアドレスがありません(あと' + days + '日)')
   }
@@ -3641,7 +3664,7 @@ function authorizeAction_(acting, action, body) {
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
   if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
-      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin_(acting)) return
     if (checkPermissionOverride_(acting, action, body)) return
     throw userError_('この操作は代表または全権管理者のみ実行できます。')
@@ -4230,6 +4253,11 @@ function userError_(message) {
 // 定型メッセージだけを返す。
 function toErrorMessage_(err) {
   if (err && err.isUserError) return String(err.message || err)
+  var quota = quotaKind_(err)
+  if (quota) {
+    Logger.log('doPost quota exceeded [' + quota + ']')
+    return quotaMessage_(quota, false)
+  }
   Logger.log('doPost unexpected error [' + (err && err.name) + ']: ' + ((err && err.stack) || (err && err.message) || err))
   return '処理中に問題が発生しました。しばらくしてから再度お試しください。'
 }
@@ -4245,6 +4273,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'revokeMySessions', 'revokeMemberSessions',
   // 本人あての招待リンクのメール(シートを書き換えない。送った回数は CacheService に数える)
   'getInviteMailStatus', 'sendInviteLinkToMe',
+  // メールの1日の上限の状態(スクリプトプロパティを読むだけ)
+  'getMailQuotaStatus',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -4359,7 +4389,7 @@ function handlePost_(e, state) {
       try {
         loginOut = { ok: true, result: exchangeIdToken_(body) }
       } catch (exchangeErr) {
-        loginOut = { ok: false, error: toErrorMessage_(exchangeErr), authError: true }
+        loginOut = authFailure_(exchangeErr)
       }
       if (loginKey) rememberLogin_(loginKey, loginOut)
       return loginOut
@@ -4374,7 +4404,7 @@ function handlePost_(e, state) {
         initAuth = timed_('authMs', function () { return authenticateRequest_(body) })
         if (memberIsInactive_(initAuth.memberId)) throw userError_(INACTIVE_MEMBER_MESSAGE)
       } catch (initAuthErr) {
-        return ({ ok: false, error: toErrorMessage_(initAuthErr), authError: true })
+        return authFailure_(initAuthErr)
       }
       try {
         return ({
@@ -4413,7 +4443,7 @@ function handlePost_(e, state) {
       if (actingMember.inactive) throw userError_(INACTIVE_MEMBER_MESSAGE)
     } catch (authErr) {
       endTiming_('authMs', authStart)
-      return ({ ok: false, error: toErrorMessage_(authErr), authError: true })
+      return authFailure_(authErr)
     }
     // 通知・翻訳の回数の上限は、操作したメンバーごとに数える
     _requestActorId = actingMember.id
@@ -4455,7 +4485,7 @@ function handlePost_(e, state) {
           actingMember = getActingMemberFromSheet_(auth.memberId)
         } catch (recheckAuthErr) {
           endTiming_('authRecheckMs', recheckStart)
-          return ({ ok: false, error: toErrorMessage_(recheckAuthErr), authError: true })
+          return authFailure_(recheckAuthErr)
         }
         if (body.action === 'batch') {
           batchDenied = authorizeBatch_(actingMember, body.ops)
@@ -5139,6 +5169,9 @@ function runWriteAction_(body, actingMember) {
     case 'getWebhookStatus':
       result = getWebhookStatus_()
       break
+    case 'getMailQuotaStatus':
+      result = mailQuotaStatus_()
+      break
     case 'testSlackWebhook':
       result = testSlackWebhook_()
       break
@@ -5661,7 +5694,7 @@ function notifyNewTasks_(tasks) {
         titlesEn.join('\n') +
         '\n\nCheck Ohsumi Admin > Approvals for details.',
     },
-  })
+  }, null, { urgent: true })
 }
 
 // Emails the task's designated reviewer(s) (reviewer_ids/reviewer_id) when an
@@ -5698,6 +5731,7 @@ function notifyReview_(taskId) {
         },
       },
       preferredEmails,
+      { urgent: true },
     )
     notifyChat_('🔔 「' + task.title + '」が確認待ちになりました。')
   } catch (err) {
@@ -5755,6 +5789,11 @@ function getNotifyFrequency_(memberId, kind) {
 function queueNotification_(memberId, kind, templates) {
   var freq = getNotifyFrequency_(memberId, kind)
   if (freq === 'none') return
+  // 急ぎでない種類と「1日ごと」の設定は、毎日のまとめに入れる(1人1日1通)
+  if (!URGENT_NOTIFY_KINDS[kind] || freq === '1d') {
+    deliverNotification_(memberEmailsByIds_([memberId]), templates, false)
+    return
+  }
   if (freq !== 'immediate' && !allowRequestNotification_('通知のキュー ' + kind)) return
   if (freq === 'immediate') {
     var emails = memberEmailsByIds_([memberId])
@@ -5837,12 +5876,138 @@ function allowRequestNotification_(what) {
   return false
 }
 
+// メールを送る。送れたら true。送らなかった時(通知の回数の上限・メールの1日の上限)は false
 function sendMail_(options) {
-  if (!allowRequestNotification_('メール ' + options.subject)) return
+  return sendMailChecked_(options) === 'sent'
+}
+
+// メールを送り、結果を返す: 'sent'(送った) / 'limited'(1人あたりの通知の上限で送らなかった) / 'quota'(メールの1日の上限で送らなかった)
+function sendMailChecked_(options) {
+  if (!allowRequestNotification_('メール ' + options.subject)) return 'limited'
+  var count = mailRecipientCount_(options)
+  if (count > 0) {
+    var remaining = mailRemainingQuota_()
+    if (remaining !== null && remaining < count) {
+      recordMailQuotaSkip_(count, options.subject)
+      return 'quota'
+    }
+  }
   countAction_('mailCount')
   // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>)
-  options.body = withSiteLink_(options.body)
-  return measureAction_('mailMs', function () { return sendMailUnmeasured_(options) })
+  var mail = {}
+  Object.keys(options).forEach(function (k) { mail[k] = options[k] })
+  mail.body = withSiteLink_(options.body)
+  try {
+    measureAction_('mailMs', function () { return sendMailUnmeasured_(mail) })
+  } catch (e) {
+    // 残りの数を確かめた後に、ほかの送信で上限に達した時など
+    if (quotaKind_(e) !== 'email') throw e
+    recordMailQuotaSkip_(Math.max(1, count), options.subject)
+    return 'quota'
+  }
+  return 'sent'
+}
+
+// ---- メールの1日の上限 --------------------------------------------------------------
+//
+// 団体の GAS は「自分として実行」なので、メールは GAS を動かすアカウントの1日の上限(宛先の数。
+// Google アカウントは 100、Google Workspace は 1,500)を、団体の全員で分け合う。
+// 送る前に残りの数(MailApp.getRemainingDailyQuota)を確かめ、足りなければ送らずに記録する
+// (スクリプトプロパティ MAIL_QUOTA_STATE)。記録は、代表の管理画面(getMailQuotaStatus)と、
+// レジストリへの確認(checkIn)で伝える。送れなかった通知は、宛先ごとの毎日のまとめに回す(sendLocalizedEmail_)
+var MAIL_QUOTA_STATE_KEY = 'MAIL_QUOTA_STATE'
+
+function mailQuotaToday_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+}
+
+// 残りの数(分からない時は null。送る前の確かめを省き、送る時の失敗で判断する)
+function mailRemainingQuota_() {
+  try {
+    var n = MailApp.getRemainingDailyQuota()
+    return typeof n === 'number' && isFinite(n) ? n : null
+  } catch (e) {
+    return null
+  }
+}
+
+// このメールで使う上限の数(宛先の数)。テスト環境では、TEST_NOTIFICATION_EMAIL の1件だけ(無ければ送らないので 0)
+function mailRecipientCount_(options) {
+  if (isTestEnvironment_()) {
+    return String(PropertiesService.getScriptProperties().getProperty('TEST_NOTIFICATION_EMAIL') || '').trim() ? 1 : 0
+  }
+  var n = 0
+  ;[options.to, options.cc, options.bcc].forEach(function (v) {
+    String(v || '').split(',').forEach(function (e) { if (e.trim()) n++ })
+  })
+  return n
+}
+
+// 今日の記録: { date, skipped(送れなかった数), reachedAt(今日、上限に達した時刻), lastReachedDate(最後に上限に達した日) }
+function readMailQuotaState_() {
+  var s = null
+  try { s = JSON.parse(PropertiesService.getScriptProperties().getProperty(MAIL_QUOTA_STATE_KEY) || 'null') } catch (e) { s = null }
+  var today = mailQuotaToday_()
+  if (!s || typeof s !== 'object') return { date: today, skipped: 0, reachedAt: '', lastReachedDate: '' }
+  var last = String(s.lastReachedDate || '')
+  if (s.date !== today) return { date: today, skipped: 0, reachedAt: '', lastReachedDate: last }
+  return { date: today, skipped: Number(s.skipped) || 0, reachedAt: String(s.reachedAt || ''), lastReachedDate: last }
+}
+
+function recordMailQuotaSkip_(count, subject) {
+  var s = readMailQuotaState_()
+  s.skipped += Math.max(1, count || 1)
+  if (!s.reachedAt) s.reachedAt = new Date().toISOString()
+  s.lastReachedDate = s.date
+  try {
+    PropertiesService.getScriptProperties().setProperty(MAIL_QUOTA_STATE_KEY, JSON.stringify(s))
+  } catch (e) {
+    console.error('メールの上限の記録を書けませんでした: ' + e)
+  }
+  console.warn('メールの1日の上限に達したため、送りませんでした(今日 ' + s.skipped + ' 件): ' + subject)
+}
+
+// 画面(代表の管理画面)とレジストリに伝える形
+function mailQuotaStatus_() {
+  var s = readMailQuotaState_()
+  return { remaining: mailRemainingQuota_(), date: s.date, skipped: s.skipped, reachedAt: s.reachedAt, lastReachedDate: s.lastReachedDate }
+}
+
+// ---- Google の利用の上限に達した時のエラー ----------------------------------------------
+//
+// GAS の1日の上限に達すると、Google は「Service invoked too many times for one day: email.」などの例外を投げる。
+// どの上限かを見分け(email / urlfetch / properties / other)、画面には決まった文を返す(上限でなければ null)
+function quotaKind_(err) {
+  var msg = String((err && err.message) || err || '')
+  var m = msg.match(/too many times for one day:\s*([a-z]+)/i)
+  if (m) {
+    var k = m[1].toLowerCase()
+    return k === 'email' || k === 'urlfetch' || k === 'properties' ? k : 'other'
+  }
+  if (/Bandwidth quota exceeded/i.test(msg)) return 'urlfetch'
+  if (/property storage quota/i.test(msg)) return 'properties'
+  if (/Service invoked too many times/i.test(msg)) return 'other'
+  return null
+}
+
+// login: ログイン(セッションの確かめ・Google でのログイン)の途中で上限に達した時
+function quotaMessage_(kind, login) {
+  var what = {
+    email: 'この団体の、今日のメールの上限に達しました。',
+    urlfetch: 'この団体の GAS が、今日の外部への通信(Google のログインの確認・Discord/Slack への通知など)の上限に達しました。',
+    properties: 'この団体の GAS が、今日の設定の読み書き(スクリプトプロパティ)の上限に達しました。',
+    other: 'この団体の GAS が、今日の Google の利用の上限に達しました。',
+  }[kind] || ''
+  return (login ? 'ログインを確かめられませんでした。' : '') + what +
+    'あなたのアカウントの問題ではありません。上限は1日ごとに戻ります。続く時は、代表に知らせてください。'
+}
+
+// ログインの確かめで失敗した時の応答。上限に達した時は、ログインの失敗と分かる文を返し、
+// authError を付けない(画面がログインし直しを求めても、上限が戻るまで同じ失敗になるため)
+function authFailure_(err) {
+  var kind = quotaKind_(err)
+  if (kind) return { ok: false, error: quotaMessage_(kind, true), quotaExceeded: kind }
+  return { ok: false, error: toErrorMessage_(err), authError: true }
 }
 
 function sendMailUnmeasured_(options) {
@@ -5873,31 +6038,46 @@ function sendMailUnmeasured_(options) {
 }
 
 // 呼び出し方は2通り:
-//   - 新パターン(多言語対応): notifyAdmins_({ ja: {subject, body}, en: {subject, body} }, preferredEmails)
-//   - 旧パターン(後方互換、常に日本語): notifyAdmins_(subject, body, preferredEmails)
-// 第1引数がオブジェクトかどうかで判別する。宛先解決ロジック(opted/reps/
-// orgEmailsのフォールバック)自体はどちらのパターンでも共通。
-function notifyAdmins_(subject, body, preferredEmails) {
-  return measureAction_('notifyMs', function () { return notifyAdminsUnmeasured_(subject, body, preferredEmails) })
+//   - 新パターン(多言語対応): notifyAdmins_({ ja: {subject, body}, en: {subject, body} }, preferredEmails, opts)
+//   - 旧パターン(後方互換、常に日本語): notifyAdmins_(subject, body, preferredEmails, opts)
+// 第1引数がオブジェクトかどうかで判別する。
+// 宛先(同じ内容を、団体の通知先と管理者に重ねて送らない):
+//   1. preferredEmails(報告先など、その人あての通知)があれば、その人たちだけ
+//   2. 無ければ、団体の通知先(org_notification_emails)があればそこにすぐ送り、通知を受け取る設定にした管理者
+//      (notify_new_task)は毎日のまとめに入れる(団体の通知先と同じアドレスなら1回だけ)
+//   3. それも無ければ、通知を受け取る設定の管理者(いなければ管理者の役職の人)
+// opts.urgent が無いものは、毎日のまとめに入れる。急ぎのものでも、Discord/Slack をつないだ団体では、
+// 管理者あて(2・3)のメールはまとめに回す(すぐの知らせは Discord/Slack に届くため)
+function notifyAdmins_(subject, body, preferredEmails, opts) {
+  return measureAction_('notifyMs', function () { return notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) })
 }
 
-function notifyAdminsUnmeasured_(subject, body, preferredEmails) {
+function chatConnected_() {
+  return !isChatSuppressed_() && !!(getDiscordWebhookUrl_() || getSlackWebhookUrl_())
+}
+
+function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
   try {
     var templates
     if (subject && typeof subject === 'object') {
       templates = subject
+      opts = preferredEmails
       preferredEmails = body
     } else {
       templates = { ja: { subject: subject, body: body } }
     }
-    var orgEmails = orgNotificationEmails_()
+    var urgent = !!(opts && opts.urgent)
 
     if (preferredEmails && preferredEmails.length > 0) {
-      var to = uniqueEmails_(preferredEmails.concat(orgEmails))
-      sendLocalizedEmail_(to, templates)
-      console.log('notifyAdmins: preferredEmails+orgに送信しました ' + to.join(','))
+      var to = uniqueEmails_(preferredEmails)
+      deliverNotification_(to, templates, urgent)
+      console.log('notifyAdmins: preferredEmailsに' + (urgent ? '送信' : 'まとめに追加') + 'しました ' + to.join(','))
       return
     }
+    // Discord/Slack をつないだ団体では、管理者あてのメールはまとめに回す(evenIfChat: Webhook の変更の知らせなど、
+    // Discord/Slack そのものが書き換えられたかもしれない時は、すぐ送る)
+    if (urgent && !(opts && opts.evenIfChat) && chatConnected_()) urgent = false
+    var orgEmails = orgNotificationEmails_()
     var members = measureAction_('recipientsMs', function () { return snapshotTableOrSheet_(SHEET_MEMBERS) })
     var headers = members.headers
     var rows = members.rows
@@ -5924,7 +6104,20 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails) {
         else if (roleCol !== -1 && isAdminRoleRef_(getRoles_(), r[roleCol])) reps.push(email)
       })
     }
-    var recipients = uniqueEmails_((opted.length > 0 ? opted : reps).concat(orgEmails))
+    // 団体の通知先がある時: すぐ送るのは団体の通知先だけ。自分で通知を受け取る設定にした管理者(notify_new_task)には、
+    // 毎日のまとめに入れる(団体の通知先と同じアドレスなら、団体の通知先への1回だけ)
+    if (orgEmails.length > 0) {
+      var org = splitEmails_(orgEmails)
+      var orgSet = {}
+      org.forEach(function (e) { orgSet[e.toLowerCase()] = true })
+      deliverNotification_(org, templates, urgent)
+      var optedOthers = splitEmails_(opted).filter(function (e) { return !orgSet[e.toLowerCase()] })
+      if (optedOthers.length) deliverNotification_(optedOthers, templates, false)
+      console.log('notifyAdmins: 団体の通知先に' + (urgent ? '送信' : 'まとめに追加') + 'しました' +
+        (optedOthers.length ? '(通知を受け取る設定の管理者 ' + optedOthers.length + '人は、まとめに追加)' : ''))
+      return
+    }
+    var recipients = uniqueEmails_(opted.length > 0 ? opted : reps)
     if (recipients.length === 0) {
       console.warn(
         'notifyAdmins: 宛先を解決できませんでした（notify_new_task=TRUEのメンバーがおらず、「一般」以外のroleを持つメンバーにメール登録もなく、団体メールも未設定）— 送信しませんでした',
@@ -5932,8 +6125,8 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails) {
       return
     }
 
-    sendLocalizedEmail_(recipients, templates)
-    console.log('notifyAdmins: 送信先 ' + recipients.join(','))
+    deliverNotification_(recipients, templates, urgent)
+    console.log('notifyAdmins: ' + (urgent ? '送信先 ' : 'まとめの宛先 ') + recipients.join(','))
   } catch (err) {
     // a mail error shouldn't roll back the caller's action, but log it so
     // it's visible in Executions instead of failing completely silently
@@ -6055,8 +6248,133 @@ function sendLocalizedEmail_(emails, templates) {
     var list = groups[loc]
     if (list.length === 0) return
     var tpl = templates[loc] || templates.ja
-    sendMail_({ to: list.join(','), subject: tpl.subject, body: tpl.body })
+    // メールの1日の上限で送れなかった時は、宛先ごとの毎日のまとめに回す(翌朝のまとめで送る)
+    if (sendMailChecked_({ to: list.join(','), subject: tpl.subject, body: tpl.body }) === 'quota') {
+      list.forEach(function (e) { addToDigest_(e, loc, tpl.subject, tpl.body) })
+    }
   })
+}
+
+// ---- 急ぎの通知と、毎日のまとめ ---------------------------------------------------------
+//
+// メールの1日の上限(団体の全員で分け合う)を使い切らないよう、メールですぐ送るのは急ぎのものだけにする:
+//   承認の依頼・確認の依頼・自分へのメンション・停止の予告・招待メール・自分のメールに送る
+// それ以外は、宛先ごとの毎日のまとめ(1人1日1通。dailyMaintenance の最後に送る)に入れる。
+// 画面の中のお知らせは、これまでどおりすべて出す(メールとは別。ここでは変えない)。
+// まとめは、宛先ごとのスクリプトプロパティ notif_digest_<アドレスのハッシュ> に、受け取る人の言語の文で入れる
+// (1人あたり DIGEST_MAX_BYTES まで。入りきらない分は件数だけ数え、画面で確かめるよう書く)
+var DIGEST_PREFIX = 'notif_digest_'
+var DIGEST_MAX_BYTES = 2000
+var DIGEST_BODY_CHARS = 160
+// まとめを送る時に、急ぎのメールのために残しておく数(今日の残りがこれ以下なら、まとめは明日に回す)
+var DIGEST_MAIL_RESERVE = 10
+// 急ぎの通知の種類(queueNotification_。それ以外は、メンバーの設定に関わらずまとめに入れる)
+var URGENT_NOTIFY_KINDS = { mention: true, review: true, new_task: true }
+
+function digestKey_(email) {
+  return DIGEST_PREFIX + sha256Base64Url_(String(email).trim().toLowerCase())
+}
+
+function utf8Bytes_(text) {
+  return encodeURIComponent(text).replace(/%[0-9A-F]{2}/gi, 'x').length
+}
+
+function readDigest_(raw) {
+  var d = null
+  try { d = JSON.parse(raw || 'null') } catch (e) { d = null }
+  if (!d || typeof d !== 'object' || !Array.isArray(d.items)) return null
+  return d
+}
+
+// 1件をまとめに入れる(文は、受け取る人の言語のもの)
+function addToDigest_(email, loc, subject, body) {
+  email = String(email || '').trim()
+  if (!email) return
+  var props = PropertiesService.getScriptProperties()
+  var key = digestKey_(email)
+  var d = readDigest_(props.getProperty(key)) || { email: email, loc: loc || 'ja', items: [], more: 0 }
+  if (loc) d.loc = loc
+  var text = String(body || '')
+  if (text.length > DIGEST_BODY_CHARS) text = text.slice(0, DIGEST_BODY_CHARS) + '…'
+  d.items.push({ s: String(subject || '').slice(0, 200), b: text, ts: new Date().toISOString() })
+  while (d.items.length > 1 && utf8Bytes_(JSON.stringify(d)) > DIGEST_MAX_BYTES) {
+    d.items.pop()
+    d.more = (Number(d.more) || 0) + 1
+  }
+  props.setProperty(key, JSON.stringify(d))
+}
+
+// 宛先(1人が複数のアドレスをカンマ区切りで持つこともある)を、1つずつのアドレスにする
+function splitEmails_(emails) {
+  var out = []
+  ;(emails || []).forEach(function (v) {
+    String(v || '').split(',').forEach(function (e) { if (e.trim()) out.push(e.trim()) })
+  })
+  return uniqueEmails_(out)
+}
+
+// 通知を送る。urgent なら今すぐメールで、そうでなければ宛先ごとの毎日のまとめに入れる
+function deliverNotification_(emails, templates, urgent) {
+  var list = splitEmails_(emails)
+  if (!list.length) return
+  if (urgent) {
+    sendLocalizedEmail_(list, templates)
+    return
+  }
+  if (!allowRequestNotification_('まとめ ' + ((templates.ja && templates.ja.subject) || ''))) return
+  var locales = localesByEmails_(list)
+  list.forEach(function (e) {
+    var loc = templates[locales[e]] ? locales[e] : 'ja'
+    var tpl = templates[loc] || templates.ja
+    addToDigest_(e, loc, tpl.subject, tpl.body)
+  })
+}
+
+// 毎日のまとめを送る(dailyMaintenance の最後)。1人1通。メールの上限で送れなかった分は、明日に回す
+function flushDailyDigests_() {
+  var props = PropertiesService.getScriptProperties()
+  var all = props.getProperties()
+  var keys = Object.keys(all).filter(function (k) { return k.indexOf(DIGEST_PREFIX) === 0 })
+  var stopped = false
+  keys.forEach(function (key) {
+    if (stopped) return
+    var d = readDigest_(all[key])
+    if (!d || !d.email || !d.items.length) { props.deleteProperty(key); return }
+    var remaining = mailRemainingQuota_()
+    if (remaining !== null && remaining <= DIGEST_MAIL_RESERVE) {
+      stopped = true
+      console.warn('メールの残りが少ないため、毎日のまとめの残り(' + (keys.length) + '人分まで)を明日に回しました')
+      return
+    }
+    var text = digestMailText_(d)
+    if (sendMailChecked_({ to: d.email, subject: text.subject, body: text.body }) === 'quota') { stopped = true; return }
+    // 送っている間に足された分は残す
+    var now = readDigest_(props.getProperty(key))
+    var rest = now ? now.items.slice(d.items.length) : []
+    if (rest.length) {
+      now.items = rest
+      now.more = Math.max(0, (Number(now.more) || 0) - (Number(d.more) || 0))
+      props.setProperty(key, JSON.stringify(now))
+    } else {
+      props.deleteProperty(key)
+    }
+  })
+}
+
+function digestMailText_(d) {
+  var en = d.loc === 'en'
+  var more = Number(d.more) || 0
+  var n = d.items.length + more
+  var body = (en
+    ? 'Here is your Ohsumi summary. Urgent notices (approval requests, mentions, etc.) are sent separately as they happen.\n\n'
+    : 'Ohsumi のお知らせのまとめです。急ぎのもの(承認の依頼・メンションなど)は、その都度お送りしています。\n\n') +
+    d.items.map(function (i) { return '【' + i.s + '】\n' + i.b }).join('\n\n---\n\n')
+  if (more) {
+    body += '\n\n' + (en
+      ? '...and ' + more + ' more. Please check them on the Ohsumi screen.'
+      : 'ほか ' + more + ' 件あります。Ohsumi の画面で確かめてください。')
+  }
+  return { subject: en ? 'Ohsumi daily summary (' + n + ')' : 'Ohsumi 今日のまとめ (' + n + '件)', body: body }
 }
 
 // ---- コメントのメンション ----------------------------------------------------------
@@ -6194,6 +6512,7 @@ function notifyTrainingRequest_(memberId, trainingId, actorId) {
         },
       },
       reportsToEmails_([memberId]),
+      { urgent: true },
     )
     notifyChat_('📚 ' + name + 'さんから研修「' + trainingName + '」の申請がありました。')
     return true
@@ -6222,7 +6541,7 @@ function rejectTask_(taskId, reason) {
   try {
     var emails = creatorId ? memberEmailsByIds_([creatorId]) : []
     if (emails.length > 0) {
-      sendLocalizedEmail_(emails, {
+      deliverNotification_(emails, {
         ja: {
           subject: '[Ohsumi] タスクが承認されませんでした',
           body: '登録した「' + title + '」は承認されませんでした。\n\n' + (why ? '理由: ' + why + '\n\n' : '') + 'Ohsumiで確認してください。',
@@ -6249,7 +6568,7 @@ function notifyTrainingDecision_(memberId, trainingId, actorId) {
     if (!takeRateLimit_('resultNotify', actorId, 1)) { _notifyLimited = true; return false }
     var approved = found.record.status === 'approved'
     var trainingName = String(found.record.name || '')
-    sendLocalizedEmail_(emails, {
+    deliverNotification_(emails, {
       ja: {
         subject: '[Ohsumi] 研修申請が' + (approved ? '承認' : '却下') + 'されました',
         body: '研修「' + trainingName + '」の申請が' + (approved ? '承認' : '却下') + 'されました。\n\nOhsumiで確認してください。',
@@ -6345,7 +6664,7 @@ function notifyScheduleResult_(taskId, actorId) {
     bodyJa += '\nOhsumiで確認してください。'
     bodyEn += '\nPlease check Ohsumi for details.'
 
-    sendLocalizedEmail_(emails, {
+    deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] 日程調整の回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
     })
@@ -6410,7 +6729,7 @@ function notifyFormResult_(taskId, actorId) {
     bodyJa += '\nOhsumiで確認してください。'
     bodyEn += '\nPlease check Ohsumi for details.'
 
-    sendLocalizedEmail_(emails, {
+    deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] フォームの回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
     })
@@ -7835,6 +8154,9 @@ function updateDiscordWebhookUrl_(url) {
     '[Ohsumi] Discord Webhook URLが変更されました',
     (url ? 'Discord Webhook URLが更新されました。' : 'Discord Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+    null,
+    // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
+    { urgent: true, evenIfChat: true },
   )
   return { updated: true }
 }
@@ -7856,6 +8178,9 @@ function updateSlackWebhookUrl_(url) {
     '[Ohsumi] Slack Webhook URLが変更されました',
     (url ? 'Slack Webhook URLが更新されました。' : 'Slack Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+    null,
+    // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
+    { urgent: true, evenIfChat: true },
   )
   return { updated: true }
 }
@@ -8250,7 +8575,7 @@ function processExpenseStep_(applicationId, stepId, actorId, action, comment) {
   if (newStatus === 'approved') {
     var applicantId = String(data[headers.indexOf('applicant_id')])
     var emails = memberEmailsByIds_([applicantId])
-    sendLocalizedEmail_(emails, {
+    deliverNotification_(emails, {
       ja: { subject: 'Ohsumi: 経費申請が承認されました', body: '経費申請が承認されました。' },
       en: { subject: 'Ohsumi: Expense application approved', body: 'Your expense application has been approved.' },
     })
@@ -8306,7 +8631,7 @@ function setExpenseStatus_(applicationId, status, reason, actorId) {
         }
         if (withdrawNotifyIds.length > 0) {
           var wEmails = memberEmailsByIds_(withdrawNotifyIds)
-          sendLocalizedEmail_(wEmails, {
+          deliverNotification_(wEmails, {
             ja: { subject: 'Ohsumi: 経費申請が取り下げられました', body: '経費申請が取り下げられました。この申請への対応は不要です。' },
             en: { subject: 'Ohsumi: Expense application withdrawn', body: 'The expense application has been withdrawn. No action is needed on your part.' },
           })
@@ -8319,7 +8644,7 @@ function setExpenseStatus_(applicationId, status, reason, actorId) {
   // 却下通知
   if (status === 'rejected') {
     var emails = memberEmailsByIds_([applicantId])
-    sendLocalizedEmail_(emails, {
+    deliverNotification_(emails, {
       ja: { subject: 'Ohsumi: 経費申請が却下されました', body: '経費申請が却下されました。\n理由: ' + (reason || '—') },
       en: { subject: 'Ohsumi: Expense application rejected', body: 'Your expense application has been rejected.\nReason: ' + (reason || '—') },
     })
@@ -8328,7 +8653,7 @@ function setExpenseStatus_(applicationId, status, reason, actorId) {
   // EXP-008: 差し戻し通知（却下とは別。修正して再提出できる旨を伝える）
   if (status === 'returned') {
     var rEmails = memberEmailsByIds_([applicantId])
-    sendLocalizedEmail_(rEmails, {
+    deliverNotification_(rEmails, {
       ja: { subject: 'Ohsumi: 経費申請が差し戻されました', body: '経費申請が差し戻されました。内容を修正のうえ、再提出してください。\n理由: ' + (reason || '—') },
       en: { subject: 'Ohsumi: Expense application returned for revision', body: 'Your expense application has been returned for revision. Please update it and resubmit.\nReason: ' + (reason || '—') },
     })
@@ -8500,14 +8825,13 @@ function setFormSubmissionStatus_(submissionId, status, reason) {
       if (submitterId) {
         var emails = memberEmailsByIds_([submitterId])
         if (emails.length > 0) {
-          sendMail_({
-            to: emails.join(','),
+          deliverNotification_(emails, { ja: {
             subject: '[Ohsumi] 申請フォームが却下されました',
             body:
               '申請フォームの申請が却下されました。\n\n' +
               (reason ? '理由: ' + reason + '\n\n' : '') +
               'Ohsumiで確認してください。',
-          })
+          } })
         }
         notifyChat_('📋 申請フォームが却下されました。' + (reason ? '（理由: ' + reason + '）' : ''))
       }

@@ -130,6 +130,18 @@ describe('提供停止(suspend)', () => {
   })
 })
 
+describe('メールの1日の上限をレジストリに伝える', () => {
+  it('checkIn で、メールの残りの数・今日送れなかった数・最後に上限に達した日を伝え、レジストリに残る', () => {
+    const p = pair()
+    p.o.c.mailQuotaToday_ = () => '2026-10-01'
+    p.o.c.MailApp = { getRemainingDailyQuota: () => 0 }
+    p.o.props.MAIL_QUOTA_STATE = JSON.stringify({ date: '2026-10-01', skipped: 3, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' })
+    check(p)
+    expect(p.o.sent.at(-1)!.mail).toEqual({ remaining: 0, skipped: 3, date: '2026-10-01', lastReachedDate: '2026-10-01' })
+    expect([p.orgValue('mail_remaining'), p.orgValue('mail_skipped'), p.orgValue('mail_date'), p.orgValue('mail_limit_date')]).toEqual([0, 3, '2026-10-01', '2026-10-01'])
+  })
+})
+
 describe('機能停止(restrict)', () => {
   it('作成・編集は断り、アンケートへの回答をお願いする。ログイン・読み取りは受け付ける', () => {
     const p = pair()

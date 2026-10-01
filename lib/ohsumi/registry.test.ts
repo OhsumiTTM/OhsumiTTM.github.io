@@ -12,7 +12,8 @@ describe('シートの用意(setupRegistry)', () => {
     t.gas.setupRegistry()
     expect([...t.sheets.keys()]).toEqual(EXPECTED_SHEETS)
     expect(t.sheets.get('Orgs')!.rows[0]).toEqual(['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
-      'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan'])
+      'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan',
+      'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date'])
     expect(t.sheets.get('Secrets')!.protections).toHaveLength(1)
     expect(t.sheets.get('AuditLog')!.protections).toHaveLength(1)
     expect(t.sheets.get('Orgs')!.protections).toHaveLength(0)
