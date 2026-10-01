@@ -165,6 +165,51 @@ export interface Overview {
   surveyLimits?: Record<Plan, number>
   surveyYear?: string
   surveyYearCounts?: Record<string, number>
+  // お知らせ(新しい順。古いレジストリでは無い)
+  announcements?: AnnouncementSummary[]
+}
+
+// ---- お知らせ(PR P) ----
+export type AnnouncementImportance = 'normal' | 'important' | 'urgent'
+export const ANNOUNCEMENT_IMPORTANCE_LABELS: Record<AnnouncementImportance, string> = { normal: '通常', important: '重要', urgent: '緊急' }
+// active: 掲載中 / expired: 掲載の終わりを過ぎた / withdrawn: 取り下げ
+export type AnnouncementState = 'active' | 'expired' | 'withdrawn'
+export const ANNOUNCEMENT_STATE_LABELS: Record<AnnouncementState, string> = { active: '掲載中', expired: '掲載終了', withdrawn: '取り下げ' }
+export const ANNOUNCEMENT_BODY_MAX = 1000
+export const ANNOUNCEMENT_DEFAULT_DAYS = 30
+
+export interface AnnouncementSummary {
+  announcementId: string
+  title: string
+  body: string
+  importance: AnnouncementImportance
+  targetKind: 'all' | 'plan' | 'orgs'
+  targetPlan: Plan | ''
+  targetOrgIds: string[]
+  publishedAt: string
+  expiresAt: string
+  createdBy: string
+  state: AnnouncementState
+  withdrawnAt: string
+  withdrawnBy: string
+}
+
+export interface AnnouncementInput {
+  title: string
+  body: string
+  importance: AnnouncementImportance
+  target: SurveyTarget
+  expiresAt: string // ISO
+}
+
+/** お知らせを出す。送り直さない(二重に出さないため) */
+export function publishAnnouncement(session: AdminSession, input: AnnouncementInput): Promise<AnnouncementSummary> {
+  return callRegistry<AnnouncementSummary>('publishAnnouncement', { session: session.token, ...input })
+}
+
+/** お知らせを取り下げる。送り直さない */
+export function withdrawAnnouncement(session: AdminSession, announcementId: string, reason: string): Promise<AnnouncementSummary> {
+  return callRegistry<AnnouncementSummary>('withdrawAnnouncement', { session: session.token, announcementId, reason })
 }
 
 // ---- アンケート(PR O) ----

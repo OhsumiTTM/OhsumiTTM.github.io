@@ -182,6 +182,25 @@ export interface PendingSurvey {
   restrictAt: string
 }
 
+/** FSIF からのお知らせ(gas/Code.gs の announcementsStatus_)。importance: normal 通常 / important 重要 / urgent 緊急 */
+export type AnnouncementImportance = 'normal' | 'important' | 'urgent'
+export interface Announcement {
+  announcementId: string
+  title: string
+  body: string
+  importance: AnnouncementImportance
+  publishedAt: string
+  expiresAt: string
+}
+export interface AnnouncementsStatus {
+  // レジストリに登録しているか(していない団体には、お知らせは届かない)
+  registered: boolean
+  announcements: Announcement[]
+  fetchedAt: string
+  // レジストリに届かず、最後に取れたものを出している
+  stale: boolean
+}
+
 export interface OpsStatus {
   jobs: JobStatus
   sharing: { checkedAt: string; problems: SharingProblem[] }
@@ -1198,6 +1217,7 @@ export const remoteApi = {
   getUsageStatus: () => postToGas<UsageStatus>('getUsageStatus', {}),
   // FSIF に送る集計値(代表だけ)
   getMetricsStatus: () => postToGas<MetricsStatus>('getMetricsStatus', {}),
+  getAnnouncements: () => postToGas<AnnouncementsStatus>('getAnnouncements', {}),
   setMetricsSharing: (enabled: boolean) => postToGas<MetricsStatus>('setMetricsSharing', { enabled }),
   reportClientError: (kind: string, errorAction?: string) => postToGas<{ recorded: boolean }>('reportClientError', { kind, errorAction: errorAction ?? '' }),
   // 個人情報の削除(代表だけ。gas/Code.gs の「個人情報の削除」)

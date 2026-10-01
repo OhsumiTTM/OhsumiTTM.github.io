@@ -64,6 +64,14 @@ import {
   type SendSurveyResult,
   type SurveyState,
   type SurveySummary,
+  ANNOUNCEMENT_BODY_MAX,
+  ANNOUNCEMENT_DEFAULT_DAYS,
+  ANNOUNCEMENT_IMPORTANCE_LABELS,
+  ANNOUNCEMENT_STATE_LABELS,
+  publishAnnouncement,
+  withdrawAnnouncement,
+  type AnnouncementImportance,
+  type AnnouncementSummary,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -106,11 +114,14 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   markSurveyAnswered: 'アンケートを回答済みにした',
   cancelSurvey: 'アンケートの取り消し',
   scheduleSurveyRestriction: 'アンケートの未回答で機能停止を入れた(28日目)',
+  publishAnnouncement: 'お知らせを出した',
+  withdrawAnnouncement: 'お知らせの取り下げ',
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },
   { id: 'codes', label: '登録コード' },
   { id: 'surveys', label: 'アンケート' },
+  { id: 'announcements', label: 'お知らせ' },
   { id: 'audit', label: '操作の記録' },
 ] as const
 type TabId = (typeof TABS)[number]['id']
@@ -257,6 +268,8 @@ export function RegistryAdmin() {
           onChanged={() => void load(session)}
           onAuthError={endSession}
         />
+      ) : tab === 'announcements' ? (
+        <AnnouncementsPanel overview={overview} session={session} onChanged={() => void load(session)} onAuthError={endSession} />
       ) : tab === 'surveys' ? (
         <SurveysPanel overview={overview} session={session} onChanged={() => void load(session)} onAuthError={endSession} />
       ) : (
@@ -1330,6 +1343,184 @@ function SurveyItem({ survey: s, session, onChanged, onAuthError }: { survey: Su
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="destructive" disabled={busy || !reason.trim()} onClick={() => void act(() => cancelSurvey(session, s.surveyId, reason))}>取り消す</Button>
             <Button size="sm" variant="ghost" onClick={() => setCancelling(false)}>やめる</Button>
+          </div>
+        </div>
+      )}
+      {message && <p className="mt-1 text-sm break-words text-destructive">{message}</p>}
+    </li>
+  )
+}
+
+// ---- お知らせ(PR P) ----
+//   全団体・プラン別・団体を選んで出す。団体の代表・管理者の管理画面の上部に出る(団体の GAS が10分ごとまでに取りに来る)
+const IMPORTANCE_TONES: Record<AnnouncementImportance, 'muted' | 'warn' | 'bad'> = { normal: 'muted', important: 'warn', urgent: 'bad' }
+
+function dateInputAfter(days: number, nowMs = Date.now()): string {
+  return todayJst(nowMs + days * 24 * 3600 * 1000)
+}
+
+function AnnouncementsPanel({ overview, session, onChanged, onAuthError }: { overview: Overview; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [importance, setImportance] = useState<AnnouncementImportance>('normal')
+  const [kind, setKind] = useState<'all' | 'plan' | 'orgs'>('all')
+  const [plan, setPlan] = useState<Plan>('ohsumi')
+  const [orgIds, setOrgIds] = useState<string[]>([])
+  const [until, setUntil] = useState(() => dateInputAfter(ANNOUNCEMENT_DEFAULT_DAYS))
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const [showAll, setShowAll] = useState(false)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  if (!overview.announcements) return <p className="text-sm text-muted-foreground">このレジストリは、お知らせに対応していません(registry/Code.gs を更新してください)。</p>
+  const list = showAll ? overview.announcements : overview.announcements.filter((a) => a.state === 'active')
+  const orgName = (id: string) => overview.orgs.find((o) => o.orgId === id)?.displayName || id
+
+  const publish = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!title.trim()) return setMessage('お知らせの題を入れてください。')
+    if (!body.trim()) return setMessage('お知らせの本文を入れてください。')
+    if (kind === 'orgs' && !orgIds.length) return setMessage('出す団体を選んでください。')
+    // 掲載の終わり: 選んだ日の終わり(日本時間の 23:59)
+    const expiresAt = new Date(Date.parse(until + 'T23:59:00+09:00')).toISOString()
+    setBusy(true)
+    setMessage(null)
+    try {
+      const target = kind === 'plan' ? { kind, plan } : kind === 'orgs' ? { kind, orgIds } : { kind }
+      await publishAnnouncement(session, { title: title.trim(), body: body.trim(), importance, target, expiresAt })
+      setTitle(''); setBody(''); setImportance('normal'); setOrgIds([])
+      setMessage('お知らせを出しました。団体の管理画面には、10分ほどで出ます。')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(`${err instanceof Error ? err.message : String(err)}(出たかどうかは、下の一覧で確かめてください)`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <form data-announcement-form onSubmit={(e) => void publish(e)} className="space-y-2 rounded-lg border border-border p-3">
+        <h2 className="text-sm font-medium">お知らせを出す</h2>
+        <p className="text-xs text-muted-foreground">団体の代表・管理者の管理画面の上部に出します(メールは送りません)。本文は文字としてだけ出します(リンクにはなりません)。緊急のお知らせは、掲載の間は既読にできません。</p>
+        <label className="block text-xs">
+          題
+          <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={100} />
+        </label>
+        <label className="block text-xs">
+          本文({body.length} / {ANNOUNCEMENT_BODY_MAX} 文字)
+          <textarea className={inputClass + ' min-h-24'} value={body} onChange={(e) => setBody(e.target.value)} maxLength={ANNOUNCEMENT_BODY_MAX} />
+        </label>
+        <fieldset className="text-xs">
+          <legend className="mb-1">重要度</legend>
+          {(['normal', 'important', 'urgent'] as const).map((k) => (
+            <label key={k} className="mr-3 inline-flex items-center gap-1">
+              <input type="radio" name="announcement-importance" checked={importance === k} onChange={() => setImportance(k)} />
+              {ANNOUNCEMENT_IMPORTANCE_LABELS[k]}
+            </label>
+          ))}
+        </fieldset>
+        <fieldset className="space-y-1 text-xs">
+          <legend className="mb-1">出す団体</legend>
+          {([['all', '全団体'], ['plan', 'プランを選ぶ'], ['orgs', '団体を選ぶ']] as const).map(([k, label]) => (
+            <label key={k} className="mr-3 inline-flex items-center gap-1">
+              <input type="radio" name="announcement-target" checked={kind === k} onChange={() => setKind(k)} />
+              {label}
+            </label>
+          ))}
+          {kind === 'plan' && (
+            <>
+              <select className={inputClass} value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
+                {(['cosmo_base', 'ohsumi', 'paid'] as const).map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+              </select>
+              <p className="text-muted-foreground">団体の今のプランで決めます(出した後にプランを変えた団体も、今のプランで出す・出さないが変わります)。</p>
+            </>
+          )}
+          {kind === 'orgs' && (
+            <ul className="max-h-60 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+              {overview.orgs.map((o) => (
+                <li key={o.orgId}>
+                  <label className="flex min-w-0 items-start gap-1.5">
+                    <input type="checkbox" className="mt-0.5" checked={orgIds.includes(o.orgId)}
+                      onChange={(e) => setOrgIds((ids) => (e.target.checked ? [...ids, o.orgId] : ids.filter((x) => x !== o.orgId)))} />
+                    <span className="min-w-0 break-all">{o.displayName || o.orgId}<span className="ml-1 text-muted-foreground">({PLAN_LABELS[o.plan]})</span></span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </fieldset>
+        <label className="block text-xs">
+          掲載の終わり(この日まで出します。1年以内)
+          <input className={inputClass} type="date" value={until} min={todayJst()} max={dateInputAfter(365)} onChange={(e) => setUntil(e.target.value)} />
+        </label>
+        <Button type="submit" size="sm" disabled={busy}>{busy ? '出しています…' : 'お知らせを出す'}</Button>
+        {message && <p className="text-sm break-words">{message}</p>}
+      </form>
+
+      <section>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium">出したお知らせ</h2>
+          <label className="flex items-center gap-1.5 text-xs">
+            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+            掲載終了・取り下げも出す
+          </label>
+        </div>
+        {list.length === 0 ? (
+          <p className="text-xs text-muted-foreground">ありません。</p>
+        ) : (
+          <ul className="space-y-2">
+            {list.map((a) => <AnnouncementItem key={a.announcementId} a={a} targetText={a.targetKind === 'all' ? '全団体' : a.targetKind === 'plan' ? PLAN_LABELS[a.targetPlan] : a.targetOrgIds.map(orgName).join('、')} session={session} onChanged={onChanged} onAuthError={onAuthError} />)}
+          </ul>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function AnnouncementItem({ a, targetText, session, onChanged, onAuthError }: { a: AnnouncementSummary; targetText: string; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [message, setMessage] = useState<string | null>(null)
+  const withdraw = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      await withdrawAnnouncement(session, a.announcementId, reason)
+      setOpen(false)
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <li data-announcement-item className="rounded-md border border-border px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge tone={IMPORTANCE_TONES[a.importance]}>{ANNOUNCEMENT_IMPORTANCE_LABELS[a.importance]}</Badge>
+        <span className="min-w-0 font-medium break-words">{a.title}</span>
+        <Badge tone={a.state === 'active' ? 'ok' : 'muted'}>{ANNOUNCEMENT_STATE_LABELS[a.state]}</Badge>
+      </div>
+      <p className="mt-1 break-words whitespace-pre-wrap">{a.body}</p>
+      <dl className="mt-1 space-y-0.5">
+        <Field label="出す団体">{targetText}</Field>
+        <Field label="掲載">{fmt(a.publishedAt)} 〜 {fmt(a.expiresAt)}</Field>
+        <Field label="出した人">{a.createdBy}</Field>
+        {a.state === 'withdrawn' && <Field label="取り下げ">{fmt(a.withdrawnAt)}({a.withdrawnBy})</Field>}
+      </dl>
+      {a.state === 'active' && !open && <Button className="mt-2" size="sm" variant="ghost" onClick={() => setOpen(true)}>取り下げる…</Button>}
+      {a.state === 'active' && open && (
+        <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2">
+          <label className="block">
+            取り下げる理由(操作の記録に残します。団体の管理画面からは、10分ほどで消えます)
+            <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="destructive" disabled={busy} onClick={() => void withdraw()}>取り下げる</Button>
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
           </div>
         </div>
       )}

@@ -100,6 +100,8 @@ export const READ_ACTIONS = new Set([
   'getUsageStatus',
   // FSIF に送る集計値の状態・プレビュー・送信の履歴(代表だけ)
   'getMetricsStatus',
+  // FSIF からのお知らせ(代表・管理者)
+  'getAnnouncements',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
