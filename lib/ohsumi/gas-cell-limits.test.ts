@@ -3,6 +3,8 @@
 //   - 8割(4万文字)を超えた保存は、書いた人(longRecords)と代表(初めて超えた時に、まとめのメール)に知らせる
 //   - 代表の管理画面(getOpsStatus)で、どの記録がいくつ上限に近いかを見られる
 //   - measureReadPerformance の判定(移行の前に、完了したタスクを最初の読み込みから外すことが要るか)
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CODE_GS, guardHarness } from './gas-guard-harness'
 
@@ -133,6 +135,22 @@ describe('読み取り性能の計測の判定', () => {
     expect(verdict(metrics(h, 10, 6, { cached: false }))).toContain('キャッシュの分割')
     expect(verdict(metrics(h, 10, 6, { readSheetsMs: 9000 }))).toContain('キャッシュなしのシート読み込みが 9000 ms')
     expect(verdict(metrics(h, 10, 6, { viewerChars: 4 * 1024 * 1024 }))).toContain('閲覧者ごとの読み込みが 4096 KB')
+  })
+})
+
+describe('予行演習の手順(docs/orbit-migration-plan.md の 5.2)', () => {
+  it('判定の目安が、measureReadPerformance と同じ', () => {
+    const doc = readFileSync(join(__dirname, '..', '..', 'docs', 'orbit-migration-plan.md'), 'utf8')
+    const h = guardHarness()
+    expect(h.c.READ_LIMIT_TASKS).toBe(2000)
+    expect(doc).toContain('| タスクの件数 | 2,000 件 |')
+    expect(h.c.READ_LIMIT_VIEWER_CHARS).toBe(3 * 1024 * 1024)
+    expect(doc).toContain('| 閲覧者ごとの読み込みの大きさ | 3MB |')
+    expect(h.c.READ_LIMIT_CHUNK_PERCENT).toBe(75)
+    expect(doc).toContain('| キャッシュの分割の数 | 45 / 60 個(75%) |')
+    expect(h.c.READ_LIMIT_SHEETS_MS).toBe(8000)
+    expect(doc).toContain('| キャッシュなしのシート読み込み | 8 秒 |')
+    expect(doc).toContain('measureReadPerformance')
   })
 })
 
