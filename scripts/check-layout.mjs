@@ -303,8 +303,23 @@ const MEASURE = `(() => {
     if (wrapped) b.dataset.wrappedText = wrapped.textContent.trim()
     return !!wrapped
   }).map((b) => '「' + b.dataset.wrappedText + '」 in ' + desc(b))
-  return JSON.stringify({ page: document.documentElement.scrollWidth, window: window.innerWidth, off: off.slice(0, 5), squashed: squashed.slice(0, 5) })
+  // Ohsumi のロゴのシンボル(ブランドガイドライン v0.4): 縦横比 1:1・回転や影などの効果なし・Ohsumi Blue(団体のテーマの色では変わらない)
+  const logos = [...document.querySelectorAll('[data-ohsumi-symbol]')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => {
+    const r = el.getBoundingClientRect()
+    const effects = []
+    for (let e = el; e && e !== document.body; e = e.parentElement) {
+      const cs = getComputedStyle(e)
+      if (cs.transform !== 'none') effects.push('transform ' + cs.transform)
+      if (e === el && cs.filter !== 'none') effects.push('filter ' + cs.filter)
+      if (e === el && cs.boxShadow !== 'none') effects.push('box-shadow')
+    }
+    return { w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100, color: getComputedStyle(el).color, effects }
+  })
+  return JSON.stringify({ page: document.documentElement.scrollWidth, window: window.innerWidth, off: off.slice(0, 5), squashed: squashed.slice(0, 5), logos })
 })()`
+// ロゴのシンボルの色(Ohsumi Blue #2F5BEA)
+const LOGO_BLUE = 'rgb(47, 91, 234)'
+let logoChecks = 0
 // カード全体、またはカードの中の行(文字が入ったもの)が、縦に押しつぶされて切れていないか
 const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-grab.absolute')].filter((c) =>
   c.scrollHeight > c.clientHeight + 1 ||
@@ -431,7 +446,7 @@ async function run({ build = true } = {}) {
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
-          orphanEmails: [{ id: 'm-old-1', email: 'old.member.with.a.long.address@example.com' }, { id: 'orbit-' + 'x'.repeat(30), email: 'shifted@example.com' }],
+          orphanEmails: [{ id: 'm-old-1', email: 'old.member.with.a.long.address@example.com' }, { id: 'old-' + 'x'.repeat(30), email: 'shifted@example.com' }],
           pending: [
             { kind: 'member', id: 'm-left', name: 'とても長い名前の退会したメンバーさん'.repeat(2), since: '2026-09-05T00:00:00.000Z', purgeAt: '2026-10-05T00:00:00.000Z', extended: false },
             { kind: 'candidate', id: 'cand-1', name: '採用しなかった候補者', since: '2026-09-05T00:00:00.000Z', purgeAt: '2026-10-05T00:00:00.000Z', extended: true },
@@ -1053,6 +1068,12 @@ async function run({ build = true } = {}) {
         m.off.forEach((o) => problems.push('はみ出し: ' + o))
         m.squashed.forEach((o) => problems.push('文字が折り返した短いラベル: ' + o))
         if (step.dependencyCards) JSON.parse(await evaluate(MEASURE_CARDS)).forEach((c) => problems.push('中身が切れたカード: ' + c))
+        for (const l of m.logos) {
+          logoChecks++
+          if (Math.abs(l.w - l.h) > 0.5) problems.push(`ロゴの円の縦横比が 1:1 ではありません(${l.w} × ${l.h}px)`)
+          if (l.color !== LOGO_BLUE) problems.push(`ロゴのシンボルの色が Ohsumi Blue ではありません(${l.color})`)
+          l.effects.forEach((e) => problems.push('ロゴに効果が付いています: ' + e))
+        }
         console.log(`${problems.length ? '✗' : '✓'} ${step.name}`)
         problems.forEach((p) => failures.push(`${step.name}: ${p}`))
       } catch (e) {
@@ -1061,6 +1082,16 @@ async function run({ build = true } = {}) {
       }
     }
     }
+    // ロゴ: どこかの画面で確かめたこと。団体がテーマの色(--primary)を変えても、シンボルの色は変わらないこと
+    if (!logoChecks) failures.push('ロゴ: どの画面でも Ohsumi のロゴ(data-ohsumi-symbol)を確かめられませんでした')
+    const themed = await evaluate(`(() => {
+      document.documentElement.style.setProperty('--primary', '#ff0000')
+      const el = document.querySelector('[data-ohsumi-symbol]')
+      const color = el ? getComputedStyle(el).color : ''
+      document.documentElement.style.removeProperty('--primary')
+      return color })()`)
+    if (themed && themed !== LOGO_BLUE) failures.push(`ロゴ: 団体のテーマの色でシンボルの色が変わりました(${themed})`)
+    console.log(`${logoChecks && (!themed || themed === LOGO_BLUE) ? '✓' : '✗'} ロゴ(${logoChecks} か所で縦横比 1:1・Ohsumi Blue・効果なし。テーマの色で変わらない)`)
     ws.close()
   } finally {
     chrome.kill()
