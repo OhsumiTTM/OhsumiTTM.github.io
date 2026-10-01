@@ -1066,7 +1066,7 @@ function AuditList({ audit }: { audit: AuditEntry[] }) {
 }
 
 // ---- アンケート(PR O) ----
-//   - 送る: Google フォームの URL・送付日・対象(全団体・プラン・団体を選ぶ)。プランごとの年間の上限を超える団体には送らない(レジストリが判定)
+//   - 送る: Google フォームの URL・送付日・対象(全団体・プラン・団体を選ぶ)。プランごとの上限(直近12か月)を超える団体には送らない(レジストリが判定)
 //   - 期限を過ぎて回答が無い団体(有償プランを除く): 「28日目に機能停止を入れる」を1回の操作で入れる(自動では入れない)
 //   - 一覧: 状態・送ったメール・「回答済みにする」(リマインドと機能停止を止める)・取り消し
 const SURVEY_STATE_TONES: Record<SurveyState, 'muted' | 'ok' | 'warn' | 'bad'> = { scheduled: 'muted', open: 'warn', overdue: 'bad', answered: 'ok', cancelled: 'muted' }
@@ -1178,7 +1178,7 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
   const [result, setResult] = useState<SendSurveyResult | null>(null)
   const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
   const limits = overview.surveyLimits
-  const counts = overview.surveyYearCounts ?? {}
+  const counts = overview.survey12mCounts ?? {}
   const orgName = (id: string) => overview.orgs.find((o) => o.orgId === id)?.displayName || id
 
   const send = async (e: React.FormEvent) => {
@@ -1211,7 +1211,7 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
       </p>
       {limits && (
         <p data-survey-limits className="text-xs text-muted-foreground">
-          年間の上限({overview.surveyYear}年。送付日の年で数え、取り消したものは数えません): {(['ohsumi', 'cosmo_base', 'paid'] as const).map((p) => `${PLAN_LABELS[p]} ${limits[p]}件`).join('・')}。上限に達した団体・プランが未設定の団体には送りません。
+          上限(直近12か月。送付日で数え、送付の予定を含みます。取り消したものは数えません): {(['ohsumi', 'cosmo_base', 'paid'] as const).map((p) => `${PLAN_LABELS[p]} ${limits[p]}件`).join('・')}。上限を超える団体・プランが未設定の団体には送りません。
         </p>
       )}
       <label className="block text-xs">
@@ -1250,7 +1250,7 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
                       onChange={(e) => setOrgIds((ids) => (e.target.checked ? [...ids, o.orgId] : ids.filter((x) => x !== o.orgId)))} />
                     <span className="min-w-0 break-all">
                       {o.displayName || o.orgId}
-                      <span className="ml-1 text-muted-foreground">({PLAN_LABELS[o.plan]}{limit !== null ? `・今年 ${counts[o.orgId] ?? 0} / ${limit}件` : ''})</span>
+                      <span className="ml-1 text-muted-foreground">({PLAN_LABELS[o.plan]}{limit !== null ? `・直近12か月 ${counts[o.orgId] ?? 0} / ${limit}件` : ''})</span>
                     </span>
                   </label>
                 </li>
@@ -1324,7 +1324,7 @@ function SurveyItem({ survey: s, session, onChanged, onAuthError }: { survey: Su
       {active && cancelling && (
         <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2">
           <label className="block">
-            取り消す理由(操作の記録に残します。取り消したものは年間の数に数えず、リマインドと機能停止も止めます)
+            取り消す理由(操作の記録に残します。取り消したものは上限の数に数えず、リマインドと機能停止も止めます)
             <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
           </label>
           <div className="flex flex-wrap gap-2">

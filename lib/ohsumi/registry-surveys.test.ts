@@ -1,4 +1,4 @@
-// レジストリ(registry/Code.gs)のアンケート(PR O): 送る・プランごとの年間の上限・リマインド・回答済み・
+// レジストリ(registry/Code.gs)のアンケート(PR O): 送る・プランごとの上限(直近12か月)・リマインド・回答済み・
 // 期限を過ぎた団体への28日目の機能停止・checkIn で団体の GAS に伝える
 import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
@@ -107,7 +107,7 @@ describe('アンケートを送る', () => {
     expect(t.send({ formUrl: 'https://docs.google.com/forms/d/' + 'x'.repeat(300) }).error).toContain('300文字まで')
   })
 
-  it('プランごとの年間の上限(Ohsumi 24・Cosmo Base 12・有償 4)を超えて送れない。取り消したものは数えない', () => {
+  it('プランごとの上限(直近12か月で Ohsumi 24・Cosmo Base 12・有償 4)を超えて送れない。取り消したものは数えない', () => {
     const t = ready()
     t.plan(ORG_A, 'paid')
     t.plan(ORG_B, 'cosmo_base')
@@ -117,14 +117,38 @@ describe('アンケートを送る', () => {
     }
     const fifth = t.send({ formUrl: 'https://forms.gle/f4' })
     expect(fifth.result.sent.map((s: { orgId: string }) => s.orgId)).toEqual([ORG_B])
-    expect(fifth.result.skipped[0]).toMatchObject({ orgId: ORG_A, reason: expect.stringContaining('有償プランの年間の上限') })
+    expect(fifth.result.skipped[0]).toMatchObject({ orgId: ORG_A, reason: expect.stringContaining('有償プランの上限(直近12か月で4件)') })
     const first = t.overview().surveys.find((s: { orgId: string; formUrl: string }) => s.orgId === ORG_A && s.formUrl === 'https://forms.gle/f0')
     expect(t.post({ action: 'cancelSurvey', session: t.session, surveyId: first.surveyId, reason: '送り間違い' }).ok).toBe(true)
     expect(t.send({ formUrl: 'https://forms.gle/f5', target: { kind: 'orgs', orgIds: [ORG_A] } }).result.sent).toHaveLength(1)
     const ov = t.overview()
     expect(ov.surveyLimits).toEqual({ ohsumi: 24, cosmo_base: 12, paid: 4 })
-    expect(ov.surveyYearCounts[ORG_A]).toBe(4)
-    expect(ov.surveyYearCounts[ORG_B]).toBe(5)
+    expect(ov.survey12mCounts[ORG_A]).toBe(4)
+    expect(ov.survey12mCounts[ORG_B]).toBe(5)
+  })
+
+  it('上限は暦年ではなく直近12か月で数える。12か月より前のものは数えない', () => {
+    const t = ready()
+    t.plan(ORG_A, 'paid')
+    const only = { target: { kind: 'orgs', orgIds: [ORG_A] } }
+    const ids: string[] = []
+    for (let i = 0; i < 4; i++) ids.push(t.send({ ...only, formUrl: 'https://forms.gle/y' + i }).result.sent[0].surveyId)
+    // 4件とも、去年の今ごろより後(12か月以内)に送った: まだ送れない
+    ids.forEach((id, i) => t.age(id, 300 - i * 30))
+    expect(t.send({ ...only, formUrl: 'https://forms.gle/y9' }).result.skipped[0].reason).toContain('直近12か月で4件')
+    // 1件が12か月より前になれば、送れる
+    t.age(ids[0], 370)
+    expect(t.send({ ...only, formUrl: 'https://forms.gle/y9' }).result.sent).toHaveLength(1)
+  })
+
+  it('先の送付日の予定も数える(どの12か月の間でも上限を超えない)', () => {
+    const t = ready()
+    const peak = t.gas.surveyPeak12m_ as (dates: string[], day: string) => number
+    expect(peak(['2026-01-10', '2026-06-01', '2026-12-01'], '2026-10-01')).toBe(4)
+    expect(peak(['2025-09-01', '2026-01-10'], '2026-10-01')).toBe(2)
+    expect(peak(['2025-10-02'], '2026-10-01')).toBe(2)
+    expect(peak(['2025-10-01'], '2026-10-01')).toBe(1)
+    expect((t.gas.addMonthsKey_ as (k: string, m: number) => string)('2026-03-31', -1)).toBe('2026-02-28')
   })
 
   it('同じフォームを回答待ちの団体には、二重に送らない', () => {

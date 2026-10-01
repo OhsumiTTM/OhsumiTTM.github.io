@@ -771,8 +771,7 @@ function adminOverview_(body, nowMs) {
       gasVersions: gasVersionList_(),
       surveys: so.surveys,
       surveyLimits: so.surveyLimits,
-      surveyYear: so.surveyYear,
-      surveyYearCounts: so.surveyYearCounts,
+      survey12mCounts: so.survey12mCounts,
     },
   }
 }
@@ -1510,7 +1509,8 @@ function reportMetrics_(body, nowMs) {
 //   - 送付日の当日に、担当者(Contacts)へメールで送る(送付日が今日なら、その場で送る)。団体の GAS には checkIn で伝え、代表の管理画面に出す
 //   - 回答期限は送付日から14日目。リマインドは 7・10・14日目、期限の後は 15・21・26・27日目に、毎日の処理(dailyRegistryBackup)から送る
 //     (処理が止まっていた時は、まだ送っていないいちばん新しいものだけを送る)
-//   - プランごとの年間の上限(送付日の年。1月〜12月・日本時間。取り消したものは数えない): SURVEY_YEAR_LIMITS。プランが未設定の団体には送らない
+//   - プランごとの上限(直近12か月。送付日で数え、どの12か月の間でも超えないようにする。取り消したものは数えない): SURVEY_YEAR_LIMITS。
+//     プランが未設定の団体には送らない
 //   - 回答の確認は、当面 FSIF が管理画面で「回答済み」を押す。押すと、リマインドとこのアンケートで入れた機能停止(予定・停止中とも)を止める
 //   - 期限を過ぎても回答が無い団体(有償プランを除く)は、管理画面の一覧から「28日目に機能停止を入れる」を1回の操作で入れられる(自動では入れない)。
 //     28日目(送付日から28日後の0時・日本時間)を過ぎている時は、翌日の0時にする。入れた時に担当者へ知らせ、停止の予告(14・7・1日前)は送らない
@@ -1613,11 +1613,41 @@ function findSurveyRow_(surveyId) {
   return null
 }
 
-// 団体のその年(送付日の年)のアンケートの数(取り消したものは数えない)
-function surveyYearCount_(rows, orgId, year) {
-  return rows.filter(function (r) {
-    return String(r.values.org_id) === orgId && String(r.values.status) !== 'cancelled' && surveyDateKey_(r.values.send_date).slice(0, 4) === year
-  }).length
+// 'YYYY-MM-DD' の months か月後(月末は、その月の最後の日にそろえる)
+function addMonthsKey_(key, months) {
+  var p = key.split('-').map(Number)
+  var y = p[0] + Math.floor((p[1] - 1 + months) / 12)
+  var m = ((p[1] - 1 + months) % 12 + 12) % 12
+  var last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate()
+  var pad = function (n) { return (n < 10 ? '0' : '') + n }
+  return y + '-' + pad(m + 1) + '-' + pad(Math.min(p[2], last))
+}
+
+// 団体のアンケートの送付日の一覧(取り消したものは数えない)
+function surveySendDates_(rows, orgId) {
+  return rows.filter(function (r) { return String(r.values.org_id) === orgId && String(r.values.status) !== 'cancelled' })
+    .map(function (r) { return surveyDateKey_(r.values.send_date) }).filter(Boolean)
+}
+
+// 直近12か月の数: 送付日が (day の12か月前, day] のもの
+function surveyCount12m_(dates, day) {
+  var from = addMonthsKey_(day, -12)
+  return dates.filter(function (d) { return d > from && d <= day }).length
+}
+
+// 送付日 day のアンケートを足した時の、day を含むどの12か月の間でも一番多い数(純粋な関数)。
+// 先の送付日の予定もあるため、day を終わりにした12か月だけでなく、day を含む12か月の間をすべて見る
+function surveyPeak12m_(dates, day) {
+  var all = dates.concat([day])
+  var from = addMonthsKey_(day, -12)
+  var starts = all.filter(function (d) { return d > from && d <= day })
+  var peak = 0
+  starts.forEach(function (start) {
+    var end = addMonthsKey_(start, 12)
+    var n = all.filter(function (d) { return d >= start && d < end }).length
+    if (n > peak) peak = n
+  })
+  return peak
 }
 
 // このアンケートで入れた機能停止の時刻(入っていなければ 0)
@@ -1659,16 +1689,20 @@ function orgValuesById_() {
   return out
 }
 
-// 管理画面の一覧: アンケート(新しい順)と、プランごとの上限・今年の数
+// 管理画面の一覧: アンケート(新しい順)と、プランごとの上限・団体ごとの直近12か月の数
 function surveyOverview_(nowMs) {
   var orgs = orgValuesById_()
   var rows = readRows_('Surveys').filter(function (r) { return String(r.values.survey_id || '') })
-  var year = jstDateKey_(nowMs).slice(0, 4)
+  var today = jstDateKey_(nowMs)
   var counts = {}
-  Object.keys(orgs).forEach(function (id) { counts[id] = surveyYearCount_(rows, id, year) })
+  // 直近12か月の数(送付の予定を含む)
+  Object.keys(orgs).forEach(function (id) {
+    var dates = surveySendDates_(rows, id)
+    counts[id] = surveyCount12m_(dates, today) + dates.filter(function (d) { return d > today }).length
+  })
   var list = rows.map(function (r) { return surveySummary_(r.values, orgs[String(r.values.org_id)] || null, nowMs) })
   list.sort(function (a, b) { return b.sendDate.localeCompare(a.sendDate) || b.createdAt.localeCompare(a.createdAt) })
-  return { surveys: list.slice(0, SURVEY_SHOW_MAX), surveyLimits: SURVEY_YEAR_LIMITS, surveyYear: year, surveyYearCounts: counts }
+  return { surveys: list.slice(0, SURVEY_SHOW_MAX), surveyLimits: SURVEY_YEAR_LIMITS, survey12mCounts: counts }
 }
 
 // アンケートのメールを担当者に送り、送ったことを記録する(送れなかった時は記録しない。次の毎日の処理で送り直す)。送った宛先の数を返す
@@ -1748,7 +1782,6 @@ function sendSurvey_(body, nowMs) {
     if (!targets.length) throw registryError_('送る団体がありません。')
     var surveys = readRows_('Surveys')
     var contacts = contactEmails_()
-    var year = sendDate.slice(0, 4)
     var sent = []
     var skipped = []
     targets.forEach(function (r) {
@@ -1757,7 +1790,7 @@ function sendSurvey_(body, nowMs) {
       var skip = ''
       if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
       else if (orgDisplayState_(r.values, nowMs).state === 'suspended') skip = '提供停止中です。'
-      else if (surveyYearCount_(surveys, orgId, year) >= SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の年間の上限(' + year + '年に' + SURVEY_YEAR_LIMITS[plan] + '件)に達しています。'
+      else if (surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
       else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
         skip = '同じフォームのアンケートを、回答待ちで送っています。'
       }

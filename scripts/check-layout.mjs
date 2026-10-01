@@ -157,8 +157,7 @@ export function registryResponse(body) {
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
         surveyLimits: { ohsumi: 24, cosmo_base: 12, paid: 4 },
-        surveyYear: '2026',
-        surveyYearCounts: { ['org_' + 'x'.repeat(40)]: 12, org_b: 0, org_r: 3, org_c: 4 },
+        survey12mCounts: { ['org_' + 'x'.repeat(40)]: 12, org_b: 0, org_r: 3, org_c: 4 },
         surveys: [
           { surveyId: 'sv_1', orgId: 'org_r', orgName: '機能停止中の団体', plan: 'ohsumi', title: '2026年秋の利用状況のアンケート(とても長い名前の例です)'.repeat(2), formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform',
             sendDate: '2026-09-01', dueDate: '2026-09-15', state: 'overdue', day: 30, remindersSent: [0, 7, 10, 14, 15, 21, 26, 27], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: iso(2), canRestrict: false },
@@ -826,7 +825,7 @@ async function run({ build = true } = {}) {
           // 団体を選ぶ(今年の数と上限を出す)
           await evaluate(`[...document.querySelectorAll('[data-survey-send] input[type=radio]')][2].click()`)
           await sleep(300)
-          if (!(await evaluate(`document.querySelector('[data-survey-send]').textContent`)).includes('今年 12 / 12件')) throw new Error('団体を選ぶ欄に、今年の数と上限が出ません')
+          if (!(await evaluate(`document.querySelector('[data-survey-send]').textContent`)).includes('直近12か月 12 / 12件')) throw new Error('団体を選ぶ欄に、今年の数と上限が出ません')
         }
         if (step.do === 'registryIssue') {
           // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
