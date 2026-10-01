@@ -110,7 +110,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -363,6 +363,12 @@ async function run({ build = true } = {}) {
               { id: 'm1', name: 'とても長い名前のメンバーさん'.repeat(2), length: 47210 }, { id: 'm2', name: '', length: 41000 }] },
             { sheet: 'Tasks', field: 'comments_json', label: 'コメント', count: 1, items: [{ id: 't1', name: 'コメントが多いタスク', length: 40500 }] },
           ] } }
+        // 利用の状況(日ごとの回数・多い操作・エラー)
+        case 'getUsageStatus': return {
+          days: Array.from({ length: 14 }, (_, i) => ({ date: '2026-09-' + String(18 + i).padStart(2, '0'), login: i, open: i * 3, writes: i * 5 })),
+          topActions: [{ action: 'updateTaskStatus', count: 120 }, { action: 'updateComments', count: 80 }, { action: 'aVeryLongActionNameThatShouldWrapInsideTheNarrowScreen', count: 3 }],
+          errors: { last7Days: 4, byKind: [{ kind: 'conflict', count: 3 }, { kind: 'client:TypeError', count: 1 }],
+            recent: [{ at: '2026-09-30T10:00:00.000Z', source: 'gas', action: 'updateComments', kind: 'conflict' }, { at: '2026-09-30T09:00:00.000Z', source: 'client', action: 'window', kind: 'client:TypeError' }] } }
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
@@ -898,6 +904,11 @@ async function run({ build = true } = {}) {
             const privacy = await evaluate(`document.querySelector('[data-personal-data-panel]')?.textContent ?? ''`)
             for (const want of ['保存期間', 'すぐ消す', '30 日延長', '退会を取り消す', '(延長済み)', '対応するメンバーがいないメールアドレスの行が 2 件あります', 'old.member.with.a.long.address@example.com']) {
               if (!privacy.includes(want)) throw new Error('個人情報の削除に「' + want + '」が出ません')
+            }
+            // 同じ画面の「利用の状況」: 直近7日の回数・多い操作・エラー
+            const usage = await evaluate(`document.querySelector('[data-usage-panel]')?.textContent ?? ''`)
+            for (const want of ['利用の状況', '直近7日: ログイン 70 回・画面の読み込み 210 回・書き込み 350 回', 'updateTaskStatus', '直近7日のエラー: 4 件', 'conflict 3']) {
+              if (!usage.includes(want)) throw new Error('利用の状況に「' + want + '」が出ません: ' + usage)
             }
             const text = await evaluate(`document.querySelector('[data-backup-preview]')?.textContent ?? ''`)
             if (!text.includes('Tasks') || !text.includes('12') || !text.includes('10')) throw new Error('戻す前の件数の差が出ません: ' + text)

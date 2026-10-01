@@ -96,6 +96,8 @@ export const READ_ACTIONS = new Set([
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(代表だけ)
   'getOpsStatus',
+  // 利用の集計とエラーの件数(代表だけ)
+  'getUsageStatus',
   'fetchDailyReports',
   'translateText',
   'getBackgroundData',
@@ -532,6 +534,8 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'restoreTasks',
   // 共有を確かめ直す(ロックを取らない。スクリプトプロパティだけを書く)
   'recheckSharing',
+  // 画面のエラーの記録(ロックを取らない。エラーの記録のシートに1行足すだけ)
+  'reportClientError',
 ])
 
 export function isBatchableWrite(action: string): boolean {
