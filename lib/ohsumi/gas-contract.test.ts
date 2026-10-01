@@ -246,6 +246,11 @@ describe('FSIF からのアンケート(PR O)', () => {
       { surveyId: 's4', title: 'ok', formUrl: 'https://docs.google.com/forms/d/e/X/viewform', dueDate: '2026-10-15', overdue: 'yes', restrictAt: 'later' },
     ])).toEqual([{ surveyId: 's4', title: 'ok', formUrl: 'https://docs.google.com/forms/d/e/X/viewform', sendDate: '', dueDate: '2026-10-15', overdue: false, restrictAt: '' }])
     expect(p.g.parseSurveys_(undefined)).toEqual([])
+    // スクリプトプロパティ(9KB まで)に入るよう、5件・URL 300文字まで
+    const many = Array.from({ length: 8 }, (_, i) => ({ surveyId: 's' + i, title: 'アンケート'.repeat(20), formUrl: 'https://forms.gle/a' + i, dueDate: '2026-10-15' }))
+    expect((p.g.parseSurveys_(many) as unknown[]).length).toBe(5)
+    expect(new TextEncoder().encode(JSON.stringify(p.g.parseSurveys_(many))).length).toBeLessThan(4000)
+    expect(p.g.parseSurveys_([{ surveyId: 'l', title: 't', formUrl: 'https://docs.google.com/forms/d/' + 'x'.repeat(300), dueDate: '2026-10-15' }])).toEqual([])
   })
 })
 

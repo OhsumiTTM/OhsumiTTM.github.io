@@ -2875,12 +2875,16 @@ function parseGasUpdate_(v) {
 // CONTRACT_STATE に覚え、代表の管理画面に出す(getOpsStatus)。回答の確認は FSIF が行い、回答済みになると次の確認で消える
 var SURVEY_FORM_URL_PATTERN = /^https:\/\/(docs\.google\.com\/forms\/[A-Za-z0-9_\-\/.?=&%]+|forms\.gle\/[A-Za-z0-9_-]+)$/
 
+var SURVEYS_KEEP_MAX = 5
+
 function parseSurveys_(list) {
   if (!Array.isArray(list)) return []
   var day = /^\d{4}-\d{2}-\d{2}$/
-  return list.slice(0, 20).filter(function (v) {
-    return v && typeof v === 'object' && SURVEY_FORM_URL_PATTERN.test(String(v.formUrl || '')) && day.test(String(v.dueDate || ''))
-  }).map(function (v) {
+  // CONTRACT_STATE(スクリプトプロパティ。1つの値は9KBまで)に入るよう、5件・URL 300文字までにする
+  return list.filter(function (v) {
+    var url = String((v && v.formUrl) || '')
+    return v && typeof v === 'object' && url.length <= 300 && SURVEY_FORM_URL_PATTERN.test(url) && day.test(String(v.dueDate || ''))
+  }).slice(0, SURVEYS_KEEP_MAX).map(function (v) {
     var restrictAt = String(v.restrictAt || '')
     return {
       surveyId: String(v.surveyId || '').slice(0, 40),

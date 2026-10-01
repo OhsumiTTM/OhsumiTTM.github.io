@@ -519,7 +519,7 @@ R1-f 後半で、ビルド時に決まる「既定の団体」(GitHub Secrets �
 
 管理画面の **「アンケート」** のタブで、Google フォームのアンケートを団体に送ります。
 
-- **送る:** アンケートの名前・Google フォームの URL(`https://docs.google.com/forms/…` か `https://forms.gle/…`)・送付日(日本時間。今日から90日以内)・
+- **送る:** アンケートの名前・Google フォームの URL(`https://docs.google.com/forms/…` か `https://forms.gle/…`。300文字まで)・送付日(日本時間。今日から90日以内)・
   送る団体(全団体・プランを選ぶ・団体を選ぶ)を入れます(`sendSurvey`。操作の記録に残します)。
   - 送付日に、担当者(Contacts のメールアドレス)へメールで送ります。送付日が今日なら、その場で送ります。先の日なら、その日の毎日の処理(`dailyRegistryBackup`)で送ります。
   - 団体の GAS には checkIn で伝え、代表の管理画面に出します(gas/README.md の「4.19」)。送付日の前は伝えません。

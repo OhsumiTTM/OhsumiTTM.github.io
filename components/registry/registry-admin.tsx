@@ -1220,7 +1220,7 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
       </label>
       <label className="block text-xs">
         Google フォームの URL
-        <input className={inputClass} type="url" inputMode="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} maxLength={500} placeholder="https://docs.google.com/forms/d/e/…/viewform" />
+        <input className={inputClass} type="url" inputMode="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} maxLength={300} placeholder="https://docs.google.com/forms/d/e/…/viewform" />
       </label>
       <label className="block text-xs">
         送付日(日本時間)

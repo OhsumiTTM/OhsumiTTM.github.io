@@ -104,6 +104,7 @@ describe('アンケートを送る', () => {
     expect(t.send({ sendDate: '2026-02-30' }).error).toContain('送付日')
     expect(t.send({ target: { kind: 'orgs', orgIds: [] } }).error).toContain('送る団体')
     expect(t.send({ title: '' }).error).toContain('名前')
+    expect(t.send({ formUrl: 'https://docs.google.com/forms/d/' + 'x'.repeat(300) }).error).toContain('300文字まで')
   })
 
   it('プランごとの年間の上限(Ohsumi 24・Cosmo Base 12・有償 4)を超えて送れない。取り消したものは数えない', () => {

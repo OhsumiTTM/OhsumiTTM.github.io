@@ -1524,6 +1524,8 @@ var SURVEY_SEND_AHEAD_DAYS = 90
 var SURVEY_STATUSES = ['open', 'answered', 'cancelled']
 var SURVEY_FORM_URL_PATTERN = /^https:\/\/(docs\.google\.com\/forms\/[A-Za-z0-9_\-\/.?=&%]+|forms\.gle\/[A-Za-z0-9_-]+)$/
 var SURVEY_SHOW_MAX = 300
+// フォームの URL の長さ(団体の GAS は、回答待ちのアンケートをスクリプトプロパティに覚える。1つの値は9KBまで)
+var SURVEY_FORM_URL_MAX = 300
 var JST_OFFSET_MS = 9 * 3600 * 1000
 var DAY_MS = 24 * 3600 * 1000
 
@@ -1719,10 +1721,11 @@ function sendSurvey_(body, nowMs) {
   var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var title = cleanText_(body.title, 100)
-  var formUrl = cleanText_(body.formUrl, 500)
+  var formUrl = cleanText_(body.formUrl, 1000)
   var sendDate = String(body.sendDate || '')
   var today = jstDateKey_(nowMs)
   if (!title) throw registryError_('アンケートの名前を入れてください。')
+  if (formUrl.length > SURVEY_FORM_URL_MAX) throw registryError_('フォームの URL は' + SURVEY_FORM_URL_MAX + '文字までにしてください(短い URL https://forms.gle/… が使えます)。')
   if (!SURVEY_FORM_URL_PATTERN.test(formUrl)) throw registryError_('Google フォームの URL(https://docs.google.com/forms/… か https://forms.gle/…)を入れてください。')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(sendDate) || isNaN(jstMidnightMs_(sendDate)) || addDaysKey_(sendDate, 0) !== sendDate) throw registryError_('送付日を入れてください。')
   if (sendDate < today) throw registryError_('送付日は、今日より後の日にしてください(過ぎた日にすると、リマインドの日がずれます)。')
