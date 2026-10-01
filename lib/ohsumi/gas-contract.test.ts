@@ -220,6 +220,35 @@ describe('この GAS の版の更新(PR E)', () => {
   })
 })
 
+describe('FSIF からのアンケート(PR O)', () => {
+  it('レジストリが返した回答待ちのアンケートを覚え、代表の管理画面(getOpsStatus)に出す。回答済みになると次の確認で消える', () => {
+    const p = pair()
+    const orgId = p.o.props.ORG_ID
+    expect(p.reg.post({ action: 'setOrgPlan', session: p.reg.session, orgId, plan: 'ohsumi', reason: '' }).ok).toBe(true)
+    const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+    const sent = p.reg.post({ action: 'sendSurvey', session: p.reg.session, title: '秋のアンケート', formUrl: 'https://forms.gle/abc', sendDate: today, target: { kind: 'all' } })
+    expect(sent.ok, JSON.stringify(sent)).toBe(true)
+    check(p)
+    const surveys = p.g.surveysStatus_() as { title: string; formUrl: string; overdue: boolean }[]
+    expect(surveys).toEqual([expect.objectContaining({ title: '秋のアンケート', formUrl: 'https://forms.gle/abc', sendDate: today, overdue: false, restrictAt: '' })])
+    expect(CODE_GS).toMatch(/longRecords: longRecordsNow_\(\), surveys: surveysStatus_\(\)/)
+    p.reg.post({ action: 'markSurveyAnswered', session: p.reg.session, surveyId: sent.result.sent[0].surveyId })
+    check(p)
+    expect(p.g.surveysStatus_()).toEqual([])
+  })
+
+  it('Google フォームでない URL・形の違うものは覚えない', () => {
+    const p = pair()
+    expect(p.g.parseSurveys_([
+      { surveyId: 's1', title: 'x', formUrl: 'https://evil.example.com/forms', dueDate: '2026-10-15' },
+      { surveyId: 's2', title: 'y', formUrl: 'javascript:alert(1)', dueDate: '2026-10-15' },
+      { surveyId: 's3', title: 'z', formUrl: 'https://docs.google.com/forms/d/e/X/viewform', dueDate: 'soon' },
+      { surveyId: 's4', title: 'ok', formUrl: 'https://docs.google.com/forms/d/e/X/viewform', dueDate: '2026-10-15', overdue: 'yes', restrictAt: 'later' },
+    ])).toEqual([{ surveyId: 's4', title: 'ok', formUrl: 'https://docs.google.com/forms/d/e/X/viewform', sendDate: '', dueDate: '2026-10-15', overdue: false, restrictAt: '' }])
+    expect(p.g.parseSurveys_(undefined)).toEqual([])
+  })
+})
+
 describe('機能停止(restrict)', () => {
   it('作成・編集は断り、アンケートへの回答をお願いする。ログイン・読み取りは受け付ける', () => {
     const p = pair()

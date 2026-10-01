@@ -2564,7 +2564,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-10'
+var OHSUMI_GAS_VERSION = '2026.10.01-11'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2869,6 +2869,36 @@ function parseGasUpdate_(v) {
     judgedVersion: OHSUMI_GAS_VERSION }
 }
 
+// ---- FSIF からのアンケート ----------------------------------------------------------
+//
+// レジストリは checkIn の返事で、回答待ちのアンケートを返す(surveys: [{ surveyId, title, formUrl, sendDate, dueDate, overdue, restrictAt }])。
+// CONTRACT_STATE に覚え、代表の管理画面に出す(getOpsStatus)。回答の確認は FSIF が行い、回答済みになると次の確認で消える
+var SURVEY_FORM_URL_PATTERN = /^https:\/\/(docs\.google\.com\/forms\/[A-Za-z0-9_\-\/.?=&%]+|forms\.gle\/[A-Za-z0-9_-]+)$/
+
+function parseSurveys_(list) {
+  if (!Array.isArray(list)) return []
+  var day = /^\d{4}-\d{2}-\d{2}$/
+  return list.slice(0, 20).filter(function (v) {
+    return v && typeof v === 'object' && SURVEY_FORM_URL_PATTERN.test(String(v.formUrl || '')) && day.test(String(v.dueDate || ''))
+  }).map(function (v) {
+    var restrictAt = String(v.restrictAt || '')
+    return {
+      surveyId: String(v.surveyId || '').slice(0, 40),
+      title: String(v.title || '').slice(0, 100),
+      formUrl: String(v.formUrl),
+      sendDate: day.test(String(v.sendDate || '')) ? String(v.sendDate) : '',
+      dueDate: String(v.dueDate),
+      overdue: v.overdue === true,
+      restrictAt: isNaN(Date.parse(restrictAt)) ? '' : new Date(restrictAt).toISOString(),
+    }
+  })
+}
+
+function surveysStatus_() {
+  var state = readContractState_()
+  return (state && Array.isArray(state.surveys)) ? state.surveys : []
+}
+
 function gasUpdateStatus_() {
   var state = readContractState_()
   var u = (state && state.gasUpdate) || null
@@ -2977,6 +3007,8 @@ function refreshContractState_(deps) {
     gasUpdate: parseGasUpdate_(out.gasUpdate),
     // プラン(集計値を送るかの決まりに使う。古いレジストリは返さない)
     plan: ['cosmo_base', 'ohsumi', 'paid'].indexOf(String(out.plan || '')) >= 0 ? String(out.plan) : '',
+    // FSIF からの回答待ちのアンケート(代表の管理画面に出す。古いレジストリは返さない)
+    surveys: parseSurveys_(out.surveys),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -5400,10 +5432,10 @@ function runWriteAction_(body, actingMember) {
       result = { recorded: reportClientError_(body, actingMember.id) }
       break
     case 'getOpsStatus':
-      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_() }
+      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_() }
       break
     case 'recheckSharing':
-      result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()) }
+      result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()), surveys: surveysStatus_() }
       break
     case 'getGasUpdateStatus':
       result = gasUpdateStatus_()
