@@ -6,7 +6,7 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { useTheme } from '@/lib/ohsumi/theme'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
-import { Avatar, OhsumiMark, StoredImage } from './primitives'
+import { Avatar, OhsumiLogo, StoredImage } from './primitives'
 import { cn } from '@/lib/utils'
 import {
   ArrowLeft,
@@ -157,8 +157,7 @@ export function Header() {
             onClick={() => handleMode('output')}
             className="flex shrink-0 items-center gap-2"
           >
-            <OhsumiMark size={22} />
-            <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Ohsumi</span>
+            <OhsumiLogo size={22} text="sm" />
             {(orgLogoUrl || orgName) && (
               <>
                 <span className="hidden text-muted-foreground/40 sm:inline" aria-hidden>|</span>

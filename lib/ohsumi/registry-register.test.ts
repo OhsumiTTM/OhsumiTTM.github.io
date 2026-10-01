@@ -115,7 +115,9 @@ describe('団体の登録(registerOrg)', () => {
 
   it('使用済みの登録コードを手に入れても、登録の時の registerNonce が合わなければ共有鍵を受け取れない(ほかの失敗と同じエラー)', () => {
     const t = ready()
-    const now = Date.now()
+    // 1時間ごとの失敗の数を確かめるので、1分後の試しが次の時間帯にずれないよう、時間の始まりの1分後にそろえる
+    // (毎時59分台に動かすと、ずれて失敗していた)
+    const now = Math.floor(Date.now() / 3600_000) * 3600_000 + 60_000
     const code = t.issue().result.code
     const first = t.register({ code, orgId: ORG_A, gasUrl: URL_A, registerNonce: REQ(1) }, now)
     expect(first.ok).toBe(true)
