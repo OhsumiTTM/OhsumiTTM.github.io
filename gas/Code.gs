@@ -6043,7 +6043,8 @@ function sendMailUnmeasured_(options) {
 // 第1引数がオブジェクトかどうかで判別する。
 // 宛先(同じ内容を、団体の通知先と管理者に重ねて送らない):
 //   1. preferredEmails(報告先など、その人あての通知)があれば、その人たちだけ
-//   2. 無ければ、団体の通知先(org_notification_emails)があればそこだけ
+//   2. 無ければ、団体の通知先(org_notification_emails)があればそこにすぐ送り、通知を受け取る設定にした管理者
+//      (notify_new_task)は毎日のまとめに入れる(団体の通知先と同じアドレスなら1回だけ)
 //   3. それも無ければ、通知を受け取る設定の管理者(いなければ管理者の役職の人)
 // opts.urgent が無いものは、毎日のまとめに入れる。急ぎのものでも、Discord/Slack をつないだ団体では、
 // 管理者あて(2・3)のメールはまとめに回す(すぐの知らせは Discord/Slack に届くため)
@@ -6073,13 +6074,10 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
       console.log('notifyAdmins: preferredEmailsに' + (urgent ? '送信' : 'まとめに追加') + 'しました ' + to.join(','))
       return
     }
-    if (urgent && chatConnected_()) urgent = false
+    // Discord/Slack をつないだ団体では、管理者あてのメールはまとめに回す(evenIfChat: Webhook の変更の知らせなど、
+    // Discord/Slack そのものが書き換えられたかもしれない時は、すぐ送る)
+    if (urgent && !(opts && opts.evenIfChat) && chatConnected_()) urgent = false
     var orgEmails = orgNotificationEmails_()
-    if (orgEmails.length > 0) {
-      deliverNotification_(uniqueEmails_(orgEmails), templates, urgent)
-      console.log('notifyAdmins: 団体の通知先に' + (urgent ? '送信' : 'まとめに追加') + 'しました')
-      return
-    }
     var members = measureAction_('recipientsMs', function () { return snapshotTableOrSheet_(SHEET_MEMBERS) })
     var headers = members.headers
     var rows = members.rows
@@ -6087,7 +6085,7 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
     var notifyCol = headers.indexOf('notify_new_task')
     var roleCol = headers.indexOf('role')
     var emailMap = getAllMemberEmails_()
-    if (Object.keys(emailMap).length === 0) {
+    if (Object.keys(emailMap).length === 0 && orgEmails.length === 0) {
       console.warn('notifyAdmins: MemberEmailsにメール登録がなく、団体メールも未設定のため送信しませんでした')
       return
     }
@@ -6105,6 +6103,19 @@ function notifyAdminsUnmeasured_(subject, body, preferredEmails, opts) {
         // from Admin > Tags, so this can't hardcode a specific role string
         else if (roleCol !== -1 && isAdminRoleRef_(getRoles_(), r[roleCol])) reps.push(email)
       })
+    }
+    // 団体の通知先がある時: すぐ送るのは団体の通知先だけ。自分で通知を受け取る設定にした管理者(notify_new_task)には、
+    // 毎日のまとめに入れる(団体の通知先と同じアドレスなら、団体の通知先への1回だけ)
+    if (orgEmails.length > 0) {
+      var org = splitEmails_(orgEmails)
+      var orgSet = {}
+      org.forEach(function (e) { orgSet[e.toLowerCase()] = true })
+      deliverNotification_(org, templates, urgent)
+      var optedOthers = splitEmails_(opted).filter(function (e) { return !orgSet[e.toLowerCase()] })
+      if (optedOthers.length) deliverNotification_(optedOthers, templates, false)
+      console.log('notifyAdmins: 団体の通知先に' + (urgent ? '送信' : 'まとめに追加') + 'しました' +
+        (optedOthers.length ? '(通知を受け取る設定の管理者 ' + optedOthers.length + '人は、まとめに追加)' : ''))
+      return
     }
     var recipients = uniqueEmails_(opted.length > 0 ? opted : reps)
     if (recipients.length === 0) {
@@ -8143,6 +8154,9 @@ function updateDiscordWebhookUrl_(url) {
     '[Ohsumi] Discord Webhook URLが変更されました',
     (url ? 'Discord Webhook URLが更新されました。' : 'Discord Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+    null,
+    // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
+    { urgent: true, evenIfChat: true },
   )
   return { updated: true }
 }
@@ -8164,6 +8178,9 @@ function updateSlackWebhookUrl_(url) {
     '[Ohsumi] Slack Webhook URLが変更されました',
     (url ? 'Slack Webhook URLが更新されました。' : 'Slack Webhook URLが削除されました。') +
       '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+    null,
+    // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
+    { urgent: true, evenIfChat: true },
   )
   return { updated: true }
 }

@@ -222,6 +222,44 @@ describe('管理者への通知の宛先', () => {
     expect(h.sent.map((s) => s.to)).toEqual(['top@example.com,lead@example.com'])
   })
 
+  it('団体の通知先がある時、通知を受け取る設定にした管理者は、毎日のまとめに入れる(同じアドレスなら1回だけ)', () => {
+    const optIn = (h: H, ids: string[]) => {
+      const rows = h.sheets.Members.rows
+      rows[0].push('notify_new_task')
+      for (const r of rows.slice(1)) r.push(ids.includes(String(r[0])) ? 'TRUE' : '')
+      h.props.DATA_VERSION = 'v2'
+    }
+    const h = guardHarness()
+    optIn(h, ['m-lead'])
+    call(h, 'notifyAdmins_', ADMIN_MAIL, null, { urgent: true })
+    expect(h.sent.map((s) => s.to)).toEqual(['org@example.com'])
+    expect(h.digested().map((d) => d.to)).toEqual(['lead@example.com'])
+    // 管理者のアドレスが団体の通知先と同じ
+    const same = guardHarness()
+    same.sheets.MemberEmails.rows.find((r) => r[0] === 'm-lead')![1] = 'ORG@example.com'
+    same.props.MEMBER_EMAILS_VERSION = 'e2'
+    optIn(same, ['m-lead'])
+    call(same, 'notifyAdmins_', ADMIN_MAIL, null, { urgent: true })
+    expect(same.sent.map((s) => s.to)).toEqual(['org@example.com'])
+    expect(same.digested()).toEqual([])
+    // 急ぎでないもの: 団体の通知先も管理者も、まとめに1件ずつ
+    const later = guardHarness()
+    optIn(later, ['m-lead'])
+    call(later, 'notifyAdmins_', ADMIN_MAIL, null)
+    expect(later.sent).toEqual([])
+    expect(later.digested().map((d) => d.to).sort()).toEqual(['lead@example.com', 'org@example.com'])
+  })
+
+  it('Webhook の URL が変わった知らせは、Discord/Slack をつないだ団体でも急ぎとしてすぐ送る', () => {
+    const h = guardHarness({ props: { discord_webhook_url: 'https://discord.com/api/webhooks/1/x' } })
+    const res = h.post({ action: 'updateDiscordWebhookUrl', sessionToken: 'm-top', url: 'https://discord.com/api/webhooks/2/y' })
+    expect(res.ok, res.error).toBe(true)
+    expect(h.sent.filter((s) => s.kind === 'mail').map((s) => [s.to, s.text.split('\n')[0]])).toEqual([['org@example.com', '[Ohsumi] Discord Webhook URLが変更されました']])
+    const slack = guardHarness()
+    expect(slack.post({ action: 'updateSlackWebhookUrl', sessionToken: 'm-top', url: '' }).ok).toBe(true)
+    expect(slack.sent.filter((s) => s.kind === 'mail').map((s) => s.to)).toEqual(['org@example.com'])
+  })
+
   it('その人あての通知(報告先など)は、その人だけに送る(団体の通知先には重ねない)', () => {
     const h = guardHarness()
     call(h, 'notifyAdmins_', ADMIN_MAIL, ['lead@example.com'], { urgent: true })
