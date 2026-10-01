@@ -84,6 +84,9 @@ import {
   featureLabel,
   setFeatureSwitches,
   type FeatureSwitches,
+  parseTunableInput,
+  setTunables,
+  type Tunables,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -118,6 +121,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   setOrgPlan: 'プランの変更',
   setOrgDemo: 'デモの印の付け外し',
   setFeatureSwitches: '機能を止めた・再開した',
+  setTunables: '上限・しきい値を変えた',
   sendSuspensionNotice: '停止の予告を担当者に送った',
   testSuspendNow: '(テスト)今すぐ停止',
   testScheduleSuspension: '(テスト)停止の予定',
@@ -274,8 +278,9 @@ export function RegistryAdmin() {
         <>
           {overview.kpis && <KpiPanel kpis={overview.kpis} />}
           {overview.features && <FeatureSwitchControl features={overview.features} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
+          {overview.tunables && <TunablesControl tunables={overview.tunables} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
-          <OrgList orgs={overview.orgs} features={overview.features} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
+          <OrgList orgs={overview.orgs} features={overview.features} tunables={overview.tunables} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
         </>
       ) : tab === 'codes' ? (
         <CodesPanel
@@ -404,6 +409,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function OrgList({
   orgs,
   features,
+  tunables,
   session,
   draft,
   onChanged,
@@ -411,6 +417,7 @@ function OrgList({
 }: {
   orgs: OrgSummary[]
   features?: FeatureSwitches
+  tunables?: Tunables
   session: AdminSession
   draft: SuspensionInput | null
   onChanged: () => void
@@ -479,6 +486,7 @@ function OrgList({
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           <DemoControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           {features && <FeatureSwitchControl features={features} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
+          {tunables && <TunablesControl tunables={tunables} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
           {o.gasStatus && o.gasStatus.versionState !== 'latest' && <GasUpdateRequest org={o} session={session} onAuthError={onAuthError} />}
           <SuspensionControl
             org={o}
@@ -1785,6 +1793,92 @@ function FeatureSwitchControl({ features, org, session, onChanged, onAuthError }
     <section data-feature-switches className="mb-4 rounded-lg border border-border p-3 text-xs">
       <h2 className="text-sm font-medium">機能のスイッチ(全団体)</h2>
       <p className="mt-0.5 text-muted-foreground">不具合が見つかった時に、団体の GAS を更新する前に、その機能だけを止めます。</p>
+      <div className="mt-1">{body}</div>
+    </section>
+  )
+}
+
+// ---- 上限・しきい値(PR X) ----
+// 全団体(org を省く)・1つの団体の値を入れる。空の項目は既定(団体では全団体の値)に戻す。
+// 範囲の外の値は保存しない(団体の GAS も範囲に収めて使う)。5分以内の Google でのログインが必要
+function TunablesControl({ tunables, org, session, onChanged, onAuthError }: { tunables: Tunables; org?: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const current = org ? (org.tunables ?? {}) : tunables.global
+  const [open, setOpen] = useState(false)
+  const [texts, setTexts] = useState<Record<string, string>>({})
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  if (org && org.tunables === undefined) return null
+  const label = (key: string) => tunables.catalog.find((c) => c.key === key)?.label ?? key
+  const set = Object.keys(current)
+  const summary = set.length ? `既定と違う値: ${set.map((k) => `${label(k)} ${current[k]}`).join('・')}` : org ? '' : 'すべて既定の値です'
+  const begin = () => {
+    setTexts(Object.fromEntries(tunables.catalog.map((c) => [c.key, current[c.key] === undefined ? '' : String(current[c.key])])))
+    setOpen(true)
+    setMessage(null)
+  }
+  const save = async () => {
+    const values: Record<string, number> = {}
+    for (const c of tunables.catalog) {
+      const r = parseTunableInput(c, texts[c.key] ?? '')
+      if (r.error) { setMessage(r.error); return }
+      if (r.value !== undefined) values[c.key] = r.value
+    }
+    if (needsReauth(session)) {
+      onAuthError('上限・しきい値を変える前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      await setTunables(session, org ? { scope: 'org', orgId: org.orgId } : { scope: 'global' }, values, reason)
+      setOpen(false)
+      setReason('')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && (err.authError || err.reauthRequired)) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const body = (
+    <>
+      {summary && <p className="break-words text-muted-foreground" data-tunables-summary>{summary}</p>}
+      {!open ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant="ghost" onClick={begin}>{org ? 'この団体の上限・しきい値を変える…' : '全団体の上限・しきい値を変える…'}</Button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2 text-xs">
+          <p>{org ? '空の項目は、全団体の値(無ければ既定の値)を使います。' : '空の項目は、既定の値を使います。'}範囲の外の値は保存できません。団体には、次の確認(最大10分ほど)で伝わります。</p>
+          <div className="grid gap-2 sm:grid-cols-2" data-tunable-fields>
+            {tunables.catalog.map((c) => (
+              <label key={c.key} className="block min-w-0">
+                <span className="block break-words">{c.label}</span>
+                <span className="block text-muted-foreground">既定 {c.def}・{c.min}〜{c.max}{org && tunables.global[c.key] !== undefined ? `・全団体 ${tunables.global[c.key]}` : ''}</span>
+                <input inputMode="numeric" className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={texts[c.key] ?? ''} placeholder={String(org && tunables.global[c.key] !== undefined ? tunables.global[c.key] : c.def)} onChange={(e) => setTexts((t) => ({ ...t, [c.key]: e.target.value }))} />
+              </label>
+            ))}
+          </div>
+          <label className="block">
+            理由(必須。操作の記録に残します)
+            <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy || !reason.trim()} onClick={() => void save()}>{busy ? '保存しています…' : '保存する'}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+          </div>
+          {message && <p className="text-sm break-words text-destructive">{message}</p>}
+        </div>
+      )}
+    </>
+  )
+  if (org) return <div className="mt-2 text-xs" data-org-tunables>{body}</div>
+  return (
+    <section data-tunables className="mb-4 rounded-lg border border-border p-3 text-xs">
+      <h2 className="text-sm font-medium">上限・しきい値(全団体)</h2>
+      <p className="mt-0.5 text-muted-foreground">回数の上限・しきい値を、団体の GAS を更新せずに変えます。団体の GAS は、決めた範囲の中でだけ使います。</p>
       <div className="mt-1">{body}</div>
     </section>
   )
