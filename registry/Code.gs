@@ -234,7 +234,9 @@ var REGISTRY_VERSION = 'r1e-2'
 //     suspend_kind(停止の種類)・plan(プラン: cosmo_base / ohsumi / paid。空は未設定)
 var REGISTRY_SHEETS = {
   Orgs: ['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
-    'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan'],
+    'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan',
+    // メールの1日の上限(checkIn で団体の GAS が伝える): 残りの数・その日に送れなかった数・その日・最後に上限に達した日
+    'mail_remaining', 'mail_skipped', 'mail_date', 'mail_limit_date'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   Usage: ['org_id', 'date', 'metrics_json'],
@@ -627,7 +629,24 @@ function orgSummary_(values, nowMs) {
     channel: String(values.channel || ''),
     gasUrl: String(values.gas_url || ''),
     gasVersion: String(values.gas_version || ''),
+    mail: orgMailSummary_(values),
   }
+}
+
+// メールの1日の上限(checkIn で伝えられたもの)。remaining: 最後の確認の時の残りの数(分からなければ null)、
+// skipped: その日(date)に上限で送れなかった数、limitDate: 最後に上限に達した日、
+// level: reached(最後に伝えられた日に上限に達した) / low(残りが MAIL_LOW_REMAINING 以下) / ok / unknown
+var MAIL_LOW_REMAINING = 20
+function orgMailSummary_(values) {
+  var raw = values.mail_remaining
+  var remaining = raw === '' || raw === undefined || raw === null || !isFinite(Number(raw)) ? null : Number(raw)
+  var skipped = Number(values.mail_skipped) || 0
+  var date = String(values.mail_date || '')
+  var limitDate = String(values.mail_limit_date || '')
+  var level = (skipped > 0 || (limitDate && limitDate === date)) ? 'reached'
+    : remaining === null ? 'unknown'
+      : remaining <= MAIL_LOW_REMAINING ? 'low' : 'ok'
+  return { remaining: remaining, skipped: skipped, date: date, limitDate: limitDate, level: level }
 }
 
 // 登録コードの状態(純粋な関数): revoked / used / expired / unused
@@ -1307,7 +1326,8 @@ function merged_(values, fields) {
 }
 
 // 団体の GAS が契約の状態を確かめる(1時間ごと・停止の予定や停止中は使われるたびに1分に1回まで)。
-//   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, sig }
+//   要求: { action: 'checkIn', orgId, ts(Unix 秒), gasVersion, mail, sig }
+//          mail: { remaining(メールの残りの数。分からなければ null), skipped(その日に上限で送れなかった数), date, lastReachedDate }
 //          sig = base64url(HMAC-SHA256(共有鍵, 'checkIn.' + orgId + '.' + ts))。時刻は前後5分まで
 //   返事: { ok: true, result: { phase: none | scheduled | inEffect, kind, suspendAt, reason, checkedAt, siteOrigins } }
 //   siteOrigins: サイトの origin の一覧(スクリプトプロパティ SITE_ORIGINS。団体の GAS が、本人あての招待リンクのメールに使う)
@@ -1330,11 +1350,30 @@ function checkIn_(body, nowMs) {
   }
   var lastCheck = timeOf_(row.values.last_check_at)
   var gasVersion = cleanText_(body.gasVersion, 40)
-  if (!(lastCheck > 0) || nowMs - lastCheck >= CHECKIN_WRITE_INTERVAL_MS || gasVersion !== String(row.values.gas_version || '')) {
-    setRowFields_('Orgs', row.row, { last_check_at: new Date(nowMs).toISOString(), gas_version: gasVersion })
+  var mail = checkInMailFields_(body.mail, row.values)
+  // 送れなかった数が変わった時(上限に達した時)は、10分を待たずに書く
+  var mailChanged = mail && String(mail.mail_skipped) !== String(row.values.mail_skipped === undefined ? '' : row.values.mail_skipped)
+  if (!(lastCheck > 0) || nowMs - lastCheck >= CHECKIN_WRITE_INTERVAL_MS || gasVersion !== String(row.values.gas_version || '') || mailChanged) {
+    var fields = { last_check_at: new Date(nowMs).toISOString(), gas_version: gasVersion }
+    if (mail) Object.keys(mail).forEach(function (k) { fields[k] = mail[k] })
+    setRowFields_('Orgs', row.row, fields)
   }
   var c = contractState_(row.values, nowMs)
   return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_() } }
+}
+
+// checkIn で伝えられたメールの上限の状態を、Orgs の列の値にする。
+// 列が無い(setupRegistry を実行し直していない)・伝えられていない時は null(書かない)
+function checkInMailFields_(mail, values) {
+  if (!mail || typeof mail !== 'object' || !('mail_remaining' in values)) return null
+  var date = /^\d{4}-\d{2}-\d{2}$/
+  var remaining = Number(mail.remaining)
+  return {
+    mail_remaining: mail.remaining === null || mail.remaining === undefined || !isFinite(remaining) ? '' : Math.max(0, Math.floor(remaining)),
+    mail_skipped: Math.max(0, Math.floor(Number(mail.skipped) || 0)),
+    mail_date: date.test(String(mail.date || '')) ? String(mail.date) : '',
+    mail_limit_date: date.test(String(mail.lastReachedDate || '')) ? String(mail.lastReachedDate) : '',
+  }
 }
 
 // サイトの origin の一覧。スクリプトプロパティ SITE_ORIGINS に、カンマ・空白・改行で区切って書く

@@ -42,6 +42,8 @@ import {
   type Plan,
   type SuspendKind,
   type SuspensionInput,
+  mailLevelCounts,
+  type OrgMailSummary,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
@@ -314,6 +316,14 @@ function Badge({ children, tone = 'muted' }: { children: React.ReactNode; tone?:
   return <span className={`inline-block rounded-md px-1.5 py-0.5 text-xs whitespace-nowrap ${color}`}>{children}</span>
 }
 
+function mailText(m: OrgMailSummary): string {
+  const parts: string[] = []
+  if (m.remaining !== null) parts.push(`最後の確認の時の残り ${m.remaining} 件`)
+  if (m.skipped > 0) parts.push(`${m.date} に送れなかった数 ${m.skipped} 件`)
+  if (m.limitDate) parts.push(`最後に上限に達した日 ${m.limitDate}`)
+  return parts.join('・') || '—'
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 gap-2 text-xs">
@@ -337,7 +347,17 @@ function OrgList({
   onAuthError: (message?: string) => void
 }) {
   if (!orgs.length) return <p className="text-sm text-muted-foreground">登録された団体はまだありません。</p>
+  const mailCounts = mailLevelCounts(orgs)
   return (
+    <>
+    {(mailCounts.reached > 0 || mailCounts.low > 0) && (
+      <p data-mail-level-summary className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
+        {mailCounts.reached > 0 && `メールの上限に達した団体: ${mailCounts.reached}`}
+        {mailCounts.reached > 0 && mailCounts.low > 0 && '・'}
+        {mailCounts.low > 0 && `メールの残りが少ない団体: ${mailCounts.low}`}
+        (GAS を動かすアカウントの1日の上限。続く団体には、Google Workspace のアカウントで GAS を動かすよう勧めてください)
+      </p>
+    )}
     <ul className="space-y-3">
       {orgs.map((o) => (
         <li key={o.orgId} className="rounded-lg border border-border p-3">
@@ -347,11 +367,14 @@ function OrgList({
             <Badge tone={o.plan ? 'muted' : 'warn'}>{PLAN_LABELS[o.plan]}</Badge>
             {o.state === 'scheduled' && <Badge tone="warn">{SUSPEND_KIND_LABELS[o.suspendKind].title}</Badge>}
             {o.checkState !== 'ok' && <Badge tone="warn">{CHECK_STATE_LABELS[o.checkState]}</Badge>}
+            {o.mail?.level === 'reached' && <Badge tone="bad">メールの上限に達した</Badge>}
+            {o.mail?.level === 'low' && <Badge tone="warn">メールの残り {o.mail.remaining}</Badge>}
           </div>
           <dl className="space-y-1">
             <Field label="契約の状態">{CONTRACT_LABELS[o.contractStatus] ?? o.contractStatus}{o.contractUntil ? `(${fmt(o.contractUntil)} まで)` : ''}</Field>
             <Field label="最後の確認">{fmt(o.lastCheckAt)}{o.gasVersion ? `(GAS の版: ${o.gasVersion})` : ''}</Field>
             <Field label="登録日">{fmt(o.createdAt)}</Field>
+            {o.mail && o.mail.level !== 'unknown' && <Field label="メール">{mailText(o.mail)}</Field>}
             {o.suspendAt && (
               <>
                 <Field label="停止">{SUSPEND_KIND_LABELS[o.suspendKind].title}・{fmt(o.suspendAt)} から{o.suspendScheduledBy ? `(入れた人: ${o.suspendScheduledBy})` : ''}</Field>
@@ -376,6 +399,7 @@ function OrgList({
         </li>
       ))}
     </ul>
+    </>
   )
 }
 

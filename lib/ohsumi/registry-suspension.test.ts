@@ -30,10 +30,10 @@ function ready() {
   const schedule = (kind: string, at: number, reason = '契約の終了') =>
     t.post({ action: 'scheduleSuspension', session, orgId: ORG_A, kind, suspendAt: new Date(at).toISOString(), reason })
   const clear = (reason = '') => t.post({ action: 'clearSuspension', session, orgId: ORG_A, reason })
-  const checkIn = (opts2: { ts?: number; sig?: string; key?: string } = {}) => {
+  const checkIn = (opts2: { ts?: number; sig?: string; key?: string; mail?: unknown } = {}) => {
     const ts = opts2.ts ?? Math.floor(Date.now() / 1000)
     const sig = opts2.sig ?? createHmac('sha256', opts2.key ?? key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url')
-    return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion: 'r1e-1', sig })
+    return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion: 'r1e-1', sig, mail: opts2.mail })
   }
   const org = () => t.post({ action: 'adminOverview', session }).result.orgs.find((o: { orgId: string }) => o.orgId === ORG_A)
   const audit = () => t.sheets.get('AuditLog')!.rows.slice(1).map((r) => ({ actor: r[1], action: r[2], target: r[3], reason: r[6] }))
@@ -377,5 +377,37 @@ describe('サイトの origin の一覧(checkIn で団体の GAS に配る)', ()
     expect(t.checkIn().result.siteOrigins).toEqual([])
     t.props.SITE_ORIGINS = 'https://Site-A.example.com/, https://b.example.jp\nhttp://c.example.com https://d.example.com/path https://site-a.example.com https://u:p@e.example.com https://f.example.com:8443'
     expect(t.checkIn().result.siteOrigins).toEqual(['https://site-a.example.com', 'https://b.example.jp', 'https://f.example.com:8443'])
+  })
+})
+
+describe('メールの1日の上限(checkIn で団体の GAS が伝える)', () => {
+  it('残りの数・送れなかった数・上限に達した日を書き、管理画面の一覧で上限に近い団体が分かる', () => {
+    const t = ready()
+    expect(t.checkIn({ mail: { remaining: 60, skipped: 0, date: '2026-10-01', lastReachedDate: '' } }).ok).toBe(true)
+    expect(t.org().mail).toEqual({ remaining: 60, skipped: 0, date: '2026-10-01', limitDate: '', level: 'ok' })
+    // 10分の間でも、送れなかった数が変われば書く
+    t.checkIn({ mail: { remaining: 0, skipped: 4, date: '2026-10-01', lastReachedDate: '2026-10-01' } })
+    expect(t.orgsRow().get('mail_skipped')).toBe(4)
+    expect(t.org().mail).toEqual({ remaining: 0, skipped: 4, date: '2026-10-01', limitDate: '2026-10-01', level: 'reached' })
+    // 残りが少ない
+    t.orgsRow().set('last_check_at', '')
+    t.checkIn({ mail: { remaining: 12, skipped: 0, date: '2026-10-02', lastReachedDate: '2026-10-01' } })
+    expect(t.org().mail).toMatchObject({ remaining: 12, level: 'low', limitDate: '2026-10-01' })
+  })
+
+  it('形の違う値は入れない。伝えない古い団体の GAS・列の無い古いレジストリでも、checkIn は成功する', () => {
+    const t = ready()
+    t.checkIn({ mail: { remaining: 'x', skipped: -3, date: '=HYPERLINK("x")', lastReachedDate: 'yesterday' } })
+    expect([t.orgsRow().get('mail_remaining'), t.orgsRow().get('mail_skipped'), t.orgsRow().get('mail_date'), t.orgsRow().get('mail_limit_date')]).toEqual(['', 0, '', ''])
+    expect(t.org().mail.level).toBe('unknown')
+    expect(t.checkIn().ok).toBe(true)
+    // 列の無いレジストリ(setupRegistry を実行し直していない)
+    const rows = t.sheets.get('Orgs')!.rows as unknown[][]
+    const cut = (rows[0] as string[]).indexOf('mail_remaining')
+    for (const r of rows) r.splice(cut, 4)
+    t.orgsRow().set('last_check_at', '')
+    const res = t.checkIn({ mail: { remaining: 1, skipped: 1, date: '2026-10-01', lastReachedDate: '2026-10-01' } })
+    expect(res.ok, JSON.stringify(res)).toBe(true)
+    expect(String(t.orgsRow().get('last_check_at'))).toMatch(/^\d{4}-/)
   })
 })
