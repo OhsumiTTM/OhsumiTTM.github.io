@@ -972,6 +972,13 @@ function checkContractStatus() {
   } catch (e) {
     console.error('停止の予告のメールを送れませんでした: ' + e)
   }
+  // 提供停止中は知らせない(機能停止中は知らせる)
+  if (contractSuspendedNow_()) return
+  try {
+    sendGasUpdateNotice_()
+  } catch (e) {
+    console.error('GAS の更新のお知らせを送れませんでした: ' + e)
+  }
 }
 
 // ============================================================================
@@ -2124,7 +2131,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus',
+  'getMailQuotaStatus', 'getGasUpdateStatus',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2529,8 +2536,10 @@ var INITIAL_SETUP_TTL_HOURS = 72
 var INITIAL_SETUP_FAIL_LIMIT = 10
 var SETUP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 var SETUP_CODE_LENGTH = 16
-// レジストリに伝える、この GAS の版(Orgs の gas_version)
-var OHSUMI_GAS_VERSION = 'r1e-2'
+// レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
+// このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
+// 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
+var OHSUMI_GAS_VERSION = '2026.10.01-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2779,8 +2788,8 @@ var READ_ONLY_ACTIONS = [
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
   'getInviteMailStatus', 'sendInviteLinkToMe',
-  // メールの1日の上限の状態(代表の管理画面に出す)
-  'getMailQuotaStatus',
+  // メールの1日の上限の状態・この GAS の版の更新(代表の管理画面に出す)
+  'getMailQuotaStatus', 'getGasUpdateStatus',
 ]
 
 // 機能停止中にも受け付ける操作か(初期設定コードで代表を入れるログインは、メンバーを足すので断る)
@@ -2808,6 +2817,73 @@ function effectiveContract_(state, nowMs) {
   if (state.phase === 'inEffect') return { phase: 'inEffect', kind: kind, suspendAt: suspendAt }
   if (state.phase === 'scheduled' && at > 0) return { phase: at <= nowMs ? 'inEffect' : 'scheduled', kind: kind, suspendAt: suspendAt }
   return { phase: 'none', kind: '', suspendAt: '' }
+}
+
+// ---- この GAS の版の更新 ----------------------------------------------------------
+//
+// レジストリは checkIn の返事で、この GAS の版の判定を返す(gasUpdate: { required, outdated, latest, minimum, security })。
+// CONTRACT_STATE に覚え、代表・全権管理者の管理画面に出す(getGasUpdateStatus)。更新が要る時は、代表にメールで知らせる
+// (1時間ごとの checkContractStatus から。最新の版ごとに1回だけ。GAS_UPDATE_NOTIFIED に覚える)
+var GAS_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}-\d+$/
+
+function parseGasUpdate_(v) {
+  if (!v || typeof v !== 'object') return null
+  var version = function (x) { return GAS_VERSION_PATTERN.test(String(x || '')) ? String(x) : '' }
+  // judgedVersion: 判定した時のこの GAS の版(貼り替えた後は、次の確認まで古い判定を出さない)
+  return { required: v.required === true, outdated: v.outdated === true, latest: version(v.latest), minimum: version(v.minimum), security: v.security === true,
+    judgedVersion: OHSUMI_GAS_VERSION }
+}
+
+function gasUpdateStatus_() {
+  var state = readContractState_()
+  var u = (state && state.gasUpdate) || null
+  if (u && u.judgedVersion !== OHSUMI_GAS_VERSION) u = null
+  return {
+    current: OHSUMI_GAS_VERSION,
+    known: !!u,
+    required: !!(u && u.required),
+    outdated: !!(u && u.outdated),
+    latest: (u && u.latest) || '',
+    minimum: (u && u.minimum) || '',
+    security: !!(u && u.security),
+    checkedAt: (state && state.checkedAt) || '',
+  }
+}
+
+function gasUpdateNoticeText_(orgName, st) {
+  var name = orgName || 'Ohsumi'
+  return {
+    subject: '[Ohsumi] ' + name + ': 団体の GAS の更新が要ります(最新の版 ' + st.latest + ')',
+    body: name + ' 代表の方へ\n\n' +
+      'この団体の Ohsumi の GAS(スプレッドシートの Apps Script)は、更新が要ります。\n\n' +
+      '今の版: ' + st.current + '\n最新の版: ' + st.latest + '\n' +
+      (st.minimum ? 'この版より古い GAS は、更新が要ります: ' + st.minimum + '\n' : '') +
+      (st.security ? '新しい版には、安全の修正が含まれます。お早めに更新してください。\n' : '') +
+      '\n更新の手順:\n' +
+      '1. Ohsumi のリポジトリの gas/Code.gs の内容を、Apps Script エディタに貼り替えて保存する\n' +
+      '2. 「デプロイ」→「デプロイを管理」→ ウェブアプリの編集(鉛筆)→「バージョン: 新規」で更新する(URL は変わりません)\n' +
+      '3. エディタで setupOhsumi を実行する\n\n' +
+      '詳しくは gas/README.md の「2. Apps Script のデプロイ」をご覧ください。このメールは、新しい版ごとに1回だけ送ります。',
+  }
+}
+
+// 更新が要る時に、代表にメールで知らせる(最新の版ごとに1回)。送ったら最新の版を返す(送らなければ null)
+function sendGasUpdateNotice_() {
+  var st = gasUpdateStatus_()
+  if (!st.required || !st.latest) return null
+  var props = PropertiesService.getScriptProperties()
+  if (props.getProperty('GAS_UPDATE_NOTIFIED') === st.latest) return null
+  var emails = getAllMemberEmails_()
+  var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  if (!to.length) {
+    console.warn('GAS の更新が要ることを知らせる代表のメールアドレスがありません')
+    return null
+  }
+  var text = gasUpdateNoticeText_(getSettingValue_('org_name'), st)
+  // メールの上限で送れなかった時は、送ったことにしない(次の確認で送り直す)
+  if (!sendMail_({ to: to.join(','), subject: text.subject, body: text.body })) return null
+  props.setProperty('GAS_UPDATE_NOTIFIED', st.latest)
+  return st.latest
 }
 
 // トリガーから: 覚えている状態で、提供停止中か(レジストリには問い合わせない)
@@ -2856,6 +2932,8 @@ function refreshContractState_(deps) {
     checkedAt: String(out.checkedAt || new Date().toISOString()),
     // サイトの origin の一覧(本人あての招待リンクのメールに使う。レジストリのスクリプトプロパティ SITE_ORIGINS)
     siteOrigins: parseSiteOrigins_(out.siteOrigins),
+    // この GAS の版の更新が要るか(レジストリの版の一覧で判定したもの)
+    gasUpdate: parseGasUpdate_(out.gasUpdate),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state
@@ -3664,7 +3742,7 @@ function authorizeAction_(acting, action, body) {
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
   if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
-      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin_(acting)) return
     if (checkPermissionOverride_(acting, action, body)) return
     throw userError_('この操作は代表または全権管理者のみ実行できます。')
@@ -4273,8 +4351,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'revokeMySessions', 'revokeMemberSessions',
   // 本人あての招待リンクのメール(シートを書き換えない。送った回数は CacheService に数える)
   'getInviteMailStatus', 'sendInviteLinkToMe',
-  // メールの1日の上限の状態(スクリプトプロパティを読むだけ)
-  'getMailQuotaStatus',
+  // メールの1日の上限の状態・この GAS の版の更新(スクリプトプロパティを読むだけ)
+  'getMailQuotaStatus', 'getGasUpdateStatus',
 ]
 
 // リクエストの中の選択肢の値を、日本語・コードのどちらでもコードにそろえる。
@@ -5171,6 +5249,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getMailQuotaStatus':
       result = mailQuotaStatus_()
+      break
+    case 'getGasUpdateStatus':
+      result = gasUpdateStatus_()
       break
     case 'testSlackWebhook':
       result = testSlackWebhook_()

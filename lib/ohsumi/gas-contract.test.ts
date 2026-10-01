@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { CODE_GS, org, registry } from './gas-org-harness'
 
 const DAY = 24 * 3600 * 1000
+// この GAS の版(日付の形。pnpm gas:version で上げる)
+const GAS_VERSION = CODE_GS.match(/^var OHSUMI_GAS_VERSION = '([^']+)'$/m)![1]
 const MEMBERS = [['id', 'name', 'role'], ['m1', '代表さん', 'top'], ['m2', '一般さん', 'base']]
 const EMAILS = { 'top@example.com': 'm1', 'base@example.com': 'm2' }
 
@@ -34,11 +36,11 @@ describe('レジストリに状態を確かめる(checkIn)', () => {
     check(p)
     expect(state(p)).toMatchObject({ phase: 'none' })
     const sent = p.o.sent.at(-1)!
-    expect(sent).toMatchObject({ action: 'checkIn', orgId: p.o.props.ORG_ID, gasVersion: 'r1e-2' })
+    expect(sent).toMatchObject({ action: 'checkIn', orgId: p.o.props.ORG_ID, gasVersion: GAS_VERSION })
     expect(sent.sig).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(JSON.stringify(sent)).not.toContain(p.o.props.REGISTRY_SHARED_KEY)
     expect(String(p.orgValue('last_check_at'))).toMatch(/^\d{4}-/)
-    expect(p.orgValue('gas_version')).toBe('r1e-2')
+    expect(p.orgValue('gas_version')).toBe(GAS_VERSION)
   })
 
   it('確かめられない時(鍵が違う・通信エラー)は null を返し、覚えた状態を変えない', () => {
@@ -142,6 +144,62 @@ describe('メールの1日の上限をレジストリに伝える', () => {
   })
 })
 
+describe('この GAS の版の更新(PR E)', () => {
+  const mark = (p: Pair, version: string, marks: Record<string, unknown>) =>
+    p.reg.post({ action: 'setGasVersionMarks', session: p.reg.session, version, ...marks })
+
+  it('レジストリが「更新が要る」と返したら覚え、代表に最新の版ごとに1回だけメールで知らせる', () => {
+    const p = pair()
+    check(p)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ current: GAS_VERSION, known: true, required: false, latest: GAS_VERSION })
+    expect(p.o.mails).toEqual([])
+    // 新しい版に「安全の修正」が付いた
+    expect(mark(p, '2099.01.01-1', { security: true }).ok).toBe(true)
+    check(p)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ known: true, required: true, outdated: true, latest: '2099.01.01-1', minimum: '2099.01.01-1', security: true })
+    expect(p.o.mails.map((m) => m.to)).toEqual(['top@example.com'])
+    expect(p.o.mails[0].subject).toContain('団体の GAS の更新が要ります(最新の版 2099.01.01-1)')
+    expect(p.o.mails[0].body).toContain('今の版: ' + GAS_VERSION)
+    expect(p.o.mails[0].body).toContain('安全の修正が含まれます')
+    check(p)
+    expect(p.o.mails).toHaveLength(1)
+    // さらに新しい版が出たら、もう1回
+    mark(p, '2099.02.01-1', {})
+    check(p)
+    expect(p.o.mails.map((m) => m.subject)).toEqual([expect.stringContaining('2099.01.01-1'), expect.stringContaining('2099.02.01-1')])
+  })
+
+  it('古いだけ(更新が要る印が無い)なら、メールは送らない。メールの上限で送れなかった時は、次の確認で送り直す', () => {
+    const p = pair()
+    mark(p, '2099.01.01-1', {})
+    check(p)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ required: false, outdated: true, latest: '2099.01.01-1' })
+    expect(p.o.mails).toEqual([])
+    mark(p, '2099.01.01-1', { required: true })
+    p.o.c.sendMail_ = () => false
+    check(p)
+    expect(p.o.props.GAS_UPDATE_NOTIFIED).toBeUndefined()
+    p.o.c.sendMail_ = (m: { to: string; subject: string; body: string }) => { p.o.mails.push(m); return true }
+    check(p)
+    expect(p.o.props.GAS_UPDATE_NOTIFIED).toBe('2099.01.01-1')
+  })
+
+  it('貼り替えて版が変わった後は、次の確認まで古い判定を出さない', () => {
+    const p = pair()
+    mark(p, '2099.01.01-1', { required: true })
+    check(p)
+    const st = state(p)
+    st.gasUpdate.judgedVersion = '2026.01.01-1'
+    p.o.props.CONTRACT_STATE = JSON.stringify(st)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ known: false, required: false })
+  })
+
+  it('代表・全権管理者は、管理画面で読める(読み取りの操作。機能停止中も使える)', () => {
+    expect(CODE_GS.match(/var READ_ONLY_ACTIONS = \[[^\]]*\]/)![0]).toContain("'getGasUpdateStatus'")
+    expect(CODE_GS).toMatch(/action === 'getGasUpdateStatus' \|\|/)
+  })
+})
+
 describe('機能停止(restrict)', () => {
   it('作成・編集は断り、アンケートへの回答をお願いする。ログイン・読み取りは受け付ける', () => {
     const p = pair()
@@ -207,7 +265,7 @@ describe('停止の予定の予告', () => {
 describe('トリガーと版', () => {
   it('setupOhsumi で1時間ごとの checkContractStatus のトリガーを作る。レジストリに伝える版を上げる', () => {
     expect(CODE_GS).toMatch(/ScriptApp\.newTrigger\('checkContractStatus'\)\.timeBased\(\)\.everyHours\(1\)\.create\(\)/)
-    expect(CODE_GS).toContain("var OHSUMI_GAS_VERSION = 'r1e-2'")
+    expect(GAS_VERSION).toMatch(/^\d{4}\.\d{2}\.\d{2}-\d+$/)
   })
 })
 

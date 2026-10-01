@@ -188,7 +188,15 @@ describe('実行(checkRegistry)', () => {
   it('毎朝の「動いています」は Discord にだけ送る', () => {
     const t = setup()
     t.gas.monitorHeartbeat()
-    expect(t.discord).toEqual(['[Ohsumi レジストリ] 監視は動いています(レジストリ: 正常)'])
+    expect(t.discord).toEqual([expect.stringMatching(/^\[Ohsumi レジストリ\] 監視は動いています\(レジストリ: 正常。監視の版: \d{4}\.\d{2}\.\d{2}-\d+\)\n団体の GAS の版: 確かめられませんでした$/)])
+    expect(t.mails).toHaveLength(0)
+  })
+
+  it('毎朝の知らせに、更新が要る団体の数と、24時間以上確認が無い団体の数を書く(health に summary を付けて聞く)', () => {
+    const t = setup()
+    t.setHealth(good({ keyValid: true, gasVersions: { latest: '2026.10.01-1', updateRequired: 2, noCheck: 1, orgs: 5 } }))
+    t.gas.monitorHeartbeat()
+    expect(t.discord[0]).toContain('団体の GAS(利用中 5 団体。最新の版: 2026.10.01-1)\n・更新が要る団体: 2\n・24時間以上確認が無い団体: 1')
     expect(t.mails).toHaveLength(0)
   })
 
