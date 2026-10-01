@@ -10,7 +10,7 @@ import { SectionLabel } from '@/components/ohsumi/primitives'
 import { useToast } from '@/components/ohsumi/toast'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { remoteApi, type PendingPersonalData, type PersonalDataStatus } from '@/lib/ohsumi/remote'
+import { remoteApi, type PendingPersonalData, type PersonalDataStatus, type UnassignedTask } from '@/lib/ohsumi/remote'
 
 export function PersonalDataPanel() {
   const { t, locale } = useI18n()
@@ -21,6 +21,9 @@ export function PersonalDataPanel() {
   const [busy, setBusy] = useState('')
   const [confirming, setConfirming] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 退会を取り消した時の、退会の時に未アサインに戻したタスク
+  const [unassigned, setUnassigned] = useState<{ name: string; tasks: UnassignedTask[] } | null>(null)
+  const [confirmOrphans, setConfirmOrphans] = useState(false)
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
   const fmt = (iso: string) => (iso ? new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'medium' }).format(new Date(iso)) : '—')
 
@@ -42,6 +45,7 @@ export function PersonalDataPanel() {
       await fn()
       toast(done)
       setConfirming(null)
+      setConfirmOrphans(false)
       await load()
       refreshAll()
     } catch (e) {
@@ -89,6 +93,55 @@ export function PersonalDataPanel() {
           </div>
           {!daysValid && <p className="text-xs text-destructive">{t('privacy.retentionRange', { min: String(status.min), max: String(status.max) })}</p>}
 
+          {unassigned && (
+            <div className="space-y-1 rounded-md border border-border bg-muted/50 p-2 text-xs" data-privacy-unassigned>
+              <p className="font-medium break-words">
+                {unassigned.tasks.length
+                  ? t('privacy.unassignedTasks', { name: unassigned.name, count: String(unassigned.tasks.length) })
+                  : t('privacy.unassignedNone', { name: unassigned.name })}
+              </p>
+              {unassigned.tasks.length > 0 && (
+                <ul className="list-disc space-y-0.5 pl-5">
+                  {unassigned.tasks.map((task) => (
+                    <li key={task.id} className="break-words">
+                      {task.title}
+                      {task.assigneeIds.length ? ` ${t('privacy.reassigned')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {unassigned.tasks.length > 0 && <p className="text-muted-foreground">{t('privacy.unassignedHint')}</p>}
+              <Button size="sm" variant="ghost" onClick={() => setUnassigned(null)}>{t('otherDevice.close')}</Button>
+            </div>
+          )}
+
+          {(status.orphanEmails?.length ?? 0) > 0 && (
+            <div className="space-y-2 rounded-md border border-warning/40 bg-warning-muted p-2 text-xs" data-privacy-orphans>
+              <p className="font-medium text-warning">{t('privacy.orphanEmails', { count: String(status.orphanEmails!.length) })}</p>
+              <p className="break-words">{t('privacy.orphanHint')}</p>
+              <ul className="space-y-0.5">
+                {status.orphanEmails!.map((o) => (
+                  <li key={o.id + o.email} className="flex min-w-0 flex-wrap gap-x-2">
+                    <span className="font-mono break-all text-muted-foreground">{o.id}</span>
+                    <span className="min-w-0 break-all">{o.email}</span>
+                  </li>
+                ))}
+              </ul>
+              {confirmOrphans ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="break-words">{t('privacy.orphanConfirm', { count: String(status.orphanEmails!.length) })}</span>
+                  <Button size="sm" variant="destructive" disabled={busy !== ''}
+                    onClick={() => void run('orphans', () => remoteApi.deleteOrphanEmails(status.orphanEmails!.map((o) => o.id)), t('privacy.orphanDeletedToast'))}>
+                    {t('privacy.orphanDelete')}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmOrphans(false)}>{t('admin.members.cancel')}</Button>
+                </div>
+              ) : (
+                <Button size="sm" variant="outline" disabled={busy !== ''} onClick={() => setConfirmOrphans(true)}>{t('privacy.orphanDelete')}</Button>
+              )}
+            </div>
+          )}
+
           {status.pending.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t('privacy.none')}</p>
           ) : (
@@ -125,7 +178,10 @@ export function PersonalDataPanel() {
                       </Button>
                       {p.kind === 'member' && (
                         <Button size="sm" variant="ghost" disabled={busy !== ''}
-                          onClick={() => void run(keyOf(p) + ':cancel', () => remoteApi.cancelWithdrawal(p.id), t('privacy.cancelledToast', { name: p.name || p.id }))}>
+                          onClick={() => void run(keyOf(p) + ':cancel', async () => {
+                            const res = await remoteApi.cancelWithdrawal(p.id)
+                            setUnassigned({ name: p.name || p.id, tasks: res.unassignedTasks ?? [] })
+                          }, t('privacy.cancelledToast', { name: p.name || p.id }))}>
                           {t('privacy.cancelWithdrawal')}
                         </Button>
                       )}

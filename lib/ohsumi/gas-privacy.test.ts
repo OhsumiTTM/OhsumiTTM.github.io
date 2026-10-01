@@ -108,12 +108,28 @@ describe('保存期間の後に消す', () => {
     expect(rowOf(h, 'Candidates', 'cand-yes')).not.toBeNull()
   })
 
-  it('以前の退会(行を消していた)で残ったメールアドレスの行を消す', () => {
+  it('対応するメンバーがいないメールアドレスの行は、自動では消さずに件数と一覧を出す。代表が「消す」を押した行だけ消す', () => {
     const h = setup()
-    h.sheets.MemberEmails.rows.push(['m-gone', 'gone@example.com'])
-    call(h, 'purgeExpiredPersonalData_', Date.now(), 'system')
-    expect(h.sheets.MemberEmails.rows.some((r) => r[0] === 'm-gone')).toBe(false)
-    expect(h.sheets.MemberEmails.rows.some((r) => r[0] === 'm-base')).toBe(true)
+    h.sheets.MemberEmails.rows.push(['m-gone', 'gone@example.com'], ['m-shifted', 'shifted@example.com'])
+    call(h, 'purgeExpiredPersonalData_', Date.now() + 400 * DAY, 'system')
+    expect(h.sheets.MemberEmails.rows.filter((r) => String(r[0]).startsWith('m-gone') || r[0] === 'm-shifted')).toHaveLength(2)
+    const st = h.post({ action: 'getPersonalDataStatus', sessionToken: 'm-top' }).result
+    expect(st.orphanEmails).toEqual([{ id: 'm-gone', email: 'gone@example.com' }, { id: 'm-shifted', email: 'shifted@example.com' }])
+    // 代表だけ。確かめた行(m-gone)だけを消す。今いるメンバーの行は、画面が送っても消さない
+    expect(h.post({ action: 'deleteOrphanEmails', sessionToken: 'm-lead', ids: ['m-gone'] })).toMatchObject({ ok: false, forbidden: true })
+    const res = h.post({ action: 'deleteOrphanEmails', sessionToken: 'm-top', ids: ['m-gone', 'm-base'] })
+    expect(res.ok, res.error).toBe(true)
+    expect(res.result).toEqual({ deleted: 1, skipped: 1 })
+    const ids = h.sheets.MemberEmails.rows.map((r) => r[0])
+    expect(ids).not.toContain('m-gone')
+    expect(ids).toEqual(expect.arrayContaining(['m-shifted', 'm-base']))
+    expect(h.sheets.AuditLog.rows.at(-1)!.slice(1, 3)).toEqual(['m-top', 'deleteOrphanEmails'])
+  })
+
+  it('Members が読めない(空)時は、対応するメンバーがいない行として出さない', () => {
+    const h = setup()
+    h.sheets.Members.rows = h.sheets.Members.rows.slice(0, 1)
+    expect(call(h, 'orphanEmailRows_')).toEqual([])
   })
 })
 
@@ -144,9 +160,11 @@ describe('代表の管理画面', () => {
     const pending = h.post({ action: 'getPersonalDataStatus', sessionToken: 'm-top' }).result.pending[0]
     expect(Date.parse(pending.purgeAt) - Date.parse(pending.since)).toBe(60 * DAY)
     expect(pending.extended).toBe(true)
-    // 取り消すと、元に戻る(ログインできる)
-    expect(h.post({ action: 'cancelWithdrawal', sessionToken: 'm-top', memberId: 'm-base' }).ok).toBe(true)
-    expect(rowOf(h, 'Members', 'm-base')).toMatchObject({ inactive: '', withdrawn_at: '', purge_at: '' })
+    // 取り消すと、元に戻る(ログインできる)。退会の時に未アサインに戻したタスクの一覧を返す(完了・確認待ちは入らない)
+    const cancel = h.post({ action: 'cancelWithdrawal', sessionToken: 'm-top', memberId: 'm-base' })
+    expect(cancel.ok, cancel.error).toBe(true)
+    expect(cancel.result.unassignedTasks).toEqual([{ id: 't1', title: 'タスク1', status: 'todo', assigneeIds: [] }])
+    expect(rowOf(h, 'Members', 'm-base')).toMatchObject({ inactive: '', withdrawn_at: '', purge_at: '', withdrawal_unassigned_task_ids: '' })
     // もう一度退会して、すぐ消す
     withdraw(h)
     expect(h.post({ action: 'purgePersonalDataNow', sessionToken: 'm-top', kind: 'member', id: 'm-base' }).ok).toBe(true)
@@ -154,6 +172,25 @@ describe('代表の管理画面', () => {
     expect(h.post({ action: 'cancelWithdrawal', sessionToken: 'm-top', memberId: 'm-base' }).error).toContain('見つかりません')
     const audit = h.sheets.AuditLog.rows.slice(1).map((r) => r[2])
     expect(audit).toEqual(expect.arrayContaining(['extendPersonalData', 'cancelWithdrawal', 'purgePersonalDataNow']))
+  })
+})
+
+describe('テスト環境で、期限を待たずに確かめる(testPersonalDataPurge)', () => {
+  it('TEST_ENVIRONMENT の時だけ、TEST_DAYS_AHEAD 日だけ日付を進めて、個人情報の削除を実行する', () => {
+    const h = setup()
+    withdraw(h)
+    expect(() => call(h, 'testPersonalDataPurge')).toThrow(/テスト環境ではない/)
+    h.c.isTestEnvironment_ = () => true
+    h.props.TEST_DAYS_AHEAD = '29'
+    const early = call(h, 'testPersonalDataPurge') as { done: { members: string[] }; before: { upcoming: unknown[] } }
+    expect(early.done.members).toEqual([])
+    expect(early.before.upcoming).toHaveLength(1)
+    expect(rowOf(h, 'Members', 'm-base')!.will_tags).toBe('デザイン')
+    h.props.TEST_DAYS_AHEAD = '31'
+    expect((call(h, 'testPersonalDataPurge') as { done: { members: string[] } }).done.members).toEqual(['m-base'])
+    expect(rowOf(h, 'Members', 'm-base')!.name).toBe('退会したメンバー')
+    h.props.TEST_DAYS_AHEAD = '401'
+    expect(() => call(h, 'testPersonalDataPurge')).toThrow(/0〜400/)
   })
 })
 
@@ -189,6 +226,12 @@ describe('守る処理を外すと失敗する', () => {
     withdraw(h)
     call(h, 'purgeExpiredPersonalData_', Date.now(), 'system')
     expect(rowOf(h, 'Members', 'm-base')!.name).toBe('退会したメンバー')
+  })
+
+  it('対応するメンバーがいない行の確かめを外すと、今いるメンバーのメールアドレスを消してしまう', () => {
+    const h = setup(mutated('var targets = Object.keys(wanted).filter(function (id) { return orphan[id] })', 'var targets = Object.keys(wanted)'))
+    h.post({ action: 'deleteOrphanEmails', sessionToken: 'm-top', ids: ['m-base'] })
+    expect(h.sheets.MemberEmails.rows.some((r) => r[0] === 'm-base')).toBe(false)
   })
 
   it('メールアドレスの行を消す処理を外すと、メールアドレスが残る', () => {

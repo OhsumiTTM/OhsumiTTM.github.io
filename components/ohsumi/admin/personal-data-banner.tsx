@@ -20,7 +20,8 @@ export function PersonalDataBanner() {
     return () => { alive = false }
   }, [])
 
-  if (!status || status.upcoming.length === 0) return null
+  const orphans = status?.orphanEmails?.length ?? 0
+  if (!status || (status.upcoming.length === 0 && orphans === 0)) return null
   const fmt = (d: string) => new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { month: 'short', day: 'numeric' }).format(new Date(d + 'T00:00:00'))
   return (
     <div role="status" data-personal-data-banner className="flex items-start gap-1.5 border-b border-border bg-warning-muted px-4 py-2 text-xs text-warning">
@@ -29,6 +30,7 @@ export function PersonalDataBanner() {
         {status.upcoming.map((u) => (
           <p key={u.date} className="font-medium">{t('privacy.upcoming', { count: String(u.count), date: fmt(u.date) })}</p>
         ))}
+        {orphans > 0 && <p className="font-medium">{t('privacy.orphanEmails', { count: String(orphans) })}</p>}
         <p className="mt-0.5">{t('privacy.upcomingHint')}</p>
       </div>
     </div>

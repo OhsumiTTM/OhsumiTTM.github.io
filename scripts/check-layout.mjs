@@ -346,6 +346,7 @@ async function run({ build = true } = {}) {
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
+          orphanEmails: [{ id: 'm-old-1', email: 'old.member.with.a.long.address@example.com' }, { id: 'orbit-' + 'x'.repeat(30), email: 'shifted@example.com' }],
           pending: [
             { kind: 'member', id: 'm-left', name: 'とても長い名前の退会したメンバーさん'.repeat(2), since: '2026-09-05T00:00:00.000Z', purgeAt: '2026-10-05T00:00:00.000Z', extended: false },
             { kind: 'candidate', id: 'cand-1', name: '採用しなかった候補者', since: '2026-09-05T00:00:00.000Z', purgeAt: '2026-10-05T00:00:00.000Z', extended: true },
@@ -694,6 +695,7 @@ async function run({ build = true } = {}) {
           if (!backupBanner.includes('のバックアップを作れませんでした(Drive の容量が足りません)')) throw new Error('管理画面に、バックアップを作れなかった知らせが出ません: ' + backupBanner)
           const privacyBanner = await evaluate(`document.querySelector('[data-personal-data-banner]')?.textContent ?? ''`)
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
+          if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
           const gasUpdate = await evaluate(`document.querySelector('[data-gas-update-banner]')?.textContent ?? ''`)
           if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → 最新の版: 2026.10.01-1)') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
         }
@@ -862,7 +864,9 @@ async function run({ build = true } = {}) {
           if (step.mode === 'full') {
             // 同じ画面の「個人情報の削除」: 保存期間と、消す前の人(すぐ消す・延長・退会を取り消す)
             const privacy = await evaluate(`document.querySelector('[data-personal-data-panel]')?.textContent ?? ''`)
-            for (const want of ['保存期間', 'すぐ消す', '30 日延長', '退会を取り消す', '(延長済み)']) if (!privacy.includes(want)) throw new Error('個人情報の削除に「' + want + '」が出ません')
+            for (const want of ['保存期間', 'すぐ消す', '30 日延長', '退会を取り消す', '(延長済み)', '対応するメンバーがいないメールアドレスの行が 2 件あります', 'old.member.with.a.long.address@example.com']) {
+              if (!privacy.includes(want)) throw new Error('個人情報の削除に「' + want + '」が出ません')
+            }
             const text = await evaluate(`document.querySelector('[data-backup-preview]')?.textContent ?? ''`)
             if (!text.includes('Tasks') || !text.includes('12') || !text.includes('10')) throw new Error('戻す前の件数の差が出ません: ' + text)
             if (!(await evaluate(`document.querySelector('[data-backup-restore-all]').disabled`))) throw new Error('確かめる前に「このバックアップに戻す」が押せます')

@@ -96,6 +96,16 @@ export interface PersonalDataStatus {
   noticeDays: number
   pending: PendingPersonalData[]
   upcoming: { date: string; count: number }[]
+  // 対応するメンバーがいないメールアドレスの行(自動では消さない。代表が確かめて消す)
+  orphanEmails?: { id: string; email: string }[]
+}
+
+/** 退会を取り消した時の、退会の時に未アサインに戻したタスク */
+export interface UnassignedTask {
+  id: string
+  title: string
+  status: string
+  assigneeIds: string[]
 }
 
 /** バックアップの状態(gas/Code.gs の backupStatus_)。failed: 最後に作ろうとした時に作れなかった */
@@ -1057,7 +1067,8 @@ export const remoteApi = {
   setPersonalDataRetention: (days: number) => postToGas<{ retentionDays: number }>('setPersonalDataRetention', { days }),
   purgePersonalDataNow: (kind: PendingPersonalData['kind'], id: string) => postToGas('purgePersonalDataNow', { kind, id }),
   extendPersonalData: (kind: PendingPersonalData['kind'], id: string) => postToGas<{ purgeAt: string }>('extendPersonalData', { kind, id }),
-  cancelWithdrawal: (memberId: string) => postToGas('cancelWithdrawal', { memberId }),
+  cancelWithdrawal: (memberId: string) => postToGas<{ restored: string; unassignedTasks?: UnassignedTask[] }>('cancelWithdrawal', { memberId }),
+  deleteOrphanEmails: (ids: string[]) => postToGas<{ deleted: number; skipped: number }>('deleteOrphanEmails', { ids }),
   // バックアップ(代表だけ。gas/Code.gs の「バックアップ」)
   getBackupStatus: () => postToGas<BackupStatus>('getBackupStatus', {}),
   listBackups: () => postToGas<{ status: BackupStatus; backups: BackupEntry[]; keep: { daily: number; weekly: number; monthly: number } }>('listBackups', {}),
