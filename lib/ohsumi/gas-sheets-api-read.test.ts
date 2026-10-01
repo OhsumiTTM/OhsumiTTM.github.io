@@ -246,8 +246,8 @@ describe('appsscript.json', () => {
     })
   })
 
-  it('権限(oauthScopes)は指定しない(Code.gs から自動で判定させる)', () => {
-    expect(manifest.oauthScopes).toBeUndefined()
+  it('権限(oauthScopes)に、Sheets API での読み込みに要るスプレッドシートの許可がある(一覧の全体は gas-permissions.test.ts で確かめる)', () => {
+    expect(manifest.oauthScopes).toContain('https://www.googleapis.com/auth/spreadsheets')
   })
 
   it('Web アプリは「実行するユーザー: 自分」「アクセスできるユーザー: 全員」', () => {

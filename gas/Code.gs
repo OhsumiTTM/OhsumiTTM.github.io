@@ -2562,7 +2562,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.01-8'
+var OHSUMI_GAS_VERSION = '2026.10.01-9'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4379,6 +4379,11 @@ function userError_(message) {
 // 定型メッセージだけを返す。
 function toErrorMessage_(err) {
   if (err && err.isUserError) return String(err.message || err)
+  // Google の許可が足りない(マニフェストの oauthScopes に無い・持ち主がまだ許可していない)時は、その機能だけ止まる。直し方を返す
+  if (isPermissionError_(err)) {
+    Logger.log('doPost permission error: ' + maskEmailsIn_(String((err && err.message) || err)).slice(0, 300))
+    return PERMISSION_MESSAGE
+  }
   var quota = quotaKind_(err)
   if (quota) {
     Logger.log('doPost quota exceeded [' + quota + ']')
@@ -14353,6 +14358,7 @@ function errorKind_(err) {
   if (err.cellTooLong) return 'cellTooLong'
   var quota = quotaKind_(err)
   if (quota) return 'quota:' + quota
+  if (isPermissionError_(err)) return 'permission'
   if (err.isUserError) return ''
   return 'unexpected:' + String(err.name || 'Error').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40)
 }
@@ -14449,4 +14455,15 @@ function usageStatus_(nowMs) {
 function maskEmailsIn_(text) {
   return String(text === undefined || text === null ? '' : text)
     .replace(/([A-Za-z0-9])[A-Za-z0-9._%+-]*@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g, '$1***@$2')
+}
+
+// ---- Google の許可(マニフェストの oauthScopes) ----
+// gas/appsscript.json の oauthScopes に書いた許可だけを使う(コードが使うサービスから自動で決めない)。
+// 許可が足りない時は、その操作だけを止め、直し方を返す(通知・カレンダー・共有の確かめなど、操作の一部だけのものは、
+// これまでどおり、その部分だけを飛ばして操作は済ませる)
+var PERMISSION_MESSAGE = 'この機能に必要な Google の許可がありません。GAS を動かしているアカウントで Apps Script エディタを開き、setupOhsumi を実行して許可してください。'
+
+function isPermissionError_(err) {
+  var msg = String((err && err.message) || err || '')
+  return /You do not have permission to call|Required permissions:|Authorization is required|権限がありません.*(必要な権限|許可)/i.test(msg)
 }
