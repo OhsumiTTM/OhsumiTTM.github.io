@@ -169,7 +169,22 @@ export interface Overview {
   announcements?: AnnouncementSummary[]
   // 団体から届いた診断情報(新しい順に最大100件。中身は受付番号で読む。古いレジストリでは無い)
   diagnostics?: DiagnosticsSummary[]
+  // レジストリのメールで、1日の上限のため送れず翌日以降に回したもの(古いレジストリでは無い)
+  mailQueue?: MailQueueStatus
 }
+
+// ---- レジストリのメールの1日の上限(PR R) ----
+export interface MailQueueStatus {
+  // 送れていないメールの数・その宛先の数
+  pending: number
+  recipients: number
+  // 種類ごとの数: notice 停止の予告 / reminder リマインド / send アンケートの送付 / other そのほか
+  byKind: Record<string, number>
+  oldestAt: string
+  // 今日まだ送れる宛先の数
+  remainingToday: number
+}
+export const MAIL_KIND_LABELS: Record<string, string> = { notice: '停止の予告', reminder: 'リマインド', send: 'アンケートの送付', other: 'そのほか' }
 
 // ---- 診断情報(PR Q) ----
 export interface DiagnosticsSummary {
@@ -462,8 +477,8 @@ export function setGasVersionMarks(session: AdminSession, version: string, marks
 }
 
 /** 団体の担当者に、GAS の更新をお願いするメールを送る(同じ団体には24時間に1回まで)。送り直さない */
-export function requestGasUpdate(session: AdminSession, orgId: string, reason: string): Promise<{ sentTo: number }> {
-  return callRegistry<{ sentTo: number }>('requestGasUpdate', { session: session.token, orgId, reason })
+export function requestGasUpdate(session: AdminSession, orgId: string, reason: string): Promise<{ sentTo: number; queued?: boolean }> {
+  return callRegistry<{ sentTo: number; queued?: boolean }>('requestGasUpdate', { session: session.token, orgId, reason })
 }
 
 /** 停止の予定を取り消す・停止を解除する。送り直さない */
