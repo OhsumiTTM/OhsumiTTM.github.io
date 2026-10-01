@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { setup } from './registry-harness'
 
 // 管理者は ADMIN_EMAILS(スクリプトプロパティ)で決めるので、Admins シートは作らない(R1-b から)
-const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'Surveys', 'AuditLog', 'GasVersions']
+const EXPECTED_SHEETS = ['Orgs', 'Contacts', 'Attributes', 'Usage', 'RegistrationCodes', 'Secrets', 'Surveys', 'Announcements', 'AuditLog', 'GasVersions']
 
 describe('シートの用意(setupRegistry)', () => {
   it('すべてのシートを見出し付きで作り、Secrets と AuditLog を保護し、鍵とバックアップのトリガーを作る', () => {
