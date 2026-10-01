@@ -2569,7 +2569,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.02-2'
+var OHSUMI_GAS_VERSION = '2026.10.02-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -14834,7 +14834,8 @@ function isPermissionError_(err) {
 // メンバーにも画面の下に出す。各指標の定義は gas/README.md の「4.18」(定義の版 METRICS_VERSION)
 // 送る曜日・時刻は団体ID から決めて、団体ごとにずらす。期間はその週(月曜日から)。失敗したら1・2・4・8時間…(最長24時間)を
 // 置いて送り直す。レジストリは同じ団体・同じ期間を1件として扱う(送り直しは上書き)
-var METRICS_VERSION = 1
+// 版 2(PR X の後): 将来使いそうな指標を、今のうちから数えて送る(過去の分は後から作れないため)
+var METRICS_VERSION = 2
 var METRICS_HISTORY_KEEP = 12
 var METRICS_RETRY_MAX_HOURS = 24
 
@@ -14918,6 +14919,18 @@ function metricsSnapshot_(nowMs) {
   var usage = usageStatus_(nowMs)
   var last7 = usage.days.slice(-7)
   var sum = function (k) { return last7.reduce(function (n, d) { return n + d[k] }, 0) }
+  var parseList = function (v) { try { var a = JSON.parse(String(v || '[]')); return Array.isArray(a) ? a : [] } catch (e) { return [] } }
+  var parseObj = function (v) { try { var o = JSON.parse(String(v || '{}')); return o && typeof o === 'object' && !Array.isArray(o) ? o : {} } catch (e) { return {} } }
+  // 期限を過ぎた日数(完了していないタスク。今日より前の期限だけ)
+  var overdueDays = tasks.filter(function (t) { var d = String(t.due_date || '').slice(0, 10); return !isDone(t) && d && d < today }).map(function (t) {
+    return Math.max(1, Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(String(t.due_date).slice(0, 10) + 'T00:00:00Z')) / day))
+  }).filter(function (n) { return isFinite(n) })
+  // 1on1 は両方のメンバーの記録に入ることがあるので、記録の ID で1回だけ数える
+  var oneOnOnes = {}
+  members.forEach(function (m) {
+    parseList(m.one_on_ones_json).forEach(function (r) { if (r && r.id && within(String(r.date || '').slice(0, 10) + 'T00:00:00', 30)) oneOnOnes[String(r.id)] = true })
+  })
+  var applications = table(SHEET_EXPENSES).concat(table(SHEET_FORM_SUBMISSIONS)).filter(function (a) { return String(a.id || '') })
   return {
     version: METRICS_VERSION,
     members: members.length,
@@ -14934,6 +14947,22 @@ function metricsSnapshot_(nowMs) {
     tasks_completed_7d: tasks.filter(function (t) { return isDone(t) && within(String(t.completed_date || '').slice(0, 10) + 'T00:00:00', 7) }).length,
     projects: projects.length,
     errors_7d: usage.errors.last7Days,
+    // ---- 版 2 ----
+    // 一度でもログインした人数(立ち上げの進み具合)
+    members_logged_in: members.filter(function (m) { return isFinite(cellTimeMs_(m.last_login)) }).length,
+    comments_7d: tasks.reduce(function (n, t) { return n + parseList(t.comments_json).filter(function (c) { return c && within(c.at, 7) }).length }, 0),
+    reviews_approved_7d: tasks.reduce(function (n, t) { return n + parseList(t.review_approvals_json).filter(function (a) { return a && within(a.at, 7) }).length }, 0),
+    tasks_overdue_days_avg: overdueDays.length ? Math.round(overdueDays.reduce(function (n, d) { return n + d }, 0) / overdueDays.length) : 0,
+    skill_points_total: Math.floor(members.reduce(function (n, m) {
+      var pts = parseObj(m.skill_points_json)
+      return n + Object.keys(pts).reduce(function (k, key) { var v = Number(pts[key]); return k + (isFinite(v) && v > 0 ? v : 0) }, 0)
+    }, 0)),
+    daily_reports_7d: table(SHEET_DAILY_REPORTS).filter(function (r) { return String(r.id || '') && within(r.created_at, 7) }).length,
+    one_on_ones_30d: Object.keys(oneOnOnes).length,
+    expenses_7d: table(SHEET_EXPENSES).filter(function (r) { return String(r.id || '') && within(r.created_at, 7) }).length,
+    form_submissions_7d: table(SHEET_FORM_SUBMISSIONS).filter(function (r) { return String(r.id || '') && within(r.created_at, 7) }).length,
+    // 直近30日に出された経費・フォームの申請のうち、差し戻した(rejected)もの(差し戻した日時は残らないため、出した日で数える)
+    applications_rejected_30d: applications.filter(function (a) { return String(a.status) === 'rejected' && within(a.created_at, 30) }).length,
   }
 }
 

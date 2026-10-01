@@ -1181,6 +1181,18 @@ Webhook URLは Settings シート（ログイン済みの全員に返る）に�
 | `tasks_completed_7d` | 直近7日に完了したタスクの数(`completed_date`) |
 | `projects` | プロジェクトの数(アーカイブしたものを除く) |
 | `errors_7d` | 直近7日のエラーの記録の件数(`ErrorLog`) |
+| **版 2 で足したもの** | (将来の分析に使うため、今から数えています。過去の分は後から作れないため) |
+| `members_logged_in` | `members` のうち、一度でもログインした人数(`last_login` がある。立ち上げの進み具合) |
+| `comments_7d` | 直近7日にタスクに付いたコメントの数(`comments_json` の `at`) |
+| `reviews_approved_7d` | 直近7日の確認の承認の数(`review_approvals_json` の `at`) |
+| `tasks_overdue_days_avg` | `tasks_overdue` のタスクの、期限を過ぎた日数の平均(四捨五入。無ければ 0) |
+| `skill_points_total` | `members` のスキルのポイントの合計(`skill_points_json`) |
+| `daily_reports_7d` | 直近7日に出された日報の数(`DailyReports` の `created_at`) |
+| `one_on_ones_30d` | 直近30日の1on1の数(`one_on_ones_json` の `date`。両方のメンバーに入った同じ記録は1回) |
+| `expenses_7d` / `form_submissions_7d` | 直近7日に出された経費の申請 / フォームの申請の数(`created_at`) |
+| `applications_rejected_30d` | 直近30日に出された経費・フォームの申請のうち、差し戻したもの(差し戻した日時は残らないため、出した日で数える) |
+
+検定の合格の数は、合格の記録が残らない(レベルだけが上がる)ため、数えていません。タスクの差し戻しは、タスクを消すため数えていません。
 
 ## 4.19. FSIF からのアンケート
 
