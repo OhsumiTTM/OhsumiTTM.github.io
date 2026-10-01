@@ -44,6 +44,9 @@ class FakeSheet {
         this.rows[row - 1][col - 1] = v
         if (this.display) this.display[row - 1][col - 1] = String(v)
       },
+      // 退会は行を消さずに書き換える(withdrawn_at など)
+      setValues: (vs: Cell[][]) => vs.forEach((line, r) => line.forEach((v, c) => { this.rows[row - 1 + r][col - 1 + c] = v })),
+      setNumberFormat: () => {},
     }
   }
   appendRow(values: Cell[]) {
@@ -284,6 +287,8 @@ describe('メールアドレス表のキャッシュの版', () => {
 
   it('メンバーの削除と、スプレッドシートの手動編集でも版が変わる', () => {
     const { gas, props } = setup()
+    // 操作の記録(AuditLog シート)は、この偽のスプレッドシートでは作らない
+    ;(gas as unknown as Record<string, unknown>).appendOrgAudit_ = () => {}
     gas.removeMember_('2')
     const afterRemove = props.MEMBER_EMAILS_VERSION
     expect(afterRemove).toBeDefined()

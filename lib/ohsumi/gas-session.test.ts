@@ -23,6 +23,9 @@ class FakeSheet {
     return {
       getValues: () => Array.from({ length: numRows }, (_, r) => Array.from({ length: numCols }, (_, c) => this.rows[row - 1 + r]?.[col - 1 + c] ?? '')),
       setValue: (v: string) => { this.rows[row - 1][col - 1] = v },
+      // 退会は行を消さずに書き換える(withdrawn_at など)
+      setValues: (vs: string[][]) => vs.forEach((line, r) => line.forEach((v, c) => { this.rows[row - 1 + r][col - 1 + c] = v })),
+      setNumberFormat: () => {},
     }
   }
   appendRow(v: string[]) { this.rows.push(v) }
@@ -354,6 +357,8 @@ describe('セッショントークンの確認', () => {
   it('メンバーを削除すると、そのメンバーのトークンは無効になる', () => {
     const t = setup()
     const token = t.login('member@example.com')
+    // 操作の記録(AuditLog シート)は、この偽のスプレッドシートでは作らない
+    ;(t.gas as unknown as Record<string, unknown>).appendOrgAudit_ = () => {}
     t.gas.removeMember_('m2')
     expect(t.post({ action: 'getMyEmails', sessionToken: token }).ok).toBe(false)
   })

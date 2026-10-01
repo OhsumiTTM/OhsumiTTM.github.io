@@ -323,7 +323,7 @@ describe('守る処理を外すと、テストが失敗する', () => {
   })
 
   it('休止中の確かめを外すと、休止中のテストが失敗する', () => {
-    const code = mutate('      if (actingMember.inactive) throw userError_(INACTIVE_MEMBER_MESSAGE)\n', '')
+    const code = mutate('      if (actingMember.inactive) throw userError_(inactiveMessageOf_(actingMember.id))\n', '')
     expect(() => checkInactive(code)).toThrow()
     const noBump = mutate("      if (body.inactive) bumpSessionGeneration_(String(body.memberId))\n", '')
     expect(() => checkInactive(noBump)).toThrow()
