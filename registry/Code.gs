@@ -1452,7 +1452,9 @@ function checkIn_(body, nowMs) {
   var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
   return { ok: true, result: { phase: c.phase, kind: c.kind, suspendAt: c.suspendAt, reason: c.reason, checkedAt: new Date(nowMs).toISOString(), siteOrigins: siteOrigins_(), gasUpdate: gasUpdate, plan: plan,
     // 回答待ちのアンケート(代表の管理画面に出す)
-    surveys: openSurveysFor_(orgId, row.values, nowMs) } }
+    surveys: openSurveysFor_(orgId, row.values, nowMs),
+    // 掲載中の緊急のお知らせの ID(団体の GAS が、自分の団体の代表に1回だけメールで送る。本文は fetchAnnouncements で取る)
+    urgentAnnouncementIds: announcementsFor_(orgId, plan, nowMs).filter(function (a) { return a.importance === 'urgent' }).map(function (a) { return a.announcementId }) } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -1917,6 +1919,8 @@ function scheduleSurveyRestriction_(body, nowMs) {
 // 管理画面から、全団体・プラン別・団体を選んでお知らせを出す。重要度は normal(通常)/ important(重要)/ urgent(緊急)。
 // 団体の GAS は、代表・管理者が管理画面を開いた時に、共有鍵の署名で取りに来る(fetchAnnouncements。団体の GAS が10分覚える)。
 // 本文が長くなるため、checkIn には入れない(団体の GAS のスクリプトプロパティは、1つの値が9KBまで)。
+// 緊急のお知らせは、checkIn で ID だけを伝え、団体の GAS が自分の団体の代表にメールで1回だけ送る
+// (レジストリから全団体に送ると、レジストリのメールの1日の上限に届くため)。
 // 取り下げたもの・掲載の終わり(expires_at)を過ぎたものは伝えない。プラン別は、出した後にプランを変えた団体にも、今のプランで決める
 var ANNOUNCEMENT_IMPORTANCE = ['normal', 'important', 'urgent']
 var ANNOUNCEMENT_TITLE_MAX = 100

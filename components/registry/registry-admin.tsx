@@ -1402,7 +1402,7 @@ function AnnouncementsPanel({ overview, session, onChanged, onAuthError }: { ove
     <div className="space-y-5">
       <form data-announcement-form onSubmit={(e) => void publish(e)} className="space-y-2 rounded-lg border border-border p-3">
         <h2 className="text-sm font-medium">お知らせを出す</h2>
-        <p className="text-xs text-muted-foreground">団体の代表・管理者の管理画面の上部に出します(メールは送りません)。本文は文字としてだけ出します(リンクにはなりません)。緊急のお知らせは、掲載の間は既読にできません。</p>
+        <p className="text-xs text-muted-foreground">団体の代表・管理者の管理画面の上部に出します。緊急のお知らせは、団体の GAS が代表にもメールで1回送ります(1時間以内)。本文は文字としてだけ出します(リンクにはなりません)。緊急のお知らせは、掲載の間は既読にできません。</p>
         <label className="block text-xs">
           題
           <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={100} />
