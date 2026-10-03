@@ -9,6 +9,7 @@ import { SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Plus, Trash2, UserPlus2, Briefcase } from 'lucide-react'
 import type { Candidate } from '@/lib/ohsumi/types'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { isValidEmail } from '@/lib/ohsumi/member-email'
 
 const STATUS_LABEL_KEY: Record<Candidate['status'], TranslationKey> = {
   candidate: 'admin.recruiting.status.candidate',
@@ -175,6 +176,11 @@ export function AdminRecruiting() {
   }
 
   const convert = (c: Candidate) => {
+    // メンバーにはメールアドレスが要る(無いとログインできない)
+    if (!isValidEmail(c.email)) {
+      toast(t('admin.recruiting.convertNeedsEmail', { name: c.name }))
+      return
+    }
     if (!confirm(t('admin.recruiting.confirmConvert', { name: c.name }))) return
     // 招待メール: 登録したアドレスに、団体の招待リンクを送る(リンクは GAS が作る)
     const sendInvite = !!c.email && confirm(t('admin.recruiting.confirmInvite'))

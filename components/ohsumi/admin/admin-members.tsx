@@ -19,6 +19,7 @@ import type { Member, Role } from '@/lib/ohsumi/types'
 import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
 import { PermissionOverridesButton } from './admin-permission-overrides'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { isValidEmail, needsGoogleAccountCheck } from '@/lib/ohsumi/member-email'
 
 // HRD-009: CSV/xlsxのどちらも、同じ「行=[氏名,メール,所属,ロール]」の
 // 2次元配列に正規化してから、この共通ロジックでプレビュー配列に変換する
@@ -144,9 +145,13 @@ export function AdminMembers() {
 
   const handleBulkAdd = () => {
     if (!csvPreview) return
-    const rows = csvPreview
+    // メールアドレスの無い・形の違う行は追加しない(メールアドレスが無いとログインできないため)
+    const rows = csvPreview.filter((r) => isValidEmail(r.email))
+    const skipped = csvPreview.length - rows.length
     setCsvPreview(null)
-    Promise.allSettled(rows.map((r) => addMember(r.name, r.email, r.affiliation, r.role, sendInvite && inviteMail.available))).then(
+    if (skipped > 0) toast(t('admin.members.bulkSkippedNoEmail', { count: skipped }))
+    if (rows.length === 0) return
+    Promise.allSettled(rows.map((r) => addMember(r.name, r.email.trim(), r.affiliation, r.role, sendInvite && inviteMail.available))).then(
       (results) => {
         const failed = results.filter((r) => r.status === 'rejected').length
         if (failed > 0) {
@@ -161,7 +166,7 @@ export function AdminMembers() {
 
   const handleAddMember = () => {
     const name = newName.trim()
-    if (!name) return
+    if (!name || !isValidEmail(newEmail)) return
     setNewName('')
     setNewEmail('')
     setNewAffiliation('')
@@ -269,11 +274,17 @@ export function AdminMembers() {
               </option>
             ))}
           </select>
-          <Button className="h-9" disabled={!newName.trim() || !isDaihyo} onClick={handleAddMember}>
+          <Button className="h-9" disabled={!newName.trim() || !isValidEmail(newEmail) || !isDaihyo} onClick={handleAddMember}>
             <UserPlus className="size-4" />
             {t('admin.members.register.submit')}
           </Button>
         </div>
+        {newEmail.trim() !== '' && !isValidEmail(newEmail) && (
+          <p className="mt-2 text-xs text-destructive">{t('admin.members.register.emailInvalid')}</p>
+        )}
+        {needsGoogleAccountCheck(newEmail) && (
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">{t('admin.members.register.nonGmailWarning')}</p>
+        )}
         {/* 招待メール: 登録したアドレスに、団体の招待リンクを送る(リンクは GAS が作る。レジストリに確かめた団体だけ) */}
         <label className="mt-3 flex items-start gap-2 text-xs">
           <input
@@ -323,7 +334,9 @@ export function AdminMembers() {
                   {csvPreview.map((r, i) => (
                     <tr key={i} className="border-b border-border/40">
                       <td className="py-1 pr-3">{r.name}</td>
-                      <td className="py-1 pr-3 text-muted-foreground">{r.email || '—'}</td>
+                      <td className={isValidEmail(r.email) ? 'py-1 pr-3 text-muted-foreground' : 'py-1 pr-3 text-destructive'}>
+                        {isValidEmail(r.email) ? r.email : t('admin.members.csv.emailRequired')}
+                      </td>
                       <td className="py-1 pr-3 text-muted-foreground">{r.affiliation || '—'}</td>
                       <td className="py-1 text-muted-foreground">{roleName(r.role)}</td>
                     </tr>

@@ -371,6 +371,12 @@ export function TaskDetailDrawer({
         <p className="mt-1 text-sm text-muted-foreground">
           {tr('taskDrawer.confirmDelete.body', { name: task?.name ?? '' })}
         </p>
+        {/* 完了・確認待ちのタスクは、団体の経験の記録として残すので消さない */}
+        {(task?.status === 'done' || task?.status === 'review') && (
+          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            {tr('taskDrawer.confirmDelete.blockedDone')}
+          </p>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" className="h-9" onClick={() => setConfirmDelete(false)}>
             {tr('common.cancel')}
@@ -378,6 +384,7 @@ export function TaskDetailDrawer({
           <Button
             variant="destructive"
             className="h-9"
+            disabled={task?.status === 'done' || task?.status === 'review'}
             onClick={() => {
               if (task) {
                 removeTask(task.id)
