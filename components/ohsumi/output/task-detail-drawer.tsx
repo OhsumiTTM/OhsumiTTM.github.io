@@ -42,7 +42,7 @@ import {
   type TaskStatus,
   type TaskVisibility,
 } from '@/lib/ohsumi/types'
-import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, type WorkloadCapacity } from '@/lib/ohsumi/utils'
+import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, todayStr, type WorkloadCapacity } from '@/lib/ohsumi/utils'
 import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
@@ -2500,7 +2500,7 @@ function AddToGCalButton({ task }: { task: Task }) {
   const { t } = useI18n()
   const href =
     googleCalendarUrl(task, { appLink: currentInviteLink() ?? undefined }) ??
-    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, new Date().toISOString().slice(0, 10), [task.description, `Ohsumiから追加${currentInviteLink() ? ': ' + currentInviteLink() : ''}`].filter(Boolean).join('\n'))
+    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, todayStr(), [task.description, `Ohsumiから追加${currentInviteLink() ? ': ' + currentInviteLink() : ''}`].filter(Boolean).join('\n'))
 
   return (
     <a

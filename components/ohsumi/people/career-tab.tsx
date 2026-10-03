@@ -10,7 +10,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { useToast } from '@/components/ohsumi/toast'
 import { useI18n, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
-import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure } from '@/lib/ohsumi/utils'
+import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure, todayStr } from '@/lib/ohsumi/utils'
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
 import { doneTaskCountsOf, levelProgress } from '@/lib/ohsumi/skill-levels'
 import { conditionText } from '@/components/ohsumi/skill-condition-text'
@@ -1084,7 +1084,7 @@ function TrainingHistorySection({
 
   // LRN-007: 承認済み・開催日が過去のレコードについて、管理者が実際の
   // 出席可否を記録する。updateTrainingHistoryをそのまま使って更新する。
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   const setAttendance = (t: TrainingRecord, attendanceStatus: NonNullable<TrainingRecord['attendanceStatus']>) => {
     onSave(
       member.id,

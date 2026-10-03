@@ -119,7 +119,7 @@ import {
 } from './remote'
 import { selectProjectHealthReports } from './project-health-report'
 import { isGoogleCalendarReadEnabled } from './features'
-import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions } from './utils'
+import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, todayStr } from './utils'
 import { doneTaskCountsOf, levelPointsFor, skillLevelOf, type SkillEvidence, type SkillLevelRules } from './skill-levels'
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
@@ -2522,6 +2522,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (isRemoteConfigured && !lastLoginRecordedRef.current) runRemote(remoteApi.updateLastLogin(userId))
       lastLoginRecordedRef.current = false
 
+      // GAS につながっている時は、画面だけで初期タスクを作らない。画面だけのタスクは GAS に
+      // 保存されず(完了にしても保存できない)、端末ごとに何度も付くため。GAS の側で作る形は v1.1 で入れる
+      if (isRemoteConfigured) return
+
       // 既に初期タスクを付与済みか、タスクが存在する場合はスキップ
       try {
         const given = window.localStorage.getItem(INITIAL_TASKS_KEY)
@@ -2891,7 +2895,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       const template = taskSetTemplates.find((t) => t.id === templateId)
       if (!template || template.items.length === 0) return
 
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const tempIdByItemId = new Map(
         template.items.map((item) => [item.id, `t-${Math.random().toString(36).slice(2, 9)}`]),
       )
@@ -2977,7 +2981,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       const sourceTasks = tasks.filter((t) => t.projectId === sourceProjectId && taskIds.includes(t.id))
       if (sourceTasks.length === 0) return
 
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const tempIdBySourceId = new Map(
         sourceTasks.map((t) => [t.id, `t-${Math.random().toString(36).slice(2, 9)}`]),
       )
@@ -3270,7 +3274,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         at: new Date().toISOString(),
         byId: currentUserId ?? '',
       }
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id !== id) return t
@@ -3354,7 +3358,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 返ってきた本物のidに差し替える)
   const createReviewConfirmTask = useCallback(
     (original: Task, reviewerIds: string[]) => {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
       const confirmTask: Task = {
         id: tempId,
@@ -3417,7 +3421,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         const task = tasks.find((t) => t.id === id)
         if (task && incompletePrerequisites(task, tasks).length > 0) return
       }
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const updated = tasks.map((t) =>
         t.id === id
           ? appendHistory(
@@ -3603,7 +3607,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setProjects((prev) => [...prev, { id: tempProjectId, name, description, type, parentId }])
 
       const templates = type ? projectTemplates[type] ?? [] : []
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       // 業務テンプレート(applyTaskSetTemplate)と同じく、テンプレート内の
       // dependsOnはテンプレートローカルidで書かれているので、生成した
       // 一時idへのマップを介して実際のdependsOnIdsに変換する
@@ -4246,7 +4250,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         const needed = original.requiredApprovals === 'all' ? reviewerIds.length : (original.requiredApprovals ?? 1)
         willComplete = nextCount >= needed
       }
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id === taskId) {
@@ -4297,7 +4301,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const setBlocker = useCallback(
     (id: string, note: string | null) => {
       const trimmed = note?.trim() || null
-      const since = trimmed ? new Date().toISOString().slice(0, 10) : null
+      const since = trimmed ? todayStr() : null
       setTasks((prev) =>
         prev.map((t) => (t.id === id ? { ...t, blocker: trimmed ? { note: trimmed, since: since! } : undefined } : t)),
       )
@@ -4311,7 +4315,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const setHoldReason = useCallback(
     (id: string, note: string | null) => {
       const trimmed = note?.trim() || null
-      const since = trimmed ? new Date().toISOString().slice(0, 10) : null
+      const since = trimmed ? todayStr() : null
       setTasks((prev) =>
         prev.map((t) =>
           t.id === id ? { ...t, holdReason: trimmed ? { note: trimmed, since: since! } : undefined } : t,
@@ -4390,7 +4394,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           })
           if (isRemoteConfigured) runRemote(remoteApi.updateTaskSchedule(id, nextSchedule))
           if (allDone && t.status !== 'done') {
-            const today = new Date().toISOString().slice(0, 10)
+            const today = todayStr()
             if (isRemoteConfigured) {
               runRemote(remoteApi.updateTaskStatus(id, 'done'))
               runRemote(remoteApi.notifyScheduleResult(id))
@@ -4422,7 +4426,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       invitedIds: string[],
     ) => {
       const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const schedule: TaskSchedule = { candidates, invitedIds, responses: {} }
       const newTask: Task = {
         id: tempId,
@@ -4508,7 +4512,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           const allDone = t.form.invitedIds.every((mid) => !!nextForm.responses[mid])
           if (isRemoteConfigured) runRemote(remoteApi.updateTaskForm(id, nextForm))
           if (allDone && t.status !== 'done') {
-            const today = new Date().toISOString().slice(0, 10)
+            const today = todayStr()
             if (isRemoteConfigured) {
               runRemote(remoteApi.updateTaskStatus(id, 'done'))
               runRemote(remoteApi.notifyFormResult(id))
@@ -4532,7 +4536,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const createFormTask = useCallback(
     (projectId: string, name: string, fields: FormFieldDef[], invitedIds: string[]) => {
       const tempId = `t-${Math.random().toString(36).slice(2, 9)}`
-      const today = new Date().toISOString().slice(0, 10)
+      const today = todayStr()
       const form: TaskForm = { fields, invitedIds, responses: {} }
       const newTask: Task = {
         id: tempId,

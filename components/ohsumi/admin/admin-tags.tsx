@@ -928,88 +928,16 @@ function SurveyQuestionImageInput({
   )
 }
 
-// item 26: 通知種別・頻度選択UIをlocalStorageに保存する
-// GAS側との連携は将来対応。現時点ではUIの設定値をフロント側の表示制御に利用する想定。
-const NOTIFY_SETTINGS_KEY = 'ohsumi-notify-settings'
-
-type NotifyFrequency = 'immediate' | 'daily' | 'weekly' | 'off'
-
-interface NotifySettings {
-  overdue: NotifyFrequency
-  approval: NotifyFrequency
-  inactive: NotifyFrequency
-  assign: NotifyFrequency
-}
-
-const DEFAULT_NOTIFY_SETTINGS: NotifySettings = {
-  overdue: 'daily',
-  approval: 'immediate',
-  inactive: 'weekly',
-  assign: 'immediate',
-}
-
-const NOTIFY_KIND_KEY: Record<keyof NotifySettings, TranslationKey> = {
-  overdue: 'admin.tags.notify.kind.overdue',
-  approval: 'admin.tags.notify.kind.approval',
-  inactive: 'admin.tags.notify.kind.inactive',
-  assign: 'admin.tags.notify.kind.assign',
-}
-
-const FREQ_KEY: Record<NotifyFrequency, TranslationKey> = {
-  immediate: 'admin.tags.notify.freq.immediate',
-  daily: 'admin.tags.notify.freq.daily',
-  weekly: 'admin.tags.notify.freq.weekly',
-  off: 'admin.tags.notify.freq.off',
-}
-const FREQ_OPTIONS: NotifyFrequency[] = ['immediate', 'daily', 'weekly', 'off']
-
-function loadNotifySettings(): NotifySettings {
-  try {
-    const raw = window.localStorage.getItem(NOTIFY_SETTINGS_KEY)
-    if (raw) return { ...DEFAULT_NOTIFY_SETTINGS, ...JSON.parse(raw) }
-  } catch { /* ignore */ }
-  return DEFAULT_NOTIFY_SETTINGS
-}
-
+// 通知の受け取り方の案内。以前の「通知種別・頻度」の選択(ブラウザに保存するだけで、通知には
+// 何も効いていなかった)は消した。通知はメンバーごとの通知の設定と、Discord・Slack・団体の通知先で決まる
 function NotifySettingsEditor() {
-  const [settings, setSettings] = useState<NotifySettings>(() => {
-    if (typeof window === 'undefined') return DEFAULT_NOTIFY_SETTINGS
-    return loadNotifySettings()
-  })
-  const toast = useToast()
   const { t } = useI18n()
-
-  const update = (kind: keyof NotifySettings, freq: NotifyFrequency) => {
-    const next = { ...settings, [kind]: freq }
-    setSettings(next)
-    try { window.localStorage.setItem(NOTIFY_SETTINGS_KEY, JSON.stringify(next)) } catch { /* ignore */ }
-    toast(t('admin.tags.notify.updatedToast', { kind: t(NOTIFY_KIND_KEY[kind]), freq: t(FREQ_KEY[freq]) }))
-  }
-
   return (
     <div className="mt-6 rounded-lg border border-border bg-card p-4">
       <SectionLabel>{t('admin.tags.notify.title')}</SectionLabel>
       <p className="mt-1 text-xs text-muted-foreground">
         {t('admin.tags.notify.desc')}
       </p>
-      <div className="mt-3 flex flex-col gap-2">
-        {(Object.keys(NOTIFY_KIND_KEY) as (keyof NotifySettings)[]).map((kind) => (
-          <div key={kind} className="flex items-center gap-3">
-            <span className="w-40 shrink-0 text-sm">{t(NOTIFY_KIND_KEY[kind])}</span>
-            <div className="flex gap-1">
-              {FREQ_OPTIONS.map((freq) => (
-                <button
-                  key={freq}
-                  onClick={() => update(kind, freq)}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${settings[kind] === freq ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground hover:bg-secondary/80'}`}
-                >
-                  {t(FREQ_KEY[freq])}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   )
 }

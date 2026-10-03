@@ -2,7 +2,8 @@ import * as XLSX from 'xlsx'
 import type { Member, Project, Task } from './types'
 import { STATUS_LABEL } from './types'
 import { sheetLabel } from './codes'
-import { formatDeadlineFull } from './utils'
+import { formatDeadlineFull, todayStr } from './utils'
+import { csvField } from './csv-safe'
 
 function memberLabel(members: Member[], id: string): string {
   const m = members.find((mm) => mm.id === id)
@@ -46,9 +47,9 @@ function downloadWorkbook(wb: XLSX.WorkBook, filename: string) {
 
 // USR-013: CSVフィールドのエスケープ — カンマ・改行・ダブルクォートを
 // 含む場合はダブルクォートで囲み、内部のダブルクォートは二重化する
+// 数式の対策と " の囲みは csv-safe.ts の共通の関数で行う
 function escapeCsvField(value: unknown): string {
-  const str = value == null ? '' : String(value)
-  return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str
+  return csvField(value)
 }
 
 function rowsToCsv(rows: Record<string, unknown>[]): string {
@@ -79,7 +80,7 @@ export function exportTasksToExcel(tasks: Task[], projects: Project[], members: 
   sheet['!cols'] = autoWidth(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'タスク')
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   downloadWorkbook(wb, `Ohsumi_タスク一覧_${today}.xlsx`)
 }
 
@@ -88,7 +89,7 @@ export function exportTasksToExcel(tasks: Task[], projects: Project[], members: 
 export function exportTasksToCsv(tasks: Task[], projects: Project[], members: Member[]) {
   const rows = taskRows(tasks, projects, members)
   const csv = rowsToCsv(rows)
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   downloadCsv(csv, `Ohsumi_タスク一覧_${today}.csv`)
 }
 
@@ -107,7 +108,7 @@ export function exportSkillExcel(members: Member[], skillOptions: string[]) {
   sheet['!cols'] = autoWidth(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'スキル')
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   downloadWorkbook(wb, `Ohsumi_スキル一覧_${today}.xlsx`)
 }
 
@@ -119,7 +120,7 @@ export function exportProjectTasksToExcel(project: Project, tasks: Task[], proje
   sheet['!cols'] = autoWidth(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheet, 'タスク')
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   downloadWorkbook(wb, `Ohsumi_${project.name}_${today}.xlsx`)
 }
 
@@ -159,6 +160,6 @@ export function exportAllDataToExcel(tasks: Task[], projects: Project[], members
   mSheet['!cols'] = autoWidth(mRows)
   XLSX.utils.book_append_sheet(wb, mSheet, 'メンバー')
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayStr()
   downloadWorkbook(wb, `Ohsumi_全データ_${today}.xlsx`)
 }

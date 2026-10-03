@@ -290,6 +290,10 @@ export function getActiveOrg(): { orgId: string | null; gasUrl: string } {
 
 /** この団体を使う(一覧に入れ、今の団体にする) */
 export function activateOrg(org: SavedOrg): void {
+  // 前に使っていた団体と違う団体を使い始める時は、前の団体の保存(画面の状態・団体の名前・ロゴ・色など)を消す。
+  // 招待リンクで別の団体を開いた時に、前の団体の内容が新しい団体の画面に出ないようにするため
+  const previousOrgId = getCurrentOrgId()
+  if (previousOrgId && previousOrgId !== org.orgId) clearOrgScopedStorage()
   activeGasUrl = org.gasUrl
   activeOrgId = org.orgId
   upsertSavedOrg(org)
@@ -364,11 +368,16 @@ export function switchToOrg(orgId: string, reload: () => void = () => window.loc
   setCurrentOrgId(orgId)
   // 読み込み直したページが、アドレスバーの前の団体(?org=)を開かないように、先に切り替える
   syncOrgParam(orgId)
+  clearOrgScopedStorage()
+  reload()
+}
+
+/** 団体ごとの保存(ORG_SCOPED_STORAGE_KEYS)を消す */
+export function clearOrgScopedStorage(): void {
   const s = storage()
   for (const key of ORG_SCOPED_STORAGE_KEYS) {
     try { s?.removeItem(key) } catch { /* ignore */ }
   }
-  reload()
 }
 
 // テスト用: ページを読み込み直した状態に戻す

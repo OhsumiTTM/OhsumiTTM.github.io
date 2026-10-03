@@ -10,6 +10,7 @@
 // 場合だけ要求する(既定では無効)。
 
 import { isGoogleCalendarReadEnabled } from './features'
+import { neutralizeFormula } from './csv-safe'
 
 export const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
 
@@ -168,11 +169,13 @@ export async function syncTasksToSheet(
 ): Promise<void> {
   const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`
   const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+  // 書き込みは USER_ENTERED(日付・数を値として扱わせるため)なので、利用者が入れた文字が数式として
+  // 動かないよう、= + - @ などで始まる値には先頭に ' を付ける(neutralizeFormula)
   const values = [HEADER, ...rows.map((r) => [
     r.taskName, r.project, r.department, r.assignees, r.status,
     r.priority, r.difficulty, r.category, r.skills,
     r.startDate, r.deadline, r.completedDate, r.progress, r.description,
-  ])]
+  ].map(neutralizeFormula))]
 
   // Clear existing data, then write fresh
   await fetch(`${base}/values/${encodeURIComponent(SHEET_NAME)}:clear`, {

@@ -1,7 +1,7 @@
 import type { Difficulty, Member, Project, ProjectHealthLevel, Qualification, RadarAxis, SkillLevelValue, Task } from './types'
 import { BUILTIN_LEVEL_POINTS, EMPTY_EVIDENCE, skillLevelOf } from './skill-levels'
 import { DIFFICULTY_LABEL } from './types'
-import { todayStrInTz, DEFAULT_TIMEZONE } from './timezone'
+import { todayStrInTz, DEFAULT_TIMEZONE, loadCachedTimezone } from './timezone'
 
 // F5: 成果物リンク・経費の領収書URLなど、ユーザーが自由に入力したURLを
 // リンクとして描画する前に必ず通す。http/https以外(javascript:等)を拒否する。
@@ -67,8 +67,10 @@ export function directManagersOf(assigneeIds: string[], members: Member[]): Memb
   return result
 }
 
+// 今日の日付(YYYY-MM-DD)。その人の時間帯(未設定なら日本時間)で求める。
+// toISOString().slice(0, 10) は世界標準時なので、日本時間の0時〜9時に前の日になる
 export function todayStr(): string {
-  return new Date().toISOString().slice(0, 10)
+  return todayStrInTz(loadCachedTimezone())
 }
 
 export function formatDeadline(d: string | null): string {
