@@ -196,25 +196,30 @@ function checkOpenBid(code: string) {
 
 function checkInactive(code: string) {
   const h = guardHarness({ code })
-  // 休止中のメンバーは、操作も初期データの読み込みもできない(ログイン画面に戻す)
-  expect(h.post({ action: 'updateComments', sessionToken: 'm-off', taskId: 't1', comments: [] })).toMatchObject({ ok: false, authError: true })
-  const init = h.post({ action: 'getInitialData', sessionToken: 'm-off' })
-  expect(init).toMatchObject({ ok: false, authError: true })
-  expect(init.error).toMatch(/休止中/)
-  // Google でログインしようとしても断る
+  // 休止中のメンバーも、ログイン・初期データの読み込み・操作ができる(2026年10月に変更)
+  expect(h.post({ action: 'getInitialData', sessionToken: 'm-off' }).ok).toBe(true)
   h.c.verifyGoogleIdToken_ = () => ({ email: 'off@example.com' })
   const login = h.post({ action: 'exchangeIdToken', idToken: 'x', nonceSecret: 'y' })
-  expect(login.ok).toBe(false)
-  expect(login.error).toMatch(/休止中/)
-
-  // 休止にした時点で、そのメンバーのログイン(全端末)を無効にする。解除すれば、また使える
+  expect(login.ok, login.error).toBe(true)
+  // 休止にしてもログイン(セッション)は無効にしない
   const genKey = 'SESSION_GEN_m-base'
   const before = Number(h.props[genKey] || 0)
   expect(h.post({ action: 'updateMemberInactive', sessionToken: 'm-top', memberId: 'm-base', inactive: true }).ok).toBe(true)
-  expect(Number(h.props[genKey])).toBe(before + 1)
-  expect(h.post({ action: 'updateProgress', sessionToken: 'm-base', taskId: 't1', progressPercent: 10 }).authError).toBe(true)
-  expect(h.post({ action: 'updateMemberInactive', sessionToken: 'm-top', memberId: 'm-base', inactive: false }).ok).toBe(true)
+  expect(Number(h.props[genKey] || 0)).toBe(before)
   expect(h.post({ action: 'updateProgress', sessionToken: 'm-base', taskId: 't1', progressPercent: 10 }).ok).toBe(true)
+
+  // 退会したメンバー(withdrawn_at がある)は、ログインも操作もできない
+  const rows = h.sheets.Members.rows
+  rows[0].push('withdrawn_at')
+  for (let r = 1; r < rows.length; r++) rows[r].push(rows[r][0] === 'm-off' ? '2026-10-01T00:00:00Z' : '')
+  h.props.DATA_VERSION = 'v' + Math.random()
+  const init = h.post({ action: 'getInitialData', sessionToken: 'm-off' })
+  expect(init).toMatchObject({ ok: false, authError: true })
+  expect(init.error).toMatch(/退会/)
+  expect(h.post({ action: 'updateComments', sessionToken: 'm-off', taskId: 't1', comments: [] })).toMatchObject({ ok: false, authError: true })
+  const login2 = h.post({ action: 'exchangeIdToken', idToken: 'x', nonceSecret: 'y' })
+  expect(login2.ok).toBe(false)
+  expect(login2.error).toMatch(/退会/)
 }
 
 describe('メンションの通知', () => {
@@ -274,7 +279,7 @@ describe('進捗・保留の理由・公募', () => {
 })
 
 describe('休止中のメンバー', () => {
-  it('ログインできず、休止にした時点でセッションを無効にする。解除すれば使える', () => checkInactive(CODE_GS))
+  it('休止中もログイン・操作ができる。退会したメンバーはログインも操作もできない', () => checkInactive(CODE_GS))
 })
 
 // ---- 守る処理を外すと、上のテストが失敗すること --------------------------------------------
@@ -322,10 +327,8 @@ describe('守る処理を外すと、テストが失敗する', () => {
     expect(() => checkOpenBid(code)).toThrow()
   })
 
-  it('休止中の確かめを外すと、休止中のテストが失敗する', () => {
-    const code = mutate('      if (actingMember.inactive) throw userError_(inactiveMessageOf_(actingMember.id))\n', '')
+  it('退会の確かめを外すと、休止中・退会のテストが失敗する', () => {
+    const code = mutate('      if (actingMember.withdrawn) throw userError_(WITHDRAWN_MEMBER_MESSAGE)\n', '')
     expect(() => checkInactive(code)).toThrow()
-    const noBump = mutate("      if (body.inactive) bumpSessionGeneration_(String(body.memberId))\n", '')
-    expect(() => checkInactive(noBump)).toThrow()
   })
 })

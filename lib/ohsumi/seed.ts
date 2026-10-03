@@ -43,7 +43,7 @@ export const MEMBERS: Member[] = [
     name: '眞鍋 和士',
     affiliation: 'Ohsumi',
     role: '代表',
-    avatarColor: '#2f5bea',
+    avatarColor: '#2948e8',
     initials: 'MK',
     will: ['プロダクト戦略を磨きたい', '組織づくりに関わりたい'],
     judgment: ['リーダー経験', 'プロダクト設計', 'ファシリテーション'],

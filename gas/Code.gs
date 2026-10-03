@@ -1836,6 +1836,7 @@ function assertTopRemains_(change) {
   var idCol = headers.indexOf('id')
   var roleCol = headers.indexOf('role')
   var inactiveCol = headers.indexOf('inactive')
+  var withdrawnCol = headers.indexOf('withdrawn_at')
   var rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues() : []
   var count = 0
   rows.forEach(function (r) {
@@ -2149,6 +2150,7 @@ function getActingMemberById_(memberId) {
   var projectIdsCol = headers.indexOf('project_ids')
   var overridesCol = headers.indexOf('permission_overrides_json')
   var inactiveCol = headers.indexOf('inactive')
+  var withdrawnCol = headers.indexOf('withdrawn_at')
   if (idCol < 0) throw userError_('Membersシートの構造が不正です。')
   var data = sheet.getDataRange().getValues()
   for (var i = 1; i < data.length; i++) {
@@ -2163,6 +2165,7 @@ function getActingMemberById_(memberId) {
         project_ids: String(data[i][projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean),
         permission_overrides: Array.isArray(overrides) ? overrides : [],
         inactive: inactiveCol >= 0 && isInactiveValue_(data[i][inactiveCol]),
+        withdrawn: withdrawnCol >= 0 && String(data[i][withdrawnCol] || '') !== '',
       }
     }
   }
@@ -2191,6 +2194,7 @@ function actingMemberFromTable_(table, memberId) {
   var projectIdsCol = h.indexOf('project_ids')
   var overridesCol = h.indexOf('permission_overrides_json')
   var inactiveCol = h.indexOf('inactive')
+  var withdrawnCol = h.indexOf('withdrawn_at')
   for (var i = 0; i < table.rows.length; i++) {
     var row = table.rows[i]
     if (String(row[idCol]) !== String(memberId)) continue
@@ -2204,6 +2208,7 @@ function actingMemberFromTable_(table, memberId) {
       project_ids: projectIdsCol >= 0 ? String(row[projectIdsCol] || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) : [],
       permission_overrides: Array.isArray(overrides) ? overrides : [],
       inactive: inactiveCol >= 0 && isInactiveValue_(row[inactiveCol]),
+      withdrawn: withdrawnCol >= 0 && String(row[withdrawnCol] || '') !== '',
     }
   }
   return null
@@ -2248,19 +2253,17 @@ var _authSnapshotVersion = null
 // それ以外(読み取り・普通の書き込み)はスナップショットから(役職の設定もそこから)。
 // スナップショットに見つからない・読めない時はシートから
 // ---- 休止中のメンバー --------------------------------------------------------
-// 休止中(Members の inactive が TRUE)のメンバーは、ログインできず、発行済みのセッションも使えない。
-// 休止にした時は、そのメンバーのセッションを無効にする(updateMemberInactive)。シートを直接書き換えて
-// 休止にした時も、次のリクエストで断る(操作するメンバーを引く時に確かめる)。休止を解除すれば、またログインできる
-var INACTIVE_MEMBER_MESSAGE = 'このアカウントは休止中のため、ログインできません。代表に休止の解除を依頼してください。'
+// 休止中(Members の inactive が TRUE)のメンバーも、ログイン・操作はできる(2026年10月に変更。以前はログインを止めていた)。
+// 担当の候補・おすすめ・招待・人数の集計などからは外れる。ログインを止めるのは退会(withdrawn_at がある)の時だけ
 
 function isInactiveValue_(v) {
   return v === true || String(v || '').trim().toUpperCase() === 'TRUE'
 }
 
-// 休止中か(スナップショットの Members で確かめる。読めなければシート)
-function memberIsInactive_(memberId) {
+// 退会したか(退会したメンバーはログインも操作もできない)
+function memberIsWithdrawn_(memberId) {
   var row = snapshotRowOrSheet_(SHEET_MEMBERS, memberId)
-  return !!row && isInactiveValue_(row.inactive)
+  return !!row && String(row.withdrawn_at || '') !== ''
 }
 
 function getActingMember_(memberId, action) {
@@ -2586,7 +2589,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.03-3'
+var OHSUMI_GAS_VERSION = '2026.10.03-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -3562,8 +3565,8 @@ function exchangeIdToken_(body) {
   // 未登録のアカウント: ログイン画面に表示するため、本人のメールアドレスと団体名だけ返す
   // (団体名は、Google でログインした後にだけ返す。どの団体に入ろうとしたかを画面に出すため)
   if (!memberId) return { memberId: null, email: google.email, orgName: String(getSettingValue_('org_name') || '') }
-  // 休止中のメンバーはログインできない(休止を解除すれば、またログインできる)
-  if (memberIsInactive_(memberId)) throw userError_(inactiveMessageOf_(memberId))
+  // 退会したメンバーはログインできない(休止中のメンバーはログインできる)
+  if (memberIsWithdrawn_(memberId)) throw userError_(WITHDRAWN_MEMBER_MESSAGE)
   var data = getInitialDataForMember_(memberId, null)
   if (!data.memberId) return { memberId: null, email: google.email }
   data.session = timed_('sessionMs', function () { return issueSessionToken_(memberId, body.remember !== false, nowSec_()) })
@@ -5003,7 +5006,7 @@ function handlePost_(e, state) {
       var initAuth
       try {
         initAuth = timed_('authMs', function () { return authenticateRequest_(body) })
-        if (memberIsInactive_(initAuth.memberId)) throw userError_(inactiveMessageOf_(initAuth.memberId))
+        if (memberIsWithdrawn_(initAuth.memberId)) throw userError_(WITHDRAWN_MEMBER_MESSAGE)
       } catch (initAuthErr) {
         return authFailure_(initAuthErr)
       }
@@ -5041,7 +5044,8 @@ function handlePost_(e, state) {
       auth = authenticateRequest_(body)
       renewedSession = auth.renewed
       actingMember = getActingMember_(auth.memberId, requestAuthAction_(body))
-      if (actingMember.inactive) throw userError_(inactiveMessageOf_(actingMember.id))
+      // 退会したメンバーは操作できない(休止中のメンバーは、ログインも操作もできる。担当の候補などからは外れる)
+      if (actingMember.withdrawn) throw userError_(WITHDRAWN_MEMBER_MESSAGE)
     } catch (authErr) {
       endTiming_('authMs', authStart)
       return authFailure_(authErr)
@@ -5886,8 +5890,8 @@ function runWriteAction_(body, actingMember) {
         throw userError_('退会したメンバーは、休止の解除では戻せません。団体設定の「個人情報の削除」で、退会を取り消してください。')
       }
       result = updateMemberFields_(body.memberId, { inactive: body.inactive ? 'TRUE' : '' })
-      // 休止にしたら、そのメンバーのログイン(全端末)を無効にする
-      if (body.inactive) bumpSessionGeneration_(String(body.memberId))
+      // 休止中のメンバーもログイン・操作はできる(担当の候補・おすすめ・招待などからは外れる)。
+      // ログインを止めるのは退会の時だけ
       break
     case 'updateMemberDepartmentPath':
       result = updateMemberFields_(body.memberId, { department_path: body.departmentPath || '' })
@@ -9081,6 +9085,7 @@ function notifyInactiveMembers_() {
   var idCol = headers.indexOf('id')
   var nameCol = headers.indexOf('name')
   var inactiveCol = headers.indexOf('inactive')
+  var withdrawnCol = headers.indexOf('withdrawn_at')
   var lastLoginCol = headers.indexOf('last_login')
   var lastNotifiedCol = headers.indexOf('last_inactive_notified')
   if (idCol < 0 || lastLoginCol < 0) return
@@ -14205,12 +14210,6 @@ function personalDataRetentionDays_() {
   return n
 }
 
-// ログインできない理由(退会・休止)
-function inactiveMessageOf_(memberId) {
-  var row = null
-  try { row = snapshotRowOrSheet_(SHEET_MEMBERS, memberId) } catch (e) { row = null }
-  return row && String(row.withdrawn_at || '') ? WITHDRAWN_MEMBER_MESSAGE : INACTIVE_MEMBER_MESSAGE
-}
 
 function timeOfCell_(v) {
   if (v instanceof Date) return v.getTime()

@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none">
   <!-- Ohsumi のシンボル(ブランドガイドライン v0.4)。components/ohsumi/primitives.tsx の OhsumiMark と同じ形 -->
-  <circle cx="11" cy="12" r="8.4" stroke="#2F5BEA" stroke-width="2.1"/>
-  <circle cx="19.4" cy="12" r="2.7" fill="#2F5BEA"/>
+  <circle cx="11" cy="12" r="8.4" stroke="#2948E8" stroke-width="2.1"/>
+  <circle cx="19.4" cy="12" r="2.7" fill="#2948E8"/>
 </svg>

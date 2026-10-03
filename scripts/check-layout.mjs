@@ -323,8 +323,8 @@ const MEASURE = `(() => {
   })
   return JSON.stringify({ page: document.documentElement.scrollWidth, window: window.innerWidth, off: off.slice(0, 5), squashed: squashed.slice(0, 5), logos })
 })()`
-// ロゴのシンボルの色(Ohsumi Blue #2F5BEA)
-const LOGO_BLUE = 'rgb(47, 91, 234)'
+// ロゴのシンボルの色(Ohsumi Blue #2948E8)
+const LOGO_BLUE = 'rgb(41, 72, 232)'
 let logoChecks = 0
 // カード全体、またはカードの中の行(文字が入ったもの)が、縦に押しつぶされて切れていないか
 const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-grab.absolute')].filter((c) =>
