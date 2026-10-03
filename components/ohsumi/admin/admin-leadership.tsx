@@ -6,7 +6,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { STATUS_LABEL } from '@/lib/ohsumi/types'
 import { Crown, AlertTriangle, Users, TrendingUp, CheckCircle2, Clock, UserCheck } from 'lucide-react'
-import { isOverdue, deadlineLevel } from '@/lib/ohsumi/utils'
+import { isOverdue, deadlineLevel, isActiveMember } from '@/lib/ohsumi/utils'
 import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -35,7 +35,7 @@ export function AdminLeadership() {
       const now = new Date()
       return (now.getTime() - d.getTime()) < 30 * 86400000
     })
-    const activeMembers = members.filter((m) => !m.inactive)
+    const activeMembers = members.filter(isActiveMember)
     const assignedMemberIds = new Set(visibleTasks.flatMap((t) => t.assigneeIds))
     const engagedCount = activeMembers.filter((m) => assignedMemberIds.has(m.id)).length
 
@@ -61,7 +61,7 @@ export function AdminLeadership() {
   // メンバー稼働ランキング（担当タスク数でソート）
   const memberRanking = useMemo(() => {
     return members
-      .filter((m) => !m.inactive)
+      .filter(isActiveMember)
       .map((m) => {
         const myTasks = visibleTasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done')
         const overdueCount = myTasks.filter((t) => isOverdue(t, tz)).length
@@ -74,9 +74,9 @@ export function AdminLeadership() {
   // item 19: 後継者・候補者サジェスト
   // Will/Judgment/skillsのベクトル類似度で現役幹部に近いメンバーをサジェスト
   const successorSuggestions = useMemo(() => {
-    const leaders = members.filter((m) => isAdminRef(m.role) && !m.inactive)
+    const leaders = members.filter((m) => isAdminRef(m.role) && isActiveMember(m))
     if (leaders.length === 0) return []
-    const nonLeaders = members.filter((m) => !isAdminRef(m.role) && !m.inactive)
+    const nonLeaders = members.filter((m) => !isAdminRef(m.role) && isActiveMember(m))
 
     return leaders.slice(0, 5).map((leader) => {
       const leaderTags = new Set([...leader.will, ...leader.judgment, ...leader.skills])

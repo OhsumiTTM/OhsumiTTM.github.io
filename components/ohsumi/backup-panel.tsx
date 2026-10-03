@@ -27,7 +27,7 @@ export function BackupPanel() {
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState<BackupTaskMatch[] | null>(null)
   const [picked, setPicked] = useState<string[]>([])
-  const [busy, setBusy] = useState<'' | 'list' | 'preview' | 'restore' | 'search'>('')
+  const [busy, setBusy] = useState<'' | 'list' | 'preview' | 'restore' | 'search' | 'create'>('')
   const [error, setError] = useState<string | null>(null)
 
   const fmt = useCallback(
@@ -48,6 +48,21 @@ export function BackupPanel() {
     }
   }, [])
   useEffect(() => { void load() }, [load])
+
+  // 今すぐバックアップを作る(代表だけ)。作った後は一覧を新しくする
+  const createNow = async () => {
+    setBusy('create')
+    setError(null)
+    try {
+      const r = await remoteApi.createBackupNow()
+      setList((prev) => ({ ...(prev ?? { status: r.status, backups: [] }), status: r.status, backups: r.backups }))
+      toast(t('backup.createdToast'))
+    } catch (e) {
+      setError(message(e))
+    } finally {
+      setBusy('')
+    }
+  }
 
   const choose = async (id: string, nextMode: Mode = mode) => {
     setBackupId(id)
@@ -126,6 +141,12 @@ export function BackupPanel() {
         <SectionLabel>{t('backup.title')}</SectionLabel>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{t('backup.desc')}</p>
+      <div className="mt-2">
+        <Button size="sm" variant="outline" disabled={busy !== ''} onClick={() => void createNow()} data-backup-create>
+          {busy === 'create' && <Loader2 className="size-3.5 animate-spin" />}
+          {t(busy === 'create' ? 'backup.creating' : 'backup.createNow')}
+        </Button>
+      </div>
       {list?.status.failed && (
         <p className="mt-2 text-xs break-words text-warning">{t('backup.failedBanner', { date: fmt(list.status.failedAt), error: list.status.error })}</p>
       )}

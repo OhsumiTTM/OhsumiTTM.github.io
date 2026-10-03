@@ -135,6 +135,15 @@ function setupOhsumi() {
     } else {
       console.log('✅ checkContractStatus トリガー既存')
     }
+    // 毎日の処理(バックアップ・定期タスク・個人情報の削除・期限切れの知らせ・メールのまとめなど。毎朝6時台)。
+    // 以前は setupDailyTrigger でしか作られず、テンプレートから立ち上げた団体で一度も動かなかった
+    var hasDaily = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'dailyMaintenance' })
+    if (!hasDaily) {
+      ScriptApp.newTrigger('dailyMaintenance').timeBased().everyDays(1).atHour(6).create()
+      console.log('✅ dailyMaintenance トリガー作成')
+    } else {
+      console.log('✅ dailyMaintenance トリガー既存')
+    }
   } catch (e) { console.error('❌ トリガー設定: ' + e) }
 
   // F4(レビュー再確認対応): シートを作り直したり列を追加したりした際、
@@ -182,8 +191,19 @@ function setupOhsumi() {
     }
   } catch (e) { console.error('❌ 共有の確認: ' + e) }
 
+  // --- 必要なトリガーがすべてそろっているか(足りなければ実行ログに出す) ---
+  try {
+    var have = ScriptApp.getProjectTriggers().map(function(t) { return t.getHandlerFunction() })
+    var missing = REQUIRED_TRIGGERS.filter(function(name) { return have.indexOf(name) < 0 })
+    if (missing.length) console.error('❌ 足りないトリガー: ' + missing.join('・') + '(もう一度 setupOhsumi を実行し、権限を許可してください)')
+    else console.log('✅ トリガー: ' + REQUIRED_TRIGGERS.join('・') + ' がそろっています')
+  } catch (e) { console.error('❌ トリガーの確認: ' + e) }
+
   console.log('🚀 setupOhsumi 完了')
 }
+
+// setupOhsumi が作る、団体の GAS に必要なトリガー
+var REQUIRED_TRIGGERS = ['dailyMaintenance', 'sendBatchNotifications', 'checkContractStatus', 'onSpreadsheetChange', 'onSpreadsheetEdit']
 
 // ============================================================================
 // エディタから実行する関数(よく使う順)
@@ -2566,7 +2586,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.02-4'
+var OHSUMI_GAS_VERSION = '2026.10.03-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2819,6 +2839,8 @@ var READ_ONLY_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(戻すのは書き込みなので、機能停止中は断る)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
+  'createBackupNow',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
@@ -4165,7 +4187,7 @@ function authorizeAction_(acting, action, body) {
   if (isDaihyo) return
 
   // バックアップ(一覧・戻す)は代表だけ(権限の個別の上書きでも渡さない)
-  var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks']
+  var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks', 'createBackupNow']
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
@@ -4835,6 +4857,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(バックアップを読むだけ)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
+  'createBackupNow',
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
@@ -5784,6 +5808,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'listBackups':
       result = { status: backupStatus_(), backups: listBackups_(), keep: BACKUP_KEEP }
+      break
+    case 'createBackupNow':
+      result = createBackupNow_(actingMember.id, Date.now())
       break
     case 'previewRestore':
       result = previewRestore_(body.backupId)
@@ -10540,22 +10567,22 @@ var READ_POLICY = {
       career_history_json: 'selfOrAdminRole',
       qualifications_json: 'selfOrAdminRole',
       quiz_passes_json: 'selfOrAdminRole',
-      evaluation_history_json: 'selfOrAdminRole',
+      evaluation_history_json: 'selfOrSupervisor',
       transfer_history_json: 'selfOrAdminRole',
       competencies_json: 'selfOrAdminRole',
       training_history_json: 'selfOrAdminRole',
-      development_plan_json: 'selfOrAdminRole',
-      one_on_ones_json: 'selfOrAdminRole',
-      career_aspiration: 'selfOrAdminRole',
-      desired_future_role: 'selfOrAdminRole',
-      career_plan: 'selfOrAdminRole',
+      development_plan_json: 'selfOrSupervisor',
+      one_on_ones_json: 'selfOrSupervisor',
+      career_aspiration: 'selfOrSupervisor',
+      desired_future_role: 'selfOrSupervisor',
+      career_plan: 'selfOrSupervisor',
       university: 'selfOrAdminRole',
       faculty: 'selfOrAdminRole',
       department_name: 'selfOrAdminRole',
       grade_year: 'selfOrAdminRole',
       custom_fields_json: 'selfOrAdminRole',
       skill_points_json: 'selfOrAdminRole',
-      survey_responses_json: 'selfOrAdminRole',
+      survey_responses_json: 'selfOrSupervisor',
       last_login: 'selfOrAdminRole',
       notify_new_task: 'self',
       notify_settings: 'self',
@@ -10651,6 +10678,9 @@ function makeViewer_(memberRow, roles) {
     role: role,
     isAdminRole: isAdminRoleRef_(roles, role),
     isFullAdmin: isFullAdminRoleRef_(roles, role),
+    isTop: roleTier_(roles, role) === 'top',
+    // 評価・1on1 などを見られる相手(buildViewerData_ が報告先・メンター・プロジェクトの責任者から作る)
+    supervisedIds: {},
   }
 }
 
@@ -10662,6 +10692,8 @@ function checkReadRule_(rule, viewer, ownerId) {
     case 'selfOrFullAdmin': return (!!ownerId && ownerId === viewer.id) || viewer.isFullAdmin
     case 'adminRole': return viewer.isAdminRole
     case 'fullAdmin': return viewer.isFullAdmin
+    // 本人・代表・その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者)
+    case 'selfOrSupervisor': return (!!ownerId && ownerId === viewer.id) || !!viewer.isTop || !!(viewer.supervisedIds && viewer.supervisedIds[ownerId])
     default: return false
   }
 }
@@ -10787,12 +10819,63 @@ function findMemberInSnapshot_(data, memberId) {
   return null
 }
 
+// 閲覧者が「見る立場」にあるメンバーの ID(評価・1on1 などの読み取りに使う)。
+//   ・報告先(reports_to_id)をたどって、閲覧者が上にいるメンバー
+//   ・メンター(mentor_id)が閲覧者のメンバー
+//   ・閲覧者が責任者(owner_id)のプロジェクト(その子プロジェクトも含む)に入っているメンバー
+function supervisedMemberIds_(data, viewerId) {
+  var out = {}
+  if (!viewerId) return out
+  var members = data.Members || { headers: [], rows: [] }
+  var mh = members.headers || []
+  var idCol = mh.indexOf('id'), repCol = mh.indexOf('reports_to_id'), mentorCol = mh.indexOf('mentor_id')
+  var reportsTo = {}
+  ;(members.rows || []).forEach(function (r) {
+    var id = String(r[idCol] || '')
+    if (!id) return
+    reportsTo[id] = repCol >= 0 ? String(r[repCol] || '') : ''
+    if (mentorCol >= 0 && String(r[mentorCol] || '') === viewerId) out[id] = true
+  })
+  Object.keys(reportsTo).forEach(function (id) {
+    var cur = reportsTo[id]
+    for (var hop = 0; cur && hop < 20; hop++) {
+      if (cur === viewerId) { out[id] = true; break }
+      cur = reportsTo[cur]
+    }
+  })
+  var projects = data.Projects || { headers: [], rows: [] }
+  var ph = projects.headers || []
+  var pid = ph.indexOf('id'), owner = ph.indexOf('owner_id'), mem = ph.indexOf('member_ids'), parent = ph.indexOf('parent_id')
+  if (pid >= 0 && owner >= 0 && mem >= 0) {
+    var byId = {}, children = {}
+    ;(projects.rows || []).forEach(function (r) {
+      var id = String(r[pid] || '')
+      if (!id) return
+      byId[id] = r
+      var p = parent >= 0 ? String(r[parent] || '') : ''
+      if (p) (children[p] = children[p] || []).push(id)
+    })
+    var stack = Object.keys(byId).filter(function (id) { return String(byId[id][owner] || '') === viewerId })
+    var seen = {}
+    while (stack.length) {
+      var cur = stack.pop()
+      if (seen[cur]) continue
+      seen[cur] = true
+      splitCsvList_(byId[cur][mem]).forEach(function (m) { out[m] = true })
+      ;(children[cur] || []).forEach(function (c) { stack.push(c) })
+    }
+  }
+  delete out[viewerId]
+  return out
+}
+
 // スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
 // Google のサービスを使わない純粋な関数なのでテストから直接呼べる)
 function buildViewerData_(data, memberId) {
   var memberRow = findMemberInSnapshot_(data, memberId)
   if (!memberRow) return null
   var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
+  viewer.supervisedIds = supervisedMemberIds_(data, viewer.id)
   var empty = { headers: [], rows: [] }
   return {
     Members: filterTableForViewer_('Members', data.Members || empty, viewer),
@@ -13782,6 +13865,31 @@ function dailyBackup_(nowMs) {
   }
   try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
   return made
+}
+
+// 代表が管理画面から「今すぐバックアップを作る」。作りすぎないよう、前に手で作ってから10分は断る。
+// 作った後は、毎日の分と同じく残す数を超えた古いものを片付ける
+var BACKUP_MANUAL_INTERVAL_MS = 10 * 60 * 1000
+function createBackupNow_(actorId, nowMs) {
+  nowMs = nowMs || Date.now()
+  if (restoreInProgress_()) throw userError_('バックアップから戻している間は、バックアップを作れません。')
+  var state = readBackupState_()
+  var last = Date.parse(state.lastManualAt || '')
+  if (last && nowMs - last < BACKUP_MANUAL_INTERVAL_MS) {
+    throw userError_('少し前にバックアップを作ったばかりです。10分ほど待ってから、もう一度お試しください。')
+  }
+  var made
+  try {
+    made = createBackup_('manual', nowMs)
+  } catch (e) {
+    var message = String((e && e.message) || e).slice(0, 300)
+    writeBackupState_({ lastFailureAt: new Date(nowMs).toISOString(), lastError: message })
+    throw userError_('バックアップを作れませんでした: ' + message)
+  }
+  writeBackupState_({ lastSuccessAt: made.at, lastName: made.name, lastManualAt: made.at, lastFailureAt: '', lastError: '' })
+  try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
+  try { appendOrgAudit_(actorId, 'createBackupNow', made.name, { backupId: made.id }) } catch (e) { console.error('操作の記録: ' + e) }
+  return { backup: made, status: backupStatus_(), backups: listBackups_() }
 }
 
 // 画面に出す状態: 最後に作れた日時と、最後に作れなかった日時(作れた後にまた作れた時は出さない)

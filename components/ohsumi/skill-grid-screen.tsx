@@ -11,6 +11,7 @@ import { type Member, type SkillLevel, type SkillLevelValue, type Task } from '@
 import { ArrowLeft, Pencil, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/ohsumi/i18n'
+import { isActiveMember } from '@/lib/ohsumi/utils'
 
 function levelOf(member: Member, skill: string): SkillLevelValue | undefined {
   return member.skillLevels?.find((s) => s.skill === skill)?.level
@@ -55,7 +56,7 @@ export function SkillGridScreen() {
   const rows = useMemo(() => {
     if (!currentUser) return []
     if (!isLeader) return members.filter((m) => m.id === currentUser.id)
-    return members.filter((m) => !m.inactive)
+    return members.filter(isActiveMember)
   }, [members, currentUser, isLeader])
 
   const canEditRow = (member: Member) => (isLeader ? true : member.id === currentUser?.id)

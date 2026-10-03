@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar, Tag, ProjectTag, DifficultyBadge } from '@/components/ohsumi/primitives'
-import { rankCandidates, matchSkills, formatDeadline } from '@/lib/ohsumi/utils'
+import { rankCandidates, matchSkills, formatDeadline, isActiveMember } from '@/lib/ohsumi/utils'
 import { useToast } from '@/components/ohsumi/toast'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, Sparkles, Info } from 'lucide-react'
@@ -92,10 +92,11 @@ function MatchPanel({
   // 休止中メンバーはおすすめ候補から除外する(INPUT画面の担当者選択と同じ扱い)。
   // 手動選択用の「その他」一覧は引き続き全メンバーを対象にする(意図的に
   // 休止中メンバーへ手動アサインし直したいケースもあるため)
-  const activeMembers = members.filter((m) => !m.inactive)
+  const activeMembers = members.filter(isActiveMember)
   const ranked = rankCandidates(task, activeMembers, allTasks)
   const rankedIds = new Set(ranked.map((r) => r.member.id))
-  const others = members.filter((m) => !rankedIds.has(m.id))
+  // 退会したメンバーは手動の一覧にも出さない(休止中は手動で選べるよう残す)
+  const others = members.filter((m) => !rankedIds.has(m.id) && !m.withdrawnAt)
   const [showOthers, setShowOthers] = useState(false)
 
   function handleAssign(m: Member) {

@@ -28,7 +28,7 @@ import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Avatar, OhsumiMark, SectionLabel, StatusBadge } from '../primitives'
 import { useI18n, DEPARTMENT_KEY, DIFFICULTY_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
 import type { TranslationKey } from '@/lib/ohsumi/i18n'
-import { formatDateTime, findSimilarTasks } from '@/lib/ohsumi/utils'
+import { formatDateTime, findSimilarTasks, isActiveMember } from '@/lib/ohsumi/utils'
 import { buildParsedTasks, detectColumns, readExcelFile } from '@/lib/ohsumi/import-excel'
 import type {
   ColumnMapping,
@@ -107,7 +107,7 @@ export function InputScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // 休止中メンバーは一括変更の担当者追加にも出さない(ParsedTaskCard側の
   // 個別担当者選択と揃える)
-  const activeMembers = members.filter((m) => !m.inactive)
+  const activeMembers = members.filter(isActiveMember)
   const [importError, setImportError] = useState<string | null>(null)
   const [importSource, setImportSource] = useState<string | null>(null)
   const [sheetData, setSheetData] = useState<SheetData | null>(null)
@@ -1031,7 +1031,7 @@ function ScheduleQuickAdd({
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">{t('input.scheduleQuickAdd.inviteesLabel')}</p>
           <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 ohsumi-scroll">
-            {members.map((m) => {
+            {members.filter(isActiveMember).map((m) => {
               const checked = invitedIds.includes(m.id)
               return (
                 <button
@@ -1392,7 +1392,7 @@ function FormQuickAdd({
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">{tr('input.formQuickAdd.respondersLabel')}</p>
           <div className="flex max-h-32 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1 ohsumi-scroll">
-            {members.map((m) => {
+            {members.filter(isActiveMember).map((m) => {
               const checked = invitedIds.includes(m.id)
               return (
                 <button

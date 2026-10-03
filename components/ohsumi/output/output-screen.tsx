@@ -812,7 +812,9 @@ export function OutputScreen() {
         ) : (
           <ListView tasks={archivedTasks} onOpenTask={setOpenTaskId} />
         )
-      ) : visibleTasks.length === 0 ? (
+      ) : visibleTasks.length === 0 && myTasks.length === 0 ? (
+        // 団体にまだ承認済みのタスクが無くても、自分の承認待ちのタスクなどがあれば一覧を出す
+        // (新しい団体の代表が最初に登録したタスクが「まだタスクがありません」に隠れないように)
         <EmptyState onInput={() => go({ name: 'input' })} />
       ) : target === 'mine' && myTasks.length === 0 ? (
         <MineEmptyState onShowAll={() => setTarget('all')} />

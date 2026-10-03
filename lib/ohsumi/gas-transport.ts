@@ -542,6 +542,8 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'restoreTasks',
   // 共有を確かめ直す(ロックを取らない。スクリプトプロパティだけを書く)
   'recheckSharing',
+  // 今すぐバックアップを作る(時間がかかるので、ほかの書き込みとまとめない)
+  'createBackupNow',
   // 画面のエラーの記録(ロックを取らない。エラーの記録のシートに1行足すだけ)
   'reportClientError',
   // 診断情報を FSIF に送る(ロックを取らない。スクリプトプロパティに受付番号を残すだけ)

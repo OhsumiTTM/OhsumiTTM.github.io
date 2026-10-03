@@ -7,7 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n, DIFFICULTY_KEY, IMPORTANCE_KEY } from '@/lib/ohsumi/i18n'
 import { Card, DifficultyBadge, Tag, Avatar, SimilarTaskSummary } from '../primitives'
 import { cn } from '@/lib/utils'
-import { findSimilarTasks, rankCandidates, suggestSkillsForCategory, suggestCategoriesForTitle } from '@/lib/ohsumi/utils'
+import { findSimilarTasks, rankCandidates, suggestSkillsForCategory, suggestCategoriesForTitle, isActiveMember } from '@/lib/ohsumi/utils'
 import { Check, Plus, Sparkles, TriangleAlert, Trash2 } from 'lucide-react'
 
 export function ParsedTaskCard({
@@ -40,7 +40,7 @@ export function ParsedTaskCard({
   const [categoryDraft, setCategoryDraft] = useState('')
   // 休止中メンバーは新規タスクの担当候補に出さない(admin.membersの一時停止と
   // 同じ扱い — task-detail-drawer.tsx等、他の担当者選択箇所と揃える)
-  const activeMembers = members.filter((m) => !m.inactive)
+  const activeMembers = members.filter(isActiveMember)
   const candidates = rankCandidates(task, activeMembers, tasks).slice(0, 3)
 
   // TSK-034: おすすめカテゴリ — タイトルとカテゴリ名/頻出スキル名の文字列

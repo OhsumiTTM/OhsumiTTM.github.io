@@ -14,6 +14,7 @@ import { SkillLevelRulesEditor } from '@/components/ohsumi/admin/skill-level-rul
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { checkImageFile } from '@/lib/ohsumi/image-upload'
+import { isActiveMember } from '@/lib/ohsumi/utils'
 
 // dashboard always stays visible (it's the redirect target for a
 // disallowed section — see store.tsx's visibleAdminSections), so there's
@@ -973,7 +974,7 @@ function SurveyInviteEditor() {
         </p>
       )}
       <div className="mt-3 grid grid-cols-1 gap-1 sm:grid-cols-2">
-        {members.filter((m) => !m.inactive).map((m) => {
+        {members.filter(isActiveMember).map((m) => {
           const checked = surveyInvitedIds.includes(m.id)
           return (
             <button

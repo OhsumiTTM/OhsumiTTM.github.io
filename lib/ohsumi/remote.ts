@@ -1255,6 +1255,8 @@ export const remoteApi = {
   // バックアップ(代表だけ。gas/Code.gs の「バックアップ」)
   getBackupStatus: () => postToGas<BackupStatus>('getBackupStatus', {}),
   listBackups: () => postToGas<{ status: BackupStatus; backups: BackupEntry[]; keep: { daily: number; weekly: number; monthly: number } }>('listBackups', {}),
+  // 今すぐバックアップを作る(代表だけ。前に手で作ってから10分は断られる)
+  createBackupNow: () => postToGas<{ backup: BackupEntry; status: BackupStatus; backups: BackupEntry[] }>('createBackupNow', {}),
   previewRestore: (backupId: string) => postToGas<RestorePreview>('previewRestore', { backupId }),
   restoreBackup: (backupId: string) => postToGas<{ restored: string[]; beforeRestore: BackupEntry }>('restoreBackup', { backupId }),
   searchBackupTasks: (backupId: string, query: string) => postToGas<{ backup: BackupEntry; tasks: BackupTaskMatch[] }>('searchBackupTasks', { backupId, query }),

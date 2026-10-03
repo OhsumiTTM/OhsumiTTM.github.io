@@ -13,7 +13,7 @@ import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { CareerTab } from '@/components/ohsumi/people/career-tab'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks } from '@/lib/ohsumi/utils'
+import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks, isActiveMember } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
 import { DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member } from '@/lib/ohsumi/types'
 import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
@@ -331,7 +331,7 @@ export function PersonDetail({ id }: { id: string }) {
     .filter(([s]) => !member.skills.includes(s))
     .sort((a, b) => b[1].length - a[1].length)
   const mentorsFor = (skill: string) =>
-    members.filter((m) => m.id !== member.id && m.skills.includes(skill))
+    members.filter((m) => m.id !== member.id && isActiveMember(m) && m.skills.includes(skill))
 
   // DEV-006: 取得希望スキル(desiredSkills)起点のタスク推薦
   const desiredSkills = member.desiredSkills ?? []
