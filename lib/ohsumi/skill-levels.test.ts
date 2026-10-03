@@ -199,25 +199,30 @@ describe('GAS: 本物の認証で、ポイントの付与・検定の合格・�
     r[head.indexOf(col)] = value
     A.org.cache.clear()
   }
+  // 点数を直接足す(タスクの点数の付与は、完了・担当者・必要スキル・自分には付けない などの確かめがあるため)
+  const addPoints = (points: Record<string, number>) => {
+    ;(A.org.gas as unknown as { addSkillPoints_: (id: string, p: Record<string, number>) => void }).addSkillPoints_(me, points)
+    A.org.cache.clear()
+  }
   const levels = () => JSON.parse(member(A.org).skill_levels_json || '[]') as { skill: string; level: number }[]
   const levelOf = (skill: string) => levels().find((l) => l.skill === skill)?.level
 
   it('以前の計算で上がったレベル(100点で Lv.2)は、ポイントを足しても下がらない。新しい計算に届けば上がる', () => {
     // 以前の GAS の計算で保存されたレベル(点数 0 で Lv.2)
     setMemberCell('skill_levels_json', JSON.stringify([{ skill: 'デザイン', level: 2, acquiredAt: '2026-01-01' }]))
-    expect(w.call(A.org, top, 'awardSkillPoints', { taskId: '', memberId: me, points: { デザイン: 100 } }).ok).toBe(true)
+    addPoints({ デザイン: 100 })
     expect(levelOf('デザイン')).toBe(2)
-    expect(w.call(A.org, top, 'awardSkillPoints', { taskId: '', memberId: me, points: { デザイン: 260 } }).ok).toBe(true)
+    addPoints({ デザイン: 260 })
     expect(levelOf('デザイン')).toBe(3)
     // 資格が無いので、点数が Lv.4 に届いても Lv.3 のまま(組み込みの条件)
-    w.call(A.org, top, 'awardSkillPoints', { taskId: '', memberId: me, points: { デザイン: 300 } })
+    addPoints({ デザイン: 300 })
     expect(levelOf('デザイン')).toBe(3)
   })
 
   it('団体の設定(skill_level_rules)に従う。検定の合格を記録し、検定が条件のレベルに上がれる', () => {
     const rules = { default: { points: [10, 20, 30, 40, 50], conditions: { '2': [{ type: 'quiz' }] } } }
     expect(w.call(A.org, top, 'updateSetting', { key: 'skill_level_rules', value: JSON.stringify(rules) }).ok).toBe(true)
-    w.call(A.org, top, 'awardSkillPoints', { taskId: '', memberId: me, points: { 企画: 25 } })
+    addPoints({ 企画: 25 })
     expect(levelOf('企画')).toBe(1) // Lv.2 は検定の合格が要る
     const quiz = { id: 'quiz-plan', title: '企画の基礎', targetSkill: '企画', targetLevel: 2, passRate: 50, questions: [{ text: 'Q', options: ['a', 'b'], correctIndex: 0 }] }
     expect(w.call(A.org, top, 'updateSetting', { key: 'quiz_definitions', value: JSON.stringify([quiz]) }).ok).toBe(true)
