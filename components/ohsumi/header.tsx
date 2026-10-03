@@ -33,8 +33,10 @@ import {
   TrendingDown,
   GraduationCap,
   Smartphone,
+  Repeat,
 } from 'lucide-react'
 import { OtherDeviceModal, currentInviteLink } from './other-device'
+import { getCurrentOrgId, loadSavedOrgs, switchToOrg } from '@/lib/ohsumi/org-directory'
 
 
 export function Header() {
@@ -462,6 +464,30 @@ export function Header() {
                     {t('header.menu.otherDevice')}
                   </MenuItem>
                 )}
+                {/* 団体の切り替え: この端末に保存したほかの団体へ移る(団体ごとのログインはそのまま)。読み込み直す */}
+                {(() => {
+                  const current = getCurrentOrgId()
+                  const others = loadSavedOrgs().filter((o) => o.orgId !== current)
+                  if (others.length === 0) return null
+                  return (
+                    <>
+                      <div className="my-1 h-px bg-border" />
+                      <div className="px-3 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">{t('header.menu.switchOrg')}</div>
+                      {others.map((o) => (
+                        <MenuItem
+                          key={o.orgId}
+                          onClick={() => {
+                            setMenuOpen(false)
+                            switchToOrg(o.orgId)
+                          }}
+                        >
+                          <Repeat className="size-4" />
+                          <span className="truncate" data-switch-org={o.orgId}>{o.name || o.orgId}</span>
+                        </MenuItem>
+                      ))}
+                    </>
+                  )
+                })()}
                 <div className="my-1 h-px bg-border" />
                 <MenuItem onClick={logout}>
                   <LogOut className="size-4" />

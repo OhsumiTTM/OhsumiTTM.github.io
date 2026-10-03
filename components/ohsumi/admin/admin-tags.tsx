@@ -13,6 +13,7 @@ import type { AdminSection, CustomMemberColumn, SurveyQuestion } from '@/lib/ohs
 import { SkillLevelRulesEditor } from '@/components/ohsumi/admin/skill-level-rules-editor'
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { checkImageFile } from '@/lib/ohsumi/image-upload'
 
 // dashboard always stays visible (it's the redirect target for a
 // disallowed section — see store.tsx's visibleAdminSections), so there's
@@ -871,11 +872,14 @@ function SurveyQuestionImageInput({
 }) {
   const { uploadSurveyImage, driveEnabled } = useOhsumi()
   const { t } = useI18n()
+  const toast = useToast()
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileSelect = async (file: File | undefined) => {
     if (!file) return
+    const check = checkImageFile(file)
+    if (check !== 'ok') { toast(t(check === 'type' ? 'upload.image.badType' : 'upload.image.tooLarge')); return }
     setUploading(true)
     try {
       const dataUrl = await fileToDataUrl(file)
