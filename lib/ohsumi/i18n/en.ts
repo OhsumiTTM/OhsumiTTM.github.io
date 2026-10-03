@@ -1835,7 +1835,7 @@ export const en = {
   'orgSettings.themeColor.desc': "Customize the app's primary color (buttons and accents). Leave it unset to keep the default color.",
   'orgSettings.themeColor.savedToast': 'Saved the theme color',
   'orgSettings.themeColor.reset': 'Reset to default',
-  'orgSettings.themeColor.invalidHint': 'Enter a valid hex color code (e.g. #2f5bea)',
+  'orgSettings.themeColor.invalidHint': 'Enter a valid hex color code (e.g. #2948e8)',
   'orgSettings.email.label': 'Organization notification emails',
   'orgSettings.email.desc': 'Admin notifications such as approval requests and awaiting-review alerts always reach the addresses here as well, regardless of individual members\' settings. Intended for a shared mailing list or group address.',
   'orgSettings.remoteWarning': 'Spreadsheet sync is not configured, so saving here will have no effect.',

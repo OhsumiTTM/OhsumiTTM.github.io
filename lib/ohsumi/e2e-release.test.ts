@@ -196,9 +196,9 @@ describe('7. 未ログイン・ログアウトの後', () => {
     expect(w.call(A.org, again.result.session.token, 'getInitialData').ok).toBe(true)
   })
 
-  it('代表がメンバーを休止にすると、そのメンバーはログインできない', () => {
+  it('代表がメンバーを休止にしても、そのメンバーはログインできる(ログインを止めるのは退会の時だけ)', () => {
     const base = rowsOf(A.org, 'Members').find((m) => m.name === '一般さん')!
     expect(w.call(A.org, tok.topA, 'updateMemberInactive', { memberId: base.id, inactive: true }).ok).toBe(true)
-    expect(w.googleLogin(A.org, 'base@a.example').ok).toBe(false)
+    expect(w.googleLogin(A.org, 'base@a.example').ok).toBe(true)
   })
 })

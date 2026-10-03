@@ -15,7 +15,7 @@ function files(dir: string, exts = /\.(tsx?|css|svg|json|md)$/): string[] {
 describe('ブランド', () => {
   it('基本の4色を変数として定義し、背景・文字・CTA・カードに使う', () => {
     const css = read('app/globals.css')
-    for (const [name, hex] of [['navy', '#0c1b32'], ['blue', '#2f5bea'], ['pale-blue', '#eef3ff'], ['off-white', '#f6f8fc']]) {
+    for (const [name, hex] of [['navy', '#0c1b32'], ['blue', '#2948e8'], ['pale-blue', '#eef3ff'], ['off-white', '#f6f8fc']]) {
       expect(css).toContain(`--ohsumi-${name}: ${hex};`)
     }
     expect(css).toMatch(/--background: var\(--ohsumi-off-white\)/)

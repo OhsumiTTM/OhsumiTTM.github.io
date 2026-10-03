@@ -61,7 +61,7 @@
   /* ブランドの基本の色(ブランドガイドライン v0.4)。ロゴはこの4色だけを使い、団体のテーマの色(--primary の上書き)では変えない
      Ohsumi Navy: 見出し・本文 / Ohsumi Blue: ロゴ・重要語・線・CTA / Pale Blue: カード / Off White: 背景 */
   --ohsumi-navy: #0c1b32;
-  --ohsumi-blue: #2f5bea;
+  --ohsumi-blue: #2948e8;
   --ohsumi-pale-blue: #eef3ff;
   --ohsumi-off-white: #f6f8fc;
   /* ロゴの文字の色(暗い表示では白にする。docs/brand.md) */

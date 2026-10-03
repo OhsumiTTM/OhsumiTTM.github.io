@@ -1838,7 +1838,7 @@ export const ja = {
   'orgSettings.themeColor.desc': 'アプリ全体のプライマリカラー（ボタンやアクセントカラー）をカスタマイズできます。未設定時はデフォルトの色のままです。',
   'orgSettings.themeColor.savedToast': 'テーマカラーを保存しました',
   'orgSettings.themeColor.reset': 'デフォルトに戻す',
-  'orgSettings.themeColor.invalidHint': '有効な16進カラーコード（例: #2f5bea）を入力してください',
+  'orgSettings.themeColor.invalidHint': '有効な16進カラーコード（例: #2948e8）を入力してください',
   'orgSettings.email.label': '団体メール通知先',
   'orgSettings.email.desc': '承認依頼・確認待ちなどの管理者向け通知が、個々のメンバーの設定に関わらず常にここにも届きます。団体で共有しているメーリングリストやグループアドレスの登録を想定しています。',
   'orgSettings.remoteWarning': 'スプレッドシート連携が未設定のため、保存しても反映されません。',

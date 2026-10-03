@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.03-4'
+var REGISTRY_VERSION = '2026.10.03-5'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2581,6 +2581,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.03-4', security: false, required: false, note: '休止中のメンバーもログイン・操作できる(担当の候補などからは外れる)。ログインを止めるのは退会の時だけ' },
   { version: '2026.10.03-3', security: false, required: false, note: '代表が管理画面から「今すぐバックアップを作る」(前に手で作ってから10分は作れない)' },
   { version: '2026.10.03-2', security: false, required: false, note: 'setupOhsumi で毎日の処理のトリガー(dailyMaintenance)も作る(無いとバックアップなどが動かない)。評価・1on1 などを本人・代表・上長・メンター・プロジェクトの責任者だけに見せる' },
   { version: '2026.10.02-4', security: false, required: false, note: 'スキルのレベルの決め方(点数の一覧・資格・検定・完了したタスクの条件)を団体ごとに設定する(PR Z)' },
