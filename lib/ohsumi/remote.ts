@@ -590,7 +590,8 @@ function mapTaskRow(r: Record<string, string>, departments: DepartmentDef[]): Ta
     importance: r.importance ? normalizeCode('importance', r.importance) : undefined,
     schedule: normalizeSchedule(parseJsonObject<TaskSchedule>(r.schedule_json)),
     form: parseJsonObject<TaskForm>(r.form_json),
-    awardedPoints: parseJsonObject<SkillPoints>(r.awarded_points_json),
+    // __ で始まる項目(点数を付けた人の一覧など、GAS の記録)は、スキルの点数ではないので除く
+    awardedPoints: skillPointsOnly(parseJsonObject<Record<string, unknown>>(r.awarded_points_json)),
     requiredApprovals: r.required_approvals
       ? r.required_approvals === 'all' ? 'all' : Number(r.required_approvals)
       : undefined,
@@ -613,6 +614,13 @@ function parseJsonArray<T>(raw: string | undefined): T[] | undefined {
 }
 
 // Same as parseJsonArray but for a single JSON object cell (retrospective_json)
+function skillPointsOnly(obj: Record<string, unknown> | undefined): SkillPoints | undefined {
+  if (!obj) return undefined
+  const out: SkillPoints = {}
+  for (const [k, v] of Object.entries(obj)) if (!k.startsWith('__') && typeof v === 'number') out[k] = v
+  return out
+}
+
 function parseJsonObject<T>(raw: string | undefined): T | undefined {
   if (!raw) return undefined
   try {
