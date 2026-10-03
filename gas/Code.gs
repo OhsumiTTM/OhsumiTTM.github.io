@@ -2589,7 +2589,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.03-4'
+var OHSUMI_GAS_VERSION = '2026.10.04-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4066,7 +4066,50 @@ function importPortableRecord_(memberId, skillPoints, qualifications) {
  * Updates skill_points_json and auto-levels skill_levels_json.
  * Also saves awarded_points_json on the task for future avg calculations.
  */
-function awardSkillPoints_(taskId, memberId, points) {
+// 完了したタスクのスキルの点数を付ける。画面から送られた値を、GAS でも確かめる:
+//   ・タスクが完了している ・受け取る人がそのタスクの担当者 ・点数を付けるスキルがタスクの必要スキル
+//   ・1つのタスクにつき1人1回だけ(付けた人の一覧は awarded_points_json の __awardedTo に記録する)
+//   ・1回にスキルごと AWARD_MAX_POINTS_PER_SKILL 点まで(0以上の整数) ・自分自身には付けられない
+var AWARD_MAX_POINTS_PER_SKILL = 100
+function awardSkillPoints_(taskId, memberId, points, acting) {
+  taskId = String(taskId || '')
+  memberId = String(memberId || '')
+  if (!taskId) throw userError_('タスクを指定してください。')
+  if (acting && memberId === String(acting.id)) throw userError_('自分自身にはスキルの点数を付けられません。ほかの管理者に依頼してください。')
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task) throw userError_('タスクが見つかりません。')
+  if (normalizeCode_('status', task.status) !== 'done') throw userError_('完了したタスクにだけ、スキルの点数を付けられます。')
+  var assignees = splitCsvList_(task.assignee_id)
+  if (assignees.indexOf(memberId) < 0) throw userError_('このタスクの担当者にだけ、スキルの点数を付けられます。')
+  var taskSkills = String(task.skills || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
+  var clean = {}
+  Object.keys(points || {}).forEach(function (skill) {
+    var v = Number(points[skill])
+    if (taskSkills.indexOf(skill) < 0) throw userError_('「' + skill + '」はこのタスクの必要スキルではありません。')
+    if (!(v >= 0) || Math.floor(v) !== v) throw userError_('点数は0以上の整数で入れてください。')
+    if (v > AWARD_MAX_POINTS_PER_SKILL) throw userError_('1回に付けられる点数は、スキルごとに' + AWARD_MAX_POINTS_PER_SKILL + '点までです。')
+    clean[skill] = v
+  })
+  if (!Object.keys(clean).length) throw userError_('点数を付けるスキルがありません。')
+  var awarded = {}
+  try { awarded = JSON.parse(task.awarded_points_json || '{}') || {} } catch (_) { awarded = {} }
+  var awardedTo = Array.isArray(awarded.__awardedTo) ? awarded.__awardedTo.map(String) : []
+  if (awardedTo.indexOf(memberId) >= 0) throw userError_('このメンバーには、このタスクの点数をもう付けています。')
+  points = clean
+  var added = addSkillPoints_(memberId, points)
+
+  // タスクには、付けた点数(画面の「似たタスクの平均」に使う)と、付けた人の一覧を残す
+  var record = {}
+  Object.keys(points).forEach(function (k) { record[k] = points[k] })
+  record.__awardedTo = awardedTo.concat([memberId])
+  record.__awardedBy = acting ? String(acting.id) : ''
+  record.__awardedAt = new Date().toISOString()
+  updateTaskFields_(taskId, { awarded_points_json: JSON.stringify(record) })
+  return { ok: true, newPoints: added.newPoints, newLevels: added.newLevels }
+}
+
+// メンバーのスキルの点数を足し、レベルを決め直して保存する(確かめは呼ぶ側で行う)
+function addSkillPoints_(memberId, points) {
   var memberRow = findRow_(SHEET_MEMBERS, memberId)
   if (!memberRow) throw userError_('メンバーが見つかりません: ' + memberId)
 
@@ -4090,10 +4133,7 @@ function awardSkillPoints_(taskId, memberId, points) {
     skill_points_json: JSON.stringify(currentPoints),
     skill_levels_json: JSON.stringify(newLevels),
   })
-  if (taskId) {
-    updateTaskFields_(taskId, { awarded_points_json: JSON.stringify(points) })
-  }
-  return { ok: true, newPoints: currentPoints, newLevels: newLevels }
+  return { newPoints: currentPoints, newLevels: newLevels }
 }
 
 /**
@@ -5472,7 +5512,8 @@ function runWriteAction_(body, actingMember) {
           '【設定されたWillタグ】\n' + willTags + '\n\n' +
           'Ohsumiの人材画面で確認してください。'
         notifyAdmins_(willSubject, willBody)
-        notifyChat_('💡 ' + willName + 'さんのWillタグが更新されました：' + willTags)
+        // チャンネルには Will の中身を流さない(団体の外の人が入っていることもあるため)
+        notifyChat_('💡 ' + willName + 'さんがWillを更新しました。Ohsumiで確認してください。')
       } catch (err) {
         console.error('updateWillの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
       }
@@ -5966,7 +6007,7 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'awardSkillPoints':
-      result = awardSkillPoints_(body.taskId, body.memberId, body.points || {})
+      result = awardSkillPoints_(body.taskId, body.memberId, body.points || {}, actingMember)
       break
     case 'importPortableRecord':
       result = importPortableRecord_(body.memberId, body.skillPoints || {}, body.qualifications || [])
@@ -6441,7 +6482,7 @@ function notifyReview_(taskId) {
       preferredEmails,
       { urgent: true },
     )
-    notifyChat_('🔔 「' + task.title + '」が確認待ちになりました。')
+    notifyChat_('🔔 ' + chatTaskLabel_(task) + 'が確認待ちになりました。')
   } catch (err) {
     console.error('notifyReviewの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
@@ -7229,7 +7270,7 @@ function notifyTrainingRequest_(memberId, trainingId, actorId) {
       reportsToEmails_([memberId]),
       { urgent: true },
     )
-    notifyChat_('📚 ' + name + 'さんから研修「' + trainingName + '」の申請がありました。')
+    notifyChat_('📚 ' + name + 'さんから研修の申請がありました。Ohsumiで確認してください。')
     return true
   } catch (err) {
     console.error('notifyTrainingRequestの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -7384,7 +7425,7 @@ function notifyScheduleResult_(taskId, actorId) {
       en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
     })
     console.log('notifyScheduleResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
-    notifyChat_('🗓️ 「' + task.title + '」の日程調整で全員の回答が揃いました。')
+    notifyChat_('🗓️ ' + chatTaskLabel_(task) + 'の日程調整で全員の回答が揃いました。')
     return true
   } catch (err) {
     console.error('notifyScheduleResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -7449,7 +7490,7 @@ function notifyFormResult_(taskId, actorId) {
       en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
     })
     console.log('notifyFormResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
-    notifyChat_('📝 「' + task.title + '」のフォームで全員の回答が揃いました。')
+    notifyChat_('📝 ' + chatTaskLabel_(task) + 'のフォームで全員の回答が揃いました。')
     return true
   } catch (err) {
     console.error('notifyFormResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -9327,6 +9368,14 @@ function sendSlackMessage_(content) {
   }
 }
 
+// チャンネル(Discord・Slack)に出すタスクの名前。チャンネルにはメンバー全員(や団体の外の人)が
+// 入っていることがあるので、幹部限定のタスク・承認待ちのタスクは名前を出さない
+function chatTaskLabel_(task) {
+  if (normalizeCode_('visibility', task && task.visibility) === 'leaders') return '幹部限定のタスク'
+  if (normalizeCode_('approval', task && task.approval_status) === 'pending') return '承認待ちのタスク'
+  return '「' + String((task && task.title) || '') + '」'
+}
+
 function notifyChat_(content) {
   return measureAction_('chatMs', function () { return notifyChatUnmeasured_(content) })
 }
@@ -9436,6 +9485,8 @@ function notifyOverdueTasksToDiscord_() {
     var titleCol = headers.indexOf('title')
     var dueCol = headers.indexOf('due_date')
     var statusCol = headers.indexOf('status')
+    var visCol = headers.indexOf('visibility')
+    var apprCol = headers.indexOf('approval_status')
     if (titleCol === -1 || dueCol === -1 || statusCol === -1) return
     var lastRow = sheet.getLastRow()
     if (lastRow < 2) return
@@ -9443,14 +9494,19 @@ function notifyOverdueTasksToDiscord_() {
     var today = todayStr_()
     var overdue = rows
       .map(function (r) {
-        return { title: r[titleCol], due: cellDateStr_(r[dueCol]), status: String(r[statusCol] || '') }
+        return {
+          title: r[titleCol], due: cellDateStr_(r[dueCol]), status: String(r[statusCol] || ''),
+          visibility: visCol >= 0 ? r[visCol] : '', approval_status: apprCol >= 0 ? r[apprCol] : '',
+        }
       })
       .filter(function (t) {
+        // 承認待ち(まだ承認されていない)のタスクは、チャンネルには出さない
+        if (normalizeCode_('approval', t.approval_status) === 'pending') return false
         return t.due && t.due < today && normalizeCode_('status', t.status) !== 'done'
       })
     if (overdue.length === 0) return
     var lines = overdue.map(function (t) {
-      return '・' + t.title + '（期限: ' + t.due + '）'
+      return '・' + chatTaskLabel_(t) + '（期限: ' + t.due + '）'
     })
     notifyChat_('⚠️ 期限超過タスクが' + overdue.length + '件あります。\n' + lines.join('\n'))
   } catch (err) {
@@ -9924,7 +9980,7 @@ function setFormSubmissionStatus_(submissionId, status, reason) {
               'Ohsumiで確認してください。',
           } })
         }
-        notifyChat_('📋 申請フォームが却下されました。' + (reason ? '（理由: ' + reason + '）' : ''))
+        notifyChat_('📋 申請フォームが却下されました。理由はOhsumiで確認してください。')
       }
     } catch (eR) {
       console.error('setFormSubmissionStatus: 却下通知送信失敗: ' + eR)
