@@ -11,6 +11,7 @@ import type { CustomMemberColumn, Member } from '@/lib/ohsumi/types'
 import { exportSkillExcel } from '@/lib/ohsumi/export-excel'
 import { computeYearsOfExperience } from '@/lib/ohsumi/utils'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { csvField } from '@/lib/ohsumi/csv-safe'
 
 type TranslationFn = (key: TranslationKey, vars?: Record<string, string | number>) => string
 
@@ -151,11 +152,9 @@ function filterColsForViewer(cols: ColDef[], isAnyAdmin: boolean): ColDef[] {
 
 // ---------- CSV helpers ----------
 
+// 数式の対策と " の囲みは csv-safe.ts の共通の関数で行う
 function escapeCsv(v: string): string {
-  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
-    return '"' + v.replace(/"/g, '""') + '"'
-  }
-  return v
+  return csvField(v)
 }
 
 function downloadCsv(filename: string, rows: string[][]) {

@@ -6,6 +6,7 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { ArrowLeft, Video, FileText, Link2, BookOpen, GraduationCap, Layers, ChevronRight } from 'lucide-react'
 import type { LearningContent, LearningCourse } from '@/lib/ohsumi/types'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
 
 const CONTENT_TYPE_KEY: Record<LearningContent['contentType'], TranslationKey> = {
   video: 'admin.learningContent.type.video',
@@ -51,14 +52,17 @@ function ContentCard({
             <p className="mt-1.5 text-xs text-muted-foreground">{content.description}</p>
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <a
-              href={content.url}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-secondary"
-            >
-              {t('learningContent.open')}
-            </a>
+            {/* http/https 以外(javascript: など)のリンクは出さない */}
+            {isSafeHttpUrl(content.url) && (
+              <a
+                href={content.url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-secondary"
+              >
+                {t('learningContent.open')}
+              </a>
+            )}
             {quizTitle && onTakeQuiz && (
               <button
                 onClick={onTakeQuiz}

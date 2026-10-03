@@ -311,6 +311,28 @@ describe('団体の切り替え', () => {
     expect(local.getItem('ohsumi-locale')).toBe('en')
   })
 
+  it('招待リンクなどで別の団体を使い始めると、前の団体の保存を消す(ログイン・表示言語は残す)', async () => {
+    const d = await load()
+    local.setItem('ohsumi-current-org', ORG_A)
+    for (const k of d.ORG_SCOPED_STORAGE_KEYS) local.setItem(k, 'x')
+    local.setItem('ohsumi-session-' + ORG_A, 'sa')
+    local.setItem('ohsumi-locale', 'en')
+    d.activateOrg(saved(ORG_B, URL_B))
+    expect(local.getItem('ohsumi-current-org')).toBe(ORG_B)
+    for (const k of d.ORG_SCOPED_STORAGE_KEYS) expect(local.getItem(k), k).toBeNull()
+    expect(local.getItem('ohsumi-session-' + ORG_A)).toBe('sa')
+    expect(local.getItem('ohsumi-locale')).toBe('en')
+  })
+
+  it('同じ団体を使い直す時と、初めて団体を使う時は、保存を消さない', async () => {
+    const d = await load()
+    for (const k of d.ORG_SCOPED_STORAGE_KEYS) local.setItem(k, 'x')
+    d.activateOrg(saved(ORG_A, URL_A))
+    for (const k of d.ORG_SCOPED_STORAGE_KEYS) expect(local.getItem(k), k).toBe('x')
+    d.activateOrg(saved(ORG_A, URL_A2))
+    for (const k of d.ORG_SCOPED_STORAGE_KEYS) expect(local.getItem(k), k).toBe('x')
+  })
+
   it('団体ごとの保存の一覧は、store.tsx の団体名・ロゴ・テーマ色・データの保存のキーを含む', async () => {
     const d = await load()
     const store = readFileSync(join(__dirname, 'store.tsx'), 'utf8')

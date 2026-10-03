@@ -5,6 +5,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { BookOpen, Send, CheckCircle2, CalendarDays } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
+import { todayStr } from '@/lib/ohsumi/utils'
 
 type ReportType = 'daily' | 'weekly'
 
@@ -44,7 +45,7 @@ export function DailyReportScreen() {
   const { goBack } = useNav()
   const { t } = useI18n()
   const [type, setType] = useState<ReportType>('daily')
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(() => todayStr())
   const [done, setDone] = useState('')
   const [todo, setTodo] = useState('')
   const [issues, setIssues] = useState('')

@@ -2,6 +2,7 @@
 
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { cn } from '@/lib/utils'
+import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
 import { TriangleAlert } from 'lucide-react'
 import {
   STATUS_COLOR,
@@ -268,7 +269,8 @@ export function SimilarTaskSummary({ task }: { task: Task }) {
     task.status === 'done' && task.retrospective
       ? task.retrospective.improve || task.retrospective.bad || task.retrospective.good
       : null
-  const deliverables = (task.deliverables ?? []).slice(0, 3)
+  // http/https 以外(javascript: など)のリンクは出さない
+  const deliverables = (task.deliverables ?? []).filter((d) => isSafeHttpUrl(d.url)).slice(0, 3)
   return (
     <li className="text-xs text-muted-foreground">
       ・{task.name}
