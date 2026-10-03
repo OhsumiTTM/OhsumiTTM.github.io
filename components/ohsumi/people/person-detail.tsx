@@ -58,6 +58,7 @@ import {
   type PersonalSheet,
   type SyncRow,
 } from '@/lib/ohsumi/google-sheet-sync'
+import { checkImageFile, MAX_RESIZED_SOURCE_BYTES } from '@/lib/ohsumi/image-upload'
 
 type Tab = 'overview' | 'tasks' | 'growth' | 'career' | 'calendar' | 'settings'
 type TaskView = 'list' | 'board' | 'calendar' | 'dependency'
@@ -181,8 +182,9 @@ export function PersonDetail({ id }: { id: string }) {
   }
 
   const handleAvatarFile = async (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      toast(t('person.avatar.selectImage'))
+    const check = checkImageFile(file, MAX_RESIZED_SOURCE_BYTES)
+    if (check !== 'ok') {
+      toast(t(check === 'type' ? 'upload.image.badType' : 'upload.image.tooLarge'))
       return
     }
     setUploadingAvatar(true)

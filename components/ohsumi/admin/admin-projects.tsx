@@ -68,6 +68,7 @@ export function AdminProjects() {
   const { isTopRef,
     adminProjects: projects,
     adminTasks: visibleTasks,
+    tasks: allTasks,
     members,
     addProject,
     removeProject,
@@ -157,6 +158,11 @@ export function AdminProjects() {
     next.splice(next.indexOf(dropOnId), 0, draggedId)
     setProjectOrder([...next, ...archivedList.map((p) => p.id)])
   }
+
+  // 消そうとしているプロジェクトのタスク(見えないものも含めた全部)と子プロジェクトの数
+  const removeBlock = removing
+    ? { tasks: allTasks.filter((task) => task.projectId === removing.id).length, children: projects.filter((p) => p.parentId === removing.id).length }
+    : { tasks: 0, children: 0 }
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
@@ -902,6 +908,13 @@ export function AdminProjects() {
             このボタン自体はisFullAdmin配下に表示されるため、代表以外の
             全権管理者には見えるが実行するとGASに拒否される — 事前に示す */}
         <AdminAccessNote level="daihyo" className="mt-2" />
+        {/* タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。完了したタスクの記録は
+            団体の経験として残すべきなので、終わったプロジェクトはアーカイブにしてもらう */}
+        {removing && (removeBlock.tasks > 0 || removeBlock.children > 0) && (
+          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+            {t('admin.projects.removeModal.blocked', { tasks: removeBlock.tasks, children: removeBlock.children })}
+          </p>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" className="h-9" onClick={() => setRemoving(null)}>
             {t('common.cancel')}
@@ -909,7 +922,7 @@ export function AdminProjects() {
           <Button
             variant="destructive"
             className="h-9"
-            disabled={!isDaihyo}
+            disabled={!isDaihyo || removeBlock.tasks > 0 || removeBlock.children > 0}
             onClick={() => {
               if (removing) {
                 removeProject(removing.id)

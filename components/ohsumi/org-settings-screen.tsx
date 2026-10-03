@@ -13,6 +13,7 @@ import { PersonalDataPanel } from './personal-data-panel'
 import { UsagePanel } from './usage-panel'
 import { MetricsPanel } from './metrics-panel'
 import { DiagnosticsPanel } from './diagnostics-panel'
+import { checkImageFile } from '@/lib/ohsumi/image-upload'
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -117,6 +118,8 @@ export function OrgSettingsScreen() {
                 const file = e.target.files?.[0]
                 if (!file) return
                 if (!driveEnabled) { toast(t('orgSettings.nameLogo.driveNotConfiguredToast')); return }
+                const check = checkImageFile(file)
+                if (check !== 'ok') { toast(t(check === 'type' ? 'upload.image.badType' : 'upload.image.tooLarge')); e.target.value = ''; return }
                 setUploadingLogo(true)
                 try {
                   await uploadOrgLogo(await fileToDataUrl(file), 'org-logo.jpg')

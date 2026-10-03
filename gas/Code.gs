@@ -135,6 +135,15 @@ function setupOhsumi() {
     } else {
       console.log('✅ checkContractStatus トリガー既存')
     }
+    // 毎日の処理(バックアップ・定期タスク・個人情報の削除・期限切れの知らせ・メールのまとめなど。毎朝6時台)。
+    // 以前は setupDailyTrigger でしか作られず、テンプレートから立ち上げた団体で一度も動かなかった
+    var hasDaily = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'dailyMaintenance' })
+    if (!hasDaily) {
+      ScriptApp.newTrigger('dailyMaintenance').timeBased().everyDays(1).atHour(6).create()
+      console.log('✅ dailyMaintenance トリガー作成')
+    } else {
+      console.log('✅ dailyMaintenance トリガー既存')
+    }
   } catch (e) { console.error('❌ トリガー設定: ' + e) }
 
   // F4(レビュー再確認対応): シートを作り直したり列を追加したりした際、
@@ -182,8 +191,19 @@ function setupOhsumi() {
     }
   } catch (e) { console.error('❌ 共有の確認: ' + e) }
 
+  // --- 必要なトリガーがすべてそろっているか(足りなければ実行ログに出す) ---
+  try {
+    var have = ScriptApp.getProjectTriggers().map(function(t) { return t.getHandlerFunction() })
+    var missing = REQUIRED_TRIGGERS.filter(function(name) { return have.indexOf(name) < 0 })
+    if (missing.length) console.error('❌ 足りないトリガー: ' + missing.join('・') + '(もう一度 setupOhsumi を実行し、権限を許可してください)')
+    else console.log('✅ トリガー: ' + REQUIRED_TRIGGERS.join('・') + ' がそろっています')
+  } catch (e) { console.error('❌ トリガーの確認: ' + e) }
+
   console.log('🚀 setupOhsumi 完了')
 }
+
+// setupOhsumi が作る、団体の GAS に必要なトリガー
+var REQUIRED_TRIGGERS = ['dailyMaintenance', 'sendBatchNotifications', 'checkContractStatus', 'onSpreadsheetChange', 'onSpreadsheetEdit']
 
 // ============================================================================
 // エディタから実行する関数(よく使う順)
@@ -2566,7 +2586,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.02-4'
+var OHSUMI_GAS_VERSION = '2026.10.03-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -10540,22 +10560,22 @@ var READ_POLICY = {
       career_history_json: 'selfOrAdminRole',
       qualifications_json: 'selfOrAdminRole',
       quiz_passes_json: 'selfOrAdminRole',
-      evaluation_history_json: 'selfOrAdminRole',
+      evaluation_history_json: 'selfOrSupervisor',
       transfer_history_json: 'selfOrAdminRole',
       competencies_json: 'selfOrAdminRole',
       training_history_json: 'selfOrAdminRole',
-      development_plan_json: 'selfOrAdminRole',
-      one_on_ones_json: 'selfOrAdminRole',
-      career_aspiration: 'selfOrAdminRole',
-      desired_future_role: 'selfOrAdminRole',
-      career_plan: 'selfOrAdminRole',
+      development_plan_json: 'selfOrSupervisor',
+      one_on_ones_json: 'selfOrSupervisor',
+      career_aspiration: 'selfOrSupervisor',
+      desired_future_role: 'selfOrSupervisor',
+      career_plan: 'selfOrSupervisor',
       university: 'selfOrAdminRole',
       faculty: 'selfOrAdminRole',
       department_name: 'selfOrAdminRole',
       grade_year: 'selfOrAdminRole',
       custom_fields_json: 'selfOrAdminRole',
       skill_points_json: 'selfOrAdminRole',
-      survey_responses_json: 'selfOrAdminRole',
+      survey_responses_json: 'selfOrSupervisor',
       last_login: 'selfOrAdminRole',
       notify_new_task: 'self',
       notify_settings: 'self',
@@ -10651,6 +10671,9 @@ function makeViewer_(memberRow, roles) {
     role: role,
     isAdminRole: isAdminRoleRef_(roles, role),
     isFullAdmin: isFullAdminRoleRef_(roles, role),
+    isTop: roleTier_(roles, role) === 'top',
+    // 評価・1on1 などを見られる相手(buildViewerData_ が報告先・メンター・プロジェクトの責任者から作る)
+    supervisedIds: {},
   }
 }
 
@@ -10662,6 +10685,8 @@ function checkReadRule_(rule, viewer, ownerId) {
     case 'selfOrFullAdmin': return (!!ownerId && ownerId === viewer.id) || viewer.isFullAdmin
     case 'adminRole': return viewer.isAdminRole
     case 'fullAdmin': return viewer.isFullAdmin
+    // 本人・代表・その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者)
+    case 'selfOrSupervisor': return (!!ownerId && ownerId === viewer.id) || !!viewer.isTop || !!(viewer.supervisedIds && viewer.supervisedIds[ownerId])
     default: return false
   }
 }
@@ -10787,12 +10812,63 @@ function findMemberInSnapshot_(data, memberId) {
   return null
 }
 
+// 閲覧者が「見る立場」にあるメンバーの ID(評価・1on1 などの読み取りに使う)。
+//   ・報告先(reports_to_id)をたどって、閲覧者が上にいるメンバー
+//   ・メンター(mentor_id)が閲覧者のメンバー
+//   ・閲覧者が責任者(owner_id)のプロジェクト(その子プロジェクトも含む)に入っているメンバー
+function supervisedMemberIds_(data, viewerId) {
+  var out = {}
+  if (!viewerId) return out
+  var members = data.Members || { headers: [], rows: [] }
+  var mh = members.headers || []
+  var idCol = mh.indexOf('id'), repCol = mh.indexOf('reports_to_id'), mentorCol = mh.indexOf('mentor_id')
+  var reportsTo = {}
+  ;(members.rows || []).forEach(function (r) {
+    var id = String(r[idCol] || '')
+    if (!id) return
+    reportsTo[id] = repCol >= 0 ? String(r[repCol] || '') : ''
+    if (mentorCol >= 0 && String(r[mentorCol] || '') === viewerId) out[id] = true
+  })
+  Object.keys(reportsTo).forEach(function (id) {
+    var cur = reportsTo[id]
+    for (var hop = 0; cur && hop < 20; hop++) {
+      if (cur === viewerId) { out[id] = true; break }
+      cur = reportsTo[cur]
+    }
+  })
+  var projects = data.Projects || { headers: [], rows: [] }
+  var ph = projects.headers || []
+  var pid = ph.indexOf('id'), owner = ph.indexOf('owner_id'), mem = ph.indexOf('member_ids'), parent = ph.indexOf('parent_id')
+  if (pid >= 0 && owner >= 0 && mem >= 0) {
+    var byId = {}, children = {}
+    ;(projects.rows || []).forEach(function (r) {
+      var id = String(r[pid] || '')
+      if (!id) return
+      byId[id] = r
+      var p = parent >= 0 ? String(r[parent] || '') : ''
+      if (p) (children[p] = children[p] || []).push(id)
+    })
+    var stack = Object.keys(byId).filter(function (id) { return String(byId[id][owner] || '') === viewerId })
+    var seen = {}
+    while (stack.length) {
+      var cur = stack.pop()
+      if (seen[cur]) continue
+      seen[cur] = true
+      splitCsvList_(byId[cur][mem]).forEach(function (m) { out[m] = true })
+      ;(children[cur] || []).forEach(function (c) { stack.push(c) })
+    }
+  }
+  delete out[viewerId]
+  return out
+}
+
 // スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
 // Google のサービスを使わない純粋な関数なのでテストから直接呼べる)
 function buildViewerData_(data, memberId) {
   var memberRow = findMemberInSnapshot_(data, memberId)
   if (!memberRow) return null
   var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
+  viewer.supervisedIds = supervisedMemberIds_(data, viewer.id)
   var empty = { headers: [], rows: [] }
   return {
     Members: filterTableForViewer_('Members', data.Members || empty, viewer),

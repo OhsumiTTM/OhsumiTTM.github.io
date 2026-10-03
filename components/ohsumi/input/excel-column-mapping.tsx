@@ -234,6 +234,10 @@ function ValueMappingSection({
                 </option>
               ))}
             </select>
+            {/* 名前の一致するプロジェクトが無い値は、仮に最初のプロジェクトに入る。黙って入らないよう知らせる */}
+            {field === 'project' && overrides[raw] === undefined && !projects.some((p) => p.name.trim() === raw) && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">{t('excelMapping.valueMapping.projectNoMatch')}</span>
+            )}
           </div>
         ))}
       </div>
