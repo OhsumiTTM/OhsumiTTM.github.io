@@ -42,7 +42,7 @@ import {
   type TaskStatus,
   type TaskVisibility,
 } from '@/lib/ohsumi/types'
-import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, todayStr, type WorkloadCapacity } from '@/lib/ohsumi/utils'
+import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, todayStr, type WorkloadCapacity, isActiveMember } from '@/lib/ohsumi/utils'
 import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
@@ -458,7 +458,7 @@ export function TaskDetailDrawer({
                 </>
               )}
               {members
-                .filter((m) => !topIds.has(m.id) && !m.inactive)
+                .filter((m) => !topIds.has(m.id) && isActiveMember(m))
                 .map((m) => {
                   const activeCount = tasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done').length
                   const capacity = memberWorkloadCapacity(m.id, tasks)

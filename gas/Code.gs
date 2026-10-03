@@ -2586,7 +2586,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.03-2'
+var OHSUMI_GAS_VERSION = '2026.10.03-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2839,6 +2839,8 @@ var READ_ONLY_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(戻すのは書き込みなので、機能停止中は断る)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
+  'createBackupNow',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
@@ -4185,7 +4187,7 @@ function authorizeAction_(acting, action, body) {
   if (isDaihyo) return
 
   // バックアップ(一覧・戻す)は代表だけ(権限の個別の上書きでも渡さない)
-  var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks']
+  var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks', 'createBackupNow']
   if (backupActions.indexOf(action) >= 0) throw userError_('バックアップは代表だけが使えます。')
   // 個人情報の削除(保存期間・すぐ消す・延長・退会の取り消し)も代表だけ
   // 毎日・毎時の処理と共有の状態(代表の管理画面に出す)・共有の確かめ直しも代表だけ
@@ -4855,6 +4857,8 @@ var LOCK_EXEMPT_ACTIONS = [
   'getMailQuotaStatus', 'getGasUpdateStatus',
   // バックアップの状態・一覧・戻す前の確かめ(バックアップを読むだけ)
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
+  // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
+  'createBackupNow',
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
@@ -5804,6 +5808,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'listBackups':
       result = { status: backupStatus_(), backups: listBackups_(), keep: BACKUP_KEEP }
+      break
+    case 'createBackupNow':
+      result = createBackupNow_(actingMember.id, Date.now())
       break
     case 'previewRestore':
       result = previewRestore_(body.backupId)
@@ -13858,6 +13865,31 @@ function dailyBackup_(nowMs) {
   }
   try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
   return made
+}
+
+// 代表が管理画面から「今すぐバックアップを作る」。作りすぎないよう、前に手で作ってから10分は断る。
+// 作った後は、毎日の分と同じく残す数を超えた古いものを片付ける
+var BACKUP_MANUAL_INTERVAL_MS = 10 * 60 * 1000
+function createBackupNow_(actorId, nowMs) {
+  nowMs = nowMs || Date.now()
+  if (restoreInProgress_()) throw userError_('バックアップから戻している間は、バックアップを作れません。')
+  var state = readBackupState_()
+  var last = Date.parse(state.lastManualAt || '')
+  if (last && nowMs - last < BACKUP_MANUAL_INTERVAL_MS) {
+    throw userError_('少し前にバックアップを作ったばかりです。10分ほど待ってから、もう一度お試しください。')
+  }
+  var made
+  try {
+    made = createBackup_('manual', nowMs)
+  } catch (e) {
+    var message = String((e && e.message) || e).slice(0, 300)
+    writeBackupState_({ lastFailureAt: new Date(nowMs).toISOString(), lastError: message })
+    throw userError_('バックアップを作れませんでした: ' + message)
+  }
+  writeBackupState_({ lastSuccessAt: made.at, lastName: made.name, lastManualAt: made.at, lastFailureAt: '', lastError: '' })
+  try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
+  try { appendOrgAudit_(actorId, 'createBackupNow', made.name, { backupId: made.id }) } catch (e) { console.error('操作の記録: ' + e) }
+  return { backup: made, status: backupStatus_(), backups: listBackups_() }
 }
 
 // 画面に出す状態: 最後に作れた日時と、最後に作れなかった日時(作れた後にまた作れた時は出さない)

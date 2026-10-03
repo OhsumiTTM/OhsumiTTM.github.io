@@ -7,7 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { SectionLabel, Avatar } from '@/components/ohsumi/primitives'
 import { DIFFICULTY_LABEL, type Member } from '@/lib/ohsumi/types'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
-import { memberWorkloadCapacity, matchSkills, tenureYears, computeTaskPerformanceScore, computeReviewTurnaroundDays, computeYearsOfExperience, type WorkloadCapacity } from '@/lib/ohsumi/utils'
+import { memberWorkloadCapacity, matchSkills, tenureYears, computeTaskPerformanceScore, computeReviewTurnaroundDays, computeYearsOfExperience, type WorkloadCapacity, isActiveMember } from '@/lib/ohsumi/utils'
 import { buildDefaultQuestions } from '@/components/ohsumi/survey-screen'
 
 function BarRow({
@@ -227,11 +227,11 @@ export function AdminAnalytics() {
 
   // SKL-016: 保有率(%)の分母は休止中でないメンバー数(HRD-006の除外と
   // 一貫性を持たせるため、分子側の保有人数集計も休止中メンバーは除く)
-  const activeMemberCount = members.filter((m) => !m.inactive).length
+  const activeMemberCount = members.filter(isActiveMember).length
   const skillCounts = new Map<string, number>()
   const skillLevelSum = new Map<string, number>()
   members
-    .filter((m) => !m.inactive)
+    .filter(isActiveMember)
     .forEach((m) => {
       ;(m.skillLevels ?? []).forEach((sl) => {
         skillCounts.set(sl.skill, (skillCounts.get(sl.skill) ?? 0) + 1)
@@ -354,7 +354,7 @@ export function AdminAnalytics() {
 
   const scatterPoints = useMemo(() =>
     members
-      .filter((m) => !m.inactive)
+      .filter(isActiveMember)
       .map((m) => {
         const activeTasks = visibleTasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done')
         const doneTasks = allTasks.filter((t) => t.assigneeIds.includes(m.id) && t.status === 'done')
@@ -388,7 +388,7 @@ export function AdminAnalytics() {
   // 自動計算に統一したため、joinedAt未設定のメンバーはこのマップから除外する
   const skillExperiencePoints = useMemo(() =>
     members
-      .filter((m) => !m.inactive && m.joinedAt)
+      .filter((m) => isActiveMember(m) && m.joinedAt)
       .map((m) => ({
         member: m,
         x: m.skills.length + (m.skillLevels ?? []).length,
@@ -401,7 +401,7 @@ export function AdminAnalytics() {
   // メンバーはこのマップから除外する（適合度が算出できないため）
   const capacityFitPoints = useMemo(() =>
     members
-      .filter((m) => !m.inactive)
+      .filter(isActiveMember)
       .map((m) => {
         const activeTasks = visibleTasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done')
         if (activeTasks.length === 0) return null

@@ -6,7 +6,7 @@ import { useToast } from '@/components/ohsumi/toast'
 import { Button } from '@/components/ui/button'
 import { Plus, Trash2, Radar, Users } from 'lucide-react'
 import type { RadarAxis } from '@/lib/ohsumi/types'
-import { computeTeamRadarValues } from '@/lib/ohsumi/utils'
+import { computeTeamRadarValues, isActiveMember } from '@/lib/ohsumi/utils'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { AdminAccessNote, Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -21,7 +21,7 @@ export function AdminRadarAxes() {
   const [dirty, setDirty] = useState(false)
 
   // チームレーダーチャート（item 8）— 集計対象メンバーの選択
-  const activeMembers = useMemo(() => members.filter((m) => !m.inactive), [members])
+  const activeMembers = useMemo(() => members.filter(isActiveMember), [members])
   const [teamProjectId, setTeamProjectId] = useState('')
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(
     () => new Set(activeMembers.map((m) => m.id)),

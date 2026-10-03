@@ -454,12 +454,18 @@ export function suggestCategoriesForTitle(
 // なく、「その他のメンバーから選ぶ」には引き続き表示される）。数字は仮
 const MAX_ACTIVE_TASKS_FOR_SUGGESTION = 5
 
+// 担当・おすすめ・招待などの候補にしてよいメンバー(休止中・退会したメンバーは除く)
+export function isActiveMember(m: Pick<Member, 'inactive' | 'withdrawnAt'>): boolean {
+  return !m.inactive && !m.withdrawnAt
+}
+
 export function rankCandidates(
   task: { skills: string[]; assigneeIds?: string[] },
   members: Member[],
   allTasks?: Task[],
 ): { member: Member; matches: string[] }[] {
   return members
+    .filter(isActiveMember)
     .filter((m) => !task.assigneeIds?.includes(m.id))
     .filter((m) => {
       if (!allTasks) return true
@@ -623,7 +629,9 @@ export interface WorkloadRebalanceSuggestion {
 // (memberWorkloadCapacity)+スキルマッチング(matchSkills)のみで構成する。
 // 1タスクにつき提案は1件(最初にスキルが一致したavailableメンバー) —
 // 複数担当者の一部入れ替えまでは考慮しない、1対1の単純な付け替え提案。
-export function suggestWorkloadRebalance(members: Member[], tasks: Task[]): WorkloadRebalanceSuggestion[] {
+export function suggestWorkloadRebalance(allMembers: Member[], tasks: Task[]): WorkloadRebalanceSuggestion[] {
+  // 休止中・退会したメンバーには振り直さない(元の担当としても出さない)
+  const members = allMembers.filter(isActiveMember)
   const capacityByMember = new Map(members.map((m) => [m.id, memberWorkloadCapacity(m.id, tasks)]))
   const overloaded = members.filter((m) => capacityByMember.get(m.id) === 'full')
   const available = members.filter((m) => capacityByMember.get(m.id) === 'available')
