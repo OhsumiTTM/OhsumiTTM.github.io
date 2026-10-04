@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Ohsumi — タスクを打ち上げ、組織を軌道に乗せる',
+  title: 'Ohsumi —  仕事を進めるほど、組織が見えてくる。 ',
   description:
-    'Ohsumi は Task Management × Talent Management × Human Development を接続する組織運営システムです。',
+    'Ohsumi は 仕事を中心に、人・プロジェクト・組織・知識をつなぐ組織運営プラットフォームです。',
 }
 
 export const viewport: Viewport = {
