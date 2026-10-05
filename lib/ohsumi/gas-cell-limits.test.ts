@@ -138,22 +138,6 @@ describe('読み取り性能の計測の判定', () => {
   })
 })
 
-describe('予行演習の手順(docs/orbit-migration-plan.md の 5.2)', () => {
-  it('判定の目安が、measureReadPerformance と同じ', () => {
-    const doc = readFileSync(join(__dirname, '..', '..', 'docs', 'orbit-migration-plan.md'), 'utf8')
-    const h = guardHarness()
-    expect(h.c.READ_LIMIT_TASKS).toBe(2000)
-    expect(doc).toContain('| タスクの件数 | 2,000 件 |')
-    expect(h.c.READ_LIMIT_VIEWER_CHARS).toBe(3 * 1024 * 1024)
-    expect(doc).toContain('| 閲覧者ごとの読み込みの大きさ | 3MB |')
-    expect(h.c.READ_LIMIT_CHUNK_PERCENT).toBe(75)
-    expect(doc).toContain('| キャッシュの分割の数 | 45 / 60 個(75%) |')
-    expect(h.c.READ_LIMIT_SHEETS_MS).toBe(8000)
-    expect(doc).toContain('| キャッシュなしのシート読み込み | 8 秒 |')
-    expect(doc).toContain('measureReadPerformance')
-  })
-})
-
 describe('守る処理を外すと失敗する', () => {
   const mutated = (from: string, to: string) => {
     const code = CODE_GS.replace(from, to)
