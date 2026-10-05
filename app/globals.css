@@ -5,6 +5,10 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
+  /* ホームページ(components/site)で使う色。ブランドガイドライン v0.9 */
+  --color-navy: var(--ohsumi-navy);
+  --color-navy-foreground: #ffffff;
+  --color-pale: var(--ohsumi-pale-blue);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
@@ -221,4 +225,14 @@
   .ohsumi-scroll::-webkit-scrollbar-track {
     background: transparent;
   }
+}
+
+/* ?org= 付きで開いた時は、ホームページを描かない(components/site/root-switch.tsx) */
+html.ohsumi-app [data-site-home] {
+  display: none;
+}
+
+/* ホームページの中では、セクションの背景(bg-surface)を Off White にする(Ohsumi の画面の surface は白のまま) */
+[data-site] {
+  --surface: var(--ohsumi-off-white);
 }

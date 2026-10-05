@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Ohsumi —  仕事を進めるほど、組織が見えてくる。 ',
+  title: 'Ohsumi — タスクを打ち上げ、組織を軌道に乗せる',
   description:
-    'Ohsumi は 仕事を中心に、人・プロジェクト・組織・知識をつなぐ組織運営プラットフォームです。',
+    'Ohsumi は Task Management × Talent Management × Human Development を接続する組織運営システムです。',
 }
 
 export const viewport: Viewport = {
@@ -35,6 +35,14 @@ export default function RootLayout({
       lang="ja"
       className={`${geistSans.variable} ${geistMono.variable} bg-background`}
     >
+      <head>
+        {/* ?org= か ?login= がある時は、ホームページを描く前に隠す(Ohsumi の画面を出すため。components/site/root-switch.tsx) */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "if(/[?&](org|login)=/.test(location.search))document.documentElement.classList.add('ohsumi-app')",
+          }}
+        />
+      </head>
       <body className="font-sans antialiased">
         <FrameGuard>{children}</FrameGuard>
         <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />

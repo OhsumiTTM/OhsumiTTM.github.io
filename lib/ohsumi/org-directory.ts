@@ -149,7 +149,9 @@ export function syncOrgParam(orgId: string | null): void {
   try {
     const url = new URL(window.location.href)
     if (orgId) {
-      if (url.searchParams.get('org') === orgId) return
+      // ?login=1(ホームページの「ログイン」から開いた印)は、団体が決まったら外して /?org=<団体ID> にする
+      if (url.searchParams.get('org') === orgId && !url.searchParams.has('login')) return
+      url.searchParams.delete('login')
       url.searchParams.set('org', orgId)
     } else {
       if (!url.searchParams.has('org')) return
