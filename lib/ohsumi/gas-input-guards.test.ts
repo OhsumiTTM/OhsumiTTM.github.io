@@ -40,8 +40,9 @@ const lastRow = (h: H, sheet: string): Row => {
   return Object.fromEntries(head.map((k, i) => [String(k), rows[rows.length - 1][i]]))
 }
 const jsonOf = (h: H, sheet: string, id: string, col: string) => JSON.parse(String(rowOf(h, sheet, id)[col] || '[]'))
-const ok = (res: { ok: boolean; error?: string }) => { expect(res.ok, JSON.stringify(res)).toBe(true); return res }
-const ng = (res: { ok: boolean; error?: string }, msg?: RegExp) => {
+type Res = { ok: boolean; error?: string; result?: unknown }
+const ok = (res: Res) => { expect(res.ok, JSON.stringify(res)).toBe(true); return res }
+const ng = (res: Res, msg?: RegExp) => {
   expect(res.ok, JSON.stringify(res)).toBe(false)
   if (msg) expect(String(res.error)).toMatch(msg)
   return res
