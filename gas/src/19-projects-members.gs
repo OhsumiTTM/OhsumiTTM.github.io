@@ -30,9 +30,9 @@ function assertProjectRemovable_(projectId) {
     if (c < 0) return 0
     return (t.rows || []).filter(function (r) { return String(r[c] || '') === projectId }).length
   }
-  var tasks = count(SHEET_TASKS, 'project_id'), children = count(SHEET_PROJECTS, 'parent_id')
+  var tasks = count(SHEET_TASKS, 'project_id') + archivedTaskCountOfProject_(projectId), children = count(SHEET_PROJECTS, 'parent_id')
   if (tasks > 0 || children > 0) {
-    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱のタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
+    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱・移した古いタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
   }
 }
 

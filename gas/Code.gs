@@ -863,6 +863,7 @@ var MEMBERS_HEADERS = [
   'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
   'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
   'quiz_passes_json',         // 検定の合格の記録 [{"quizId","skill","level","at"}](スキルのレベルの条件に使う)
+  'skill_approvals_json',     // スキルのレベルの承認 [{"id","skill","level","reason","byId","at"}](スキルのレベルの条件に使う)
   'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）
   'absent_dates',            // 不在日リスト（カンマ区切り YYYY-MM-DD）
   'last_login',              // 最終ログイン日時（ISO datetime）
@@ -927,6 +928,10 @@ var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interv
 
 // 本人だけが読み書きできる保存(getMyStorage・setMyStorage)。画面が決めたキーごとに、値を40000文字ずつの行に分けて持つ
 var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id はメンバーID(1人に何行もある)
+// 団体の保存(getOrgStorage・setOrgStorage)。キーごとに、値を40000文字ずつの行に分けて持つ
+var ORG_STORE_HEADERS = ['id', 'part', 'value', 'updated_at', 'updated_by'] // id は保存のキー(1つのキーに何行もある)
+// 完了してから日数がたったタスクを移すシート(36-task-archive.gs)。Tasks と同じ列 + 移した日時
+var TASKS_ARCHIVE_HEADERS = TASKS_HEADERS.concat(['archived_at'])
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -938,6 +943,8 @@ var SHEET_HEADERS = {
   DailyReports: DAILY_REPORTS_HEADERS,
   Candidates: CANDIDATES_HEADERS,
   PersonalStore: PERSONAL_STORE_HEADERS,
+  OrgStore: ORG_STORE_HEADERS,
+  TasksArchive: TASKS_ARCHIVE_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
@@ -1964,7 +1971,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage',
+  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2024,7 +2031,7 @@ var SHEET_AUTH_ACTIONS = [
   // 代表・全権管理者だけ(役職・部門・設定・通知先・ログインの取り消し)
   'updateSetting', 'updateRoles', 'deleteRole', 'updateDepartments', 'deleteDepartment', 'moveDepartmentTasks',
   'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth',
-  'revokeMemberSessions', 'restoreTask', 'purgeTask',
+  'revokeMemberSessions', 'restoreTask', 'purgeTask', 'unarchiveTasks',
   // メンバーの状態・部門・プロジェクトの担当(班長の担当範囲の判定に使う)
   'updateMemberInactive', 'updateMemberDepartmentPath', 'updateProjectMembers',
 ]
@@ -2372,7 +2379,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.05-3'
+var OHSUMI_GAS_VERSION = '2026.10.05-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2670,6 +2677,8 @@ var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いしま
 // 読み取り・ログイン(初期設定コードで代表を入れる時を除く)・ログインの記録・自分や管理者によるログインの無効化だけを入れる
 var READ_ONLY_ACTIONS = [
   'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getExpenses', 'getFiles',
+  // 団体の保存を読む・移した古いタスクを探す(読み取りだけ)
+  'getOrgStorage', 'searchArchivedTasks',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
@@ -2718,7 +2727,7 @@ var FEATURE_SWITCHES = {
   schedule: { label: '日程調整', actions: ['updateTaskSchedule', 'notifyScheduleResult'] },
   dailyReports: { label: '日報の提出', actions: ['submitDailyReport'] },
   recruiting: { label: '採用の候補者', actions: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'] },
-  skills: { label: 'スキル・ポイント・クイズ', actions: ['awardSkillPoints', 'importPortableRecord', 'submitQuizResult', 'bulkUpdateSkills', 'updateSkillLevels'] },
+  skills: { label: 'スキル・ポイント・クイズ', actions: ['awardSkillPoints', 'importPortableRecord', 'submitQuizResult', 'bulkUpdateSkills', 'updateSkillLevels', 'approveSkillLevel'] },
   projectHealth: { label: 'プロジェクトの健康状態', actions: ['updateProjectHealth', 'notifyProjectHealth', 'reportProjectHealth', 'updateProjectHealthRecord'] },
   training: { label: '研修の申請', actions: ['updateTrainingHistory', 'notifyTrainingRequest', 'notifyTrainingDecision'] },
   memberSurvey: { label: 'メンバーのアンケートの回答', actions: ['submitSurveyResponse'] },
@@ -2805,6 +2814,8 @@ var TUNABLES = {
   contractRecheckIdleSec: { def: 600, min: 120, max: 1800, label: '書き込みの前にレジストリへ確かめ直す間隔(秒)' },
   // FSIF からのお知らせを覚えておく時間(秒)
   announcementsCacheSec: { def: 600, min: 60, max: 3600, label: 'お知らせを覚えておく時間(秒)' },
+  // 完了してからこの日数がたったタスクを、毎日の処理で TasksArchive に移す
+  taskArchiveDays: { def: 365, min: 90, max: 3650, label: '完了したタスクを移すまでの日数' },
 }
 var _tunablesFrom = null
 var _tunablesValue = null
@@ -3690,7 +3701,8 @@ function getQuizDefinitions_() {
 //   点数: スキルごとの一覧 → 団体の既定の一覧 → 組み込みの [50, 150, 350, 550, 750]
 //   条件: レベルごとに、スキルごと → 団体の既定 → 組み込み(Lv.4: 関連する資格1件以上・Lv.5: 外部評価の資格3件以上)
 //   条件の種類: qualification(資格 min 件以上。external で外部評価だけ)・quiz(このスキル・このレベル以上の検定に合格)・
-//               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)
+//               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)・
+//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel)
 // 設定は Settings の skill_level_rules(代表・全権管理者が設定の画面で変える)。以前の skill_level_thresholds は使わない。
 // 保存されたレベルは下げない(上がる時だけ書き換える)
 var BUILTIN_LEVEL_POINTS = [50, 150, 350, 550, 750]
@@ -3711,7 +3723,7 @@ function validLevelPoints_(v) {
 
 function validLevelCondition_(c) {
   if (!c || typeof c !== 'object') return false
-  if (c.type === 'quiz') return true
+  if (c.type === 'quiz' || c.type === 'approval') return true
   if (c.type === 'qualification' || c.type === 'tasksDone') return typeof c.min === 'number' && Math.floor(c.min) === c.min && c.min >= 1 && c.min <= 1000
   return false
 }
@@ -3785,6 +3797,7 @@ function levelConditionMet_(c, skill, level, ev) {
     return related.length >= c.min
   }
   if (c.type === 'quiz') return (ev.quizPasses || []).some(function (p) { return p && p.skill === skill && Number(p.level) >= level })
+  if (c.type === 'approval') return (ev.approvals || []).some(function (a) { return a && a.skill === skill && Number(a.level) >= level })
   return ((ev.doneTaskCounts || {})[skill] || 0) >= c.min
 }
 
@@ -3804,7 +3817,8 @@ function parseJsonListSafe_(v) {
   try { var a = JSON.parse(String(v || '[]')); return Array.isArray(a) ? a : [] } catch (e) { return [] }
 }
 
-// 条件を確かめるための、その人の記録(資格・検定の合格・担当して完了したタスクの数)
+// 条件を確かめるための、その人の記録(資格・検定の合格・担当して完了したタスクの数・スキルのレベルの承認)。
+// 完了したタスクの数には、TasksArchive に移した古いタスクも数える
 function skillEvidenceOf_(memberRow, memberId) {
   var counts = {}
   try {
@@ -3818,11 +3832,13 @@ function skillEvidenceOf_(memberRow, memberId) {
       if (assignees.indexOf(String(memberId)) < 0) return
       String(r[kCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
     })
+    archivedDoneTaskSkills_(memberId).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
   } catch (e) { counts = {} }
   return {
     qualifications: parseJsonListSafe_(memberRow && memberRow.qualifications_json),
     quizPasses: parseJsonListSafe_(memberRow && memberRow.quiz_passes_json),
     doneTaskCounts: counts,
+    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json),
   }
 }
 
@@ -4138,7 +4154,7 @@ function authorizeAction_(acting, action, body) {
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
   if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
-      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'restoreTask' || action === 'purgeTask' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'restoreTask' || action === 'purgeTask' || action === 'unarchiveTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin_(acting)) return
     if (checkPermissionOverride_(acting, action, body)) return
     throw userError_('この操作は代表または全権管理者のみ実行できます。')
@@ -4435,6 +4451,10 @@ function authorizeAction_(acting, action, body) {
     'getInviteMailStatus',     // ほかの端末で開く: 本人あてのメールを送れるか(常に acting.id が対象)
     'sendInviteLinkToMe',      // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は受け取らない)
     'reportClientError',       // 画面のエラーの記録(日時・操作の名前・エラーの種類だけ。1人1時間の上限あり)
+    'approveSkillLevel',       // スキルのレベルの承認。代表と、その人を見る立場の人だけ・自分には不可(approveSkillLevel_ で確かめる)
+    'getOrgStorage',           // 団体の保存。キーごとに決めた役職だけが読める(getOrgStorage_ で確かめる)
+    'setOrgStorage',           // 団体の保存。キーごとに決めた役職だけが書ける(setOrgStorage_ で確かめる)
+    'searchArchivedTasks',     // 移したタスクの検索。見てよいタスクだけを返す(canViewTaskRow_ で絞り込む)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
@@ -4927,7 +4947,7 @@ function toErrorMessage_(err) {
 // Webhookへの疎通確認(UrlFetchApp、数百ms〜数秒かかりうる)のみなので、
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
-  'translateText', 'getMyEmails', 'getMyStorage', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
+  'translateText', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
@@ -5557,10 +5577,10 @@ function runWriteAction_(body, actingMember) {
       }
       break
     case 'updateTimezone':
-      result = updateMemberFields_(body.memberId, { timezone: body.timezone || '' })
+      result = updateMemberFields_(body.memberId, { timezone: checkTimezone_(body.timezone) })
       break
     case 'updateLocale':
-      result = updateMemberFields_(body.memberId, { locale: body.locale || '' })
+      result = updateMemberFields_(body.memberId, { locale: checkLocale_(body.locale) })
       break
     case 'updateJudgment':
       result = updateMemberFields_(body.memberId, {
@@ -5609,7 +5629,7 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateNotifySettings':
       result = updateMemberFields_(body.memberId, {
-        notify_settings: JSON.stringify(body.settings),
+        notify_settings: JSON.stringify(checkNotifySettings_(body.settings)),
       })
       break
     case 'updateRole':
@@ -5801,10 +5821,10 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateProjectHealth':
-      result = updateProjectHealthOverride_(body.projectId, body.healthOverride)
+      result = updateProjectHealthOverride_(body.projectId, checkProjectHealth_(body.healthOverride, true))
       break
     case 'notifyProjectHealth':
-      result = notifyProjectHealth_(body.projectId, body.health)
+      result = notifyProjectHealth_(body.projectId, checkProjectHealth_(body.health, false))
       break
     case 'reportProjectHealth':
       // 自動判定の結果を複数プロジェクト分まとめて受け取り、記録の更新と
@@ -5814,10 +5834,11 @@ function runWriteAction_(body, actingMember) {
     case 'updateProjectHealthRecord':
       // item 26(追補): 通知なしでlast_notified_health列だけを更新する
       // （attentionから回復した際、次回の再悪化を確実に再通知するため）
-      result = updateProjectFields_(body.projectId, { last_notified_health: body.health })
+      result = updateProjectFields_(body.projectId, { last_notified_health: checkProjectHealth_(body.health, true) })
       break
     case 'updateAvatar':
       // choosing a color+initials avatar supersedes any uploaded picture
+      checkAvatar_(body.avatarColor, body.initials)
       result = updateMemberFields_(body.memberId, {
         avatar_color: body.avatarColor || '',
         avatar_initials: body.initials || '',
@@ -5834,9 +5855,11 @@ function runWriteAction_(body, actingMember) {
       if (body.sendInvite) result.invite = sendMemberInvite_(result.id)
       break
     case 'addCandidate':
+      checkCandidateFields_(body.candidate || {}, true)
       result = addCandidate_(body.candidate || {})
       break
     case 'updateCandidate':
+      checkCandidateFields_(body.fields || {}, false)
       result = updateCandidate_(body.candidateId, body.fields || {})
       break
     case 'removeCandidate':
@@ -5848,6 +5871,7 @@ function runWriteAction_(body, actingMember) {
       if (body.sendInvite && result && result.memberId) result.invite = sendMemberInvite_(result.memberId)
       break
     case 'updateEducationInfo':
+      checkEducationInfo_(body)
       result = updateMemberFields_(body.memberId, {
         university: body.university || '',
         faculty: body.faculty || '',
@@ -5858,7 +5882,7 @@ function runWriteAction_(body, actingMember) {
     case 'updateCustomFields':
       // フロント側（store.tsx）で既存値とマージ済みの完全なオブジェクトを送ってくる
       result = updateMemberFields_(body.memberId, {
-        custom_fields_json: JSON.stringify(body.customFields || {}),
+        custom_fields_json: JSON.stringify(checkCustomFields_(body.customFields)),
       })
       break
     case 'updateEmail':
@@ -5888,6 +5912,21 @@ function runWriteAction_(body, actingMember) {
     case 'setMyStorage':
       result = setMyStorage_(actingMember.id, body.key, body.value)
       break
+    case 'approveSkillLevel':
+      result = approveSkillLevel_(actingMember, body.memberId, body.skill, body.level, body.reason)
+      break
+    case 'getOrgStorage':
+      result = getOrgStorage_(actingMember, body.keys)
+      break
+    case 'setOrgStorage':
+      result = setOrgStorage_(actingMember, body.key, body.value)
+      break
+    case 'searchArchivedTasks':
+      result = searchArchivedTasks_(actingMember, body.query, body.memberId)
+      break
+    case 'unarchiveTasks':
+      result = unarchiveTasks_(body.taskIds)
+      break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
       // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
@@ -5901,6 +5940,7 @@ function runWriteAction_(body, actingMember) {
         throw userError_('役職の設定は、管理画面の役職の編集から変更してください。')
       }
       if (body.key === 'departments') throw userError_('部門の設定は、管理画面の部門の編集から変更してください。')
+      checkSettingValue_(body.key, body.value)
       result = updateSetting_(body.key, sheetSettingValue_(body.key, body.value))
       if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles_()
       break
@@ -8143,9 +8183,9 @@ function assertProjectRemovable_(projectId) {
     if (c < 0) return 0
     return (t.rows || []).filter(function (r) { return String(r[c] || '') === projectId }).length
   }
-  var tasks = count(SHEET_TASKS, 'project_id'), children = count(SHEET_PROJECTS, 'parent_id')
+  var tasks = count(SHEET_TASKS, 'project_id') + archivedTaskCountOfProject_(projectId), children = count(SHEET_PROJECTS, 'parent_id')
   if (tasks > 0 || children > 0) {
-    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱のタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
+    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱・移した古いタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
   }
 }
 
@@ -9006,6 +9046,8 @@ function nextIntId_(sheet, headers) {
     var n = parseInt(r[0], 10)
     if (!isNaN(n) && n > max) max = n
   })
+  // タスクは、TasksArchive に移したタスクの ID も使わない(戻した時にぶつからないように)
+  max = Math.max(max, archivedMaxIdFor_(sheet))
   return max + 1
 }
 
@@ -11192,7 +11234,7 @@ var TABLE_WRITE_ACTIONS = {
     'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
-var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage']
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage', 'setOrgStorage']
 
 // actions は操作の名前、または名前の配列(まとめて送られた書き込み)。表ごとに1回だけ新しくする
 function bumpVersionsAfterWrite_(actions) {
@@ -11559,6 +11601,8 @@ var READ_POLICY = {
       career_history_json: 'selfOrAdminRole',
       qualifications_json: 'selfOrAdminRole',
       quiz_passes_json: 'selfOrAdminRole',
+      // スキルのレベルの承認(誰が・いつ・何を認めたか)。見る立場の人と本人
+      skill_approvals_json: 'selfOrSupervisor',
       evaluation_history_json: 'selfOrSupervisor',
       transfer_history_json: 'selfOrAdminRole',
       competencies_json: 'selfOrAdminRole',
@@ -11653,6 +11697,10 @@ var READ_POLICY = {
       survey_questions: 'all',
       // 集計値を FSIF に送っているか(on / off。メンバーにも画面の下に出す)
       metrics_sharing_notice: 'all',
+      // 人材データの項目ごとの閲覧範囲(33-member-field-visibility.gs)。どの範囲かは、全員に見せてよい
+      member_field_visibility: 'all',
+      // 団体の保存の、キーごとの読み書きの役職(35-org-store.gs)
+      org_storage_access: 'fullAdmin',
     },
   },
 }
@@ -11674,6 +11722,8 @@ function makeViewer_(memberRow, roles) {
     isTop: roleTier_(roles, role) === 'top',
     // 評価・1on1 などを見られる相手(buildViewerData_ が報告先・メンター・プロジェクトの責任者から作る)
     supervisedIds: {},
+    // Members の列ごとの規則の上書き(Settings の member_field_visibility から buildViewerData_ が入れる)
+    memberColumnRules: {},
   }
 }
 
@@ -11765,8 +11815,10 @@ function filterTableForViewer_(sheetName, table, viewer) {
     }
     // Members の「本人」判定は行の id で行う
     var ownerId = sheetName === 'Members' && idCol >= 0 ? String(row[idCol]) : ''
+    var overrides = sheetName === 'Members' ? (viewer.memberColumnRules || {}) : {}
     outRows.push(keepCols.map(function (c) {
-      return checkReadRule_(policy.columns[headers[c]], viewer, ownerId) ? row[c] : ''
+      var rule = overrides[headers[c]] || policy.columns[headers[c]]
+      return checkReadRule_(rule, viewer, ownerId) ? row[c] : ''
     }))
   })
   return { headers: keepCols.map(function (c) { return headers[c] }), rows: outRows }
@@ -11875,6 +11927,7 @@ function buildViewerData_(data, memberId) {
   if (!memberRow) return null
   var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
   viewer.supervisedIds = supervisedMemberIds_(data, viewer.id)
+  viewer.memberColumnRules = memberColumnRulesFromSnapshot_(data)
   var empty = { headers: [], rows: [] }
   return {
     Members: filterTableForViewer_('Members', data.Members || empty, viewer),
@@ -13931,6 +13984,14 @@ function searchBackupTasks_(backupId, query) {
   if (!q) throw userError_('タスクの名前を入れてください。')
   var backup = taskTableOf_(SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS).getDataRange().getValues())
   var current = taskTableOf_(getSheet_(SHEET_TASKS).getDataRange().getValues())
+  // TasksArchive に移したタスクは、移した内容と比べる(archived: true。戻すと Tasks に戻る)
+  var archivedIds = {}
+  archivedTaskRows_().forEach(function (t) {
+    var id = String(t.id)
+    if (current.rows[id]) return
+    current.rows[id] = t
+    archivedIds[id] = true
+  })
   var out = []
   Object.keys(backup.rows).forEach(function (id) {
     var bt = backup.rows[id]
@@ -13950,7 +14011,9 @@ function searchBackupTasks_(backupId, query) {
         }
       })
     }
-    out.push({ id: id, title: String(bt.title || ''), currentTitle: ct ? String(ct.title || '') : '', state: !ct ? 'missing' : diffs.length ? 'changed' : 'same', diffs: diffs })
+    var item = { id: id, title: String(bt.title || ''), currentTitle: ct ? String(ct.title || '') : '', state: !ct ? 'missing' : diffs.length ? 'changed' : 'same', diffs: diffs }
+    if (archivedIds[id]) item.archived = true
+    out.push(item)
   })
   return { backup: b, tasks: out }
 }
@@ -13982,11 +14045,20 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   var rowOf = {}
   for (var i = 1; i < liveValues.length; i++) rowOf[String(liveValues[i][idCol])] = i
   var label = Utilities.formatDate(new Date(b.at), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+  // TasksArchive に移したタスクは、移した内容を今の内容として合わせ、Tasks に戻す(TasksArchive からは消す)
+  var archived = {}
+  archivedTaskRows_().forEach(function (t) { if (rowOf[String(t.id)] === undefined) archived[String(t.id)] = t })
+  var unarchived = []
   var done = []
   ids.forEach(function (id) {
     var bt = backup.rows[id]
     if (!bt) return
     var cur = rowOf[id] !== undefined ? liveValues[rowOf[id]] : null
+    if (!cur && archived[id]) {
+      cur = headers.map(function (h) { return archived[id][h] === undefined ? '' : archived[id][h] })
+      unarchived.push(id)
+    }
+    var isLive = rowOf[id] !== undefined
     var row = headers.map(function (h, c) {
       if (RESTORE_MERGED_TASK_LISTS.indexOf(h) < 0) return bt[h] === undefined ? (cur ? cur[c] : '') : bt[h]
       var merged = mergeTaskList_(parseJsonList_(bt[h]), parseJsonList_(cur ? cur[c] : '[]'), h === 'history_json')
@@ -13996,14 +14068,15 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
       }
       return JSON.stringify(merged)
     })
-    var rowNumber = cur ? rowOf[id] + 1 : sheet.getLastRow() + 1
+    var rowNumber = isLive ? rowOf[id] + 1 : sheet.getLastRow() + 1
     var target = sheet.getRange(rowNumber, 1, 1, headers.length)
     // 文字として扱う列は、値を書く前に書式を文字にする(数式として扱われないように)
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     target.setValues([row])
-    if (!cur) rowOf[id] = rowNumber - 1
-    done.push({ id: id, title: String(bt.title || ''), state: cur ? 'restored' : 'recreated' })
+    if (!isLive) rowOf[id] = rowNumber - 1
+    done.push({ id: id, title: String(bt.title || ''), state: isLive ? 'restored' : archived[id] ? 'unarchived' : 'recreated' })
   })
+  if (unarchived.length) deleteRowsById_(tasksArchiveSheet_(false), unarchived)
   // データの版は、書き込みの後の bumpVersionsAfterWrite_ が上げる
   forgetSheetGrid_(SHEET_TASKS)
   appendOrgAudit_(actorId, 'restoreTasks', b.name, { backupId: b.id, tasks: done })
@@ -14544,6 +14617,8 @@ function dailyMaintenanceUnrecorded_() {
   try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
   // ゴミ箱に入れてから30日たったタスクを消す
   try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
+  // 完了してから日数がたったタスクを TasksArchive に移す
+  try { archiveOldTasksLocked_(Date.now()) } catch (err) { console.error('古いタスクを移せませんでした: ' + String(err)) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -15193,4 +15268,684 @@ function sendDiagnostics_(diagId, nowMs, deps) {
   history.unshift(entry)
   props.setProperty('DIAGNOSTICS_HISTORY', JSON.stringify(history.slice(0, DIAGNOSTICS_HISTORY_MAX)))
   return { receiptNo: entry.receiptNo, at: entry.at, history: history.slice(0, DIAGNOSTICS_HISTORY_MAX) }
+}
+
+// ---- 人材データの項目ごとの閲覧範囲 ---------------------------------------------
+//
+// Settings の member_field_visibility に {列名: 範囲} の JSON を入れると、その列の閲覧範囲を変える
+// (READ_POLICY の Members の規則を、閲覧者ごとに上書きする)。設定の無い列は、今までどおり READ_POLICY の規則。
+// 設定できるのは代表・全権管理者だけ(updateSetting の権限)。範囲は次の4つ:
+//   all         ログインしている全員
+//   supervisor  本人・代表・その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者)
+//   admin       本人と、一般以外の役職
+//   self        本人だけ
+// 評価・1on1・育成計画・キャリアの希望・アンケートの回答は、「見る立場の人」より広くできない
+// (MEMBER_FIELD_NARROW_ONLY。広い範囲が保存されていても、今までどおりの範囲で返す)。
+// 管理用の列(id・名前・役職・通知の設定・権限の上書き など)は、この設定では変えない。
+var MEMBER_FIELD_VISIBILITY_KEY = 'member_field_visibility'
+var MEMBER_FIELD_VISIBILITY_RULES = { all: 'all', supervisor: 'selfOrSupervisor', admin: 'selfOrAdminRole', self: 'self' }
+var MEMBER_FIELD_VISIBILITY_COLUMNS = [
+  'will_tags', 'judgment_tags', 'joined_at', 'department_path', 'unavailable_dates', 'absent_dates',
+  'available_hours_json', 'skill_levels_json', 'timezone', 'mentor_id', 'has_management_experience',
+  'desired_areas', 'desired_skills', 'career_history_json', 'qualifications_json', 'quiz_passes_json',
+  'evaluation_history_json', 'transfer_history_json', 'competencies_json', 'training_history_json',
+  'development_plan_json', 'one_on_ones_json', 'career_aspiration', 'desired_future_role', 'career_plan',
+  'university', 'faculty', 'department_name', 'grade_year', 'custom_fields_json', 'skill_points_json',
+  'survey_responses_json', 'last_login', 'skill_approvals_json',
+]
+var MEMBER_FIELD_NARROW_ONLY = [
+  'evaluation_history_json', 'one_on_ones_json', 'development_plan_json',
+  'career_aspiration', 'desired_future_role', 'career_plan', 'survey_responses_json',
+]
+
+// 保存された設定(JSON の文字列)を、列ごとの規則にする。読めない値・決まった範囲でない値・
+// 狭めることしかできない列を広げる値は使わない(今までどおりの規則になる)
+function memberColumnRulesFromValue_(value) {
+  var out = {}
+  var parsed
+  try { parsed = typeof value === 'string' ? (value ? JSON.parse(value) : null) : value } catch (e) { return out }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return out
+  Object.keys(parsed).forEach(function (col) {
+    if (MEMBER_FIELD_VISIBILITY_COLUMNS.indexOf(col) < 0) return
+    var level = parsed[col]
+    if (!Object.prototype.hasOwnProperty.call(MEMBER_FIELD_VISIBILITY_RULES, level)) return
+    if (MEMBER_FIELD_NARROW_ONLY.indexOf(col) >= 0 && level !== 'supervisor' && level !== 'self') return
+    out[col] = MEMBER_FIELD_VISIBILITY_RULES[level]
+  })
+  return out
+}
+
+function memberColumnRulesFromSnapshot_(data) {
+  var settings = data.Settings || { headers: [], rows: [] }
+  var keyCol = (settings.headers || []).indexOf('key')
+  var valueCol = (settings.headers || []).indexOf('value')
+  if (keyCol < 0 || valueCol < 0) return {}
+  for (var i = 0; i < (settings.rows || []).length; i++) {
+    if (String(settings.rows[i][keyCol]) === MEMBER_FIELD_VISIBILITY_KEY) return memberColumnRulesFromValue_(settings.rows[i][valueCol])
+  }
+  return {}
+}
+
+// updateSetting で保存する前に確かめる(おかしな値は保存しない)
+function checkMemberFieldVisibility_(value) {
+  if (value === '' || value === null || value === undefined) return
+  var parsed
+  try { parsed = JSON.parse(String(value)) } catch (e) { throw userError_('項目ごとの閲覧範囲の設定を読めませんでした。') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw userError_('項目ごとの閲覧範囲の設定の形が正しくありません。')
+  Object.keys(parsed).forEach(function (col) {
+    if (MEMBER_FIELD_VISIBILITY_COLUMNS.indexOf(col) < 0) throw userError_('閲覧範囲を設定できない項目です: ' + String(col).slice(0, 60))
+    var level = parsed[col]
+    if (!Object.prototype.hasOwnProperty.call(MEMBER_FIELD_VISIBILITY_RULES, level)) throw userError_('閲覧範囲は 全員・見る立場の人・管理者・本人 のどれかにしてください。')
+    if (MEMBER_FIELD_NARROW_ONLY.indexOf(col) >= 0 && level !== 'supervisor' && level !== 'self') {
+      throw userError_('評価・1on1・育成計画・キャリアの希望・アンケートの回答は、見る立場の人より広くできません。')
+    }
+  })
+}
+
+// ---- スキルのレベルの承認(評価をスキルの証拠にする) -----------------------------
+//
+// approveSkillLevel { memberId, skill, level(1〜5), reason }: 「スキル○○を Lv.○ と認める」を、理由の文と一緒に記録する。
+// 記録できるのは、代表と、その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者。
+// 評価・1on1 を読める人と同じ supervisedMemberIds_)。自分自身には記録できない(代表も)。
+// 記録は Members の skill_approvals_json に {id, skill, level, reason, byId, at} で残す(誰が・いつ・何を)。
+// skill_level_rules の条件 {type:'approval'} は、このスキルをそのレベル以上と認めた記録があれば満たす。
+// 記録した後に、レベルを決め直す(点数と、ほかの条件も要る。保存されたレベルは下げない)
+var SKILL_APPROVAL_REASON_MAX = 500
+var SKILL_APPROVAL_MAX = 200
+
+function canApproveSkillOf_(acting, memberId) {
+  if (String(acting.id) === String(memberId)) return false
+  if (isTopRoleRef_(getRoles_(), acting.role)) return true
+  var data = { Members: snapshotTableOrSheet_(SHEET_MEMBERS), Projects: snapshotTableOrSheet_(SHEET_PROJECTS) }
+  return !!supervisedMemberIds_(data, String(acting.id))[String(memberId)]
+}
+
+function approveSkillLevel_(acting, memberId, skill, level, reason) {
+  memberId = String(memberId || '')
+  skill = typeof skill === 'string' ? skill.trim() : ''
+  reason = typeof reason === 'string' ? reason.trim() : ''
+  if (!memberId) throw userError_('メンバーを指定してください。')
+  if (memberId === String(acting.id)) throw userError_('自分自身のスキルのレベルは認められません。見る立場の人に依頼してください。')
+  if (!skill || skill.length > 100) throw userError_('スキルの名前を100文字以内で入れてください。')
+  if (typeof level !== 'number' || [1, 2, 3, 4, 5].indexOf(level) < 0) throw userError_('レベルは 1〜5 で指定してください。')
+  if (!reason) throw userError_('認める理由を書いてください。')
+  if (reason.length > SKILL_APPROVAL_REASON_MAX) throw userError_('理由は' + SKILL_APPROVAL_REASON_MAX + '文字以内にしてください。')
+  if (!canApproveSkillOf_(acting, memberId)) throw userError_('スキルのレベルを認められるのは、代表と、その人を見る立場の人(上長・メンター・プロジェクトの責任者)だけです。')
+  checkActiveMember_(memberId, '認める相手')
+  // 列が無い古いシートには足す(初期設定を実行し直さなくても記録できるように)
+  ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_MEMBERS, ['skill_approvals_json'])
+  forgetSheetGrid_(SHEET_MEMBERS)
+  var memberRow = findRow_(SHEET_MEMBERS, memberId)
+  if (!memberRow) throw userError_('メンバーが見つかりません。')
+  var record = { id: 'sa-' + Utilities.getUuid().slice(0, 8), skill: skill, level: level, reason: reason, byId: String(acting.id), at: new Date().toISOString() }
+  var approvals = parseJsonListSafe_(memberRow.skill_approvals_json).concat([record]).slice(-SKILL_APPROVAL_MAX)
+  var points = {}
+  try { points = JSON.parse(memberRow.skill_points_json || '{}') || {} } catch (e) { points = {} }
+  var evidence = skillEvidenceOf_(memberRow, memberId)
+  evidence.approvals = approvals
+  var newLevels = computeAutoLevels_(parseJsonListSafe_(memberRow.skill_levels_json), points, getSkillLevelRules_(), evidence)
+  updateMemberFields_(memberId, { skill_approvals_json: JSON.stringify(approvals), skill_levels_json: JSON.stringify(newLevels) })
+  return { approval: record, newLevels: newLevels }
+}
+
+// ---- 団体の保存(getOrgStorage・setOrgStorage) -----------------------------------
+//
+// 本人だけの保存(PersonalStore)と同じしくみで、団体に1つの値をキーごとに持つ(OrgStore シート)。
+// キー(英小文字・数字・. _ -、64文字まで)ごとに、読める役職・書ける役職を Settings の org_storage_access に
+// {キー: {read: 範囲, write: 範囲}} で決める(設定できるのは代表・全権管理者。updateSetting の権限)。範囲は次のどれか:
+//   'all'        ログインしている全員
+//   'adminRole'  一般以外の役職
+//   'fullAdmin'  代表・全権管理者
+//   'top'        代表だけ
+//   [役職, ...]  一覧の役職(役職の ID・名前)と、代表・全権管理者
+// 設定の無いキー・読めない設定は、代表・全権管理者だけが読み書きできる。
+// 1つのキー ORG_STORE_MAX_CHARS_PER_KEY 文字・合わせて ORG_STORE_MAX_CHARS 文字・ORG_STORE_MAX_KEYS 個まで。
+// 値は ORG_STORE_CHUNK 文字ずつの行に分ける。初期データ・スナップショットには入れない(読める人にだけ返す)
+var SHEET_ORG_STORE = 'OrgStore'
+var ORG_STORE_ACCESS_KEY = 'org_storage_access'
+var ORG_STORE_CHUNK = 40000
+var ORG_STORE_MAX_CHARS_PER_KEY = 100000
+var ORG_STORE_MAX_CHARS = 1000000
+var ORG_STORE_MAX_KEYS = 200
+var ORG_STORE_LEVELS = ['all', 'adminRole', 'fullAdmin', 'top']
+
+function validOrgStoreLevel_(level) {
+  if (typeof level === 'string') return ORG_STORE_LEVELS.indexOf(level) >= 0
+  if (!Array.isArray(level) || level.length === 0 || level.length > 50) return false
+  return level.every(function (r) { return typeof r === 'string' && r.trim() !== '' && r.length <= 100 })
+}
+
+// updateSetting で保存する前に確かめる
+function checkOrgStorageAccess_(value) {
+  if (value === '' || value === null || value === undefined) return
+  var parsed
+  try { parsed = JSON.parse(String(value)) } catch (e) { throw userError_('団体の保存の権限の設定を読めませんでした。') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw userError_('団体の保存の権限の設定の形が正しくありません。')
+  var keys = Object.keys(parsed)
+  if (keys.length > ORG_STORE_MAX_KEYS) throw userError_('団体の保存の権限は ' + ORG_STORE_MAX_KEYS + ' 個のキーまで設定できます。')
+  keys.forEach(function (k) {
+    if (!PERSONAL_STORE_KEY_RE.test(k)) throw userError_('団体の保存のキーが正しくありません: ' + String(k).slice(0, 70))
+    var rule = parsed[k]
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) throw userError_('団体の保存の権限は {read, write} で設定してください。')
+    Object.keys(rule).forEach(function (op) { if (op !== 'read' && op !== 'write') throw userError_('団体の保存の権限は read と write だけを設定できます。') })
+    ;['read', 'write'].forEach(function (op) {
+      if (rule[op] !== undefined && !validOrgStoreLevel_(rule[op])) throw userError_('団体の保存の権限の範囲が正しくありません: ' + k + ' の ' + op)
+    })
+  })
+}
+
+function orgStoreAccess_() {
+  var parsed = {}
+  try { parsed = JSON.parse(getSettingValue_(ORG_STORE_ACCESS_KEY) || '{}') || {} } catch (e) { parsed = {} }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+}
+
+function orgStoreAllowed_(acting, access, key, op) {
+  var roles = getRoles_()
+  if (isFullAdminRoleRef_(roles, acting.role)) return true
+  var rule = Object.prototype.hasOwnProperty.call(access, key) ? access[key] : null
+  var level = rule && typeof rule === 'object' ? rule[op] : undefined
+  if (!validOrgStoreLevel_(level)) return false
+  if (level === 'all') return true
+  if (level === 'adminRole') return isAdminRoleRef_(roles, acting.role)
+  if (level === 'fullAdmin' || level === 'top') return false
+  return level.some(function (r) { return sameRole_(roles, r, acting.role) })
+}
+
+function orgStoreSheet_(create) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ORG_STORE)
+  if (!sheet && create) sheet = getOrCreateSheet_(SHEET_ORG_STORE, ORG_STORE_HEADERS)
+  return sheet
+}
+
+// 全部の行(行番号・キー・何番目か・値)
+function orgStoreRows_(sheet) {
+  var last = sheet ? sheet.getLastRow() : 0
+  if (last < 2) return []
+  var headers = headerRow_(sheet)
+  var col = function (h) { return headers.indexOf(h) }
+  return sheet.getRange(2, 1, last - 1, headers.length).getValues().map(function (r, i) {
+    return { row: i + 2, key: String(r[col('id')]), part: Number(r[col('part')]) || 0, value: String(r[col('value')] == null ? '' : r[col('value')]) }
+  })
+}
+
+function getOrgStorage_(acting, keys) {
+  var access = orgStoreAccess_()
+  var values = personalStoreValues_(orgStoreRows_(orgStoreSheet_(false)))
+  var out = {}
+  Object.keys(values).forEach(function (k) {
+    if (Array.isArray(keys) && keys.map(String).indexOf(k) < 0) return
+    if (orgStoreAllowed_(acting, access, k, 'read')) out[k] = values[k]
+  })
+  return { values: out }
+}
+
+// value: 文字列(画面が JSON にして送る)。null・空の文字列はキーを消す
+function setOrgStorage_(acting, key, value) {
+  key = String(key || '')
+  if (!PERSONAL_STORE_KEY_RE.test(key)) throw userError_('保存のキーが正しくありません。')
+  if (value !== null && value !== undefined && typeof value !== 'string') throw userError_('保存する値は文字列にしてください。')
+  if (!orgStoreAllowed_(acting, orgStoreAccess_(), key, 'write')) throw userError_('この保存のキーを書き換える権限がありません。')
+  var text = value == null ? '' : value
+  if (text.length > ORG_STORE_MAX_CHARS_PER_KEY) throw userError_('1つのキーに保存できるのは ' + ORG_STORE_MAX_CHARS_PER_KEY + ' 文字までです。')
+  var sheet = orgStoreSheet_(true)
+  var rows = orgStoreRows_(sheet)
+  var current = personalStoreValues_(rows)
+  var others = Object.keys(current).filter(function (k) { return k !== key })
+  if (text) {
+    if (others.length + 1 > ORG_STORE_MAX_KEYS) throw userError_('団体の保存のキーは ' + ORG_STORE_MAX_KEYS + ' 個までです。')
+    var total = text.length + others.reduce(function (n, k) { return n + current[k].length }, 0)
+    if (total > ORG_STORE_MAX_CHARS) throw userError_('団体の保存の大きさ(合わせて ' + ORG_STORE_MAX_CHARS + ' 文字)を超えています。')
+  }
+  var chunks = []
+  for (var i = 0; i < text.length; i += ORG_STORE_CHUNK) chunks.push(text.slice(i, i + ORG_STORE_CHUNK))
+  var mine = rows.filter(function (r) { return r.key === key }).sort(function (a, b) { return a.part - b.part })
+  var headers = headerRow_(sheet)
+  var now = new Date().toISOString()
+  chunks.forEach(function (chunk, part) {
+    var o = { id: key, part: part, value: chunk, updated_at: now, updated_by: String(acting.id) }
+    var target = mine[part] ? mine[part].row : sheet.getLastRow() + 1
+    // 数式として扱われないよう、書式なしテキストにしてから書く
+    sheet.getRange(target, 1, 1, headers.length).setNumberFormat('@')
+    sheet.getRange(target, 1, 1, headers.length).setValues([headers.map(function (h) { return Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '' })])
+  })
+  mine.slice(chunks.length).map(function (r) { return r.row }).sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
+  return { key: key, size: text.length }
+}
+
+// ---- 古いタスクを移す(TasksArchive) -------------------------------------------
+//
+// 完了してから決めた日数(レジストリから配る taskArchiveDays。既定は365日)がたったタスクを、毎日の処理で
+// TasksArchive シートに移す(Tasks から行を消し、同じ列 + archived_at で TasksArchive に足す)。
+//   ・ふだんの読み込み(初期データ・スナップショット)には入れない(Tasks だけを読む)
+//   ・検索(searchArchivedTasks。見てよいタスクだけ)・スキルの条件の「完了したタスクの数」・バックアップから戻す、に使う
+//   ・戻す(unarchiveTasks。代表・全権管理者)で Tasks に戻す
+// 移さないもの: ゴミ箱のタスク・完了の日が分からないタスク・まだ Tasks にあるタスクから前提タスク・確認タスクとして
+// 参照されているタスク(画面で前提タスクが見えなくならないように)。1回に TASK_ARCHIVE_MAX_PER_RUN 件まで。
+// 先に TasksArchive に足してから Tasks の行を消す(途中で止まっても、次の回に同じ ID を足し直さずに消すだけにする)
+var SHEET_TASKS_ARCHIVE = 'TasksArchive'
+var TASK_ARCHIVE_MAX_PER_RUN = 500
+var ARCHIVE_SEARCH_MAX = 200
+var UNARCHIVE_MAX = 100
+
+function tasksArchiveSheet_(create) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_TASKS_ARCHIVE)
+  if (!sheet && create) sheet = getOrCreateSheet_(SHEET_TASKS_ARCHIVE, TASKS_ARCHIVE_HEADERS)
+  if (sheet && create) ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_TASKS_ARCHIVE, TASKS_ARCHIVE_HEADERS)
+  return sheet
+}
+
+function archivedTaskRows_() {
+  return sheetRowsAsObjects_(SHEET_TASKS_ARCHIVE)
+}
+
+// 移したタスクの ID の最大値(新しいタスクに同じ ID を使わないように。nextIntId_ が Tasks の時だけ数える)。
+// 読むだけ(シートを作らない)
+function archivedMaxIdFor_(sheet) {
+  if (!sheet || !sheet.getName || sheet.getName() !== SHEET_TASKS) return 0
+  var archive = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_TASKS_ARCHIVE)
+  if (!archive || archive.getLastRow() < 2) return 0
+  var headers = headerRow_(archive)
+  var idCol = headers.indexOf('id')
+  if (idCol < 0) return 0
+  var max = 0
+  archive.getRange(2, idCol + 1, archive.getLastRow() - 1, 1).getValues().forEach(function (r) {
+    var n = parseInt(r[0], 10)
+    if (!isNaN(n) && n > max) max = n
+  })
+  return max
+}
+
+// 移した完了のタスクのうち、その人が担当したもののスキル(1タスクにつき、スキルごとに1つ)
+function archivedDoneTaskSkills_(memberId) {
+  var out = []
+  archivedTaskRows_().forEach(function (t) {
+    if (normalizeCode_('status', t.status) !== 'done') return
+    if (splitCsvList_(t.assignee_id).indexOf(String(memberId)) < 0) return
+    splitCsvList_(t.skills).forEach(function (s) { out.push(s) })
+  })
+  return out
+}
+
+function archivedTaskCountOfProject_(projectId) {
+  return archivedTaskRows_().filter(function (t) { return String(t.project_id || '') === String(projectId) }).length
+}
+
+function taskDoneAtMs_(t) {
+  var at = cellTimeMs_(t.completed_date)
+  if (!isFinite(at)) at = cellTimeMs_(t.last_activity)
+  return at
+}
+
+// 移すタスク(Tasks の行のオブジェクトの一覧から選ぶ)
+function tasksToArchive_(rows, nowMs, days) {
+  var limit = nowMs - days * 24 * 3600 * 1000
+  var referenced = {}
+  var candidates = rows.filter(function (t) {
+    return normalizeCode_('status', t.status) === 'done' && !isTrashedTask_(t) && isFinite(taskDoneAtMs_(t)) && taskDoneAtMs_(t) <= limit
+  })
+  var moving = {}
+  candidates.forEach(function (t) { moving[String(t.id)] = true })
+  rows.forEach(function (t) {
+    if (moving[String(t.id)]) return
+    splitCsvList_(t.depends_on_ids).forEach(function (id) { referenced[id] = true })
+    if (String(t.related_review_task_id || '')) referenced[String(t.related_review_task_id)] = true
+  })
+  return candidates.filter(function (t) { return !referenced[String(t.id)] }).slice(0, TASK_ARCHIVE_MAX_PER_RUN)
+}
+
+// 行を Tasks から TasksArchive へ移す(ロックを取った中で呼ぶ)。移した ID を返す
+function moveTasksToArchive_(tasks, nowMs) {
+  if (!tasks.length) return []
+  var archive = tasksArchiveSheet_(true)
+  var aHeaders = headerRow_(archive)
+  var already = {}
+  archivedTaskRows_().forEach(function (t) { already[String(t.id)] = true })
+  var at = new Date(nowMs).toISOString()
+  tasks.forEach(function (t) {
+    if (already[String(t.id)]) return
+    var row = aHeaders.map(function (h) { return h === 'archived_at' ? at : (t[h] === undefined ? '' : t[h]) })
+    var rowNumber = archive.getLastRow() + 1
+    protectRowFromFormulaInjection_(archive, aHeaders, rowNumber, SHEET_TASKS)
+    archive.getRange(rowNumber, 1, 1, aHeaders.length).setValues([row])
+  })
+  deleteRowsById_(getSheet_(SHEET_TASKS), tasks.map(function (t) { return String(t.id) }))
+  forgetSheetGrid_(SHEET_TASKS)
+  return tasks.map(function (t) { return String(t.id) })
+}
+
+// シートから、ID が一覧にある行を消す(下から消す)
+function deleteRowsById_(sheet, ids) {
+  var headers = headerRow_(sheet)
+  var idCol = headers.indexOf('id')
+  if (idCol < 0 || sheet.getLastRow() < 2) return 0
+  var want = {}
+  ids.forEach(function (id) { want[String(id)] = true })
+  var values = sheet.getRange(2, idCol + 1, sheet.getLastRow() - 1, 1).getValues()
+  var rows = []
+  values.forEach(function (r, i) { if (want[String(r[0])]) rows.push(i + 2) })
+  rows.sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
+  return rows.length
+}
+
+// 毎日の処理から呼ぶ
+function archiveOldTasksLocked_(nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    var moved = moveTasksToArchive_(tasksToArchive_(sheetRowsAsObjects_(SHEET_TASKS), nowMs, tunable_('taskArchiveDays')), nowMs)
+    if (moved.length) bumpSnapshotVersion_()
+    return moved
+  } finally {
+    SpreadsheetApp.flush()
+    lock.releaseLock()
+  }
+}
+
+// 移したタスクを探す(名前の一部・担当者)。見てよいタスクだけを、新しく移した順に ARCHIVE_SEARCH_MAX 件まで返す。
+// 列は READ_POLICY の Tasks と同じ(規則の無い列は返さない)に、移した日時(archivedAt)を足す
+function searchArchivedTasks_(acting, query, memberId) {
+  var q = typeof query === 'string' ? query.trim().toLowerCase() : ''
+  var who = typeof memberId === 'string' ? memberId.trim() : ''
+  if (q.length > 200) throw userError_('探す文字は200文字までにしてください。')
+  var sheet = tasksArchiveSheet_(false)
+  if (!sheet || sheet.getLastRow() < 2) return { headers: [], rows: [], archivedAt: {}, total: 0 }
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var col = function (h) { return headers.indexOf(h) }
+  var matched = values.slice(1).filter(function (r) {
+    if (!String(r[col('id')] || '')) return false
+    if (q && String(r[col('title')] || '').toLowerCase().indexOf(q) < 0) return false
+    if (who && splitCsvList_(r[col('assignee_id')]).indexOf(who) < 0) return false
+    return true
+  })
+  var viewer = makeViewer_({ id: acting.id, role: acting.role }, getRoles_())
+  var filtered = filterTableForViewer_('Tasks', { headers: headers, rows: matched }, viewer)
+  var archivedAt = {}
+  var visibleIds = {}
+  var idOut = filtered.headers.indexOf('id')
+  filtered.rows.forEach(function (r) { visibleIds[String(r[idOut])] = true })
+  matched.forEach(function (r) {
+    var id = String(r[col('id')])
+    if (visibleIds[id]) archivedAt[id] = col('archived_at') >= 0 ? String(r[col('archived_at')] || '') : ''
+  })
+  var rows = filtered.rows.slice().sort(function (a, b) {
+    var x = archivedAt[String(a[idOut])], y = archivedAt[String(b[idOut])]
+    return x < y ? 1 : x > y ? -1 : 0
+  })
+  return { headers: filtered.headers, rows: rows.slice(0, ARCHIVE_SEARCH_MAX), archivedAt: archivedAt, total: rows.length }
+}
+
+// 移したタスクを Tasks に戻す(代表・全権管理者。ロックを取った書き込みの中で呼ぶ)
+function unarchiveTasks_(taskIds) {
+  var ids = []
+  ;(Array.isArray(taskIds) ? taskIds : []).forEach(function (id) {
+    var s = String(id || '')
+    if (s && ids.indexOf(s) < 0) ids.push(s)
+  })
+  if (!ids.length) throw userError_('戻すタスクを選んでください。')
+  if (ids.length > UNARCHIVE_MAX) throw userError_('一度に戻せるタスクは ' + UNARCHIVE_MAX + ' 件までです。')
+  var byId = {}
+  archivedTaskRows_().forEach(function (t) { byId[String(t.id)] = t })
+  var missing = ids.filter(function (id) { return !byId[id] })
+  if (missing.length) throw userError_('移したタスクに見つかりません: ' + missing.slice(0, 5).join(', '))
+  var sheet = getSheet_(SHEET_TASKS)
+  var headers = headerRow_(sheet)
+  var live = {}
+  sheetRowsAsObjects_(SHEET_TASKS).forEach(function (t) { live[String(t.id)] = true })
+  ids.forEach(function (id) {
+    if (live[id]) return
+    var t = byId[id]
+    var row = headers.map(function (h) { return t[h] === undefined ? '' : t[h] })
+    var rowNumber = sheet.getLastRow() + 1
+    protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
+    sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row])
+  })
+  deleteRowsById_(tasksArchiveSheet_(false), ids)
+  forgetSheetGrid_(SHEET_TASKS)
+  return { restored: ids }
+}
+
+// ---- 残りの値の確かめ(形と大きさ) ---------------------------------------------
+//
+// 画面が送る値のうち、まだ確かめていなかったものを、保存する前に確かめる(おかしな値は保存せずに断る)。
+// 画面が今送る値はすべて通す(画面の選択肢・入力の上限と同じか、それより広くしてある)。
+//   ・本人の設定: 通知の設定・タイムゾーン・表示言語・アイコンの色と文字・学歴・カスタム列
+//   ・プロジェクトの健康状態(手動の上書き・自動判定の記録)
+//   ・採用の候補者の項目
+//   ・updateSetting の値: フォームの定義と承認の段・検定・定期タスクの規則・項目ごとの閲覧範囲・団体の保存の権限・
+//     スキルのレベルの決め方
+var NOTIFY_KINDS = ['new_task', 'review', 'mention', 'rejected', 'deadline']
+var NOTIFY_FREQUENCIES = ['immediate', '3h', '6h', '1d', 'none']
+var TIMEZONE_RE = /^(UTC|[A-Za-z]+(\/[A-Za-z0-9_+\-]+){1,2})$/
+var LOCALE_RE = /^[a-z]{2}(-[A-Z]{2})?$/
+var AVATAR_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+var CUSTOM_FIELDS_MAX_KEYS = 100
+var CUSTOM_FIELD_VALUE_MAX = 2000
+var CANDIDATE_STATUSES = ['candidate', 'hired', 'rejected']
+var CANDIDATE_TEXT_MAX = 50000
+
+function isPlainObject_(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+function checkText_(v, max, label, required) {
+  if (v === undefined || v === null || v === '') {
+    if (required) throw userError_(label + 'を入れてください。')
+    return ''
+  }
+  if (typeof v !== 'string' && typeof v !== 'number') throw userError_(label + 'の形が正しくありません。')
+  var s = String(v)
+  if (s.length > max) throw userError_(label + 'は' + max + '文字以内にしてください。')
+  if (required && !s.trim()) throw userError_(label + 'を入れてください。')
+  return s
+}
+
+function checkNotifySettings_(settings) {
+  if (!isPlainObject_(settings)) throw userError_('通知の設定の形が正しくありません。')
+  Object.keys(settings).forEach(function (k) {
+    if (NOTIFY_KINDS.indexOf(k) < 0) throw userError_('通知の種類が正しくありません。')
+    if (NOTIFY_FREQUENCIES.indexOf(settings[k]) < 0) throw userError_('通知の頻度が正しくありません。')
+  })
+  return settings
+}
+
+function checkTimezone_(tz) {
+  if (tz === undefined || tz === null || tz === '') return ''
+  if (typeof tz !== 'string' || tz.length > 64 || !TIMEZONE_RE.test(tz)) throw userError_('タイムゾーンの形が正しくありません。')
+  return tz
+}
+
+function checkLocale_(locale) {
+  if (locale === undefined || locale === null || locale === '') return ''
+  if (typeof locale !== 'string' || !LOCALE_RE.test(locale)) throw userError_('表示言語の形が正しくありません。')
+  return locale
+}
+
+function checkAvatar_(color, initials) {
+  if (color !== undefined && color !== null && color !== '' && (typeof color !== 'string' || !AVATAR_COLOR_RE.test(color))) {
+    throw userError_('アイコンの色の形が正しくありません。')
+  }
+  checkText_(initials, 4, 'アイコンの文字')
+}
+
+function checkEducationInfo_(body) {
+  checkText_(body.university, 200, '大学名')
+  checkText_(body.faculty, 200, '学部')
+  checkText_(body.departmentName, 200, '学科')
+  checkText_(body.gradeYear, 50, '学年')
+}
+
+function checkCustomFields_(fields) {
+  if (fields === undefined || fields === null) return {}
+  if (!isPlainObject_(fields)) throw userError_('カスタム列の値の形が正しくありません。')
+  var keys = Object.keys(fields)
+  if (keys.length > CUSTOM_FIELDS_MAX_KEYS) throw userError_('カスタム列は ' + CUSTOM_FIELDS_MAX_KEYS + ' 個までです。')
+  keys.forEach(function (k) {
+    if (!k || k.length > 100) throw userError_('カスタム列のキーが正しくありません。')
+    var v = fields[k]
+    if (v === null || v === undefined) return
+    if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') throw userError_('カスタム列の値の形が正しくありません。')
+    if (String(v).length > CUSTOM_FIELD_VALUE_MAX) throw userError_('カスタム列の値は ' + CUSTOM_FIELD_VALUE_MAX + ' 文字以内にしてください。')
+  })
+  return fields
+}
+
+// 健康状態: good / watch / attention。allowEmpty の時は空(手動の上書きを外す)も通す
+function checkProjectHealth_(health, allowEmpty) {
+  if ((health === '' || health === null || health === undefined) && allowEmpty) return ''
+  if (PROJECT_HEALTH_LEVELS.indexOf(health) < 0) throw userError_('健康状態は good・watch・attention のどれかにしてください。')
+  return health
+}
+
+function checkCandidateFields_(c, isNew) {
+  if (!isPlainObject_(c)) throw userError_('候補者の項目の形が正しくありません。')
+  if (isNew || c.name !== undefined) checkText_(c.name, 200, '候補者の名前', true)
+  if (c.email !== undefined && c.email !== '' && c.email !== null) {
+    if (typeof c.email !== 'string' || c.email.length > 254 || !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(c.email.trim())) throw userError_('候補者のメールアドレスの形が正しくありません。')
+  }
+  if (c.phone !== undefined && c.phone !== '' && c.phone !== null) {
+    if (typeof c.phone !== 'string' || c.phone.length > 50 || /[\r\n]/.test(c.phone)) throw userError_('候補者の電話番号は1行・50文字以内にしてください。')
+  }
+  checkText_(c.resumeText, CANDIDATE_TEXT_MAX, '経歴')
+  checkText_(c.interviewNotes, CANDIDATE_TEXT_MAX, '面接のメモ')
+  if (c.status !== undefined && CANDIDATE_STATUSES.indexOf(c.status) < 0) throw userError_('候補者の状態が正しくありません。')
+}
+
+// ---- updateSetting の値 ----
+
+function parseSettingJson_(value, label) {
+  if (typeof value !== 'string') throw userError_(label + 'の形が正しくありません。')
+  try { return JSON.parse(value) } catch (e) { throw userError_(label + 'を読めませんでした。') }
+}
+
+function checkList_(v, max, label) {
+  if (!Array.isArray(v)) throw userError_(label + 'の形が正しくありません。')
+  if (v.length > max) throw userError_(label + 'は ' + max + ' 件までです。')
+  return v
+}
+
+function checkApprovalSteps_(steps, label) {
+  checkList_(steps, 20, label)
+  steps.forEach(function (s) {
+    if (!isPlainObject_(s)) throw userError_(label + 'の形が正しくありません。')
+    checkText_(s.id, 100, label + 'の ID', true)
+    if (s.type !== 'member' && s.type !== 'role') throw userError_(label + 'の種類は member か role にしてください。')
+    if (s.type === 'member') checkText_(s.memberId, 100, label + 'のメンバー', true)
+    if (s.type === 'role') checkText_(s.role, 100, label + 'の役職', true)
+    checkText_(s.department, 200, label + 'の部門')
+    if (s.requiredCount !== undefined && s.requiredCount !== null && s.requiredCount !== 'all' && s.requiredCount !== 'any') {
+      if (typeof s.requiredCount !== 'number' || Math.floor(s.requiredCount) !== s.requiredCount || s.requiredCount < 1 || s.requiredCount > 100) {
+        throw userError_(label + 'の必要な人数が正しくありません。')
+      }
+    }
+  })
+}
+
+function checkCustomFormDefs_(value) {
+  var defs = checkList_(parseSettingJson_(value, 'フォームの定義'), 100, 'フォームの定義')
+  defs.forEach(function (d) {
+    if (!isPlainObject_(d)) throw userError_('フォームの定義の形が正しくありません。')
+    checkText_(d.id, 100, 'フォームの ID', true)
+    checkText_(d.title, 200, 'フォームの名前')
+    checkText_(d.description, 5000, 'フォームの説明')
+    checkList_(d.fields || [], 100, 'フォームの項目').forEach(function (f) {
+      if (!isPlainObject_(f)) throw userError_('フォームの項目の形が正しくありません。')
+      checkText_(f.id, 100, '項目の ID', true)
+      checkText_(f.label, 500, '項目の名前')
+      if (['text', 'number', 'select', 'date'].indexOf(f.type) < 0) throw userError_('項目の種類が正しくありません。')
+      if (f.options !== undefined) checkList_(f.options, 100, '項目の選択肢').forEach(function (o) { checkText_(o, 200, '選択肢') })
+      if (f.required !== undefined && typeof f.required !== 'boolean') throw userError_('項目の「必須」の形が正しくありません。')
+      checkText_(f.description, 2000, '項目の説明')
+    })
+    checkApprovalSteps_(d.approvalSteps || [], 'フォームの承認の段')
+  })
+}
+
+function checkQuizDefinitions_(value) {
+  var quizzes = checkList_(parseSettingJson_(value, '検定の定義'), 200, '検定の定義')
+  quizzes.forEach(function (q) {
+    if (!isPlainObject_(q)) throw userError_('検定の定義の形が正しくありません。')
+    checkText_(q.id, 100, '検定の ID', true)
+    checkText_(q.title, 200, '検定の名前')
+    checkText_(q.targetSkill, 100, '検定のスキル')
+    if (q.targetLevel !== undefined && [1, 2, 3, 4, 5].indexOf(q.targetLevel) < 0) throw userError_('検定の目標のレベルは 1〜5 にしてください。')
+    if (q.passRate !== undefined && (typeof q.passRate !== 'number' || !(q.passRate >= 0 && q.passRate <= 100))) throw userError_('検定の合格ラインは 0〜100 にしてください。')
+    checkList_(q.questions || [], 200, '検定の設問').forEach(function (question) {
+      if (!isPlainObject_(question)) throw userError_('検定の設問の形が正しくありません。')
+      checkText_(question.id, 100, '設問の ID')
+      checkText_(question.text, 5000, '設問の文')
+      var choices = checkList_(question.choices || [], 20, '設問の選択肢')
+      choices.forEach(function (c) { checkText_(c, 1000, '選択肢') })
+      if (question.correctIndex !== undefined) {
+        var ci = question.correctIndex
+        if (typeof ci !== 'number' || Math.floor(ci) !== ci || ci < 0 || ci >= Math.max(choices.length, 1)) throw userError_('設問の正解の番号が正しくありません。')
+      }
+    })
+  })
+}
+
+function checkRecurringRules_(value) {
+  var rules = checkList_(parseSettingJson_(value, '定期タスクの規則'), 200, '定期タスクの規則')
+  rules.forEach(function (r) {
+    if (!isPlainObject_(r)) throw userError_('定期タスクの規則の形が正しくありません。')
+    checkText_(r.id, 100, '規則の ID', true)
+    checkText_(r.name, 200, '定期タスクの名前')
+    checkText_(r.projectId, 100, '定期タスクのプロジェクト')
+    ;['department', 'category', 'difficulty', 'priority', 'triggerOnStatus'].forEach(function (k) { checkText_(r[k], 100, '定期タスクの項目') })
+    if (r.skills !== undefined) checkList_(r.skills, 50, '定期タスクのスキル').forEach(function (s) { checkText_(s, 100, 'スキル') })
+    if (r.frequency !== undefined && ['weekly', 'monthly'].indexOf(r.frequency) < 0) throw userError_('定期タスクの頻度は weekly か monthly にしてください。')
+    var intIn = function (v, lo, hi, label) {
+      if (v === undefined || v === null || v === '') return
+      if (typeof v !== 'number' || Math.floor(v) !== v || v < lo || v > hi) throw userError_(label + 'が正しくありません。')
+    }
+    intIn(r.dayOfWeek, 0, 6, '曜日')
+    intIn(r.dayOfMonth, 1, 31, '日にち')
+    intIn(r.dueInDays, 0, 3650, '期限までの日数')
+    if (r.active !== undefined && typeof r.active !== 'boolean') throw userError_('定期タスクの「有効」の形が正しくありません。')
+    if (r.lastGeneratedDate !== undefined && r.lastGeneratedDate !== '') checkDate_(r.lastGeneratedDate, '最後に作った日')
+    if (r.skipDates !== undefined) checkList_(r.skipDates, 366, '作らない日').forEach(function (d) { checkDate_(d, '作らない日') })
+  })
+}
+
+// スキルのレベルの決め方: 形が正しいか(壊れた部分を捨てる parseSkillLevelRules_ より厳しく、知らない条件は断る)
+function checkSkillLevelRules_(value) {
+  var obj = parseSettingJson_(value, 'スキルのレベルの決め方')
+  if (!isPlainObject_(obj)) throw userError_('スキルのレベルの決め方の形が正しくありません。')
+  var rule = function (r) {
+    if (!isPlainObject_(r)) throw userError_('スキルのレベルの決め方の形が正しくありません。')
+    if (r.points !== undefined && !validLevelPoints_(r.points)) throw userError_('レベルの点数は、増えていく5つの整数にしてください。')
+    if (r.conditions !== undefined) {
+      if (!isPlainObject_(r.conditions)) throw userError_('レベルの条件の形が正しくありません。')
+      Object.keys(r.conditions).forEach(function (l) {
+        if (['1', '2', '3', '4', '5'].indexOf(l) < 0) throw userError_('レベルは 1〜5 にしてください。')
+        checkList_(r.conditions[l], 10, 'レベルの条件').forEach(function (c) {
+          if (!validLevelCondition_(c)) throw userError_('レベルの条件が正しくありません。')
+        })
+      })
+    }
+  }
+  if (obj['default'] !== undefined) rule(obj['default'])
+  if (obj.skills !== undefined) {
+    if (!isPlainObject_(obj.skills)) throw userError_('スキルごとの決め方の形が正しくありません。')
+    var names = Object.keys(obj.skills)
+    if (names.length > 500) throw userError_('スキルごとの決め方は 500 件までです。')
+    names.forEach(function (n) { rule(obj.skills[n]) })
+  }
+}
+
+// updateSetting の値を、キーごとに確かめる(空の値は「設定を消す」なので通す)
+var SETTING_VALUE_CHECKS = {
+  custom_form_defs: checkCustomFormDefs_,
+  quiz_definitions: checkQuizDefinitions_,
+  recurring_rules: checkRecurringRules_,
+  skill_level_rules: checkSkillLevelRules_,
+  member_field_visibility: checkMemberFieldVisibility_,
+  org_storage_access: checkOrgStorageAccess_,
+}
+
+function checkSettingValue_(key, value) {
+  var check = SETTING_VALUE_CHECKS[key]
+  if (!check || value === '' || value === null || value === undefined) return
+  check(value)
 }

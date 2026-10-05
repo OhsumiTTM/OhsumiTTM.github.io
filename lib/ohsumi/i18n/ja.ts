@@ -1446,6 +1446,7 @@ export const ja = {
   'skillLevels.cond.qualification': '関連する資格 {min} 件以上',
   'skillLevels.cond.qualificationExternal': '外部評価の資格 {min} 件以上',
   'skillLevels.cond.quiz': 'このレベル以上の検定に合格',
+  'skillLevels.cond.approval': '見る立場の人がこのレベルと認めている',
   'skillLevels.cond.tasksDone': 'このスキルの完了したタスク {min} 件以上',
   'career.skillLevels.toNext': '次の Lv.{level} まで あと {remaining} 点(累計 {points} / {next} 点)',
   'career.skillLevels.max': '最高のレベルです(累計 {points} 点)',

@@ -1446,6 +1446,7 @@ export const en = {
   'skillLevels.cond.qualification': '{min}+ related qualifications',
   'skillLevels.cond.qualificationExternal': '{min}+ externally assessed qualifications',
   'skillLevels.cond.quiz': 'Pass a quiz at this level or higher',
+  'skillLevels.cond.approval': 'Approved at this level by a supervisor',
   'skillLevels.cond.tasksDone': '{min}+ completed tasks with this skill',
   'career.skillLevels.toNext': '{remaining} pts to Lv.{level} ({points} / {next} pts)',
   'career.skillLevels.max': 'Top level ({points} pts)',

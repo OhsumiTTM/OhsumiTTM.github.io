@@ -314,6 +314,14 @@ function searchBackupTasks_(backupId, query) {
   if (!q) throw userError_('タスクの名前を入れてください。')
   var backup = taskTableOf_(SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS).getDataRange().getValues())
   var current = taskTableOf_(getSheet_(SHEET_TASKS).getDataRange().getValues())
+  // TasksArchive に移したタスクは、移した内容と比べる(archived: true。戻すと Tasks に戻る)
+  var archivedIds = {}
+  archivedTaskRows_().forEach(function (t) {
+    var id = String(t.id)
+    if (current.rows[id]) return
+    current.rows[id] = t
+    archivedIds[id] = true
+  })
   var out = []
   Object.keys(backup.rows).forEach(function (id) {
     var bt = backup.rows[id]
@@ -333,7 +341,9 @@ function searchBackupTasks_(backupId, query) {
         }
       })
     }
-    out.push({ id: id, title: String(bt.title || ''), currentTitle: ct ? String(ct.title || '') : '', state: !ct ? 'missing' : diffs.length ? 'changed' : 'same', diffs: diffs })
+    var item = { id: id, title: String(bt.title || ''), currentTitle: ct ? String(ct.title || '') : '', state: !ct ? 'missing' : diffs.length ? 'changed' : 'same', diffs: diffs }
+    if (archivedIds[id]) item.archived = true
+    out.push(item)
   })
   return { backup: b, tasks: out }
 }
@@ -365,11 +375,20 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   var rowOf = {}
   for (var i = 1; i < liveValues.length; i++) rowOf[String(liveValues[i][idCol])] = i
   var label = Utilities.formatDate(new Date(b.at), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')
+  // TasksArchive に移したタスクは、移した内容を今の内容として合わせ、Tasks に戻す(TasksArchive からは消す)
+  var archived = {}
+  archivedTaskRows_().forEach(function (t) { if (rowOf[String(t.id)] === undefined) archived[String(t.id)] = t })
+  var unarchived = []
   var done = []
   ids.forEach(function (id) {
     var bt = backup.rows[id]
     if (!bt) return
     var cur = rowOf[id] !== undefined ? liveValues[rowOf[id]] : null
+    if (!cur && archived[id]) {
+      cur = headers.map(function (h) { return archived[id][h] === undefined ? '' : archived[id][h] })
+      unarchived.push(id)
+    }
+    var isLive = rowOf[id] !== undefined
     var row = headers.map(function (h, c) {
       if (RESTORE_MERGED_TASK_LISTS.indexOf(h) < 0) return bt[h] === undefined ? (cur ? cur[c] : '') : bt[h]
       var merged = mergeTaskList_(parseJsonList_(bt[h]), parseJsonList_(cur ? cur[c] : '[]'), h === 'history_json')
@@ -379,14 +398,15 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
       }
       return JSON.stringify(merged)
     })
-    var rowNumber = cur ? rowOf[id] + 1 : sheet.getLastRow() + 1
+    var rowNumber = isLive ? rowOf[id] + 1 : sheet.getLastRow() + 1
     var target = sheet.getRange(rowNumber, 1, 1, headers.length)
     // 文字として扱う列は、値を書く前に書式を文字にする(数式として扱われないように)
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     target.setValues([row])
-    if (!cur) rowOf[id] = rowNumber - 1
-    done.push({ id: id, title: String(bt.title || ''), state: cur ? 'restored' : 'recreated' })
+    if (!isLive) rowOf[id] = rowNumber - 1
+    done.push({ id: id, title: String(bt.title || ''), state: isLive ? 'restored' : archived[id] ? 'unarchived' : 'recreated' })
   })
+  if (unarchived.length) deleteRowsById_(tasksArchiveSheet_(false), unarchived)
   // データの版は、書き込みの後の bumpVersionsAfterWrite_ が上げる
   forgetSheetGrid_(SHEET_TASKS)
   appendOrgAudit_(actorId, 'restoreTasks', b.name, { backupId: b.id, tasks: done })

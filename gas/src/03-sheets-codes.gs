@@ -55,6 +55,7 @@ var MEMBERS_HEADERS = [
   'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
   'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
   'quiz_passes_json',         // 検定の合格の記録 [{"quizId","skill","level","at"}](スキルのレベルの条件に使う)
+  'skill_approvals_json',     // スキルのレベルの承認 [{"id","skill","level","reason","byId","at"}](スキルのレベルの条件に使う)
   'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）
   'absent_dates',            // 不在日リスト（カンマ区切り YYYY-MM-DD）
   'last_login',              // 最終ログイン日時（ISO datetime）
@@ -119,6 +120,10 @@ var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interv
 
 // 本人だけが読み書きできる保存(getMyStorage・setMyStorage)。画面が決めたキーごとに、値を40000文字ずつの行に分けて持つ
 var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id はメンバーID(1人に何行もある)
+// 団体の保存(getOrgStorage・setOrgStorage)。キーごとに、値を40000文字ずつの行に分けて持つ
+var ORG_STORE_HEADERS = ['id', 'part', 'value', 'updated_at', 'updated_by'] // id は保存のキー(1つのキーに何行もある)
+// 完了してから日数がたったタスクを移すシート(36-task-archive.gs)。Tasks と同じ列 + 移した日時
+var TASKS_ARCHIVE_HEADERS = TASKS_HEADERS.concat(['archived_at'])
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -130,6 +135,8 @@ var SHEET_HEADERS = {
   DailyReports: DAILY_REPORTS_HEADERS,
   Candidates: CANDIDATES_HEADERS,
   PersonalStore: PERSONAL_STORE_HEADERS,
+  OrgStore: ORG_STORE_HEADERS,
+  TasksArchive: TASKS_ARCHIVE_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'

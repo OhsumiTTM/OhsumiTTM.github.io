@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.05-3'
+var REGISTRY_VERSION = '2026.10.05-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2452,6 +2452,7 @@ var TUNABLE_RANGES = {
   metricsRetryMaxHours: { def: 24, min: 6, max: 72, label: '集計値の送り直しの間隔の上限(時間)' },
   contractRecheckIdleSec: { def: 600, min: 120, max: 1800, label: '書き込みの前にレジストリへ確かめ直す間隔(秒)' },
   announcementsCacheSec: { def: 600, min: 60, max: 3600, label: 'お知らせを覚えておく時間(秒)' },
+  taskArchiveDays: { def: 365, min: 90, max: 3650, label: '完了したタスクを移すまでの日数' },
 }
 
 // 保存してある JSON を、知っているキー・範囲の中の整数だけにする(壊れた値は捨てる)
@@ -2581,7 +2582,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
-  { version: '2026.10.05-3', security: false, required: true, note: '公開前の版: 削除の制限・メンバーのメールの必須・定期タスクの月末と取りこぼし・退会の後始末・初期タスクを GAS で作る・カレンダーの予定をタスクの ID で扱う・幹部の取り込み・本人だけの保存と通知の履歴・タスクのゴミ箱・テンプレートの既定値と「初期設定」メニュー・要求分野の初期値・画面から届いた値の確かめ(承認・申請者・自分の実績・記録・回答・数・日付・存在と輪・評価した人・メール)・移行のためだけのコードを消す・更新の知らせから「コードをコピー」。更新したら setupOhsumi を実行する(列とシートを足す)' },
+  { version: '2026.10.05-4', security: false, required: true, note: '公開前の版: 削除の制限・メンバーのメールの必須・定期タスクの月末と取りこぼし・退会の後始末・初期タスクを GAS で作る・カレンダーの予定をタスクの ID で扱う・幹部の取り込み・本人だけの保存と通知の履歴・タスクのゴミ箱・テンプレートの既定値と「初期設定」メニュー・要求分野の初期値・画面から届いた値の確かめ(承認・申請者・自分の実績・記録・回答・数・日付・存在と輪・評価した人・メール)・移行のためだけのコードを消す・更新の知らせから「コードをコピー」・人材データの項目ごとの閲覧範囲・スキルのレベルの承認・団体の保存・残りの値の確かめ・古いタスクを移す(TasksArchive)。更新したら setupOhsumi を実行する(列とシートを足す)' },
   { version: '2026.10.04-1', security: true, required: false, note: 'Discord・Slack に幹部限定・承認待ちのタスク名や Will の中身を流さない。スキルの点数の付与を GAS で確かめる(完了・担当者・必要スキル・1人1回・上限・自分には付けない)' },
   { version: '2026.10.03-4', security: false, required: false, note: '休止中のメンバーもログイン・操作できる(担当の候補などからは外れる)。ログインを止めるのは退会の時だけ' },
   { version: '2026.10.03-3', security: false, required: false, note: '代表が管理画面から「今すぐバックアップを作る」(前に手で作ってから10分は作れない)' },

@@ -46,6 +46,8 @@ var READ_POLICY = {
       career_history_json: 'selfOrAdminRole',
       qualifications_json: 'selfOrAdminRole',
       quiz_passes_json: 'selfOrAdminRole',
+      // スキルのレベルの承認(誰が・いつ・何を認めたか)。見る立場の人と本人
+      skill_approvals_json: 'selfOrSupervisor',
       evaluation_history_json: 'selfOrSupervisor',
       transfer_history_json: 'selfOrAdminRole',
       competencies_json: 'selfOrAdminRole',
@@ -140,6 +142,10 @@ var READ_POLICY = {
       survey_questions: 'all',
       // 集計値を FSIF に送っているか(on / off。メンバーにも画面の下に出す)
       metrics_sharing_notice: 'all',
+      // 人材データの項目ごとの閲覧範囲(33-member-field-visibility.gs)。どの範囲かは、全員に見せてよい
+      member_field_visibility: 'all',
+      // 団体の保存の、キーごとの読み書きの役職(35-org-store.gs)
+      org_storage_access: 'fullAdmin',
     },
   },
 }
@@ -161,6 +167,8 @@ function makeViewer_(memberRow, roles) {
     isTop: roleTier_(roles, role) === 'top',
     // 評価・1on1 などを見られる相手(buildViewerData_ が報告先・メンター・プロジェクトの責任者から作る)
     supervisedIds: {},
+    // Members の列ごとの規則の上書き(Settings の member_field_visibility から buildViewerData_ が入れる)
+    memberColumnRules: {},
   }
 }
 
@@ -252,8 +260,10 @@ function filterTableForViewer_(sheetName, table, viewer) {
     }
     // Members の「本人」判定は行の id で行う
     var ownerId = sheetName === 'Members' && idCol >= 0 ? String(row[idCol]) : ''
+    var overrides = sheetName === 'Members' ? (viewer.memberColumnRules || {}) : {}
     outRows.push(keepCols.map(function (c) {
-      return checkReadRule_(policy.columns[headers[c]], viewer, ownerId) ? row[c] : ''
+      var rule = overrides[headers[c]] || policy.columns[headers[c]]
+      return checkReadRule_(rule, viewer, ownerId) ? row[c] : ''
     }))
   })
   return { headers: keepCols.map(function (c) { return headers[c] }), rows: outRows }
@@ -362,6 +372,7 @@ function buildViewerData_(data, memberId) {
   if (!memberRow) return null
   var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
   viewer.supervisedIds = supervisedMemberIds_(data, viewer.id)
+  viewer.memberColumnRules = memberColumnRulesFromSnapshot_(data)
   var empty = { headers: [], rows: [] }
   return {
     Members: filterTableForViewer_('Members', data.Members || empty, viewer),

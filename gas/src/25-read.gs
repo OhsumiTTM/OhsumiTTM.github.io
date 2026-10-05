@@ -71,7 +71,7 @@ var TABLE_WRITE_ACTIONS = {
     'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
-var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage']
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage', 'setOrgStorage']
 
 // actions は操作の名前、または名前の配列(まとめて送られた書き込み)。表ごとに1回だけ新しくする
 function bumpVersionsAfterWrite_(actions) {

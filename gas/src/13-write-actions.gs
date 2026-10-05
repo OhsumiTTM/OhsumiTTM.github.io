@@ -92,10 +92,10 @@ function runWriteAction_(body, actingMember) {
       }
       break
     case 'updateTimezone':
-      result = updateMemberFields_(body.memberId, { timezone: body.timezone || '' })
+      result = updateMemberFields_(body.memberId, { timezone: checkTimezone_(body.timezone) })
       break
     case 'updateLocale':
-      result = updateMemberFields_(body.memberId, { locale: body.locale || '' })
+      result = updateMemberFields_(body.memberId, { locale: checkLocale_(body.locale) })
       break
     case 'updateJudgment':
       result = updateMemberFields_(body.memberId, {
@@ -144,7 +144,7 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateNotifySettings':
       result = updateMemberFields_(body.memberId, {
-        notify_settings: JSON.stringify(body.settings),
+        notify_settings: JSON.stringify(checkNotifySettings_(body.settings)),
       })
       break
     case 'updateRole':
@@ -336,10 +336,10 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateProjectHealth':
-      result = updateProjectHealthOverride_(body.projectId, body.healthOverride)
+      result = updateProjectHealthOverride_(body.projectId, checkProjectHealth_(body.healthOverride, true))
       break
     case 'notifyProjectHealth':
-      result = notifyProjectHealth_(body.projectId, body.health)
+      result = notifyProjectHealth_(body.projectId, checkProjectHealth_(body.health, false))
       break
     case 'reportProjectHealth':
       // 自動判定の結果を複数プロジェクト分まとめて受け取り、記録の更新と
@@ -349,10 +349,11 @@ function runWriteAction_(body, actingMember) {
     case 'updateProjectHealthRecord':
       // item 26(追補): 通知なしでlast_notified_health列だけを更新する
       // （attentionから回復した際、次回の再悪化を確実に再通知するため）
-      result = updateProjectFields_(body.projectId, { last_notified_health: body.health })
+      result = updateProjectFields_(body.projectId, { last_notified_health: checkProjectHealth_(body.health, true) })
       break
     case 'updateAvatar':
       // choosing a color+initials avatar supersedes any uploaded picture
+      checkAvatar_(body.avatarColor, body.initials)
       result = updateMemberFields_(body.memberId, {
         avatar_color: body.avatarColor || '',
         avatar_initials: body.initials || '',
@@ -369,9 +370,11 @@ function runWriteAction_(body, actingMember) {
       if (body.sendInvite) result.invite = sendMemberInvite_(result.id)
       break
     case 'addCandidate':
+      checkCandidateFields_(body.candidate || {}, true)
       result = addCandidate_(body.candidate || {})
       break
     case 'updateCandidate':
+      checkCandidateFields_(body.fields || {}, false)
       result = updateCandidate_(body.candidateId, body.fields || {})
       break
     case 'removeCandidate':
@@ -383,6 +386,7 @@ function runWriteAction_(body, actingMember) {
       if (body.sendInvite && result && result.memberId) result.invite = sendMemberInvite_(result.memberId)
       break
     case 'updateEducationInfo':
+      checkEducationInfo_(body)
       result = updateMemberFields_(body.memberId, {
         university: body.university || '',
         faculty: body.faculty || '',
@@ -393,7 +397,7 @@ function runWriteAction_(body, actingMember) {
     case 'updateCustomFields':
       // フロント側（store.tsx）で既存値とマージ済みの完全なオブジェクトを送ってくる
       result = updateMemberFields_(body.memberId, {
-        custom_fields_json: JSON.stringify(body.customFields || {}),
+        custom_fields_json: JSON.stringify(checkCustomFields_(body.customFields)),
       })
       break
     case 'updateEmail':
@@ -423,6 +427,21 @@ function runWriteAction_(body, actingMember) {
     case 'setMyStorage':
       result = setMyStorage_(actingMember.id, body.key, body.value)
       break
+    case 'approveSkillLevel':
+      result = approveSkillLevel_(actingMember, body.memberId, body.skill, body.level, body.reason)
+      break
+    case 'getOrgStorage':
+      result = getOrgStorage_(actingMember, body.keys)
+      break
+    case 'setOrgStorage':
+      result = setOrgStorage_(actingMember, body.key, body.value)
+      break
+    case 'searchArchivedTasks':
+      result = searchArchivedTasks_(actingMember, body.query, body.memberId)
+      break
+    case 'unarchiveTasks':
+      result = unarchiveTasks_(body.taskIds)
+      break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
       // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
@@ -436,6 +455,7 @@ function runWriteAction_(body, actingMember) {
         throw userError_('役職の設定は、管理画面の役職の編集から変更してください。')
       }
       if (body.key === 'departments') throw userError_('部門の設定は、管理画面の部門の編集から変更してください。')
+      checkSettingValue_(body.key, body.value)
       result = updateSetting_(body.key, sheetSettingValue_(body.key, body.value))
       if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles_()
       break

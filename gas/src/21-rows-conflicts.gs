@@ -37,6 +37,8 @@ function nextIntId_(sheet, headers) {
     var n = parseInt(r[0], 10)
     if (!isNaN(n) && n > max) max = n
   })
+  // タスクは、TasksArchive に移したタスクの ID も使わない(戻した時にぶつからないように)
+  max = Math.max(max, archivedMaxIdFor_(sheet))
   return max + 1
 }
 

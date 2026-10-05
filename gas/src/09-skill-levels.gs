@@ -5,7 +5,8 @@
 //   点数: スキルごとの一覧 → 団体の既定の一覧 → 組み込みの [50, 150, 350, 550, 750]
 //   条件: レベルごとに、スキルごと → 団体の既定 → 組み込み(Lv.4: 関連する資格1件以上・Lv.5: 外部評価の資格3件以上)
 //   条件の種類: qualification(資格 min 件以上。external で外部評価だけ)・quiz(このスキル・このレベル以上の検定に合格)・
-//               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)
+//               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)・
+//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel)
 // 設定は Settings の skill_level_rules(代表・全権管理者が設定の画面で変える)。以前の skill_level_thresholds は使わない。
 // 保存されたレベルは下げない(上がる時だけ書き換える)
 var BUILTIN_LEVEL_POINTS = [50, 150, 350, 550, 750]
@@ -26,7 +27,7 @@ function validLevelPoints_(v) {
 
 function validLevelCondition_(c) {
   if (!c || typeof c !== 'object') return false
-  if (c.type === 'quiz') return true
+  if (c.type === 'quiz' || c.type === 'approval') return true
   if (c.type === 'qualification' || c.type === 'tasksDone') return typeof c.min === 'number' && Math.floor(c.min) === c.min && c.min >= 1 && c.min <= 1000
   return false
 }
@@ -100,6 +101,7 @@ function levelConditionMet_(c, skill, level, ev) {
     return related.length >= c.min
   }
   if (c.type === 'quiz') return (ev.quizPasses || []).some(function (p) { return p && p.skill === skill && Number(p.level) >= level })
+  if (c.type === 'approval') return (ev.approvals || []).some(function (a) { return a && a.skill === skill && Number(a.level) >= level })
   return ((ev.doneTaskCounts || {})[skill] || 0) >= c.min
 }
 
@@ -119,7 +121,8 @@ function parseJsonListSafe_(v) {
   try { var a = JSON.parse(String(v || '[]')); return Array.isArray(a) ? a : [] } catch (e) { return [] }
 }
 
-// 条件を確かめるための、その人の記録(資格・検定の合格・担当して完了したタスクの数)
+// 条件を確かめるための、その人の記録(資格・検定の合格・担当して完了したタスクの数・スキルのレベルの承認)。
+// 完了したタスクの数には、TasksArchive に移した古いタスクも数える
 function skillEvidenceOf_(memberRow, memberId) {
   var counts = {}
   try {
@@ -133,11 +136,13 @@ function skillEvidenceOf_(memberRow, memberId) {
       if (assignees.indexOf(String(memberId)) < 0) return
       String(r[kCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
     })
+    archivedDoneTaskSkills_(memberId).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
   } catch (e) { counts = {} }
   return {
     qualifications: parseJsonListSafe_(memberRow && memberRow.qualifications_json),
     quizPasses: parseJsonListSafe_(memberRow && memberRow.quiz_passes_json),
     doneTaskCounts: counts,
+    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json),
   }
 }
 

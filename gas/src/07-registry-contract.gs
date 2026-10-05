@@ -31,7 +31,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.05-3'
+var OHSUMI_GAS_VERSION = '2026.10.05-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -329,6 +329,8 @@ var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いしま
 // 読み取り・ログイン(初期設定コードで代表を入れる時を除く)・ログインの記録・自分や管理者によるログインの無効化だけを入れる
 var READ_ONLY_ACTIONS = [
   'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getExpenses', 'getFiles',
+  // 団体の保存を読む・移した古いタスクを探す(読み取りだけ)
+  'getOrgStorage', 'searchArchivedTasks',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
@@ -377,7 +379,7 @@ var FEATURE_SWITCHES = {
   schedule: { label: '日程調整', actions: ['updateTaskSchedule', 'notifyScheduleResult'] },
   dailyReports: { label: '日報の提出', actions: ['submitDailyReport'] },
   recruiting: { label: '採用の候補者', actions: ['addCandidate', 'updateCandidate', 'removeCandidate', 'convertCandidateToMember'] },
-  skills: { label: 'スキル・ポイント・クイズ', actions: ['awardSkillPoints', 'importPortableRecord', 'submitQuizResult', 'bulkUpdateSkills', 'updateSkillLevels'] },
+  skills: { label: 'スキル・ポイント・クイズ', actions: ['awardSkillPoints', 'importPortableRecord', 'submitQuizResult', 'bulkUpdateSkills', 'updateSkillLevels', 'approveSkillLevel'] },
   projectHealth: { label: 'プロジェクトの健康状態', actions: ['updateProjectHealth', 'notifyProjectHealth', 'reportProjectHealth', 'updateProjectHealthRecord'] },
   training: { label: '研修の申請', actions: ['updateTrainingHistory', 'notifyTrainingRequest', 'notifyTrainingDecision'] },
   memberSurvey: { label: 'メンバーのアンケートの回答', actions: ['submitSurveyResponse'] },
@@ -464,6 +466,8 @@ var TUNABLES = {
   contractRecheckIdleSec: { def: 600, min: 120, max: 1800, label: '書き込みの前にレジストリへ確かめ直す間隔(秒)' },
   // FSIF からのお知らせを覚えておく時間(秒)
   announcementsCacheSec: { def: 600, min: 60, max: 3600, label: 'お知らせを覚えておく時間(秒)' },
+  // 完了してからこの日数がたったタスクを、毎日の処理で TasksArchive に移す
+  taskArchiveDays: { def: 365, min: 90, max: 3650, label: '完了したタスクを移すまでの日数' },
 }
 var _tunablesFrom = null
 var _tunablesValue = null
