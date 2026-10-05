@@ -114,6 +114,21 @@ function setupOhsumi() {
     }
   })
 
+  // --- 役職・選択肢の初期値(無い時だけ入れる。上書きはしない)---
+  // 新しい団体(メンバーがまだいない)は、どの団体にも当てはまる最小限の形にする。
+  // すでに動いている団体は、今の画面の既定値をそのまま保存しておく(後で画面の既定値を変えても、今の選択肢が変わらないように)
+  try {
+    var membersSheet = ss.getSheetByName(SHEET_MEMBERS)
+    var fresh = !membersSheet || membersSheet.getLastRow() <= 1
+    var seeds = fresh ? NEW_ORG_SETTINGS : EXISTING_ORG_SETTINGS
+    Object.keys(seeds).forEach(function (key) {
+      if (settingsData.indexOf(key) !== -1) return
+      appendRowByHeaders_(settingsSheet, SHEET_SETTINGS, { key: key, value: seeds[key] })
+      settingsData.push(key)
+      console.log('➕ Settings 初期値追加: ' + key + (fresh ? '(新しい団体)' : '(今の既定値を保存)'))
+    })
+  } catch (e) { console.error('❌ 役職・選択肢の初期値: ' + e) }
+
   // --- バッチ通知トリガーの設定 ---
   try {
     var triggers = ScriptApp.getProjectTriggers()
@@ -200,6 +215,23 @@ function setupOhsumi() {
   } catch (e) { console.error('❌ トリガーの確認: ' + e) }
 
   console.log('🚀 setupOhsumi 完了')
+}
+
+// 新しい団体の役職・選択肢の初期値(FSIF 向けのものを外した、どの団体にも当てはまる最小限の形)
+var NEW_ORG_SETTINGS = {
+  roles: JSON.stringify([
+    { id: 'base', name: '一般', tier: 'base' },
+    { id: 'r_leader', name: '班長', tier: 'admin', restricted: false },
+    { id: 'top', name: '代表', tier: 'top' },
+  ]),
+  skill_options: ['企画', 'デザイン', 'ライティング', 'リサーチ', '広報', 'SNS', 'コミュニケーション', 'イベント運営', 'データ分析', '開発'].join(','),
+  category_options: ['未分類', '企画', 'デザイン', '広報', 'イベント', 'リサーチ', '開発', '事務'].join(','),
+}
+// すでに動いている団体には、今の画面の既定値を保存しておく(画面の既定値を後で変えても選択肢が変わらないように)
+var EXISTING_ORG_SETTINGS = {
+  skill_options: ['デザイン', 'Canva', 'PowerPoint', 'ライティング', 'リサーチ', 'SNS', '広報', 'コミュニケーション',
+    'イベント運営', 'メール', 'UI/UX', '実装', '企画', '要件定義', 'プロダクト設計', '校閲', 'Claude', 'V0'].join(','),
+  category_options: ['未分類', 'デザイン', '渉外', 'イベント', '広報', 'ライティング', '企画', 'リサーチ', '開発', '物品調達'].join(','),
 }
 
 // setupOhsumi が作る、団体の GAS に必要なトリガー
@@ -5537,12 +5569,21 @@ function runWriteAction_(body, actingMember) {
       result = rejectTask_(body.taskId, body.reason)
       break
     case 'removeTask':
+      // 完了・確認待ちのタスクは、団体の経験の記録として残すので消さない
+      ;(function () {
+        var t = findRow_(SHEET_TASKS, String(body.taskId || ''))
+        if (t && ['done', 'review'].indexOf(normalizeCode_('status', t.status)) >= 0) {
+          throw userError_('完了・確認待ちのタスクは、団体の経験の記録として残すため削除できません。')
+        }
+      })()
       result = removeTask_(body.taskId)
       break
     case 'createProject':
       result = createProject_(body.name, body.description, body.type)
       break
     case 'removeProject':
+      // タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。終わったものはアーカイブにしてもらう
+      assertProjectRemovable_(String(body.projectId || ''))
       result = removeProject_(body.projectId)
       break
     case 'removeMember':
@@ -7622,6 +7663,19 @@ function createProject_(name, description, type, parentId) {
 // tasks are removed too, not just unassigned like removeMember does for
 // members. Any admin scoped to this project (see project_ids) has it
 // dropped from their scope so they don't end up referencing a dead id.
+function assertProjectRemovable_(projectId) {
+  var count = function (sheetName, col) {
+    var t = snapshotTableOrSheet_(sheetName) || { headers: [], rows: [] }
+    var c = (t.headers || []).indexOf(col)
+    if (c < 0) return 0
+    return (t.rows || []).filter(function (r) { return String(r[c] || '') === projectId }).length
+  }
+  var tasks = count(SHEET_TASKS, 'project_id'), children = count(SHEET_PROJECTS, 'parent_id')
+  if (tasks > 0 || children > 0) {
+    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
+  }
+}
+
 function removeProject_(projectId) {
   var projects = getSheet_(SHEET_PROJECTS)
   var projectHeaders = headerRow_(projects)
@@ -7732,6 +7786,11 @@ function updateMemberFields_(memberId, fields) {
 // Adds a brand-new member row — used by Admin → Members "メンバーを登録",
 // including registering someone directly as an admin (role != 一般).
 function addMember_(name, email, affiliation, role) {
+  // メンバーにはメールアドレスが要る(メールアドレスで本人を照合してログインさせるため)
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(email || '').trim())) {
+    throw userError_('メールアドレスが無い・形が正しくないため、メンバーを追加できません(メールアドレスが無いとログインできません)。')
+  }
+  email = String(email).trim()
   var sheet = getSheet_(SHEET_MEMBERS)
   var headers = headerRow_(sheet)
   var id = String(nextIntId_(sheet, headers))
@@ -7907,23 +7966,20 @@ function getAllMemberEmails_() {
 // hotlinked from an <img> tag, replaces any previous upload for this
 // member, and records the resulting URL on their Members row.
 function uploadAvatar_(memberId, dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'avatar_' + memberId + '_'
 
-  // remove any previous upload for this member so the folder doesn't
-  // accumulate orphaned files every time someone changes their picture
-  var existing = folder.getFiles()
-  while (existing.hasNext()) {
-    var f = existing.next()
-    if (f.getName().indexOf(namePrefix) === 0) f.setTrashed(true)
-  }
+  // 前の画像は、メンバーの行に記録した URL のファイルだけを消す(フォルダ全体は調べない。
+  // 領収書などが増えると遅くなるため)
+  try {
+    var prev = findRow_(SHEET_MEMBERS, memberId)
+    trashUploadedImageByUrl_(prev && prev.avatar_url, namePrefix)
+  } catch (e) { console.error('前のプロフィール画像を消せませんでした: ' + e) }
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -7938,24 +7994,43 @@ function uploadAvatar_(memberId, dataUrl, filename) {
   return { url: url }
 }
 
+// 画像のアップロードの確かめ: 種類は jpeg・png・gif・webp だけ、大きさは IMAGE_UPLOAD_MAX_BYTES まで
+var IMAGE_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+var IMAGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+function parseImageDataUrl_(dataUrl) {
+  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
+  if (!match) throw userError_('画像を読み取れませんでした。')
+  var mimeType = String(match[1]).toLowerCase()
+  if (IMAGE_UPLOAD_TYPES.indexOf(mimeType) < 0) throw userError_('画像は JPEG・PNG・GIF・WebP のどれかを選んでください。')
+  // base64 の長さから、元の大きさを先に見積もって断る(大きなデータを読み込む前に)
+  if (match[2].length * 3 / 4 > IMAGE_UPLOAD_MAX_BYTES + 4) throw userError_('画像が大きすぎます(2MB まで)。')
+  var bytes = Utilities.base64Decode(match[2])
+  if (bytes.length > IMAGE_UPLOAD_MAX_BYTES) throw userError_('画像が大きすぎます(2MB まで)。')
+  return { mimeType: mimeType, bytes: bytes }
+}
+
+// アップロードした画像の URL(https://lh3.googleusercontent.com/d/<ファイルID>=...)から、そのファイルだけをゴミ箱に移す。
+// 名前が namePrefix で始まる、アップロード用のフォルダのファイルだけを消す(ほかのファイルを消さないため)
+function trashUploadedImageByUrl_(url, namePrefix) {
+  var m = String(url || '').match(/\/d\/([A-Za-z0-9_-]{10,})/)
+  if (!m) return
+  var file = DriveApp.getFileById(m[1])
+  if (String(file.getName()).indexOf(namePrefix) === 0) file.setTrashed(true)
+}
+
 // 団体ロゴをDriveにアップロードし、Settingsシートのorg_logo_urlを更新する。
 // uploadAvatarと異なりMembersシートは変更しない。
 function uploadOrgLogo_(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'org_logo_'
 
-  var existing = folder.getFiles()
-  while (existing.hasNext()) {
-    var f = existing.next()
-    if (f.getName().indexOf(namePrefix) === 0) f.setTrashed(true)
-  }
+  // 前のロゴは、設定に記録した URL のファイルだけを消す
+  try { trashUploadedImageByUrl_(getSettingValue_('org_logo_url'), namePrefix) } catch (e) { console.error('前のロゴを消せませんでした: ' + e) }
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -7995,15 +8070,13 @@ function uploadExpenseReceipt_(dataUrl, filename) {
 // 既存ファイルの削除はしない)。ただしこちらは画像専用なので、
 // アバターと同じgoogleusercontent.comホットリンク形式のURLを返す。
 function uploadSurveyImage_(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'survey_image_'
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -8064,6 +8137,7 @@ function removeMember_(memberId, actorId, nowMs) {
       }
     }
   }
+  var cleanup = withdrawCleanupRoles_(String(memberId))
   var withdrawnAt = new Date(nowMs).toISOString()
   // 未アサインに戻したタスク(退会を取り消した時に、代表に一覧を出す)
   updateMemberFields_(memberId, { inactive: 'TRUE', withdrawn_at: withdrawnAt, purge_at: '', withdrawal_unassigned_task_ids: unassigned.join(',') })
@@ -8072,7 +8146,85 @@ function removeMember_(memberId, actorId, nowMs) {
   bumpSessionGeneration_(memberId)
   var purgeAt = new Date(nowMs + personalDataRetentionDays_() * 24 * 3600 * 1000).toISOString()
   appendOrgAudit_(actorId, 'removeMember', String(memberId), { withdrawnAt: withdrawnAt, purgeAt: purgeAt })
-  return { removed: String(memberId), withdrawnAt: withdrawnAt, purgeAt: purgeAt }
+  notifyWithdrawCleanup_(member, cleanup)
+  return { removed: String(memberId), withdrawnAt: withdrawnAt, purgeAt: purgeAt, cleanup: cleanup }
+}
+
+// 退会したメンバーの、担当以外の役割を外す(確認者・ほかのメンバーの報告先とメンター・プロジェクトの責任者とメンバー)。
+// 外したものを返す(代表への知らせに使う)。経費・申請フォームの承認の段は変えない(進行中のものは代表が確かめる)
+function withdrawCleanupRoles_(memberId) {
+  var out = { reviewerTasks: [], reviewShort: [], reportsTo: [], mentees: [], ownerProjects: [], memberProjects: [] }
+  var dropId = function (csv) {
+    var list = splitCsvList_(csv)
+    var next = list.filter(function (id) { return id !== memberId })
+    return next.length === list.length ? null : next.join(',')
+  }
+  // タスクの確認者(完了したタスクは記録として残す)
+  try {
+    var ts = getSheet_(SHEET_TASKS), th = headerRow_(ts), tv = ts.getDataRange().getValues()
+    var c = function (n) { return th.indexOf(n) }
+    for (var i = 1; i < tv.length; i++) {
+      var row = tv[i]
+      if (normalizeCode_('status', row[c('status')]) === 'done') continue
+      var changed = false
+      if (c('reviewer_ids') >= 0) {
+        var next = dropId(row[c('reviewer_ids')])
+        if (next !== null) { ts.getRange(i + 1, c('reviewer_ids') + 1).setValue(next); changed = true; row[c('reviewer_ids')] = next }
+      }
+      if (c('reviewer_id') >= 0 && String(row[c('reviewer_id')] || '') === memberId) { ts.getRange(i + 1, c('reviewer_id') + 1).setValue(''); changed = true; row[c('reviewer_id')] = '' }
+      if (!changed) continue
+      var title = String(row[c('title')] || '')
+      out.reviewerTasks.push(title)
+      // 確認待ちで、残りの確認者が必要な承認の数に届かない
+      if (normalizeCode_('status', row[c('status')]) === 'review') {
+        var left = splitCsvList_(row[c('reviewer_ids')]).concat(splitCsvList_(row[c('reviewer_id')])).filter(function (v, k, a) { return a.indexOf(v) === k }).length
+        var need = c('required_approvals') >= 0 ? String(row[c('required_approvals')] || '1') : '1'
+        if (left === 0 || (need !== 'all' && left < Number(need))) out.reviewShort.push(title)
+      }
+    }
+  } catch (e) { console.error('退会: 確認者を外せませんでした: ' + e) }
+  // ほかのメンバーの報告先・メンター
+  try {
+    var ms = getSheet_(SHEET_MEMBERS), mh = headerRow_(ms), mv = ms.getDataRange().getValues()
+    var name = function (r) { return String(r[mh.indexOf('display_name')] || r[mh.indexOf('name')] || '') }
+    for (var j = 1; j < mv.length; j++) {
+      if (mh.indexOf('reports_to_id') >= 0 && String(mv[j][mh.indexOf('reports_to_id')] || '') === memberId) {
+        ms.getRange(j + 1, mh.indexOf('reports_to_id') + 1).setValue(''); out.reportsTo.push(name(mv[j]))
+      }
+      if (mh.indexOf('mentor_id') >= 0 && String(mv[j][mh.indexOf('mentor_id')] || '') === memberId) {
+        ms.getRange(j + 1, mh.indexOf('mentor_id') + 1).setValue(''); out.mentees.push(name(mv[j]))
+      }
+    }
+  } catch (e) { console.error('退会: 報告先・メンターを外せませんでした: ' + e) }
+  // プロジェクトの責任者・メンバー
+  try {
+    var ps = getSheet_(SHEET_PROJECTS), ph = headerRow_(ps), pv = ps.getDataRange().getValues()
+    for (var k = 1; k < pv.length; k++) {
+      var pname = String(pv[k][ph.indexOf('name')] || '')
+      if (ph.indexOf('owner_id') >= 0 && String(pv[k][ph.indexOf('owner_id')] || '') === memberId) {
+        ps.getRange(k + 1, ph.indexOf('owner_id') + 1).setValue(''); out.ownerProjects.push(pname)
+      }
+      if (ph.indexOf('member_ids') >= 0) {
+        var nm = dropId(pv[k][ph.indexOf('member_ids')])
+        if (nm !== null) { ps.getRange(k + 1, ph.indexOf('member_ids') + 1).setValue(nm); out.memberProjects.push(pname) }
+      }
+    }
+  } catch (e) { console.error('退会: プロジェクトから外せませんでした: ' + e) }
+  return out
+}
+
+// 退会の後に、設定し直しが要るものを代表・管理者に知らせる(1日のまとめのメール)
+function notifyWithdrawCleanup_(member, cleanup) {
+  try {
+    var who = String((member && (member.display_name || member.name)) || '')
+    var lines = []
+    if (cleanup.reviewShort.length) lines.push('・確認者が足りなくなった確認待ちのタスク: ' + cleanup.reviewShort.join('、'))
+    if (cleanup.reportsTo.length) lines.push('・報告先(上長)の設定が必要なメンバー: ' + cleanup.reportsTo.join('、'))
+    if (cleanup.mentees.length) lines.push('・メンターの設定が必要なメンバー: ' + cleanup.mentees.join('、'))
+    if (cleanup.ownerProjects.length) lines.push('・責任者がいなくなったプロジェクト: ' + cleanup.ownerProjects.join('、'))
+    lines.push('・進行中の経費・申請フォームで、' + who + 'さんが承認の段に指定されているものがあれば、承認の段を見直してください')
+    notifyAdmins_('[Ohsumi] 退会したメンバーの役割の引き継ぎ', who + 'さんが退会しました。次の設定を見直してください。\n\n' + lines.join('\n') + '\n\nOhsumiで確認してください。')
+  } catch (e) { console.error('退会の知らせを送れませんでした: ' + maskEmailsIn_(String(e))) }
 }
 
 // ---- Settings (optional key/value sync sheet) ------------------------------
@@ -9065,24 +9217,27 @@ function generateRecurringTasksInternal_() {
 
   var now = new Date()
   var today = todayStr_()
-  var dow = now.getDay()
-  var dom = now.getDate()
   var changed = false
   var generated = []
 
   rules.forEach(function (rule) {
     if (!rule.active || rule.lastGeneratedDate === today) return
-    var due = rule.frequency === 'weekly' ? rule.dayOfWeek === dow : rule.dayOfMonth === dom
-    if (!due) return
+    // 作る日: 前回作った日の次の日から今日まで(最大31日さかのぼる)のうち、規則に合う日。
+    // 毎朝の処理が動かなかった日の分も作る。初めての規則は今日の分だけ。
+    // 毎月の規則で指定の日(29〜31日)が無い月は、その月の最終日に作る
+    var dates = recurringDueDates_(rule, rule.lastGeneratedDate || '', today)
+    if (!dates.length) return
 
     // isolate each rule — one bad rule (e.g. a stale projectId, a transient
     // Sheets error) must not abort the whole daily trigger and skip both
     // the remaining rules' lastGeneratedDate writes and the overdue-task
     // Discord sweep that runs after this function in dailyMaintenance()
+    dates.forEach(function (onDate) {
     try {
       var deadline = null
       if (rule.dueInDays != null) {
-        var d = new Date(now.getTime() + rule.dueInDays * 86400000)
+        var base = new Date(onDate + 'T12:00:00')
+        var d = new Date(base.getTime() + rule.dueInDays * 86400000)
         deadline = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd')
       }
       // same payload shape/columns the client sends for a recurring-generated
@@ -9102,15 +9257,41 @@ function generateRecurringTasksInternal_() {
         },
       ])
       generated = generated.concat(created)
-      rule.lastGeneratedDate = today
+      rule.lastGeneratedDate = onDate === dates[dates.length - 1] ? today : onDate
       changed = true
     } catch (err) {
       // best-effort — skip this rule today, try again on the next run
     }
+    })
   })
 
   if (changed) updateSetting_(SETTINGS_KEY_RECURRING_RULES, JSON.stringify(rules))
   return { generated: generated }
+}
+
+// 定期タスクを作る日(YYYY-MM-DD)の一覧。lastDate の次の日から today まで(最大31日)のうち、規則に合う日。
+// lastDate が空(初めての規則)なら、今日が規則に合う時だけ今日。
+// 毎月の規則で dayOfMonth がその月に無い(29〜31日)時は、その月の最終日を作る日にする
+function recurringDueDates_(rule, lastDate, today) {
+  var DAY = 86400000
+  var toDate = function (str) { return new Date(str + 'T12:00:00') }
+  var fmt = function (d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd') }
+  var end = toDate(today)
+  var start = lastDate ? new Date(toDate(lastDate).getTime() + DAY) : end
+  if (end.getTime() - start.getTime() > 31 * DAY) start = new Date(end.getTime() - 31 * DAY)
+  var out = []
+  for (var t = start.getTime(); t <= end.getTime(); t += DAY) {
+    var d = new Date(t)
+    var hit
+    if (rule.frequency === 'weekly') {
+      hit = d.getDay() === Number(rule.dayOfWeek)
+    } else {
+      var lastDom = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+      hit = d.getDate() === Math.min(Number(rule.dayOfMonth), lastDom)
+    }
+    if (hit) out.push(fmt(d))
+  }
+  return out
 }
 
 // 一定期間アクセスのないメンバーを管理者に通知する日次スイープ。
@@ -10764,7 +10945,11 @@ function checkReadRule_(rule, viewer, ownerId) {
 //   承認待ち: 一般以外の役職と、作成者・担当者
 function canViewTaskRow_(viewer, task) {
   // 値は移行前の日本語・コードのどちらでもよい
-  if (normalizeCode_('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) return false
+  // 幹部限定のタスクも、担当者・確認者・作成者には見せる(自分の担当のタスクが見えなくならないように)
+  if (normalizeCode_('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) {
+    var involved = splitCsvList_(task.assignee_id).concat(splitCsvList_(task.reviewer_ids), splitCsvList_(task.reviewer_id), [String(task.creator_id || '')])
+    if (involved.indexOf(viewer.id) < 0) return false
+  }
   if (normalizeCode_('approval', task.approval_status) === 'pending' && !viewer.isAdminRole) {
     if (String(task.creator_id || '') === viewer.id) return true
     return splitCsvList_(task.assignee_id).indexOf(viewer.id) >= 0
