@@ -3,7 +3,7 @@ export const SITE = {
   reading: 'オオスミ',
   // サイトの URL は直接書かない(独自ドメインの切り替えに合わせて NEXT_PUBLIC_SITE_URL で渡す)
   url: process.env.NEXT_PUBLIC_SITE_URL ?? '',
-  fsifUrl: 'https://fsif.jp',
+  fsifUrl: 'https://www.fsif.jp',
   operator: '未来宇宙産業フォーラム(FSIF)',
   operatorShort: 'FSIF',
 } as const
@@ -34,11 +34,12 @@ export const FOOTER_NAV = [
   { href: '/faq', label: 'FAQ' },
   { href: '/news', label: 'News / Updates' },
   { href: '/about', label: 'About' },
+  { href: '/apply', label: '利用の申請' },
   { href: '/contact', label: 'Contact' },
 ] as const
 
-// 問い合わせ: フォーム(Google フォーム)の URL は、作ったらここに入れる(それまでは仮の値)
+// 問い合わせの連絡先(フォームは lib/site/contact-form.ts)
 export const CONTACT = {
-  formUrl: 'https://forms.gle/REPLACE_ME',
   email: 'fsif.official@gmail.com',
 } as const
+

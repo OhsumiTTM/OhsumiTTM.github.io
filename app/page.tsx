@@ -4,7 +4,7 @@ import { HomePage } from '@/components/site/home-page'
 import { RootSwitch } from '@/components/site/root-switch'
 
 export const metadata: Metadata = {
-  title: { absolute: 'Ohsumi（オオスミ）| 仕事を進めるほど、組織が見えてくる。組織運営プラットフォーム' },
+  title: { absolute: 'Ohsumi | 仕事を進めるほど、組織が見えてくる。組織運営プラットフォーム' },
   alternates: { canonical: '/' },
 }
 
