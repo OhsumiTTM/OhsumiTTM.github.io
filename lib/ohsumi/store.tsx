@@ -416,7 +416,12 @@ interface OhsumiContextValue extends OhsumiState {
   updateWill: (memberId: string, will: string[]) => void
   updateJudgment: (memberId: string, judgment: string[]) => void
   approveTask: (id: string) => void
+  // ゴミ箱に入れる(30日後に GAS が完全に消す)
   removeTask: (id: string) => void
+  // ゴミ箱のタスク(代表・全権管理者だけに届く)。元に戻す・すぐに完全に消す
+  trashedTasks: Task[]
+  restoreTask: (id: string) => void
+  purgeTask: (id: string) => void
   rejectTask: (id: string, reason?: string) => void
   addProject: (name: string, description: string, type?: string, parentId?: string) => void
   updateProjectParent: (projectId: string, parentId: string | null) => void
@@ -876,6 +881,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // below replaces it. Start empty instead and let the loading gates in
   // ohsumi-app.tsx / admin-screen.tsx cover the wait.
   const [tasks, setTasks] = useState<Task[]>(isRemoteConfigured ? [] : SEED_TASKS)
+  // ゴミ箱のタスク(tasks には入れない。画面の一覧・検索・集計・通知から外すため)
+  const [trashedTasks, setTrashedTasks] = useState<Task[]>([])
   // GAS書き込み直後は公開CSV(fetchRemoteData)側の反映に数分ラグがあるため
   // (下のavatarUrlフォールバックと同種の問題)、承認/却下した直後に情報更新
   // すると古いCSVスナップショットでtasksが丸ごと上書きされ、「承認したのに
@@ -1278,7 +1285,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (res.data) {
         setMembers(res.data.members)
         setProjects(res.data.projects)
-        setTasks(applyLocalApprovalOverrides(res.data.tasks))
+        const all = applyLocalApprovalOverrides(res.data.tasks)
+        setTasks(all.filter((t) => !t.deletedAt))
+        setTrashedTasks(all.filter((t) => t.deletedAt))
       }
       if (res.settings) applySettings(res.settings)
       if (res.version) dataVersionRef.current = res.version
@@ -3584,22 +3593,41 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
 
-  // distinct from the automatic archive (14 days after completion) — this
-  // is a permanent, manual delete. Any other task that lists this one in
-  // dependsOnIds has that reference scrubbed so 依存関係 doesn't point at a
-  // dead id.
+  // 削除はゴミ箱に入れる(自動のアーカイブとは別)。30日後に GAS が完全に消す。
+  // 前提タスクの一覧からは、完全に消す時(purgeTask・GAS の毎日の処理)に外す
   const removeTask = useCallback(
     (id: string) => {
-      setTasks((prev) =>
-        prev
-          .filter((t) => t.id !== id)
-          .map((t) =>
-            t.dependsOnIds?.includes(id)
-              ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) }
-              : t,
-          ),
-      )
+      const target = tasks.find((t) => t.id === id)
+      setTasks((prev) => prev.filter((t) => t.id !== id))
+      if (target) {
+        setTrashedTasks((prev) => [{ ...target, deletedAt: new Date().toISOString(), deletedById: currentUserId ?? undefined }, ...prev.filter((t) => t.id !== id)])
+      }
       if (isRemoteConfigured) runRemote(remoteApi.removeTask(id))
+    },
+    [tasks, currentUserId, runRemote],
+  )
+
+  const restoreTask = useCallback(
+    (id: string) => {
+      const target = trashedTasks.find((t) => t.id === id)
+      if (!target) return
+      setTrashedTasks((prev) => prev.filter((t) => t.id !== id))
+      setTasks((prev) => [{ ...target, deletedAt: undefined, deletedById: undefined }, ...prev.filter((t) => t.id !== id)])
+      if (isRemoteConfigured) runRemote(remoteApi.restoreTask(id))
+    },
+    [trashedTasks, runRemote],
+  )
+
+  // すぐに完全に消す。ほかのタスクの前提タスクの一覧からも外す
+  const purgeTask = useCallback(
+    (id: string) => {
+      setTrashedTasks((prev) => prev.filter((t) => t.id !== id))
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.dependsOnIds?.includes(id) ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) } : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.purgeTask(id))
     },
     [runRemote],
   )
@@ -5470,6 +5498,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateJudgment,
     approveTask,
     removeTask,
+    trashedTasks,
+    restoreTask,
+    purgeTask,
     rejectTask,
     addProject,
     removeProject,

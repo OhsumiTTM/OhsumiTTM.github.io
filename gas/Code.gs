@@ -1156,6 +1156,8 @@ var TASKS_HEADERS = [
   'hold_reason_note',  // 保留の理由(ステータスを保留にしたときのメモ)
   'hold_reason_since', // 保留にした日(YYYY-MM-DD)
   'calendar_event_id', // カレンダーの予定の ID(syncCalendarForTask_ が書く。画面には返さない)
+  'deleted_at',        // ゴミ箱に入れた日時(ISO)。空なら使っているタスク。30日後に毎日の処理が行を消す
+  'deleted_by',        // ゴミ箱に入れた人(メンバーID)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
@@ -2277,7 +2279,7 @@ var SHEET_AUTH_ACTIONS = [
   // 代表・全権管理者だけ(役職・部門・設定・通知先・ログインの取り消し)
   'updateSetting', 'updateRoles', 'deleteRole', 'updateDepartments', 'deleteDepartment', 'moveDepartmentTasks',
   'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth',
-  'revokeMemberSessions',
+  'revokeMemberSessions', 'restoreTask', 'purgeTask',
   // メンバーの状態・部門・プロジェクトの担当(班長の担当範囲の判定に使う)
   'updateMemberInactive', 'updateMemberDepartmentPath', 'updateProjectMembers',
 ]
@@ -4009,9 +4011,10 @@ function skillEvidenceOf_(memberRow, memberId) {
   try {
     var t = snapshotTableOrSheet_(SHEET_TASKS)
     var col = function (name) { return t.headers.indexOf(name) }
-    var aCol = col('assignee_id'), sCol = col('status'), kCol = col('skills')
+    var aCol = col('assignee_id'), sCol = col('status'), kCol = col('skills'), delCol = col('deleted_at')
     ;(t.rows || []).forEach(function (r) {
       if (normalizeCode_('status', r[sCol]) !== 'done') return
+      if (delCol >= 0 && String(r[delCol] || '') !== '') return
       var assignees = String(r[aCol] || '').split(',').map(function (x) { return x.trim() })
       if (assignees.indexOf(String(memberId)) < 0) return
       String(r[kCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
@@ -4255,6 +4258,12 @@ var REMOVED_ACTION_MESSAGE = 'この操作は使えなくなりました。ペ�
 
 function authorizeAction_(acting, action, body) {
   if (REMOVED_ACTIONS.indexOf(action) >= 0) throw userError_(REMOVED_ACTION_MESSAGE)
+  // ゴミ箱のタスクは、元に戻す・完全に消す以外の操作を受け付けない(代表も)
+  if (body && body.taskId && TRASH_ACTIONS.indexOf(action) < 0) {
+    var trashed = null
+    try { trashed = authFindRow_(SHEET_TASKS, String(body.taskId)) } catch (e) { trashed = null }
+    if (trashed && String(trashed.deleted_at || '') !== '') throw userError_(TRASHED_TASK_MESSAGE)
+  }
   var role = acting.role
   // isLeader: true for any role that is not '一般' (i.e. any admin-level role).
   // We cannot enumerate all possible role names (they are user-configurable in Admin → Tags),
@@ -4318,7 +4327,7 @@ function authorizeAction_(acting, action, body) {
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
   if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
-      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'restoreTask' || action === 'purgeTask' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin_(acting)) return
     if (checkPermissionOverride_(acting, action, body)) return
     throw userError_('この操作は代表または全権管理者のみ実行できます。')
@@ -5582,7 +5591,13 @@ function runWriteAction_(body, actingMember) {
           throw userError_('完了・確認待ちのタスクは、団体の経験の記録として残すため削除できません。')
         }
       })()
-      result = removeTask_(body.taskId)
+      result = trashTask_(String(body.taskId || ''), actingMember.id)
+      break
+    case 'restoreTask':
+      result = restoreTrashedTask_(String(body.taskId || ''))
+      break
+    case 'purgeTask':
+      result = purgeTrashedTask_(String(body.taskId || ''))
       break
     case 'createProject':
       result = createProject_(body.name, body.description, body.type)
@@ -7903,7 +7918,7 @@ function assertProjectRemovable_(projectId) {
   }
   var tasks = count(SHEET_TASKS, 'project_id'), children = count(SHEET_PROJECTS, 'parent_id')
   if (tasks > 0 || children > 0) {
-    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
+    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱のタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
   }
 }
 
@@ -7970,6 +7985,61 @@ function removeProject_(projectId) {
 // which removes the row. Any other task that listed this one in
 // depends_on_ids has that reference scrubbed so 依存関係 doesn't point at
 // a dead id.
+// ---- タスクのゴミ箱 ----
+//
+// 削除(removeTask)は、行を消さずに deleted_at・deleted_by を書いてゴミ箱に入れる(画面・検索・集計・通知・カレンダーから外す)。
+// ゴミ箱のタスクは、代表・全権管理者だけに返し、元に戻す(restoreTask)・すぐに完全に消す(purgeTask)ことができる。
+// 毎日の処理が、入れてから TRASH_RETENTION_DAYS 日たったタスクを完全に消す。前提タスクの一覧からは、完全に消す時に外す。
+// deleted_at の列が無い古いシート(setupOhsumi を実行していない)では、これまでどおりすぐに消す
+var TRASH_RETENTION_DAYS = 30
+var TRASH_ACTIONS = ['restoreTask', 'purgeTask']
+var TRASHED_TASK_MESSAGE = 'このタスクはゴミ箱にあります。元に戻してから変えてください。'
+
+function trashTask_(taskId, actorId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task) throw userError_('タスクが見つかりません。')
+  if (!Object.prototype.hasOwnProperty.call(task, 'deleted_at')) return removeTask_(taskId)
+  if (String(task.deleted_at || '') !== '') throw userError_(TRASHED_TASK_MESSAGE)
+  updateRowFields_(SHEET_TASKS, taskId, { deleted_at: new Date().toISOString(), deleted_by: String(actorId || '') })
+  return { trashed: taskId }
+}
+
+function restoreTrashedTask_(taskId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task || String(task.deleted_at || '') === '') throw userError_('ゴミ箱にこのタスクはありません。')
+  updateRowFields_(SHEET_TASKS, taskId, { deleted_at: '', deleted_by: '' })
+  return { restored: taskId }
+}
+
+function purgeTrashedTask_(taskId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task || String(task.deleted_at || '') === '') throw userError_('ゴミ箱にこのタスクはありません。')
+  return removeTask_(taskId)
+}
+
+// 毎日の処理: ゴミ箱に入れてから TRASH_RETENTION_DAYS 日たったタスクを完全に消す
+function purgeExpiredTrashLocked_(nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    var limit = nowMs - TRASH_RETENTION_DAYS * 24 * 3600 * 1000
+    var ids = sheetRowsAsObjects_(SHEET_TASKS).filter(function (t) {
+      var at = cellTimeMs_(t.deleted_at)
+      return String(t.deleted_at || '') !== '' && isFinite(at) && at <= limit
+    }).map(function (t) { return String(t.id) })
+    ids.forEach(function (id) { removeTask_(id) })
+    if (ids.length) bumpSnapshotVersion_()
+    return ids
+  } finally {
+    SpreadsheetApp.flush()
+    lock.releaseLock()
+  }
+}
+
+function isTrashedTask_(t) {
+  return !!t && String(t.deleted_at || '') !== ''
+}
+
 function removeTask_(taskId) {
   // カレンダーの予定を消してから、行を消す
   syncCalendarForTask_(taskId, { remove: true })
@@ -9799,6 +9869,7 @@ function notifyOverdueTasksToAssignees_() {
       var due = cellDateStr_(r[dueCol])
       var status = String(r[statusCol] || '')
       if (!due || due >= today || normalizeCode_('status', status) === 'done') return
+      if (headers.indexOf('deleted_at') >= 0 && String(r[headers.indexOf('deleted_at')] || '') !== '') return
       var title = String(r[titleCol] || '')
       var assigneeIds = String(r[assigneeCol] || '')
         .split(',')
@@ -10092,9 +10163,11 @@ function notifyOverdueTasksToDiscord_() {
         return {
           title: r[titleCol], due: cellDateStr_(r[dueCol]), status: String(r[statusCol] || ''),
           visibility: visCol >= 0 ? r[visCol] : '', approval_status: apprCol >= 0 ? r[apprCol] : '',
+          deleted_at: headers.indexOf('deleted_at') >= 0 ? r[headers.indexOf('deleted_at')] : '',
         }
       })
       .filter(function (t) {
+        if (isTrashedTask_(t)) return false
         // 承認待ち(まだ承認されていない)のタスクは、チャンネルには出さない
         if (normalizeCode_('approval', t.approval_status) === 'pending') return false
         return t.due && t.due < today && normalizeCode_('status', t.status) !== 'done'
@@ -11274,6 +11347,7 @@ var READ_POLICY = {
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
       open_bid_applicant_ids: 'all', related_review_task_id: 'all', calendar_event_id: 'none',
+      deleted_at: 'all', deleted_by: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },
@@ -11358,6 +11432,8 @@ function checkReadRule_(rule, viewer, ownerId) {
 //   幹部限定: 一般以外の役職のみ
 //   承認待ち: 一般以外の役職と、作成者・担当者
 function canViewTaskRow_(viewer, task) {
+  // ゴミ箱のタスクは、元に戻す・完全に消すことのできる代表・全権管理者だけに返す
+  if (String(task.deleted_at || '') !== '' && !viewer.isFullAdmin) return false
   // 値は移行前の日本語・コードのどちらでもよい
   // 幹部限定のタスクも、担当者・確認者・作成者には見せる(自分の担当のタスクが見えなくならないように)
   if (normalizeCode_('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) {
@@ -15368,6 +15444,8 @@ function dailyMaintenanceUnrecorded_() {
   dailyBackup_(Date.now())
   // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
   try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
+  // ゴミ箱に入れてから30日たったタスクを消す
+  try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -15782,7 +15860,7 @@ function metricsSnapshot_(nowMs) {
   var members = table(SHEET_MEMBERS).filter(function (m) {
     return String(m.id || '') && !boolCellValue_(m.inactive) && !String(m.withdrawn_at || '') && !String(m.personal_data_purged_at || '')
   })
-  var tasks = table(SHEET_TASKS).filter(function (t) { return String(t.id || '') })
+  var tasks = table(SHEET_TASKS).filter(function (t) { return String(t.id || '') && !isTrashedTask_(t) })
   var projects = table(SHEET_PROJECTS).filter(function (p) { return String(p.id || '') && !boolCellValue_(p.archived) })
   var today = Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd')
   var isDone = function (t) { return normalizeCode_('status', t.status) === 'done' }

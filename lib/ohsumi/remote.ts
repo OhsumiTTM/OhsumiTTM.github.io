@@ -598,6 +598,8 @@ function mapTaskRow(r: Record<string, string>, departments: DepartmentDef[]): Ta
     reviewApprovals: parseJsonArray<{ memberId: string; at: string }>(r.review_approvals_json),
     requiredSkillLevels: parseJsonObject<Partial<Record<string, SkillLevelValue>>>(r.required_skill_levels_json),
     relatedReviewTaskId: r.related_review_task_id || undefined,
+    deletedAt: r.deleted_at || undefined,
+    deletedById: r.deleted_by || undefined,
   }
 }
 
@@ -1144,7 +1146,10 @@ export const remoteApi = {
   updateJudgment: (memberId: string, judgment: string[]) =>
     postToGas('updateJudgment', { memberId, judgment }),
   approveTask: (taskId: string) => postToGas('approveTask', { taskId }),
+  // ゴミ箱に入れる(GAS は行を消さずに deleted_at を書く)。元に戻す・完全に消すのは代表・全権管理者だけ
   removeTask: (taskId: string) => postToGas('removeTask', { taskId }),
+  restoreTask: (taskId: string) => postToGas('restoreTask', { taskId }),
+  purgeTask: (taskId: string) => postToGas('purgeTask', { taskId }),
   // 却下: タスクを消し、GAS がシートのタスクの作成者・名前で知らせる
   rejectTask: (taskId: string, reason: string | undefined) => postToGas('rejectTask', { taskId, reason }),
   createProject: (name: string, description: string, type?: string, parentId?: string) =>

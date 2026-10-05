@@ -136,6 +136,8 @@ Google スプレッドシート（データの保存場所）
 | due_date | 期限（`YYYY-MM-DD`） |
 | due_time | 期限の時刻（`HH:MM`、任意）。カレンダー表示とGoogleカレンダー同期に使用 |
 | calendar_event_id | GAS のアカウントのカレンダーに作った、このタスクの予定の ID(GAS が書きます。画面には返しません。手で書き換えないでください) |
+| deleted_at | ゴミ箱に入れた日時(ISO)。空なら使っているタスク。30日たつと毎日の処理が行を消します |
+| deleted_by | ゴミ箱に入れた人のメンバーID |
 | visibility | `全員` / `幹部`（幹部＝一般以外の全権限レベル。移行後: `all` / `leaders`） |
 | department | 部門(`運営` / `広報` / `開発` / `デザイン` / `渉外` / `イベント` / `リサーチ` / `未分類`。移行後: `ops` / `pr` / `dev` / `design` / `relations` / `event` / `research` / 空欄) |
 | category | カテゴリ |
@@ -1377,6 +1379,7 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |
 | createTasks, updateTaskStatus（担当者のみ。完了は確認者のみ）, submitSurveyResponse 等 | ログイン済みなら誰でも |
+| restoreTask・purgeTask(タスクのゴミ箱から元に戻す・完全に消す) | 最上位の役職 または 全権管理者 |
 | createTasks の取り込み(タスクに `import: true`) | 一般以外の役職のみ。状態(`status`)・完了日・確認者(`reviewerIds`。在籍しているメンバーだけ)・必要な承認数(1〜確認者の人数、または `all`)・想定/実績の時間(0〜10000)・成果物(http/https のリンク50件まで)・前提タスク(`dependsOnTempIds`。同じ取り込みの中のタスクの `tempId`)・公募にしない(`openBid: false`)・保留の理由(状態が保留の時だけ)を受け付ける。承認待ちにせず、承認待ちの通知も送らない。完了として取り込んだタスクには、スキルの点数を付けられない(`awarded_points_json` の `__noAward`)。1件でもおかしな値があれば、何も作らない |
 | applyToOpenBid(公募) | ログイン済みなら誰でも。ただし、応募者の一覧で変えられるのは自分の応募・取り下げだけ(幹部限定タスクは一般以外の役職のみ) |
 | translateText | ログイン済みなら誰でも。1人1時間に500件まで(`RATE_LIMITS.translate`) |
@@ -1481,6 +1484,16 @@ DailyReportsについては行を新規作成する時（`appendRow`の直前）
 Excel等で開いた場合には効きません（CSVには書式情報が乗らないため）。
 
 ---
+
+## 9.5.1. タスクのゴミ箱
+
+- 削除(`removeTask`)は、行を消さずに `deleted_at`・`deleted_by` を書いて、タスクをゴミ箱に入れます。完了・確認待ちのタスクは、これまでどおり削除できません
+- ゴミ箱のタスクは、代表・全権管理者だけに返します(画面の ADMIN →「プロジェクト」の「タスクのゴミ箱」)。ほかの人の画面・検索・集計(週ごとの数字・スキルのレベルの条件)・期限切れの通知・カレンダーの予定からは外します
+- ゴミ箱のタスクへの操作は、元に戻す(`restoreTask`)・完全に消す(`purgeTask`)だけを受け付けます(代表も同じ)
+- 入れてから30日たったタスクは、毎日の処理(`dailyMaintenance`)が完全に消します。前提タスクの一覧から外すのは、完全に消す時です
+- プロジェクトの削除は、ゴミ箱のタスクも数えて断ります(元に戻す先が無くならないように)
+- **この版に更新したら `setupOhsumi()` を実行して、Tasks に `deleted_at`・`deleted_by` の列を足してください。**列が無い間は、これまでどおり削除するとすぐに行を消します
+- 承認しない(却下・`rejectTask`)は、これまでどおりすぐに消します(承認前の提案のため)
 
 ## 9.6. 本人だけの保存と通知の履歴
 
