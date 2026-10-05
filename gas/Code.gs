@@ -36,7 +36,7 @@
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost                   ウェブアプリの入口
 //   onOpen                          スプレッドシートを開いた時に「Ohsumi」メニューを出す
-//   registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
+//   setupOhsumiFromMenu・registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
 //   sendBatchNotifications・dailyMaintenance・onSpreadsheetChange・onSpreadsheetEdit・checkContractStatus  トリガーから呼ばれる
 //
 // ■ そのほかの関数は、中で使うだけ。名前の最後に _ を付けて、エディタの「実行」の一覧に出ないようにしている
@@ -54,6 +54,9 @@
 function setupOhsumi() {
   // 今のコードに無い関数を指すトリガー(以前の版の名前のまま残ったもの)を消す
   removeOrphanTriggers_()
+  // テンプレートのコードの既定値(レジストリの URL・ログインのクライアント ID)を、プロパティが無ければ保存する
+  var savedDefaults = saveCodeDefaultsToProps_(PropertiesService.getScriptProperties())
+  if (savedDefaults.length) console.log('✅ コードの既定値をスクリプトプロパティに保存しました: ' + savedDefaults.join(', '))
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   console.log('📋 スプレッドシート: ' + ss.getName())
 
@@ -884,6 +887,7 @@ function clearReadMeasurements() {
 function doGet(e) {
   startRequestTiming_()
   logGetRequest_(e)
+  rememberWebAppUrl_()
   return jsonOutput_({
     ok: false,
     getReceived: true,
@@ -919,11 +923,25 @@ function onOpen() {
   try {
     SpreadsheetApp.getUi()
       .createMenu('Ohsumi')
+      .addItem('初期設定', 'setupOhsumiFromMenu')
       .addItem('レジストリに登録する…', 'registerWithRegistryFromMenu')
       .addItem('初期設定コードを作り直す', 'regenerateInitialSetupCodeFromMenu')
       .addToUi()
   } catch (e) {
     // スプレッドシートを開いた時以外(エディタからの実行など)は何もしない
+  }
+}
+
+// メニューの「初期設定」: エディタを開かずに setupOhsumi を実行する(初めての時は Google の許可の画面が出る)
+function setupOhsumiFromMenu() {
+  var ui = SpreadsheetApp.getUi()
+  try {
+    setupOhsumi()
+    ui.alert('Ohsumi', '初期設定が終わりました。\n\n次は「デプロイ → 新しいデプロイ」でウェブアプリとして公開し、' +
+      'メニューの「Ohsumi → レジストリに登録する…」に進んでください(手順は Ohsumi の案内のとおりです)。', ui.ButtonSet.OK)
+  } catch (e) {
+    ui.alert('Ohsumi', '初期設定を最後まで実行できませんでした: ' + toErrorMessage_(e) +
+      '\n\nもう一度「Ohsumi → 初期設定」を選んでください。続く時は、表示された内容を FSIF にお伝えください。', ui.ButtonSet.OK)
   }
 }
 
@@ -2557,7 +2575,7 @@ function renewSessionIfNeeded_(payload) {
 // 成功したら { email, iat } を返す
 function verifyGoogleIdToken_(idToken, nonceSecret) {
   var props = requestProps_()
-  var clientId = props.GOOGLE_OAUTH_CLIENT_ID
+  var clientId = googleOAuthClientIdOf_(props)
   if (!clientId) throw userError_('サーバー側の設定(GOOGLE_OAUTH_CLIENT_ID)が未設定です。管理者にお問い合わせください。')
   if (!props.ORG_ID) throw userError_('ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。')
   if (!/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/.test(String(idToken || '')) || String(idToken).length > 4096) {
@@ -2745,17 +2763,70 @@ function claimInitialSetup_(email, code, nowMs) {
   }
 }
 
-// この GAS のウェブアプリの URL(レジストリに伝える接続先)
+// ---- テンプレートから作る団体の既定値 ----
+// スプレッドシートを「コピーを作成」しても、スクリプトプロパティはコピーされない。そこで、FSIF の共通の値
+// (レジストリの URL・ログインの OAuth クライアント ID)をコードの既定値として持ち、スクリプトプロパティがあればそちらを使う。
+// 値は FSIF がテンプレートを作る時に入れる(このリポジトリには書かない。gas/README.md の「テンプレート」)。
+// setupOhsumi は、プロパティが無ければ既定値をプロパティに保存する(後でコードを貼り替えて既定値が空になっても動くように)
+var DEFAULT_REGISTRY_URL = ''
+var DEFAULT_GOOGLE_OAUTH_CLIENT_ID = ''
+
+function registryUrlOf_(all) {
+  return String((all || {}).REGISTRY_URL || DEFAULT_REGISTRY_URL || '').trim()
+}
+function registryUrl_() {
+  return registryUrlOf_({ REGISTRY_URL: PropertiesService.getScriptProperties().getProperty('REGISTRY_URL') })
+}
+function googleOAuthClientIdOf_(all) {
+  return String((all || {}).GOOGLE_OAUTH_CLIENT_ID || DEFAULT_GOOGLE_OAUTH_CLIENT_ID || '').trim()
+}
+
+// プロパティが無い時に、コードの既定値をプロパティに保存する(setupOhsumi から)
+function saveCodeDefaultsToProps_(props) {
+  var saved = []
+  if (!props.getProperty('REGISTRY_URL') && REGISTRY_URL_PATTERN.test(DEFAULT_REGISTRY_URL)) {
+    props.setProperty('REGISTRY_URL', DEFAULT_REGISTRY_URL)
+    saved.push('REGISTRY_URL')
+  }
+  if (!props.getProperty('GOOGLE_OAUTH_CLIENT_ID') && /\.apps\.googleusercontent\.com$/.test(DEFAULT_GOOGLE_OAUTH_CLIENT_ID)) {
+    props.setProperty('GOOGLE_OAUTH_CLIENT_ID', DEFAULT_GOOGLE_OAUTH_CLIENT_ID)
+    saved.push('GOOGLE_OAUTH_CLIENT_ID')
+  }
+  return saved
+}
+
+// この GAS のウェブアプリの URL(レジストリに伝える接続先)。
+//   1. スクリプトプロパティ OHSUMI_WEBAPP_URL
+//   2. ScriptApp.getService().getUrl() が …/exec の形なら、それ
+//   3. ウェブアプリの URL をブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL。doGet が覚える)
+// メニュー・エディタから実行すると、getService().getUrl() は /dev(エディタで試すための URL)を返すことがある
 function ownWebAppUrl_(all) {
-  var url = String((all || {}).OHSUMI_WEBAPP_URL || '').trim()
+  all = all || {}
+  var url = String(all.OHSUMI_WEBAPP_URL || '').trim()
   if (url) return url
-  try { return String(ScriptApp.getService().getUrl() || '') } catch (e) { return '' }
+  var live = ''
+  try { live = String(ScriptApp.getService().getUrl() || '') } catch (e) { live = '' }
+  if (REGISTRY_URL_PATTERN.test(live)) return live
+  var seen = String(all.DETECTED_WEBAPP_URL || '').trim()
+  if (REGISTRY_URL_PATTERN.test(seen)) return seen
+  return live
+}
+
+// ウェブアプリとして開かれた時(doGet)に、その URL を覚える(…/exec の形の時だけ)
+function rememberWebAppUrl_() {
+  try {
+    var url = String(ScriptApp.getService().getUrl() || '')
+    if (!REGISTRY_URL_PATTERN.test(url)) return
+    if (requestProps_().DETECTED_WEBAPP_URL === url) return
+    setRequestProp_('DETECTED_WEBAPP_URL', url)
+  } catch (e) { /* 覚えられなくても、GET の応答は返す */ }
 }
 
 // レジストリに伝えてよい URL か。問題があれば、直し方の文を返す(無ければ '')
 function checkOwnWebAppUrl_(url) {
-  var how = 'デプロイの画面(デプロイ → デプロイを管理)に出るウェブアプリの URL(https://script.google.com/macros/s/…/exec)を、' +
-    'そのままスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。'
+  var how = 'デプロイの画面(デプロイ → デプロイを管理)に出るウェブアプリの URL(https://script.google.com/macros/s/…/exec)を' +
+    'ブラウザで一度開いてから、もう一度試してください(開くと、この GAS がその URL を覚えます)。' +
+    'うまくいかない時は、その URL をスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。'
   url = String(url || '')
   if (!url) return 'この GAS のウェブアプリの URL が分かりません。先にウェブアプリとしてデプロイし、' + how
   if (REGISTRY_URL_PATTERN.test(url)) return ''
@@ -2777,7 +2848,7 @@ function registerWithRegistry_(code, deps) {
   ensureSessionSecrets_()
   var props = PropertiesService.getScriptProperties()
   var all = props.getProperties() || {}
-  var registryUrl = String(all.REGISTRY_URL || '').trim()
+  var registryUrl = registryUrlOf_(all)
   if (!REGISTRY_URL_PATTERN.test(registryUrl)) {
     throw userError_('スクリプトプロパティ REGISTRY_URL に、FSIF から伝えられたレジストリの URL(https://script.google.com/macros/s/…/exec)を入れてください。')
   }
@@ -3154,7 +3225,7 @@ function announcementsStatus_(nowMs, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return { registered: false, announcements: [], fetchedAt: '', stale: false }
@@ -3294,7 +3365,7 @@ function refreshContractState_(deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return null
@@ -15940,7 +16011,7 @@ function sendMetricsNow_(nowMs, period, state, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   var attempts = state.retry && state.retry.period === period ? Number(state.retry.attempts) + 1 : 1
@@ -16062,7 +16133,7 @@ function diagnosticsSnapshot_(nowMs) {
     timeZone: diagnosticsPart_(function () { return Session.getScriptTimeZone() }),
     registry: diagnosticsPart_(function () {
       return {
-        registered: REGISTRY_URL_PATTERN.test(String(props.getProperty('REGISTRY_URL') || '').trim()) && !!props.getProperty('REGISTRY_SHARED_KEY') && !!props.getProperty('ORG_ID'),
+        registered: REGISTRY_URL_PATTERN.test(registryUrl_()) && !!props.getProperty('REGISTRY_SHARED_KEY') && !!props.getProperty('ORG_ID'),
         plan: String(contract.plan || ''),
         contractPhase: String(contract.phase || ''),
         contractKind: String(contract.kind || ''),
@@ -16155,7 +16226,7 @@ function sendDiagnostics_(diagId, nowMs, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) throw userError_('この団体は、レジストリに登録していないため、診断情報を送れません。表示した内容を FSIF にお伝えください。')

@@ -315,6 +315,13 @@ Settings シートは、`setupOhsumi()` が作る初期キー(団体名など)�
 テンプレートにデータ行が入っていた場合は日本語で書き込む設定のままになりますが、読み込みはどちらの
 形式にも対応しているので、動作に問題はありません。
 
+**テンプレートの既定値と「Ohsumi → 初期設定」**:
+
+- `Code.gs` の `DEFAULT_REGISTRY_URL`・`DEFAULT_GOOGLE_OAUTH_CLIENT_ID` に、FSIF がテンプレートを作る時に、レジストリの URL とログインの OAuth クライアント ID を入れます(このリポジトリでは空にしています。値は GitHub Secrets と同じもの)。スクリプトプロパティ `REGISTRY_URL`・`GOOGLE_OAUTH_CLIENT_ID` があれば、そちらを使います
+- `setupOhsumi()` は、プロパティが無ければ既定値をプロパティに保存します。あとで `Code.gs` を貼り替えて既定値が空になっても、保存したプロパティで動き続けます
+- スプレッドシートのメニュー「Ohsumi → 初期設定」から `setupOhsumi()` を実行できます(エディタを開かなくてよい。初めての時は Google の許可の画面が出ます)
+- ウェブアプリの URL(レジストリへの登録で伝える接続先)は、自動では確実に分かりません。`ScriptApp.getService().getUrl()` は、メニュー・エディタから実行すると `/dev`(エディタで試すための URL)を返すことがあるためです。次の順に使います: スクリプトプロパティ `OHSUMI_WEBAPP_URL` → `getService().getUrl()` が `…/exec` の形ならそれ → デプロイの画面に出る URL をブラウザで一度開いた時に GAS が覚えた URL(`DETECTED_WEBAPP_URL`)。分からない時は、登録のメニューが「URL をブラウザで一度開く」か「`OHSUMI_WEBAPP_URL` に入れる」ように案内します
+
 **`VALUE_FORMAT` とシートの値の形式が食い違った場合**(バックアップから戻した、別の団体のシートを
 取り込んだなど): 読み込み・権限の判定は、日本語・コードのどちらの値も受け付けるので、表示や動作は
 壊れません。以降に書き込む値だけが `VALUE_FORMAT` の形式になるため、2つの形式が混ざった状態に
@@ -462,7 +469,8 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 | `SESSION_SIGNING_KEY` / `SESSION_KEY_ID` | セッショントークンの署名に使う秘密鍵と、その鍵のID。**この団体の Apps Script にだけ置き、FSIF を含め誰にも渡さないでください** |
 | `SESSION_NOT_BEFORE` | この時刻(秒)より前に発行されたセッションを無効にする |
 | `SESSION_GEN_<メンバーID>` | メンバーごとの世代番号(全端末でログアウト) |
-| `REGISTRY_URL` / `OHSUMI_WEBAPP_URL` | レジストリの URL と、この GAS のウェブアプリの URL(レジストリへの登録に使う。手で入れる。`registry/README.md` の 4.2) |
+| `REGISTRY_URL` / `OHSUMI_WEBAPP_URL` | レジストリの URL と、この GAS のウェブアプリの URL(レジストリへの登録に使う。`registry/README.md` の 4.2)。`REGISTRY_URL` は、無ければコードの既定値(`DEFAULT_REGISTRY_URL`)を使う。`OHSUMI_WEBAPP_URL` は、無ければ自動で探す(「2.2.」) |
+| `DETECTED_WEBAPP_URL` | ウェブアプリの URL をブラウザで開いた時に GAS が覚えた URL(GAS が書く) |
 | `REGISTRY_SHARED_KEY` / `REGISTRY_KEY_GEN` / `REGISTRY_REGISTERED_AT` | レジストリとの共有鍵・その世代・登録した日時(「Ohsumi」→「レジストリに登録する…」が保存する。**共有鍵は表示・共有しないでください**) |
 | `REGISTRY_PENDING` | 登録の途中で応答が失われた時に、同じ登録として送り直すための乱数(registerNonce。レジストリはこれが合う時だけ、24時間まで同じ共有鍵を返す)と、登録コードの SHA-256(登録できたら消える。**ほかに写さない**) |
 | `INITIAL_SETUP_HASH` / `INITIAL_SETUP_EXPIRES` / `INITIAL_SETUP_FAILS` | 最初の代表の初期設定コードの SHA-256・有効期限(72時間)・間違えた回数(使うと消える) |
