@@ -4,6 +4,9 @@
 // デプロイする(次のユーザーとして実行: 自分、アクセスできるユーザー: 全員)。手順は gas/README.md を参照。
 // 画面(Ohsumi のサイト)は、読み取りも書き込みもこの GAS に POST で送る(doPost の action で分ける)。
 //
+// ■ このファイルは、リポジトリの gas/src/*.gs をファイル名の順につなげて作る(pnpm gas:build)。直すのは gas/src の方。
+//   団体に配るのは、つなげたこの1つのファイル。サイトの /gas/Code.gs にも同じものを置く(代表の管理画面の「コードをコピー」)。
+//
 // ■ エディタから実行する関数(関数の一覧から選んで ▶ 実行。上から、よく使う順)
 //   setupOhsumi                     最初の設定・コードを貼り替えた後に実行する(シートの列・トリガー・ログインの鍵・
 //                                   アップロード先を用意する。今のコードに無い関数を指すトリガーを消す)
@@ -938,11 +941,6 @@ var SHEET_HEADERS = {
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
-// スキルごとのレベルアップ閾値 JSON: { "デフォルト": 100, "デザイン": 150, ... }
-var SETTINGS_KEY_SKILL_LEVEL_THRESHOLDS = 'skill_level_thresholds'
-// 部署ツリー設定 JSON: 部署一覧を静的に管理したい場合に使う（省略時は
-// Members.department_path の実データから動的導出）
-var SETTINGS_KEY_DEPARTMENT_TREE_CONFIG = 'department_tree_config'
 // NOT a Settings-sheet key (that sheet is published as a public CSV) — this
 // is the PropertiesService key the Discord webhook URL is stored under
 // instead. See getDiscordWebhookUrl_()/updateDiscordWebhookUrl() below.
@@ -1173,8 +1171,6 @@ var BASE_ROLE_ID = 'base'
 var DEFAULT_TOP_ROLE_NAME = '代表'
 var DEFAULT_BASE_ROLE_NAME = '一般'
 var DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
-// 制限付きの管理者が、セクションを指定していない時に見られる管理画面(types.ts と同じ)
-var DEFAULT_NON_TOP_SECTIONS = ['dashboard', 'approvals', 'assignments', 'projects', 'memberdb']
 // Settings のうち役職の設定
 var ROLE_SETTING_KEYS = ['roles', 'role_levels', 'restricted_roles', 'role_permissions', 'job_requirements']
 

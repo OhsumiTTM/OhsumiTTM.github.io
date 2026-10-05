@@ -6,10 +6,12 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { GAS_SRC_DIR, buildGasCode, gasSourceFiles } from './gas-build.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 export const GAS_VERSION_FILES = [
-  { path: 'gas/Code.gs', name: 'OHSUMI_GAS_VERSION' },
+  // 団体の GAS は gas/src から作る(scripts/gas-build.mjs)。版の行は gas/src のどれかのファイルにあり、そこを書き換えて作り直す
+  { path: 'gas/Code.gs', name: 'OHSUMI_GAS_VERSION', src: GAS_SRC_DIR },
   { path: 'registry/Code.gs', name: 'REGISTRY_VERSION' },
   { path: 'registry/monitor/Monitor.gs', name: 'MONITOR_VERSION' },
 ]
@@ -36,6 +38,13 @@ export function nextVersion(previous, now = new Date()) {
   return `${day}-${m && m[1] === day ? Number(m[2]) + 1 : 1}`
 }
 
+// 版の行がある gas/src のファイル
+function versionSourceFile(name) {
+  const file = gasSourceFiles().map((f) => join(ROOT, GAS_SRC_DIR, f)).find((f) => readVersion(readFileSync(f, 'utf8'), name) !== null)
+  if (!file) throw new Error(`gas/src に「var ${name} = '…'」の行がありません`)
+  return file
+}
+
 function main() {
   const lockFile = join(ROOT, LOCK_PATH)
   let lock = {}
@@ -43,6 +52,8 @@ function main() {
   let changed = 0
   for (const f of GAS_VERSION_FILES) {
     const file = join(ROOT, f.path)
+    // gas/src から作るファイルは、先に作り直す(gas/src を直したのに作り直していない時も、正しい中身で比べる)
+    if (f.src) writeFileSync(file, buildGasCode())
     let text = readFileSync(file, 'utf8')
     const current = readVersion(text, f.name)
     if (current === null) throw new Error(`${f.path} に「var ${f.name} = '…'」の行がありません`)
@@ -55,6 +66,11 @@ function main() {
     if (bump) {
       version = nextVersion(known?.version ?? current)
       text = text.replace(lineOf(f.name), `var ${f.name} = '${version}'`)
+      if (f.src) {
+        const srcFile = versionSourceFile(f.name)
+        writeFileSync(srcFile, readFileSync(srcFile, 'utf8').replace(lineOf(f.name), `var ${f.name} = '${version}'`))
+        text = buildGasCode()
+      }
       writeFileSync(file, text)
     }
     lock[f.path] = { version, sha256: hash }

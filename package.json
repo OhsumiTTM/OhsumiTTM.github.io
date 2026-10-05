@@ -4,11 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "node scripts/check-registry-url.mjs && next build && node scripts/csp.mjs && node scripts/check-no-demo-login.mjs",
+    "build": "node scripts/check-registry-url.mjs && node scripts/gas-build.mjs --check && next build && node scripts/csp.mjs && node scripts/check-no-demo-login.mjs && node scripts/gas-build.mjs --publish out",
     "start": "next start",
     "test": "vitest run",
     "check:layout": "node scripts/check-layout.mjs",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "gas:build": "node scripts/gas-build.mjs",
     "gas:version": "node scripts/gas-version.mjs"
   },
   "dependencies": {
