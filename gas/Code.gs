@@ -1155,6 +1155,7 @@ var TASKS_HEADERS = [
   'related_review_task_id', // APR-007: このタスクが確認タスクである場合、確認対象の元タスクのid
   'hold_reason_note',  // 保留の理由(ステータスを保留にしたときのメモ)
   'hold_reason_since', // 保留にした日(YYYY-MM-DD)
+  'calendar_event_id', // カレンダーの予定の ID(syncCalendarForTask_ が書く。画面には返さない)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
@@ -5488,7 +5489,6 @@ function runWriteAction_(body, actingMember) {
       result = updateTaskFields_(body.taskId, {
         assignee_id: (body.assigneeIds || []).join(','),
       })
-      syncCalendarForTask_(body.taskId)
       break
     case 'applyToOpenBid':
       // TSK-027: 公募タスクへの応募(承認制)。担当者(assignee_id)には
@@ -6493,7 +6493,9 @@ function notifyNewTasks_(tasks) {
 // before this fix.
 function notifyReview_(taskId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
     var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
       .split(',')
@@ -7417,7 +7419,9 @@ function formComplete_(form) {
 // 日程調整の回答が揃ったら、作成者に知らせる。宛先・本文はシートのタスクから決め、揃っていなければ送らない。送ったら true
 function notifyScheduleResult_(taskId, actorId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return false
     var schedule = null
     try {
@@ -7478,7 +7482,9 @@ function notifyScheduleResult_(taskId, actorId) {
 // 呼ばれ、作成者へ回答結果をメールする。
 function notifyFormResult_(taskId, actorId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return false
     var form = null
     try {
@@ -7544,7 +7550,9 @@ function notifyFormResult_(taskId, actorId) {
 // the detail drawer.
 function notifyScheduleChange_(taskId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
     var assigneeIds = String(task.assignee_id || '')
       .split(',')
@@ -7578,64 +7586,151 @@ function notifyScheduleChange_(taskId) {
   }
 }
 
-// Creates/updates a Google Calendar event (on this script's default
-// calendar) for a task's assignees, inviting them by email if known.
-// Best-effort — never throws back to the caller.
-function syncCalendarForTask_(taskId) {
-  return measureAction_('calendarMs', function () { return syncCalendarForTaskUnmeasured_(taskId) })
+// タスクの予定(この GAS を実行するアカウントの既定のカレンダー)。担当者をゲストにする。
+// 予定にはタスクの ID を記録し(タグ ohsumiTaskId と、タスクの calendar_event_id の列)、そのタスクの予定だけを扱う。
+//   - 予定があれば作り直さずに書き換える(日時・名前・ゲスト)。招待のメールは、予定を作った時の1回だけ送る
+//     (あとから足した担当者には、カレンダーに予定が入るだけで、メールは届かない)
+//   - 期限を変えた時は同じ予定を動かすので、前の日の予定は残らない
+//   - 同じ名前の別のタスクの予定は消さない(ID で探す。ID の無い以前の予定は、同じ日・同じ名前で ID の無いものが
+//     1つだけの時に限り、そのタスクの予定として引き継ぐ)
+//   - 完了・削除(ゴミ箱を含む)・担当者や期限が無くなった時は、予定を消す
+//   - ゲストどうしは、互いのメールアドレスを見られない(setGuestsCanSeeGuests(false))
+// 失敗しても呼び出し元には投げない(カレンダーの上限・権限で、タスクの保存を止めない)
+var CALENDAR_TASK_TAG = 'ohsumiTaskId'
+// 予定に関わる列。これらを書き換えた時に予定を合わせる(updateRowFields_)
+var CALENDAR_TASK_FIELDS = ['title', 'due_date', 'due_time', 'assignee_id', 'deleted_at']
+
+function syncCalendarForTask_(taskId, hints) {
+  return measureAction_('calendarMs', function () { return syncCalendarForTaskUnmeasured_(taskId, hints || {}) })
 }
 
-function syncCalendarForTaskUnmeasured_(taskId) {
+// タスクの行を書き換える時、予定を合わせる必要があるか(書き換える前の行 before と比べる)。合わせるなら、前の期限・名前を返す
+function calendarSyncHints_(fields, before) {
+  var keys = Object.keys(fields || {})
+  var touches = keys.some(function (k) { return CALENDAR_TASK_FIELDS.indexOf(k) >= 0 })
+  if (!touches && keys.indexOf('status') >= 0) {
+    // 状態は、完了にした時・完了から戻した時だけ(ほかの状態の変化では予定は変わらない)
+    touches = normalizeCode_('status', fields.status) === 'done' || normalizeCode_('status', before && before.status) === 'done'
+  }
+  if (!touches) return null
+  return { oldDueDate: before ? calendarDateStr_(before.due_date) : '', oldTitle: before ? String(before.title || '') : '' }
+}
+
+function calendarDateStr_(v) {
+  if (!v) return ''
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  return String(v).slice(0, 10)
+}
+
+function syncCalendarForTaskUnmeasured_(taskId, hints) {
   try {
     if (featureDisabled_('calendarSync')) return
-    var task = findRow_(SHEET_TASKS, taskId)
-    if (!task || !task.due_date) return
-
+    // 書き込みの後なら、このリクエストで覚えている表から読む(シートを読み直さない)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
+    if (!task) return
+    var dueDate = calendarDateStr_(task.due_date)
     var assigneeIds = String(task.assignee_id || '')
       .split(',')
       .map(function (s) {
         return s.trim()
       })
       .filter(Boolean)
-    if (assigneeIds.length === 0) return
-
-    var emailMap = getAllMemberEmails_()
+    var emailMap = assigneeIds.length ? getAllMemberEmails_() : {}
     var guests = assigneeIds.map(function (aid) { return emailMap[String(aid)] }).filter(Boolean)
-    if (guests.length === 0) return
+    var wanted = !hints.remove && !!dueDate && guests.length > 0 && !task.deleted_at &&
+      normalizeCode_('status', task.status) !== 'done'
 
-    // テスト環境では招待(メール)を本来の宛先に送らない。予定は作るが、ゲストは付けない
-    var eventOptions = isTestEnvironment_()
-      ? {}
-      : { guests: guests.join(','), sendInvites: true }
+    var cal = CalendarApp.getDefaultCalendar()
+    var title = CALENDAR_PREFIX_OHSUMI + task.title
+    var ev = findTaskCalendarEvent_(cal, taskId, task, [dueDate, hints.oldDueDate], [title, hints.oldTitle ? CALENDAR_PREFIX_OHSUMI + hints.oldTitle : ''])
+    var hasColumn = Object.prototype.hasOwnProperty.call(task, 'calendar_event_id')
+
+    if (!wanted) {
+      if (ev) ev.deleteEvent()
+      if (hasColumn && task.calendar_event_id && !hints.remove) updateRowFields_(SHEET_TASKS, taskId, { calendar_event_id: '' })
+      return
+    }
+
+    var testEnv = isTestEnvironment_()
     // 予定からサイトを開けるようにする(レジストリに確かめていない団体では付けない)
     var eventLink = ''
     try { eventLink = canonicalInviteLink_() } catch (linkErr) { eventLink = '' }
-    if (eventLink) eventOptions.description = 'Ohsumi を開く / Open Ohsumi: ' + eventLink
-    if (isTestEnvironment_()) {
+    var description = eventLink ? 'Ohsumi を開く / Open Ohsumi: ' + eventLink : ''
+    if (testEnv) {
       console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + maskEmailsIn_(guests.join(',')))
     }
+    var day = new Date(dueDate + 'T00:00:00')
+    var start = task.due_time ? new Date(dueDate + 'T' + String(task.due_time).slice(0, 5) + ':00') : null
+    var end = start ? new Date(start.getTime() + 60 * 60 * 1000) : null
 
-    var cal = CalendarApp.getDefaultCalendar()
-    var title = '[Ohsumi] ' + task.title
-    var existing = cal.getEvents(
-      new Date(task.due_date + 'T00:00:00'),
-      new Date(task.due_date + 'T23:59:59'),
-      { search: title },
-    )
-    existing.forEach(function (ev) {
-      ev.deleteEvent()
-    })
-
-    if (task.due_time) {
-      var start = new Date(task.due_date + 'T' + task.due_time + ':00')
-      var end = new Date(start.getTime() + 60 * 60 * 1000)
-      cal.createEvent(title, start, end, eventOptions)
+    if (ev) {
+      if (ev.getTitle() !== title) ev.setTitle(title)
+      if (start) {
+        if (ev.isAllDayEvent() || ev.getStartTime().getTime() !== start.getTime() || ev.getEndTime().getTime() !== end.getTime()) ev.setTime(start, end)
+      } else if (!ev.isAllDayEvent() || ev.getAllDayStartDate().getTime() !== day.getTime()) {
+        ev.setAllDayDate(day)
+      }
+      if (description && ev.getDescription() !== description) ev.setDescription(description)
+      // テスト環境ではゲストを付けない(本来の宛先に予定を入れない)
+      if (!testEnv) {
+        var want = guests.map(function (g) { return String(g).toLowerCase() })
+        var have = (ev.getGuestList() || []).map(function (g) { return String(g.getEmail()).toLowerCase() })
+        want.forEach(function (g) { if (have.indexOf(g) < 0) ev.addGuest(g) })
+        have.forEach(function (g) { if (want.indexOf(g) < 0) ev.removeGuest(g) })
+      }
+      if (ev.guestsCanSeeGuests()) ev.setGuestsCanSeeGuests(false)
+      if (ev.getTag(CALENDAR_TASK_TAG) !== String(taskId)) ev.setTag(CALENDAR_TASK_TAG, String(taskId))
     } else {
-      cal.createAllDayEvent(title, new Date(task.due_date + 'T00:00:00'), eventOptions)
+      // テスト環境では招待(メール)を本来の宛先に送らない。予定は作るが、ゲストは付けない
+      var eventOptions = testEnv ? {} : { guests: guests.join(','), sendInvites: true }
+      if (description) eventOptions.description = description
+      ev = start ? cal.createEvent(title, start, end, eventOptions) : cal.createAllDayEvent(title, day, eventOptions)
+      if (!ev || typeof ev.setTag !== 'function') return
+      ev.setTag(CALENDAR_TASK_TAG, String(taskId))
+      ev.setGuestsCanSeeGuests(false)
     }
+    var eventId = String(ev.getId())
+    if (hasColumn && String(task.calendar_event_id || '') !== eventId) updateRowFields_(SHEET_TASKS, taskId, { calendar_event_id: eventId })
   } catch (err) {
     // best-effort — Calendar quota/permissions issues shouldn't break assignment
+    console.warn('カレンダーの予定を合わせられませんでした: ' + maskEmailsIn_(String(err)))
   }
+}
+
+// そのタスクの予定を探す。記録した予定の ID → 期限の日(今と前)の予定のうちタグが同じもの →
+// ID の無い以前の予定(同じ日・同じ名前で ID の無いものが1つだけの時)。同じタスクの予定が2つ以上あれば、1つを残して消す
+function findTaskCalendarEvent_(cal, taskId, task, dates, titles) {
+  var id = String(taskId)
+  var recorded = String(task.calendar_event_id || '')
+  if (recorded) {
+    var byId = null
+    try { byId = cal.getEventById(recorded) } catch (e) { byId = null }
+    if (byId) {
+      var tag = byId.getTag(CALENDAR_TASK_TAG)
+      if (!tag || tag === id) return byId
+    }
+  }
+  var found = null
+  var seen = {}
+  dates.forEach(function (d) {
+    if (!d || seen[d]) return
+    seen[d] = true
+    var events = cal.getEvents(new Date(d + 'T00:00:00'), new Date(d + 'T23:59:59'), { search: CALENDAR_PREFIX_OHSUMI.trim() }) || []
+    var legacy = []
+    events.forEach(function (ev) {
+      var tag = ev.getTag(CALENDAR_TASK_TAG)
+      if (tag === id) {
+        if (found) ev.deleteEvent()
+        else found = ev
+      } else if (!tag && titles.indexOf(String(ev.getTitle())) >= 0) {
+        legacy.push(ev)
+      }
+    })
+    if (!found && legacy.length === 1) found = legacy[0]
+  })
+  return found
 }
 
 // ---- Projects ---------------------------------------------------------------
@@ -7740,6 +7835,8 @@ function removeProject_(projectId) {
 // depends_on_ids has that reference scrubbed so 依存関係 doesn't point at
 // a dead id.
 function removeTask_(taskId) {
+  // カレンダーの予定を消してから、行を消す
+  syncCalendarForTask_(taskId, { remove: true })
   var tasks = getSheet_(SHEET_TASKS)
   var taskHeaders = headerRow_(tasks)
   var idCol = taskHeaders.indexOf('id') + 1
@@ -8454,7 +8551,21 @@ function protectRowFromFormulaInjection_(sheet, headers, rowNumber, sheetName) {
 }
 
 function updateRowFields_(sheetName, rowId, fields) {
-  return measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  // タスクの期限・担当者・名前・完了などを変えた時は、カレンダーの予定を合わせる(syncCalendarForTask_)
+  var calendarHints = null
+  if (sheetName === SHEET_TASKS) {
+    var beforeRow = null
+    try {
+      // 書き込みで読む表(このリクエストで覚えている表)から、書き換える前の値を取る
+      var at = sheetGridRow_(SHEET_TASKS, rowId)
+      var vals = at.row > 0 ? at.grid.values[at.row - 1] : null
+      if (vals) beforeRow = { status: vals[at.grid.headers.indexOf('status')], due_date: vals[at.grid.headers.indexOf('due_date')], title: vals[at.grid.headers.indexOf('title')] }
+    } catch (e) { beforeRow = null }
+    calendarHints = calendarSyncHints_(fields, beforeRow)
+  }
+  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  if (calendarHints) syncCalendarForTask_(rowId, calendarHints)
+  return result
 }
 
 // 1回の実行(リクエスト)の中で読んだシートの形(見出しと、ID → 行番号)を覚えて、同じシートへの
@@ -8564,7 +8675,7 @@ var ROW_VERSION_SHEETS = ['Members', 'Projects', 'Tasks']
 var ROW_VERSION_IGNORED_FIELDS = [
   'row_version', 'row_updated_by',
   // 記録・通知のための列
-  'last_login', 'last_inactive_notified', 'last_notified_health', 'last_activity',
+  'last_login', 'last_inactive_notified', 'last_notified_health', 'last_activity', 'calendar_event_id',
   // 項目ごとの差分で確かめる記録の一覧と、GAS が足し算でまとめる列
   'comments_json', 'progress_history_json', 'history_json', 'deliverables_json',
   'career_history_json', 'qualifications_json', 'evaluation_history_json', 'transfer_history_json',
@@ -10926,7 +11037,7 @@ var READ_POLICY = {
       blocker_note: 'all', blocker_since: 'all', hold_reason_note: 'all', hold_reason_since: 'all',
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
-      open_bid_applicant_ids: 'all', related_review_task_id: 'all',
+      open_bid_applicant_ids: 'all', related_review_task_id: 'all', calendar_event_id: 'none',
       row_version: 'all', row_updated_by: 'none',
     },
   },

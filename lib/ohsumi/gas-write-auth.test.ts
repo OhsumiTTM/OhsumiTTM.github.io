@@ -112,6 +112,8 @@ function setup() {
     return { id, updated: Object.keys(fields) }
   }
   c.notifyScheduleChange_ = () => {}
+  // カレンダーの予定は gas-calendar-sync.test.ts で確かめる
+  c.syncCalendarForTask_ = () => {}
   c.updateRole = (memberId: string, role: string) => {
     writes.push({ sheet: 'Members', id: memberId, fields: { role } })
     return { ok: true }
