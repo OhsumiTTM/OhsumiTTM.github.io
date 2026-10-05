@@ -110,7 +110,6 @@ function setup(projects: string[][], props: Record<string, string> = {}) {
     sendMail_: (m: Mail) => void
     flushDailyDigests_: () => void
     syncCalendarForTask_: (id: string) => void
-    buildPerformanceTestData_: (seed?: number) => Record<string, Record<string, string>[]>
   }
   const record = (id: string) => sheets.Projects.rows.find((r) => r[0] === id)?.[3]
   // 健康状態の通知は急ぎではないので、毎日のまとめに入る(宛先・件名・本文の先頭)
@@ -300,16 +299,6 @@ describe('テスト環境のメール送信', () => {
     prod.context.findRow_ = () => ({ title: 'T', due_date: '2026-10-01', due_time: '', assignee_id: '1' })
     ;(prod.context as unknown as { syncCalendarForTask_: (id: string) => void }).syncCalendarForTask_('t1')
     expect(prod.events[0].options).toEqual({ guests: 'boss@example.com', sendInvites: true })
-  })
-})
-
-describe('性能計測用のダミーデータ', () => {
-  it('メールアドレスを作らない', () => {
-    const { gas } = setup([])
-    const data = gas.buildPerformanceTestData_()
-    expect(Object.keys(data)).toEqual(['Members', 'Projects', 'Tasks'])
-    expect(JSON.stringify(data)).not.toContain('@')
-    expect(data.Members.every((m) => !('email' in m))).toBe(true)
   })
 })
 

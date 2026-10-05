@@ -107,7 +107,6 @@ function setup(sheets: FakeSheet[], fetch?: Fetch) {
     readSheetTablesViaSpreadsheetApp_: (names: string[]) => Record<string, { headers: string[]; rows: string[][] }>
     readSheetTable: (name: string) => { headers: string[]; rows: string[][] }
     loadSnapshot_: () => { data: Record<string, unknown> }
-    measureReadD: () => string
     SNAPSHOT_SHEETS: string[]
   }
   return { gas, logs, warns, fetchUrls, defaultFetch }
@@ -164,11 +163,6 @@ describe('readSheetTables_(Sheets API で読む)', () => {
     ])
     expect(viaApi.Settings.headers).toEqual(['key', 'value', '', ''])
     expect(viaApi.Settings.rows[0]).toEqual(['org_name', 'テスト団体', '', ''])
-  })
-
-  it('計測関数の「結果の一致」でも、(d) と getDisplayValues に違いが出ない', () => {
-    const { gas } = setup(sampleSheets())
-    expect(gas.measureReadD()).toMatch(/結果の一致\(getDisplayValues と比べて\): 一致/)
   })
 
   it('スナップショットは4シートを1回の batchGet で読む', () => {

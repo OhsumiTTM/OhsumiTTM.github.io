@@ -2,7 +2,6 @@
 //   - 上限を超える保存は断り(cellTooLong)、シートは書き換えない
 //   - 8割(4万文字)を超えた保存は、書いた人(longRecords)と代表(初めて超えた時に、まとめのメール)に知らせる
 //   - 代表の管理画面(getOpsStatus)で、どの記録がいくつ上限に近いかを見られる
-//   - measureReadPerformance の判定(移行の前に、完了したタスクを最初の読み込みから外すことが要るか)
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -106,51 +105,6 @@ describe('代表の管理画面の「長くなっている記録」', () => {
   it('長い記録が無ければ、空', () => {
     const h = guardHarness()
     expect(h.post({ action: 'getOpsStatus', sessionToken: 'm-top' }).result.longRecords.groups).toEqual([])
-  })
-})
-
-describe('読み取り性能の計測の判定', () => {
-  const metrics = (h: H, tasks: number, done: number, sizes: Partial<Record<string, unknown>> = {}) => {
-    const headers = ['id', 'title', 'status', 'comments_json']
-    const rows = Array.from({ length: tasks }, (_, i) => [String(i), 't' + i, i < done ? '完了' : 'todo', i === 0 ? 'x'.repeat(41_000) : '[]'])
-    const data = { Tasks: { headers, rows }, Members: { headers: ['id'], rows: [] }, Projects: { headers: ['id'], rows: [] }, Settings: { headers: ['key', 'value'], rows: [] } }
-    return plain(call(h, 'readPerformanceMetrics_', data, { jsonChars: 1_000_000, gzipChars: 250_000, viewerChars: 500_000, readSheetsMs: 3000, cached: true, ...sizes })) as Record<string, unknown>
-  }
-
-  it('タスクの件数・完了の割合・圧縮の割合・キャッシュの分割・1つのセルの最大の長さを出す', () => {
-    const h = guardHarness()
-    const m = metrics(h, 10, 6)
-    expect(m).toMatchObject({ tasks: 10, doneTasks: 6, gzipPercent: 25, chunks: 3, chunkPercent: 5 })
-    expect(m.cells).toMatchObject({ maxLength: 41_000, maxPercent: 82 })
-    expect((m.cells as { top: unknown[] }).top[0]).toEqual({ sheet: 'Tasks', field: 'comments_json', maxLength: 41_000, over: 1 })
-  })
-
-  it('すべての目安を下回れば「移行の前には要りません」。どれかを超えれば理由を出す', () => {
-    const h = guardHarness()
-    const verdict = (m: Record<string, unknown>) => (call(h, 'readPerformanceVerdict_', m) as string[]).join('\n')
-    expect(verdict(metrics(h, 10, 6))).toContain('移行の前には要りません')
-    expect(verdict(metrics(h, 10, 6))).toContain('上限の8割(40000 文字)を超えた記録があります')
-    expect(verdict(metrics(h, 2000, 1500))).toContain('移行の前に作る必要があります: タスクが 2000 件')
-    expect(verdict(metrics(h, 10, 6, { gzipChars: 45 * 90_000 }))).toContain('キャッシュの分割が 45 / 60 個')
-    expect(verdict(metrics(h, 10, 6, { cached: false }))).toContain('キャッシュの分割')
-    expect(verdict(metrics(h, 10, 6, { readSheetsMs: 9000 }))).toContain('キャッシュなしのシート読み込みが 9000 ms')
-    expect(verdict(metrics(h, 10, 6, { viewerChars: 4 * 1024 * 1024 }))).toContain('閲覧者ごとの読み込みが 4096 KB')
-  })
-})
-
-describe('予行演習の手順(docs/orbit-migration-plan.md の 5.2)', () => {
-  it('判定の目安が、measureReadPerformance と同じ', () => {
-    const doc = readFileSync(join(__dirname, '..', '..', 'docs', 'orbit-migration-plan.md'), 'utf8')
-    const h = guardHarness()
-    expect(h.c.READ_LIMIT_TASKS).toBe(2000)
-    expect(doc).toContain('| タスクの件数 | 2,000 件 |')
-    expect(h.c.READ_LIMIT_VIEWER_CHARS).toBe(3 * 1024 * 1024)
-    expect(doc).toContain('| 閲覧者ごとの読み込みの大きさ | 3MB |')
-    expect(h.c.READ_LIMIT_CHUNK_PERCENT).toBe(75)
-    expect(doc).toContain('| キャッシュの分割の数 | 45 / 60 個(75%) |')
-    expect(h.c.READ_LIMIT_SHEETS_MS).toBe(8000)
-    expect(doc).toContain('| キャッシュなしのシート読み込み | 8 秒 |')
-    expect(doc).toContain('measureReadPerformance')
   })
 })
 

@@ -55,9 +55,6 @@ A は、文字の色を変数 `--ohsumi-wordmark` で切り替えます(`.dark` 
 
 | 場所 | 何か | 残す理由 |
 |---|---|---|
-| `docs/orbit-migration-plan.md` | Orbit から Ohsumi への移行計画 | 移行の手順書そのもの(移行が済み、戻す期限を過ぎたら消せる) |
-| `gas/Code.gs`(移行の関数・コメント) | `renameOrbitCalendarEvents`・`listChangesFromOrbit`・`convertOrbitTables_`・`CALENDAR_PREFIX_ORBIT`・スクリプトプロパティ `ORBIT_SPREADSHEET_ID`・`CALENDAR_RENAME_DIRECTION=toOrbit` | 移行の点検と、戻す時に使う関数。エディタから実行するだけで、画面には出ない(GAS を変えない決まりのため、今回は変えない) |
-| `gas/README.md` の「4.6.4」など | 上の関数の説明 | 関数を使う時の手順 |
 | `registry/README.md` | `FSIFofficial/Orbit` | 実在するリポジトリの名前(変えない決まりのリポジトリを指す) |
 
 ビルドした画面(`out/`)に「Orbit」「Osumi」が入っていないことも確かめました(`grep -ri 'orbit\|osumi' out/` が 0 件)。

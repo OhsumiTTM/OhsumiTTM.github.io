@@ -30,7 +30,6 @@ describe('GAS と同じ結果になる', () => {
     expect(plain(gas.defaultDepartments_())).toEqual(D.defaultDepartments())
     for (const raw of [JSON.stringify(CUSTOM), '[{"id":"a","name":"未分類"}]', '[{"id":"a","name":"x"},{"id":"a","name":"y"}]', '{', '']) {
       expect(plain(gas.parseDepartmentsSetting_(raw)), raw).toEqual(D.parseDepartmentsSetting(raw))
-      expect(plain(gas.departmentsFromSettings_({ departments: raw })), raw).toEqual(D.departmentsFromSettings({ departments: raw }))
     }
   })
 
