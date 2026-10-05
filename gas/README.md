@@ -1377,6 +1377,7 @@ Secrets が未設定のままだとローカルのモックデータで動きま
 | updateSkillLevels, updateCareerGoals, updateDevelopmentPlan, updateCareerHistory, updateQualifications, updateTrainingHistory | 本人 または 管理者 |
 | updateWill, updateNotify, updateNotifySettings, updateAvatar, uploadAvatar, updateDisplayName, updateUnavailableDates, updateTimezone, updateLocale | 本人のみ |
 | createTasks, updateTaskStatus（担当者のみ。完了は確認者のみ）, submitSurveyResponse 等 | ログイン済みなら誰でも |
+| createTasks の取り込み(タスクに `import: true`) | 一般以外の役職のみ。状態(`status`)・完了日・確認者(`reviewerIds`。在籍しているメンバーだけ)・必要な承認数(1〜確認者の人数、または `all`)・想定/実績の時間(0〜10000)・成果物(http/https のリンク50件まで)・前提タスク(`dependsOnTempIds`。同じ取り込みの中のタスクの `tempId`)・公募にしない(`openBid: false`)・保留の理由(状態が保留の時だけ)を受け付ける。承認待ちにせず、承認待ちの通知も送らない。完了として取り込んだタスクには、スキルの点数を付けられない(`awarded_points_json` の `__noAward`)。1件でもおかしな値があれば、何も作らない |
 | applyToOpenBid(公募) | ログイン済みなら誰でも。ただし、応募者の一覧で変えられるのは自分の応募・取り下げだけ(幹部限定タスクは一般以外の役職のみ) |
 | translateText | ログイン済みなら誰でも。1人1時間に500件まで(`RATE_LIMITS.translate`) |
 | updateDeliverables, updateHistory, updateEstimatedHours, updateActualHours, updateRetrospective, updateTaskSchedule, updateTaskForm, updateProgress, setHoldReason | そのタスクの担当者・確認者・作成者・全権管理者のみ(`TASK_OWNER_SCOPED_ACTIONS`。updateHistory・updateProgress の記録はさらに、他人が書いた既存の記録の書き換え・削除を拒否) |

@@ -97,7 +97,7 @@ describe('カレンダーの予定をタスクの ID で扱う', () => {
     top(t.h, { action: 'updateTaskStatus', taskId: 't1', status: 'done' })
     expect(t.live()).toHaveLength(0)
     expect(t.get('t1', 'calendar_event_id')).toBe('')
-    top(t.h, { action: 'updateTaskStatus', taskId: 't1', status: 'in_progress' })
+    top(t.h, { action: 'updateTaskStatus', taskId: 't1', status: 'progress' })
     expect(t.live()).toHaveLength(1)
     top(t.h, { action: 'assignTask', taskId: 't1', assigneeIds: [] })
     expect(t.live()).toHaveLength(0)

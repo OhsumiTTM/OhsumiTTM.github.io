@@ -4112,6 +4112,7 @@ function awardSkillPoints_(taskId, memberId, points, acting) {
   var task = findRow_(SHEET_TASKS, taskId)
   if (!task) throw userError_('タスクが見つかりません。')
   if (normalizeCode_('status', task.status) !== 'done') throw userError_('完了したタスクにだけ、スキルの点数を付けられます。')
+  if (String(task.awarded_points_json || '').indexOf('"__noAward":true') >= 0) throw userError_('完了として取り込んだタスクには、スキルの点数を付けられません。')
   var assignees = splitCsvList_(task.assignee_id)
   if (assignees.indexOf(memberId) < 0) throw userError_('このタスクの担当者にだけ、スキルの点数を付けられます。')
   var taskSkills = String(task.skills || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
@@ -5472,7 +5473,7 @@ function runWriteAction_(body, actingMember) {
   switch (body.action) {
     case 'createTasks':
       // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
-      result = createTasks_(body.tasks, actingMember.id)
+      result = createTasks_(body.tasks, actingMember.id, { allowImport: isAdminRoleRef_(getRoles_(), actingMember.role) })
       break
     case 'updateTaskStatus':
       // body.status は入口でコードにそろえている(normalizeRequestCodes_)
@@ -6149,16 +6150,35 @@ function runWriteAction_(body, actingMember) {
 // New rows are built by walking the sheet's actual header row (see
 // gas/README.md for the full column list), so this works regardless of
 // column order and leaves any column not listed below blank.
-function createTasks_(tasks, actingMemberId) {
+// タスクを作る。opts.allowImport: 幹部の取り込み(t.import === true)の項目を受け付ける(createTasks の操作で、幹部の時だけ)。
+// 取り込みでは、状態・確認者・必要な承認数・想定/実績の時間・成果物・前提タスク(同じ取り込みの中のタスク)・公募かどうか・
+// 保留の理由も入れられる。取り込んだタスクは承認待ちにしない。完了として取り込んだタスクには、スキルの点数を付けない
+// (awarded_points_json の __noAward。awardSkillPoints_ が断る)。値を確かめてから書く(1つでもおかしければ、何も作らない)
+var IMPORT_MAX_HOURS = 10000
+var IMPORT_MAX_DELIVERABLES = 50
+function createTasks_(tasks, actingMemberId, opts) {
+  opts = opts || {}
   var sheet = getSheet_(SHEET_TASKS)
   var headers = headerRow_(sheet)
   var nextId = nextIntId_(sheet, headers)
   var today = todayStr_()
   var created = []
+  tasks = (tasks || []).filter(Boolean)
+  // 同じ取り込みの中の前提タスク(仮の ID → 作る ID)
+  var idOfTemp = {}
+  tasks.forEach(function (t, i) { if (t.tempId) idOfTemp[String(t.tempId)] = String(nextId + i) })
+  var activeMembers = null
 
-  tasks.forEach(function (t) {
-    var id = String(nextId++)
+  var rows = tasks.map(function (t, i) {
+    var id = String(nextId + i)
+    var imp = null
+    if (t.import === true) {
+      if (!opts.allowImport) throw userError_('タスクの取り込み(状態・確認者などを入れて作る)は、幹部だけができます。')
+      if (!activeMembers) activeMembers = importActiveMemberIds_()
+      imp = importTaskValues_(t, id, idOfTemp, activeMembers, today)
+    }
     var row = headers.map(function (h) {
+      if (imp && Object.prototype.hasOwnProperty.call(imp, h)) return imp[h]
       switch (h) {
         case 'id':
           return id
@@ -6216,18 +6236,123 @@ function createTasks_(tasks, actingMemberId) {
     })
     // F4: 値を書き込む前に対象列を書式なしテキスト(@)にする
     assertRowCellLengths_('Tasks', headers, row)
+    return { t: t, id: id, row: row, imported: !!imp }
+  })
+
+  rows.forEach(function (r) {
+    var row = r.row
     protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Tasks')
     sheet.appendRow(row)
-    created.push({ tempId: t.tempId, id: id })
-    if (t.assigneeIds && t.assigneeIds.length > 0) syncCalendarForTask_(id)
+    created.push({ tempId: r.t.tempId, id: r.id })
+    if (r.t.assigneeIds && r.t.assigneeIds.length > 0) syncCalendarForTask_(r.id)
   })
 
   // template tasks (pendingApproval === false) don't need an approval-queue email
-  var needsApproval = tasks.filter(function (t) {
-    return t.pendingApproval !== false
-  })
+  var needsApproval = rows.filter(function (r) {
+    return !r.imported && r.t.pendingApproval !== false
+  }).map(function (r) { return r.t })
   if (needsApproval.length > 0) notifyNewTasks_(needsApproval)
   return created
+}
+
+// 取り込みで確認者・担当者にできる人(在籍しているメンバー)
+function importActiveMemberIds_() {
+  var out = {}
+  snapshotMembers_().forEach(function (m) {
+    if (String(m.withdrawn_at || '') === '') out[String(m.id)] = true
+  })
+  return out
+}
+
+function importHours_(v, label, title) {
+  if (v === undefined || v === null || v === '') return ''
+  var n = Number(v)
+  if (!isFinite(n) || n < 0 || n > IMPORT_MAX_HOURS) throw userError_('「' + title + '」の' + label + 'は、0〜' + IMPORT_MAX_HOURS + 'の数で入れてください。')
+  return n
+}
+
+// 取り込みの項目を確かめて、列の値にする
+function importTaskValues_(t, id, idOfTemp, activeMembers, today) {
+  var title = String(t.title || '')
+  var out = { approval_status: sheetCode_('approval', 'approved') }
+
+  // 状態(コード・日本語の表示名のどちらでもよい)
+  var status = 'todo'
+  if (t.status !== undefined && t.status !== null && String(t.status).trim() !== '') {
+    var raw = String(t.status).trim()
+    var table = VALUE_CODES.status
+    var known = table.codes.indexOf(raw) >= 0 || table.codes.some(function (c) { return table.sheetLabels[c] === raw })
+    if (!known) throw userError_('「' + title + '」の状態「' + raw + '」は使えません。')
+    status = normalizeCode_('status', raw)
+  }
+  out.status = sheetCode_('status', status)
+  if (status === 'done') {
+    out.completed_date = /^\d{4}-\d{2}-\d{2}$/.test(String(t.completedDate || '')) ? String(t.completedDate) : today
+    out.awarded_points_json = JSON.stringify({ __noAward: true, __imported: true })
+  }
+
+  // 担当者・確認者は、在籍しているメンバーだけ
+  var checkMembers = function (list, label) {
+    var ids = (Array.isArray(list) ? list : []).map(function (x) { return String(x).trim() }).filter(Boolean)
+    ids.forEach(function (m) {
+      if (!activeMembers[m]) throw userError_('「' + title + '」の' + label + 'に、登録されていない(または退会した)メンバーがいます。')
+    })
+    return ids.filter(function (m, i) { return ids.indexOf(m) === i })
+  }
+  checkMembers(t.assigneeIds, '担当者')
+  var reviewers = checkMembers(t.reviewerIds, '確認者')
+  if (reviewers.length) {
+    out.reviewer_ids = reviewers.join(',')
+    out.reviewer_id = reviewers[0]
+  }
+  if (t.requiredApprovals !== undefined && t.requiredApprovals !== null && t.requiredApprovals !== '') {
+    var ra = t.requiredApprovals
+    if (ra !== 'all') {
+      ra = Number(ra)
+      if (!reviewers.length || Math.floor(ra) !== ra || ra < 1 || ra > reviewers.length) {
+        throw userError_('「' + title + '」の必要な承認の数は、1〜確認者の人数(または all)で入れてください。')
+      }
+    }
+    out.required_approvals = String(ra)
+  }
+
+  out.estimated_hours = importHours_(t.estimatedHours, '想定の時間', title)
+  out.actual_hours = importHours_(t.actualHours, '実績の時間', title)
+
+  // 成果物(http/https のリンクだけ)
+  if (t.deliverables !== undefined && t.deliverables !== null) {
+    if (!Array.isArray(t.deliverables) || t.deliverables.length > IMPORT_MAX_DELIVERABLES) {
+      throw userError_('「' + title + '」の成果物は、' + IMPORT_MAX_DELIVERABLES + '件までの一覧で入れてください。')
+    }
+    out.deliverables_json = JSON.stringify(t.deliverables.map(function (d, i) {
+      var url = String((d && d.url) || '').trim()
+      if (!isSafeHttpUrl_(url)) throw userError_('成果物のURLは http または https で始まるURLのみ登録できます。')
+      return { id: 'd-' + id + '-' + (i + 1), label: String((d && d.label) || url).slice(0, 200), url: url }
+    }))
+  }
+
+  // 前提タスク: 同じ取り込みの中のタスク(仮の ID)
+  if (t.dependsOnTempIds !== undefined && t.dependsOnTempIds !== null) {
+    var deps = (Array.isArray(t.dependsOnTempIds) ? t.dependsOnTempIds : []).map(function (x) {
+      var real = idOfTemp[String(x)]
+      if (!real) throw userError_('「' + title + '」の前提タスクは、同じ取り込みの中のタスクだけを選べます。')
+      if (real === id) throw userError_('「' + title + '」の前提タスクに、そのタスク自身は選べません。')
+      return real
+    })
+    out.depends_on_ids = deps.filter(function (d, i) { return deps.indexOf(d) === i }).join(',')
+  }
+
+  // 公募にしない(担当を決めて割り当てる)
+  if (t.openBid === false) out.assign_type = 'manager_assign'
+
+  // 保留の理由(状態が保留の時だけ)
+  var hold = String(t.holdReason || '').trim()
+  if (hold) {
+    if (status !== 'hold') throw userError_('「' + title + '」の保留の理由は、状態が保留の時だけ入れられます。')
+    out.hold_reason_note = hold.slice(0, 1000)
+    out.hold_reason_since = today
+  }
+  return out
 }
 
 function updateTaskFields_(taskId, fields) {

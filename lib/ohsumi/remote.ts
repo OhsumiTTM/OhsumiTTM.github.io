@@ -905,6 +905,20 @@ export interface CreateTaskPayload {
   estimatedHours?: number
   importance?: TaskImportance
   relatedReviewTaskId?: string
+  // 幹部の取り込み(GAS は幹部の時だけ受け付ける)。承認待ちにせず、次の項目も入れられる
+  import?: boolean
+  status?: TaskStatus
+  completedDate?: string
+  reviewerIds?: string[]
+  requiredApprovals?: number | 'all'
+  actualHours?: number
+  deliverables?: { label: string; url: string }[]
+  // 前提タスク: 同じ取り込みの中のタスクの tempId
+  dependsOnTempIds?: string[]
+  // false: 公募にしない(担当を決めて割り当てる)
+  openBid?: boolean
+  // 保留の理由(status が hold の時だけ)
+  holdReason?: string
 }
 
 // 認証なしで GAS を呼ぶ(getLoginConfig・exchangeIdToken)
