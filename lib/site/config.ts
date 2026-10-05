@@ -34,6 +34,7 @@ export const FOOTER_NAV = [
   { href: '/faq', label: 'FAQ' },
   { href: '/news', label: 'News / Updates' },
   { href: '/about', label: 'About' },
+  { href: '/apply', label: '利用の申請' },
   { href: '/contact', label: 'Contact' },
 ] as const
 
