@@ -3,7 +3,7 @@ export const SITE = {
   reading: 'オオスミ',
   // サイトの URL は直接書かない(独自ドメインの切り替えに合わせて NEXT_PUBLIC_SITE_URL で渡す)
   url: process.env.NEXT_PUBLIC_SITE_URL ?? '',
-  fsifUrl: 'https://fsif.jp',
+  fsifUrl: 'https://www.fsif.jp',
   operator: '未来宇宙産業フォーラム(FSIF)',
   operatorShort: 'FSIF',
 } as const
