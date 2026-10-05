@@ -131,9 +131,9 @@ async function openBrowser() {
 }
 
 const navigate = async (path: string) => { await page.send('Page.navigate', { url: base + path }); await sleep(2500) }
-const text = () => page.evaluate<string>('document.body.innerText')
+const text = () => page.evaluate<string>("document.body?.innerText ?? ''")
 // 隠れている要素(閉じた知らせ・メニュー)も含めた文字。データが漏れていないかは、こちらで確かめる
-const allText = () => page.evaluate<string>('document.body.textContent')
+const allText = () => page.evaluate<string>("document.body?.textContent ?? ''")
 const waitFor = async (fn: () => Promise<boolean>, what: string, ms = 10000) => {
   for (let t = 0; t < ms; t += 250) { if (await fn()) return; await sleep(250) }
   throw new Error(what + '(' + ms / 1000 + '秒待ちました)。画面: ' + (await text()).slice(0, 300))
@@ -148,7 +148,8 @@ const googleSignIn = async (email: string) => {
 const loggedIn = () => page.evaluate<boolean>(`(() => {
   const later = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'あとで設定する')
   if (later) later.click()
-  return document.body.innerText.includes('OUTPUT') && !document.querySelector('[data-e2e-gsi]')
+  // ログアウトなどで読み込み直している途中は body が無いことがある
+  return !!document.body && document.body.innerText.includes('OUTPUT') && !document.querySelector('[data-e2e-gsi]')
 })()`)
 const clearDevice = () => page.evaluate('localStorage.clear(); sessionStorage.clear(); true')
 
@@ -220,6 +221,9 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
     await waitFor(() => page.evaluate<boolean>(`!!${logoutItem}`), 'アカウントのメニューが開きません')
     await page.evaluate(`${logoutItem}.click(); true`)
     await waitFor(async () => !(await loggedIn()), 'ログアウトできません')
+    // 読み込み直した後も団体のログイン画面のまま(?org= が残り、ホームページにならない)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-e2e-gsi]")'), 'ログアウトの後に団体のログイン画面になりません')
+    expect(await page.evaluate<string>('location.search')).toContain('org=')
     expect(await page.evaluate(`localStorage.getItem('ohsumi-session-${A.orgId}')`)).toBeNull()
     await navigate('/?org=' + A.orgId)
     expect(await loggedIn()).toBe(false)
@@ -241,6 +245,15 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
     await sleep(2500)
     expect(await loggedIn()).toBe(false)
     expect(await allText()).not.toContain('団体Aのタスク')
+  })
+
+  it('トップ: 団体コード(?org=)が無ければホームページ、ログインから Ohsumi の画面に入れる', async () => {
+    await navigate('/')
+    await waitFor(() => page.evaluate<boolean>("(document.body?.innerText ?? '').includes('仕事を進めるほど')"), 'ホームページが出ません')
+    expect(await page.evaluate<boolean>('!!document.querySelector("[data-e2e-gsi]")')).toBe(false)
+    expect(await allText()).not.toContain('団体Aのタスク')
+    await navigate('/?login=1')
+    await waitFor(() => page.evaluate<boolean>("!(document.body?.innerText ?? '').includes('仕事を進めるほど')"), 'ログインから Ohsumi の画面になりません')
   })
 
   it('URL の直打ち: 公開のページは開け、無いページは 404、知らない団体は「見つかりません」、レジストリの管理画面はログインが要る', async () => {

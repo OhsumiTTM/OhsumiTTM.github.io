@@ -524,7 +524,9 @@ async function run({ build = true } = {}) {
     await send('Page.enable')
     await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
 
-    const navigate = async (path = '/') => { await send('Page.navigate', { url: base + path }); await sleep(3000) }
+    // トップ(/)は ?org= か ?login= が無いとホームページになるので、Ohsumi の画面を確かめる時は ?login=1 を付ける
+    const appPath = (path) => (path === '/' ? '/?login=1' : path)
+    const navigate = async (path = '/') => { await send('Page.navigate', { url: base + appPath(path) }); await sleep(3000) }
     // gesture: 人が押した時と同じ扱いにする(機能停止中の知らせは、人が操作した時だけ出る)
     const clickText = (text, from = 'button, a, [role=tab]', gesture = false) => evaluate(`(() => {
       const els = [...document.querySelectorAll(${JSON.stringify(from)})]
@@ -609,7 +611,7 @@ async function run({ build = true } = {}) {
           await evaluate('localStorage.clear(); sessionStorage.clear()'); await saveOrgs(false)
           slowConfigMs = 8000; configCalls = 0
           try {
-            await send('Page.navigate', { url: base + '/' })
+            await send('Page.navigate', { url: base + '/?login=1' })
             // 答え(8秒後)より前に、ログインボタンが出ていること
             const started = Date.now()
             let shown = false
