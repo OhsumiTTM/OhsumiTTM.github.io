@@ -38,8 +38,8 @@ export const FOOTER_NAV = [
   { href: '/contact', label: 'Contact' },
 ] as const
 
-// 問い合わせ: フォーム(Google フォーム)の URL は、作ったらここに入れる(それまでは仮の値)
+// 問い合わせの連絡先(フォームは lib/site/contact-form.ts)
 export const CONTACT = {
-  formUrl: 'https://forms.gle/REPLACE_ME',
   email: 'fsif.official@gmail.com',
 } as const
+
