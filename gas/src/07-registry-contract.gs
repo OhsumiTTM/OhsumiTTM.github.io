@@ -152,10 +152,10 @@ function claimInitialSetup_(email, code, nowMs) {
 // ---- テンプレートから作る団体の既定値 ----
 // スプレッドシートを「コピーを作成」しても、スクリプトプロパティはコピーされない。そこで、FSIF の共通の値
 // (レジストリの URL・ログインの OAuth クライアント ID)をコードの既定値として持ち、スクリプトプロパティがあればそちらを使う。
-// 値はどちらもサイトの画面に入っている公開の値なので、ここに書いてよい(gas/README.md の「2.2.」。今は空)。
+// 値はどちらもサイトの画面に入っている公開の値なので、ここに書く(gas/README.md の「2.2.」)。
 // setupOhsumi は、プロパティが無ければ既定値をプロパティに保存する(後でコードを貼り替えて既定値が空になっても動くように)
-var DEFAULT_REGISTRY_URL = ''
-var DEFAULT_GOOGLE_OAUTH_CLIENT_ID = ''
+var DEFAULT_REGISTRY_URL = 'https://script.google.com/macros/s/AKfycbx2P-V2NINgmX3oxI-4cgBrCe5vYqjfUzFj9X26TiEZJGBJjOhPYF4kOiaTP8tS3Hm2/exec'
+var DEFAULT_GOOGLE_OAUTH_CLIENT_ID = '367437999259-qpqdq6nakl8vmsg9fdociscv1i3m0rk9.apps.googleusercontent.com'
 
 function registryUrlOf_(all) {
   return String((all || {}).REGISTRY_URL || DEFAULT_REGISTRY_URL || '').trim()

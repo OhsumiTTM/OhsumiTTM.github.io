@@ -8,9 +8,17 @@ const CLIENT = 'template-client.apps.googleusercontent.com'
 type Fn = (...a: unknown[]) => unknown
 
 describe('テンプレートの既定値', () => {
+  it('コードに入れた既定値は、形が正しい(レジストリの /exec・OAuth クライアント ID)', () => {
+    const c = guardHarness().c as Record<string, unknown>
+    expect(c.DEFAULT_REGISTRY_URL).toMatch(/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/)
+    expect(c.DEFAULT_GOOGLE_OAUTH_CLIENT_ID).toMatch(/^\d+-[a-z0-9]+\.apps\.googleusercontent\.com$/)
+  })
+
   it('プロパティがあればプロパティ、無ければコードの既定値を使う', () => {
     const h = guardHarness()
     const c = h.c as Record<string, unknown>
+    c.DEFAULT_REGISTRY_URL = ''
+    c.DEFAULT_GOOGLE_OAUTH_CLIENT_ID = ''
     expect((c.registryUrlOf_ as Fn)({})).toBe('')
     c.DEFAULT_REGISTRY_URL = REG
     c.DEFAULT_GOOGLE_OAUTH_CLIENT_ID = CLIENT
@@ -24,6 +32,8 @@ describe('テンプレートの既定値', () => {
     const h = guardHarness()
     const c = h.c as Record<string, unknown>
     const props = { getProperty: (k: string) => h.props[k] ?? null, setProperty: (k: string, v: string) => { h.props[k] = v } }
+    c.DEFAULT_REGISTRY_URL = ''
+    c.DEFAULT_GOOGLE_OAUTH_CLIENT_ID = ''
     expect((c.saveCodeDefaultsToProps_ as Fn)(props)).toEqual([])
     c.DEFAULT_REGISTRY_URL = REG
     c.DEFAULT_GOOGLE_OAUTH_CLIENT_ID = CLIENT
