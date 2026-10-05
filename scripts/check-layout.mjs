@@ -254,7 +254,7 @@ export function viewerData(memberId = MEMBER) {
 
 // ---- out/ の配信 ----
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain' }
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain', '.gs': 'text/plain; charset=utf-8' }
 function serve(dir) {
   const server = createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname)
@@ -341,6 +341,9 @@ async function run({ build = true } = {}) {
     if (b.status !== 0) throw new Error('ビルドに失敗しました')
     const c = spawnSync('node', ['scripts/csp.mjs'], { cwd: ROOT, stdio: 'inherit' })
     if (c.status !== 0) throw new Error('CSP の確認に失敗しました')
+    // 本番のビルドと同じく、まとめた団体の GAS をサイトの /gas/Code.gs に置く(管理画面の「コードをコピー」が読む)
+    const g = spawnSync('node', ['scripts/gas-build.mjs', '--publish', 'out'], { cwd: ROOT, stdio: 'inherit' })
+    if (g.status !== 0) throw new Error('団体の GAS をサイトに置けませんでした')
   }
   const chromePath = findChrome()
   if (!chromePath) {
