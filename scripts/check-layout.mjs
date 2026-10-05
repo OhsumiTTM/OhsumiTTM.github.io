@@ -111,7 +111,7 @@ export const READ_ONLY_STEPS = [
 ]
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
-export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getExpenses',
+export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
   'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
@@ -254,7 +254,7 @@ export function viewerData(memberId = MEMBER) {
 
 // ---- out/ の配信 ----
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain' }
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.txt': 'text/plain', '.gs': 'text/plain; charset=utf-8' }
 function serve(dir) {
   const server = createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname)
@@ -341,6 +341,9 @@ async function run({ build = true } = {}) {
     if (b.status !== 0) throw new Error('ビルドに失敗しました')
     const c = spawnSync('node', ['scripts/csp.mjs'], { cwd: ROOT, stdio: 'inherit' })
     if (c.status !== 0) throw new Error('CSP の確認に失敗しました')
+    // 本番のビルドと同じく、まとめた団体の GAS をサイトの /gas/Code.gs に置く(管理画面の「コードをコピー」が読む)
+    const g = spawnSync('node', ['scripts/gas-build.mjs', '--publish', 'out'], { cwd: ROOT, stdio: 'inherit' })
+    if (g.status !== 0) throw new Error('団体の GAS をサイトに置けませんでした')
   }
   const chromePath = findChrome()
   if (!chromePath) {
@@ -831,6 +834,16 @@ async function run({ build = true } = {}) {
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
           const gasUpdate = await evaluate(`document.querySelector('[data-gas-update-banner]')?.textContent ?? ''`)
           if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → 最新の版: 2026.10.01-1)') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
+          if (!gasUpdate.includes('「Ohsumi」→「初期設定」') || !gasUpdate.includes('デプロイを管理')) throw new Error('GAS の更新の知らせに、更新の手順が出ません: ' + gasUpdate)
+          // 「コードをコピー」: このサイトの /gas/Code.gs を読む(CSP の connect-src 'self' のまま)。知らせの最新の版(2026.10.01-1)と
+          // サイトのコードの版が違うので、コピーせずに理由を出す
+          await evaluate(`document.querySelector('[data-gas-copy-code]').click()`)
+          let copyResult = ''
+          for (let i = 0; i < 50 && !copyResult; i++) {
+            await new Promise((r) => setTimeout(r, 100))
+            copyResult = await evaluate(`document.querySelector('[data-gas-copy-result]')?.textContent ?? ''`)
+          }
+          if (!/このサイトのコードの版\(\d{4}\.\d{2}\.\d{2}-\d+\)が、最新の版\(2026\.10\.01-1\)と違う/.test(copyResult)) throw new Error('「コードをコピー」が、サイトの Code.gs の版を確かめていません: ' + copyResult)
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
         if (step.do === 'registry') {

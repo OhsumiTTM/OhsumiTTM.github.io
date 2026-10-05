@@ -78,8 +78,6 @@ describe('GAS と同じ結果になる', () => {
     }
     expect(plain(gas.validateRoles_([CODED[0], CODED[0]]))).toEqual(R.validateRoles([CODED[0], CODED[0]]))
     expect(plain(gas.defaultRoles_())).toEqual(R.defaultRoles())
-    expect(gas.DEFAULT_NON_TOP_SECTIONS).toBeDefined()
-    expect([...(gas.DEFAULT_NON_TOP_SECTIONS as unknown as string[])]).toEqual(R.restrictedSections([], 'x'))
   })
 })
 

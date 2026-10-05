@@ -118,7 +118,7 @@ const writes = collectWrites()
 describe('シートの列の一覧(SHEET_HEADERS)', () => {
   it('すべてのシートの一覧があり、列名に重複が無い', () => {
     expect(Object.keys(gas.SHEET_HEADERS).sort()).toEqual(
-      ['Candidates', 'DailyReports', 'Expenses', 'FormSubmissions', 'MemberEmails', 'Members', 'PersonalStore', 'Projects', 'Settings', 'Tasks'],
+      ['Candidates', 'DailyReports', 'Expenses', 'FormSubmissions', 'MemberEmails', 'Members', 'OrgStore', 'PersonalStore', 'Projects', 'Settings', 'Tasks', 'TasksArchive'],
     )
     for (const [sheet, headers] of Object.entries(gas.SHEET_HEADERS)) {
       expect(new Set(headers).size, sheet).toBe(headers.length)

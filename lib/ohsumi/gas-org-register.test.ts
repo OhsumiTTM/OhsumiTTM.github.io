@@ -63,7 +63,10 @@ describe('レジストリへの登録(団体の GAS)', () => {
 
   it('レジストリの URL・この GAS の URL が無い・形が違う時は、設定のしかたを知らせる', () => {
     const reg = registry()
-    expect(() => org(reg, { props: { REGISTRY_URL: '' } }).register('AAAA')).toThrow(/REGISTRY_URL/)
+    // コードの既定値(DEFAULT_REGISTRY_URL)も空の時
+    const noUrl = org(reg, { props: { REGISTRY_URL: '' } })
+    noUrl.c.DEFAULT_REGISTRY_URL = ''
+    expect(() => noUrl.register('AAAA')).toThrow(/REGISTRY_URL/)
     expect(() => org(reg, { props: { OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/X/dev' } }).register('AAAA')).toThrow(/OHSUMI_WEBAPP_URL/)
   })
 

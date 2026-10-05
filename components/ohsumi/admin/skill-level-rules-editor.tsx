@@ -27,6 +27,8 @@ interface Row {
   qualExternal: boolean
   quiz: boolean
   tasksMin: string
+  /** 承認の条件(この画面ではまだ変えられない。保存し直しても消さない) */
+  approval?: boolean
 }
 
 const DEFAULT_TARGET = '__default__'
@@ -37,7 +39,7 @@ function rowsOf(rules: SkillLevelRules, skill: string): Row[] {
     const conds = levelConditionsFor(rules, skill, level)
     const qual = conds.find((c) => c.type === 'qualification') as Extract<LevelCondition, { type: 'qualification' }> | undefined
     const tasks = conds.find((c) => c.type === 'tasksDone') as Extract<LevelCondition, { type: 'tasksDone' }> | undefined
-    return { points: String(points[i]), qualMin: qual ? String(qual.min) : '', qualExternal: !!qual?.external, quiz: conds.some((c) => c.type === 'quiz'), tasksMin: tasks ? String(tasks.min) : '' }
+    return { points: String(points[i]), qualMin: qual ? String(qual.min) : '', qualExternal: !!qual?.external, quiz: conds.some((c) => c.type === 'quiz'), tasksMin: tasks ? String(tasks.min) : '', approval: conds.some((c) => c.type === 'approval') }
   })
 }
 
@@ -61,6 +63,7 @@ export function ruleFromRows(rows: Row[]): { rule?: SkillRule; error?: string } 
       if (!Number.isInteger(tm) || tm < 1 || tm > 1000) return { error: 'min' }
       list.push({ type: 'tasksDone', min: tm })
     }
+    if (r.approval) list.push({ type: 'approval' })
     conditions[String(i + 1) as '1'] = list
   }
   return { rule: { points, conditions } }

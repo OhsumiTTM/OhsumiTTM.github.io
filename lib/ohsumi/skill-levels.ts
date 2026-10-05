@@ -24,6 +24,8 @@ export type LevelCondition =
   | { type: 'quiz' }
   // このスキルを含む、担当して完了したタスクが min 件以上
   | { type: 'tasksDone'; min: number }
+  // 見る立場の人・代表が、このスキルをこのレベル以上と認めている(Members の skill_approvals_json)
+  | { type: 'approval' }
 
 export type LevelConditions = Partial<Record<'1' | '2' | '3' | '4' | '5', LevelCondition[]>>
 
@@ -52,15 +54,28 @@ export interface QuizPass {
   at: string
 }
 
+/** スキルのレベルの承認(Members の skill_approvals_json。GAS の approveSkillLevel が記録する) */
+export interface SkillApproval {
+  id: string
+  skill: string
+  level: SkillLevelValue
+  reason: string
+  /** 認めた人のメンバーID */
+  byId: string
+  at: string
+}
+
 /** 条件を確かめるための、その人の記録 */
 export interface SkillEvidence {
   qualifications: Qualification[]
   quizPasses: QuizPass[]
   /** スキル → 担当して完了したタスクの数 */
   doneTaskCounts: Record<string, number>
+  /** スキルのレベルの承認(無ければ空とみなす) */
+  approvals?: SkillApproval[]
 }
 
-export const EMPTY_EVIDENCE: SkillEvidence = { qualifications: [], quizPasses: [], doneTaskCounts: {} }
+export const EMPTY_EVIDENCE: SkillEvidence = { qualifications: [], quizPasses: [], doneTaskCounts: {}, approvals: [] }
 
 /** 点数の一覧として使えるか(5つ・0 以上の整数・増えていく) */
 export function validLevelPoints(v: unknown): v is number[] {
@@ -76,7 +91,7 @@ export function validLevelPoints(v: unknown): v is number[] {
 function validCondition(c: unknown): c is LevelCondition {
   if (!c || typeof c !== 'object') return false
   const o = c as Record<string, unknown>
-  if (o.type === 'quiz') return true
+  if (o.type === 'quiz' || o.type === 'approval') return true
   if (o.type === 'qualification' || o.type === 'tasksDone') return typeof o.min === 'number' && Number.isInteger(o.min) && o.min >= 1 && o.min <= 1000
   return false
 }
@@ -135,6 +150,7 @@ export function conditionMet(c: LevelCondition, skill: string, level: SkillLevel
     return related.length >= c.min
   }
   if (c.type === 'quiz') return ev.quizPasses.some((p) => p.skill === skill && p.level >= level)
+  if (c.type === 'approval') return (ev.approvals ?? []).some((a) => a.skill === skill && a.level >= level)
   return (ev.doneTaskCounts[skill] ?? 0) >= c.min
 }
 
