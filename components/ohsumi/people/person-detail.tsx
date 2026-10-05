@@ -1123,7 +1123,7 @@ export function PersonDetail({ id }: { id: string }) {
         <>
       {/* ダッシュボードサマリー */}
       {isSelf && (() => {
-        // notifications は store でdismissed済みを除外済み — そのまま未読として扱う
+        // notifications は store で既読を除外済み — そのまま未読として扱う
         const approvalNotifs = notifications.filter((n) => n.kind === 'approval')
         const pendingApprovTasks = tasks.filter((t) => t.pendingApproval && t.createdById === member.id)
         return (

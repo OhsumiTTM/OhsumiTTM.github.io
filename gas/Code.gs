@@ -1166,6 +1166,8 @@ var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interv
   // 採用しなかった日時と、消す日時を延ばした時の日時(「個人情報の削除」)
   'rejected_at', 'purge_at']
 
+// 本人だけが読み書きできる保存(getMyStorage・setMyStorage)。画面が決めたキーごとに、値を40000文字ずつの行に分けて持つ
+var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id はメンバーID(1人に何行もある)
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -1176,6 +1178,7 @@ var SHEET_HEADERS = {
   FormSubmissions: FORM_SUBMISSIONS_HEADERS,
   DailyReports: DAILY_REPORTS_HEADERS,
   Candidates: CANDIDATES_HEADERS,
+  PersonalStore: PERSONAL_STORE_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
@@ -2214,7 +2217,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus', 'getGasUpdateStatus',
+  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2866,7 +2869,7 @@ var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いしま
 // 機能停止中にも受け付ける操作(読み取りの一覧)。ここに無い操作は、すべて断る(新しく足した操作も、ここに足さない限り断る)。
 // 読み取り・ログイン(初期設定コードで代表を入れる時を除く)・ログインの記録・自分や管理者によるログインの無効化だけを入れる
 var READ_ONLY_ACTIONS = [
-  'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses', 'getFiles',
+  'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getExpenses', 'getFiles',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
@@ -4600,6 +4603,8 @@ function authorizeAction_(acting, action, body) {
     'approveTaskReview',       // 複数確認者の承認（本人が確認者かどうかは下記でチェック）
     'checkAndGenerateRecurringTasks', // item 2/TSK-051: 生成はルール定義に従うだけなので誰でも呼べる
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
+    'getMyStorage',            // 本人だけの保存を読む・書く(常に acting.id の分だけ)
+    'setMyStorage',
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
     'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)
@@ -4923,7 +4928,7 @@ function toErrorMessage_(err) {
 // Webhookへの疎通確認(UrlFetchApp、数百ms〜数秒かかりうる)のみなので、
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
-  'translateText', 'getMyEmails', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
+  'translateText', 'getMyEmails', 'getMyStorage', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
@@ -5855,6 +5860,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'sendInviteLinkToMe':
       result = sendInviteLinkToMe_(actingMember.id, body, Date.now())
+      break
+    case 'getMyStorage':
+      result = getMyStorage_(actingMember.id, body.keys)
+      break
+    case 'setMyStorage':
+      result = setMyStorage_(actingMember.id, body.key, body.value)
       break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
@@ -8112,6 +8123,106 @@ function createInitialTasksForMember_(memberId, firstLeader) {
 // メールアドレスはMembersシート(公開CSV)には置かず、こちらの非公開シートに
 // id(=Members.idと同じ値)をキーとして1人1行で保持する。読み書きは必ず
 // このセクションの関数経由で行い、Membersシート側に書き戻さないこと。
+
+// ---- 本人だけの保存(getMyStorage・setMyStorage) ----
+//
+// 画面が決めたキー(英小文字・数字・. _ -、64文字まで)ごとに、文字列の値を保存する。
+// 読み書きできるのは本人の分だけ(メンバーID は認証済みの acting.id。画面が送るメンバーID は使わない)。
+// 1人あたり PERSONAL_STORE_MAX_KEYS 個のキー・合わせて PERSONAL_STORE_MAX_CHARS 文字まで。
+// 値は1つのセルの上限を超えないよう、PERSONAL_STORE_CHUNK 文字ずつの行に分ける。
+// 初期データ・スナップショットには入れない(ほかの人には返さない)。個人情報の削除で消す
+var SHEET_PERSONAL_STORE = 'PersonalStore'
+var PERSONAL_STORE_CHUNK = 40000
+var PERSONAL_STORE_MAX_CHARS = 150000
+var PERSONAL_STORE_MAX_KEYS = 20
+var PERSONAL_STORE_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+
+function personalStoreSheet_(create) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var sheet = ss.getSheetByName(SHEET_PERSONAL_STORE)
+  if (!sheet && create) sheet = getOrCreateSheet_(SHEET_PERSONAL_STORE, PERSONAL_STORE_HEADERS)
+  return sheet
+}
+
+// 本人の行(行番号・キー・何番目か・値)。メンバーID の列だけを読んで探し、本人の行だけを読む
+function personalStoreRows_(sheet, memberId) {
+  var last = sheet ? sheet.getLastRow() : 0
+  if (last < 2) return []
+  var headers = headerRow_(sheet)
+  var col = function (h) { return headers.indexOf(h) }
+  var ids = sheet.getRange(2, col('id') + 1, last - 1, 1).getValues()
+  var out = []
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) !== String(memberId)) continue
+    var r = sheet.getRange(i + 2, 1, 1, headers.length).getValues()[0]
+    out.push({ row: i + 2, key: String(r[col('key')]), part: Number(r[col('part')]) || 0, value: String(r[col('value')] == null ? '' : r[col('value')]) })
+  }
+  return out
+}
+
+function personalStoreValues_(rows) {
+  var byKey = {}
+  rows.forEach(function (r) { (byKey[r.key] = byKey[r.key] || []).push(r) })
+  var out = {}
+  Object.keys(byKey).forEach(function (k) {
+    out[k] = byKey[k].sort(function (a, b) { return a.part - b.part }).map(function (r) { return r.value }).join('')
+  })
+  return out
+}
+
+function getMyStorage_(memberId, keys) {
+  var values = personalStoreValues_(personalStoreRows_(personalStoreSheet_(false), memberId))
+  if (Array.isArray(keys)) {
+    var picked = {}
+    keys.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(values, String(k))) picked[String(k)] = values[String(k)] })
+    values = picked
+  }
+  return { values: values }
+}
+
+// value: 文字列(画面が JSON にして送る)。null・空の文字列はキーを消す
+function setMyStorage_(memberId, key, value) {
+  key = String(key || '')
+  if (!PERSONAL_STORE_KEY_RE.test(key)) throw userError_('保存のキーが正しくありません。')
+  if (value !== null && value !== undefined && typeof value !== 'string') throw userError_('保存する値は文字列にしてください。')
+  var text = value == null ? '' : value
+  var sheet = personalStoreSheet_(true)
+  var rows = personalStoreRows_(sheet, memberId)
+  var current = personalStoreValues_(rows)
+  var others = Object.keys(current).filter(function (k) { return k !== key })
+  if (text) {
+    if (others.length + 1 > PERSONAL_STORE_MAX_KEYS) throw userError_('保存できるキーは1人' + PERSONAL_STORE_MAX_KEYS + '個までです。')
+    var total = text.length + others.reduce(function (n, k) { return n + current[k].length }, 0)
+    if (total > PERSONAL_STORE_MAX_CHARS) throw userError_('保存できる大きさ(1人' + PERSONAL_STORE_MAX_CHARS + '文字)を超えています。')
+  }
+  var chunks = []
+  for (var i = 0; i < text.length; i += PERSONAL_STORE_CHUNK) chunks.push(text.slice(i, i + PERSONAL_STORE_CHUNK))
+  var mine = rows.filter(function (r) { return r.key === key }).sort(function (a, b) { return a.part - b.part })
+  var headers = headerRow_(sheet)
+  var now = new Date().toISOString()
+  var rowOf = function (part, chunk) {
+    var o = { id: String(memberId), key: key, part: part, value: chunk, updated_at: now }
+    return headers.map(function (h) { return Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '' })
+  }
+  chunks.forEach(function (chunk, part) {
+    var target = mine[part] ? mine[part].row : sheet.getLastRow() + 1
+    // 数式として扱われないよう、書式なしテキストにしてから書く
+    sheet.getRange(target, 1, 1, headers.length).setNumberFormat('@')
+    sheet.getRange(target, 1, 1, headers.length).setValues([rowOf(part, chunk)])
+  })
+  // 余った行は下から消す(行番号がずれないように)
+  mine.slice(chunks.length).map(function (r) { return r.row }).sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
+  return { key: key, size: text.length }
+}
+
+// 個人情報の削除: 本人だけの保存を消す
+function deletePersonalStore_(memberId) {
+  var sheet = personalStoreSheet_(false)
+  if (!sheet) return 0
+  var rows = personalStoreRows_(sheet, memberId).map(function (r) { return r.row }).sort(function (a, b) { return b - a })
+  rows.forEach(function (r) { sheet.deleteRow(r) })
+  return rows.length
+}
 
 function getMemberEmailsSheet_() {
   return getOrCreateSheet_(SHEET_MEMBER_EMAILS, MEMBER_EMAILS_HEADERS)
@@ -10745,7 +10856,7 @@ var TABLE_WRITE_ACTIONS = {
     'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
-var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage']
 
 // actions は操作の名前、または名前の配列(まとめて送られた書き込み)。表ごとに1回だけ新しくする
 function bumpVersionsAfterWrite_(actions) {
@@ -14849,6 +14960,7 @@ function purgeMember_(memberId, nowMs) {
   var emails = String(getAllMemberEmails_()[String(memberId)] || '')
   updateRowFields_(SHEET_MEMBERS, memberId, fields)
   deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
+  deletePersonalStore_(memberId)
   forgetPersonalProps_(memberId, emails)
   bumpMemberEmailsVersion_()
   // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)

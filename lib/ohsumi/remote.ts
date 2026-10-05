@@ -1235,6 +1235,9 @@ export const remoteApi = {
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
   // サーバー側が自分の分のみ返すため、他人のメールを取得する手段にはならない
   getMyEmails: () => postToGas<{ email: string }>('getMyEmails', {}),
+  // 本人だけの保存(gas/Code.gs の getMyStorage・setMyStorage)。値は文字列(null で消す)
+  getMyStorage: (keys?: string[]) => postToGas<{ values: Record<string, string> }>('getMyStorage', keys ? { keys } : {}),
+  setMyStorage: (key: string, value: string | null) => postToGas<{ key: string; size: number }>('setMyStorage', { key, value }),
   // 全端末でログアウト(自分)。発行済みのセッションがすべて無効になる
   revokeMySessions: () => postToGas<{ revoked: boolean }>('revokeMySessions', {}),
   // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は送らない。GAS が決める)
