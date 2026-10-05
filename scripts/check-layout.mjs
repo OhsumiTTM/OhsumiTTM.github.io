@@ -831,6 +831,16 @@ async function run({ build = true } = {}) {
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
           const gasUpdate = await evaluate(`document.querySelector('[data-gas-update-banner]')?.textContent ?? ''`)
           if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → 最新の版: 2026.10.01-1)') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
+          if (!gasUpdate.includes('「Ohsumi」→「初期設定」') || !gasUpdate.includes('デプロイを管理')) throw new Error('GAS の更新の知らせに、更新の手順が出ません: ' + gasUpdate)
+          // 「コードをコピー」: このサイトの /gas/Code.gs を読む(CSP の connect-src 'self' のまま)。知らせの最新の版(2026.10.01-1)と
+          // サイトのコードの版が違うので、コピーせずに理由を出す
+          await evaluate(`document.querySelector('[data-gas-copy-code]').click()`)
+          let copyResult = ''
+          for (let i = 0; i < 50 && !copyResult; i++) {
+            await new Promise((r) => setTimeout(r, 100))
+            copyResult = await evaluate(`document.querySelector('[data-gas-copy-result]')?.textContent ?? ''`)
+          }
+          if (!/このサイトのコードの版\(\d{4}\.\d{2}\.\d{2}-\d+\)が、最新の版\(2026\.10\.01-1\)と違う/.test(copyResult)) throw new Error('「コードをコピー」が、サイトの Code.gs の版を確かめていません: ' + copyResult)
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
         if (step.do === 'registry') {
