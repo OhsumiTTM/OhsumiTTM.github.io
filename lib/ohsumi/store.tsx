@@ -2019,7 +2019,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const importPortableRecord = useCallback(
     (memberId: string, skillPoints: SkillPoints, qualifications: Qualification[]) => {
       const commonSkills = new Set(DEFAULT_SKILL_OPTIONS)
-      const filteredPoints = Object.fromEntries(
+      // 本人が自分の分を持ち込む時は、点数を足さない(GAS の importPortableRecord_ と同じ。代表は除く)
+      const me = members.find((m) => m.id === currentUserId)
+      const selfImport = memberId === currentUserId && !isTopRoleRef(roles, me?.role)
+      const filteredPoints = selfImport ? {} : Object.fromEntries(
         Object.entries(skillPoints).filter(([skill]) => commonSkills.has(skill)),
       )
       setMembers((prev) =>
@@ -2059,7 +2062,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (isRemoteConfigured)
         runRemote(remoteApi.importPortableRecord(memberId, filteredPoints, qualifications))
     },
-    [runRemote],
+    [runRemote, members, currentUserId, roles],
   )
 
   // 検定定義の更新（Admin）
@@ -2233,7 +2236,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       }
       setExpenseApplications((prev) => [newApp, ...prev])
-      if (isRemoteConfigured) runRemote(remoteApi.submitExpenseApplication(newApp))
+      // GAS が決めた ID に差し替える(申請者・作った日時・承認の段も GAS が決める)
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.submitExpenseApplication(newApp).then((res) => {
+            if (res?.id) setExpenseApplications((prev) => prev.map((a) => (a.id === newApp.id ? { ...a, id: res.id } : a)))
+          }),
+        )
+      }
     },
     [runRemote],
   )
@@ -2335,12 +2345,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         }),
       )
       if (isRemoteConfigured) {
-        const category = expenseCategories.find((c) => c.id === fields.categoryId)
         runRemote(
-          remoteApi.resubmitExpense(applicationId, {
-            ...fields,
-            approvalSteps: category?.approvalSteps ?? [],
-          }),
+          remoteApi.resubmitExpense(applicationId, fields),
         )
       }
     },
@@ -2407,7 +2413,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       }
       setCustomFormSubmissions((prev) => [submission, ...prev])
-      if (isRemoteConfigured) runRemote(remoteApi.submitCustomForm(submission))
+      // GAS が決めた ID に差し替える(提出者・作った日時も GAS が決める)
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.submitCustomForm(submission).then((res) => {
+            if (res?.id) setCustomFormSubmissions((prev) => prev.map((x) => (x.id === submission.id ? { ...x, id: res.id } : x)))
+          }),
+        )
+      }
     },
     [customFormDefs, currentUserId, runRemote],
   )
@@ -4515,6 +4528,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
+              // 一般のメンバーでも承認なしで作れるクイック追加(GAS が中身を確かめて、作る時に保存する)
+              quickKind: 'schedule',
+              schedule,
             },
           ])
           .then((mapping) => {
@@ -4625,6 +4641,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
+              quickKind: 'form',
+              form,
             },
           ])
           .then((mapping) => {

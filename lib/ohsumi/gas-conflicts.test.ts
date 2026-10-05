@@ -119,7 +119,8 @@ describe('記録の一覧の差分(listOps)', () => {
     const b = { id: 'o2', date: '2026-09-15', note: 'B' }
     expect(h.post({ action: 'updateOneOnOnes', sessionToken: 'm-lead', memberId: 'm-base', listOps: [{ op: 'add', entry: a }], requestId: rid() }).ok).toBe(true)
     expect(h.post({ action: 'updateOneOnOnes', sessionToken: 'm-top', memberId: 'm-base', listOps: [{ op: 'add', entry: b }], requestId: rid() }).ok).toBe(true)
-    expect(json(h, 'Members', 'm-base', 'one_on_ones_json')).toEqual([a, b])
+    // 相手(行った人)は、記録を足した本人になる
+    expect(json(h, 'Members', 'm-base', 'one_on_ones_json')).toEqual([{ ...a, withId: 'm-lead' }, { ...b, withId: 'm-top' }])
   })
 
   it('一覧を丸ごと送る古い画面からの保存は、読み込み直してもらう', () => {

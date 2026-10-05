@@ -849,6 +849,9 @@ function QualificationsSection({
   rid: () => string
 }) {
   const items = member.qualifications ?? []
+  const { currentUser, isTopRef } = useOhsumi()
+  // 「外部」の印は、本人は付けられない(代表は除く。GAS の checkQualifications_ と同じ)
+  const canMarkExternal = member.id !== currentUser?.id || isTopRef(currentUser?.role)
   const [name, setName] = useState('')
   const [acquiredDate, setAcquiredDate] = useState('')
   const [issuer, setIssuer] = useState('')
@@ -866,7 +869,7 @@ function QualificationsSection({
         acquiredDate: acquiredDate || undefined,
         issuer: issuer.trim() || undefined,
         relatedSkills: relatedSkills.length > 0 ? relatedSkills : undefined,
-        external: external || undefined,
+        external: (canMarkExternal && external) || undefined,
       },
     ])
     setName('')
@@ -922,10 +925,12 @@ function QualificationsSection({
               emptyText={t('common.notSet')}
               placeholder={t('career.qualifications.relatedSkillsPlaceholder')}
             />
-            <label className="ml-2 flex items-center gap-1 text-xs">
-              <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} className="size-3.5 accent-primary" />
-              {t('career.qualifications.externalLabel')}
-            </label>
+            {canMarkExternal && (
+              <label className="ml-2 flex items-center gap-1 text-xs">
+                <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} className="size-3.5 accent-primary" />
+                {t('career.qualifications.externalLabel')}
+              </label>
+            )}
           </div>
         </div>
       )}
@@ -1034,6 +1039,8 @@ function TrainingHistorySection({
   rid: () => string
 }) {
   const { isTopRef, currentUser, trainingPrograms, roles } = useOhsumi()
+  // 承認するのは管理者。自分の研修は自分では承認できない(代表は除く。GAS の checkTrainingHistory_ と同じ)
+  const canApprove = isAdmin && (member.id !== currentUser?.id || isTopRef(currentUser?.role))
   // 役職の名前(団体が付けた名前。研修の対象の層との部分一致に使う)
   const roleNameRaw = findRole(roles, member.role)?.name ?? member.role
   const { t: trHint } = useI18n()
@@ -1060,14 +1067,14 @@ function TrainingHistorySection({
   const add = () => {
     const n = name.trim()
     if (!n || !date) return
-    const status: TrainingRecord['status'] = isAdmin ? 'approved' : 'pending'
+    const status: TrainingRecord['status'] = canApprove ? 'approved' : 'pending'
     const id = rid()
     onSave(member.id, [
       ...items,
       { id, name: n, date, provider: provider.trim() || undefined, status },
     ])
     // 研修の名前・状態は、GAS が保存した記録(id)から読んで知らせる
-    if (!isAdmin) onRequest(member.id, id)
+    if (!canApprove) onRequest(member.id, id)
     setName('')
     setDate('')
     setProvider('')
@@ -1123,7 +1130,7 @@ function TrainingHistorySection({
                     {tr(t.attendanceStatus === 'attended' ? 'career.training.attendance.attended' : 'career.training.attendance.absent')}
                   </span>
                 )}
-                {isAdmin && status === 'pending' && (
+                {canApprove && status === 'pending' && (
                   <div className="flex items-center gap-1">
                     {/* 承認/却下自体（updateTrainingHistory）はselfOrAdminで
                         代表以外でも成功するが、その後のメール通知

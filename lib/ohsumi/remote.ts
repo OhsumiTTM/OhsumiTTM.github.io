@@ -907,6 +907,10 @@ export interface CreateTaskPayload {
   estimatedHours?: number
   importance?: TaskImportance
   relatedReviewTaskId?: string
+  // 日程調整・フォームのクイック追加(一般のメンバーでも承認なしで作れる。GAS が中身を確かめて、作る時に保存する)
+  quickKind?: 'schedule' | 'form'
+  schedule?: import('./types').TaskSchedule
+  form?: import('./types').TaskForm
   // 幹部の取り込み(GAS は幹部の時だけ受け付ける)。承認待ちにせず、次の項目も入れられる
   import?: boolean
   status?: TaskStatus
@@ -1466,8 +1470,9 @@ export const remoteApi = {
   updateCustomFields: (memberId: string, customFields: Record<string, string>) =>
     postToGas('updateCustomFields', { memberId, customFields }),
   // ---- 経費申請 ----
+  // 申請者・ID・作った日時・承認の段は GAS が決める(返ってきた id に差し替える)
   submitExpenseApplication: (application: import('./types').ExpenseApplication) =>
-    postToGas('submitExpenseApplication', { application }),
+    postToGas<{ id: string }>('submitExpenseApplication', { application }),
   approveExpenseStep: (applicationId: string, stepId: string, actorId: string, comment?: string) =>
     postToGas('approveExpenseStep', { applicationId, stepId, actorId, comment }),
   rejectExpense: (applicationId: string, reason: string) =>
@@ -1485,12 +1490,13 @@ export const remoteApi = {
       justification?: string
       purpose?: string
       customFieldAnswers?: Record<string, string>
-      approvalSteps: import('./types').ApprovalStep[]
     },
+    // 承認の段は送らない(GAS がカテゴリの設定から決める)
   ) => postToGas('resubmitExpense', { applicationId, fields }),
   // ---- カスタムフォーム ----
+  // 提出者・ID・作った日時は GAS が決める(返ってきた id に差し替える)
   submitCustomForm: (submission: import('./types').CustomFormSubmission) =>
-    postToGas('submitCustomForm', { submission }),
+    postToGas<{ id: string }>('submitCustomForm', { submission }),
   approveFormStep: (submissionId: string, stepId: string, actorId: string, comment?: string) =>
     postToGas('approveFormStep', { submissionId, stepId, actorId, comment }),
   rejectFormSubmission: (submissionId: string, reason: string) =>
