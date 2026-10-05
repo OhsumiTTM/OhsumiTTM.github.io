@@ -80,7 +80,7 @@ describe('レジストリから止める・再開する', () => {
     w.reg.post({ action: 'setFeatureSwitches', session: w.adminSession, ...target, features, reason })
   // 書き込みの前の確かめ直し(10分に1回まで)の間隔を過ぎたことにする
   const elapse = (org: Org) => org.cache.delete('contract:recheck')
-  const report = (org: Org, token: string) => w.call(org, token, 'submitDailyReport', { report: { date: '2026-10-01', did: '確認', next: '', blockers: '' } })
+  const report = (org: Org, token: string) => w.call(org, token, 'submitDailyReport', { report: { type: 'daily', date: '2026-10-01', did: '確認', next: '', blockers: '' } })
   const createTask = (org: Org, token: string) => w.call(org, token, 'createTasks', { tasks: [{ tempId: 'tmp-1', title: '確認', projectId: '', department: '', category: '', skills: [],
     difficulty: 'normal', priority: 'medium', deadline: null, assigneeIds: [], creatorId: '', pendingApproval: false }] })
 
@@ -97,7 +97,7 @@ describe('レジストリから止める・再開する', () => {
     expect(w.googleLogin(A.org, 'top@a.example').ok).toBe(true)
     // まとめて送った時は、止めた操作だけを断る
     const batch = w.call(A.org, topA, 'batch', { ops: [
-      { action: 'submitDailyReport', report: { date: '2026-10-02', did: 'x', next: '', blockers: '' } },
+      { action: 'submitDailyReport', report: { type: 'daily', date: '2026-10-02', did: 'x', next: '', blockers: '' } },
       { action: 'updateDisplayName', memberId: meA, displayName: '代表' },
     ] })
     expect(batch.ok).toBe(true)

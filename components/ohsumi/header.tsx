@@ -16,6 +16,7 @@ import {
   Building2,
   CalendarClock,
   CheckCheck,
+  Check,
   ChevronDown,
   ClipboardCheck,
   ClipboardList,
@@ -45,7 +46,9 @@ export function Header() {
     setMode,
     logout,
     notifications,
-    dismissNotification,
+    notificationHistory,
+    markNotificationRead,
+    markAllNotificationsRead,
     remoteEnabled,
     refreshing,
     refreshAll,
@@ -67,10 +70,28 @@ export function Header() {
   const { openTask } = useTaskDrawer()
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
+  // 通知の一覧: 未読(今の通知のうち読んでいないもの)・すべて(履歴。既読・対応済みを含む)
+  const [notifTab, setNotifTab] = useState<'unread' | 'all'>('unread')
   const [otherDeviceOpen, setOtherDeviceOpen] = useState(false)
   const [query, setQuery] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
   const notifRef = useRef<HTMLDivElement>(null)
+
+  // 通知を開く: 既読にして、開く先(承認の一覧・メンバー・タスク)へ移る
+  const openNotification = (n: { id: string; kind: string; taskId: string; commentId?: string; memberId?: string }) => {
+    setNotifOpen(false)
+    markNotificationRead(n.id)
+    if (n.kind === 'mention' && n.commentId) markMentionSeen(n.commentId)
+    if (n.kind === 'approval') {
+      go({ name: 'admin', section: 'approvals' })
+      return
+    }
+    if (n.memberId) {
+      go({ name: 'person', id: n.memberId })
+      return
+    }
+    if (n.taskId) openTask(n.taskId)
+  }
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -220,61 +241,101 @@ export function Header() {
             </button>
             {notifOpen && (
               <div className="absolute right-0 top-full mt-1.5 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-lg animate-in fade-in slide-in-from-top-1">
-                <div className="border-b border-border px-3 py-2 text-sm font-semibold">{t('header.notifications')}</div>
+                <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                  <span className="text-sm font-semibold">{t('header.notifications')}</span>
+                  {notifications.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={markAllNotificationsRead}
+                      className="shrink-0 text-xs text-primary hover:underline"
+                    >
+                      {t('header.notifications.markAllRead')}
+                    </button>
+                  )}
+                </div>
+                <div className="flex border-b border-border text-xs" role="tablist">
+                  {(['unread', 'all'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      aria-selected={notifTab === tab}
+                      onClick={() => setNotifTab(tab)}
+                      className={cn(
+                        'flex-1 px-3 py-1.5 font-medium transition-colors',
+                        notifTab === tab ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {t(tab === 'unread' ? 'header.notifications.tab.unread' : 'header.notifications.tab.all')}
+                      {tab === 'unread' && notifications.length > 0 ? ` (${notifications.length})` : ''}
+                    </button>
+                  ))}
+                </div>
                 <div className="max-h-96 overflow-y-auto ohsumi-scroll">
-                  {notifications.length === 0 && (
+                  {notifTab === 'unread' && notifications.length === 0 && (
                     <div className="flex items-center gap-2 px-3 py-6 text-sm text-muted-foreground">
                       <CheckCheck className="size-4" />
                       {t('header.notifications.empty')}
                     </div>
                   )}
-                  {notifications.map((n) => (
+                  {notifTab === 'unread' && notifications.map((n) => (
                     <div
                       key={n.id}
                       className="flex items-start border-b border-border last:border-0"
                     >
                       <button
-                        onClick={() => {
-                          setNotifOpen(false)
-                          if (n.kind === 'mention' && n.commentId) markMentionSeen(n.commentId)
-                          if (n.kind === 'approval') {
-                            go({ name: 'admin', section: 'approvals' })
-                            return
-                          }
-                          if (n.memberId) {
-                            go({ name: 'person', id: n.memberId })
-                            return
-                          }
-                          if (n.taskId) openTask(n.taskId)
-                        }}
+                        onClick={() => openNotification(n)}
                         className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-secondary"
                       >
-                        {n.kind === 'deadline' ? (
-                          <CalendarClock className="mt-0.5 size-4 shrink-0 text-warning" />
-                        ) : n.kind === 'stale' ? (
-                          <Clock className="mt-0.5 size-4 shrink-0 text-warning" />
-                        ) : n.kind === 'mention' ? (
-                          <AtSign className="mt-0.5 size-4 shrink-0 text-primary" />
-                        ) : n.kind === 'lowWorkload' ? (
-                          <TrendingDown className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <ClipboardCheck className="mt-0.5 size-4 shrink-0 text-primary" />
-                        )}
+                        <NotificationIcon kind={n.kind} />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium">{n.title}</p>
                           <p className="mt-0.5 text-xs text-muted-foreground">{n.detail}</p>
                         </div>
                       </button>
                       <button
-                        onClick={() => dismissNotification(n.id)}
+                        onClick={() => markNotificationRead(n.id)}
                         className="flex size-8 shrink-0 items-center justify-center self-center text-muted-foreground transition-colors hover:text-foreground"
-                        aria-label={t('header.notifications.dismiss')}
-                        title={t('header.notifications.dismiss.title')}
+                        aria-label={t('header.notifications.markRead')}
+                        title={t('header.notifications.markRead')}
                       >
-                        <X className="size-3.5" />
+                        <Check className="size-3.5" />
                       </button>
                     </div>
                   ))}
+                  {notifTab === 'all' && notificationHistory.length === 0 && (
+                    <div className="px-3 py-6 text-sm text-muted-foreground">{t('header.notifications.historyEmpty')}</div>
+                  )}
+                  {notifTab === 'all' && notificationHistory.map((r) => {
+                    const state = r.resolvedAt ? 'resolved' : r.readAt ? 'read' : 'unread'
+                    return (
+                      <button
+                        key={r.id}
+                        onClick={() => openNotification(r)}
+                        className={cn(
+                          'flex w-full min-w-0 items-start gap-2.5 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-secondary',
+                          state !== 'unread' && 'opacity-70',
+                        )}
+                      >
+                        <NotificationIcon kind={r.kind} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{r.title}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{r.detail}</p>
+                          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                            <span
+                              className={cn(
+                                'rounded px-1.5 py-px font-medium',
+                                state === 'unread' ? 'bg-primary/10 text-primary' : 'bg-secondary',
+                              )}
+                            >
+                              {t(`header.notifications.state.${state}`)}
+                            </span>
+                            <span className="tabular-nums">{formatNotifiedAt(r.at)}</span>
+                          </p>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -559,4 +620,20 @@ function MenuItem({
       {children}
     </button>
   )
+}
+
+function NotificationIcon({ kind }: { kind: string }) {
+  if (kind === 'deadline') return <CalendarClock className="mt-0.5 size-4 shrink-0 text-warning" />
+  if (kind === 'stale') return <Clock className="mt-0.5 size-4 shrink-0 text-warning" />
+  if (kind === 'mention') return <AtSign className="mt-0.5 size-4 shrink-0 text-primary" />
+  if (kind === 'lowWorkload') return <TrendingDown className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+  return <ClipboardCheck className="mt-0.5 size-4 shrink-0 text-primary" />
+}
+
+// 履歴の時刻(この端末の時刻で「10/05 14:30」)
+function formatNotifiedAt(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }

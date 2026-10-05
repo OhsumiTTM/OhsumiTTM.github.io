@@ -36,7 +36,7 @@
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost                   ウェブアプリの入口
 //   onOpen                          スプレッドシートを開いた時に「Ohsumi」メニューを出す
-//   registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
+//   setupOhsumiFromMenu・registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
 //   sendBatchNotifications・dailyMaintenance・onSpreadsheetChange・onSpreadsheetEdit・checkContractStatus  トリガーから呼ばれる
 //
 // ■ そのほかの関数は、中で使うだけ。名前の最後に _ を付けて、エディタの「実行」の一覧に出ないようにしている
@@ -54,6 +54,9 @@
 function setupOhsumi() {
   // 今のコードに無い関数を指すトリガー(以前の版の名前のまま残ったもの)を消す
   removeOrphanTriggers_()
+  // テンプレートのコードの既定値(レジストリの URL・ログインのクライアント ID)を、プロパティが無ければ保存する
+  var savedDefaults = saveCodeDefaultsToProps_(PropertiesService.getScriptProperties())
+  if (savedDefaults.length) console.log('✅ コードの既定値をスクリプトプロパティに保存しました: ' + savedDefaults.join(', '))
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   console.log('📋 スプレッドシート: ' + ss.getName())
 
@@ -113,6 +116,21 @@ function setupOhsumi() {
       console.log('➕ Settings 初期キー追加: ' + pair[0])
     }
   })
+
+  // --- 役職・選択肢の初期値(無い時だけ入れる。上書きはしない)---
+  // 新しい団体(メンバーがまだいない)は、どの団体にも当てはまる最小限の形にする。
+  // すでに動いている団体は、今の画面の既定値をそのまま保存しておく(後で画面の既定値を変えても、今の選択肢が変わらないように)
+  try {
+    var membersSheet = ss.getSheetByName(SHEET_MEMBERS)
+    var fresh = !membersSheet || membersSheet.getLastRow() <= 1
+    var seeds = fresh ? NEW_ORG_SETTINGS : EXISTING_ORG_SETTINGS
+    Object.keys(seeds).forEach(function (key) {
+      if (settingsData.indexOf(key) !== -1) return
+      appendRowByHeaders_(settingsSheet, SHEET_SETTINGS, { key: key, value: seeds[key] })
+      settingsData.push(key)
+      console.log('➕ Settings 初期値追加: ' + key + (fresh ? '(新しい団体)' : '(今の既定値を保存)'))
+    })
+  } catch (e) { console.error('❌ 役職・選択肢の初期値: ' + e) }
 
   // --- バッチ通知トリガーの設定 ---
   try {
@@ -200,6 +218,36 @@ function setupOhsumi() {
   } catch (e) { console.error('❌ トリガーの確認: ' + e) }
 
   console.log('🚀 setupOhsumi 完了')
+}
+
+// 新しい団体の役職・選択肢の初期値(FSIF 向けのものを外した、どの団体にも当てはまる最小限の形)
+var NEW_ORG_SETTINGS = {
+  roles: JSON.stringify([
+    { id: 'base', name: '一般', tier: 'base' },
+    { id: 'r_leader', name: '班長', tier: 'admin', restricted: false },
+    { id: 'top', name: '代表', tier: 'top' },
+  ]),
+  skill_options: ['企画', 'デザイン', 'ライティング', 'リサーチ', '広報', 'SNS', 'コミュニケーション', 'イベント運営', 'データ分析', '開発'].join(','),
+  category_options: ['未分類', '企画', 'デザイン', '広報', 'イベント', 'リサーチ', '開発', '事務'].join(','),
+  // 要求分野と、分野ごとのスキル(上の skill_options のスキルだけを使う)
+  skill_field_options: ['企画', 'デザイン', '広報', '運営', 'データ・開発'].join(','),
+  skill_field_skills: JSON.stringify({
+    '企画': ['企画', 'リサーチ'],
+    'デザイン': ['デザイン'],
+    '広報': ['広報', 'SNS', 'ライティング'],
+    '運営': ['イベント運営', 'コミュニケーション'],
+    'データ・開発': ['データ分析', '開発'],
+  }),
+}
+// すでに動いている団体には、今の画面の既定値を保存しておく(画面の既定値を後で変えても選択肢が変わらないように)
+var EXISTING_ORG_SETTINGS = {
+  skill_options: ['デザイン', 'Canva', 'PowerPoint', 'ライティング', 'リサーチ', 'SNS', '広報', 'コミュニケーション',
+    'イベント運営', 'メール', 'UI/UX', '実装', '企画', '要件定義', 'プロダクト設計', '校閲', 'Claude', 'V0'].join(','),
+  category_options: ['未分類', 'デザイン', '渉外', 'イベント', '広報', 'ライティング', '企画', 'リサーチ', '開発', '物品調達'].join(','),
+  // 要求分野: 設定が無い時に画面が出している値(lib/ohsumi/store.tsx の DEFAULT_SKILL_FIELD_OPTIONS)。
+  // 分野ごとのスキルは、設定が無い時の画面では空(GAS から読んだ設定で、画面の初期値を置き換えるため)なので、空のまま保存する
+  skill_field_options: ['デザイン', '営業', 'AI活用'].join(','),
+  skill_field_skills: '{}',
 }
 
 // setupOhsumi が作る、団体の GAS に必要なトリガー
@@ -852,6 +900,7 @@ function clearReadMeasurements() {
 function doGet(e) {
   startRequestTiming_()
   logGetRequest_(e)
+  rememberWebAppUrl_()
   return jsonOutput_({
     ok: false,
     getReceived: true,
@@ -887,11 +936,25 @@ function onOpen() {
   try {
     SpreadsheetApp.getUi()
       .createMenu('Ohsumi')
+      .addItem('初期設定', 'setupOhsumiFromMenu')
       .addItem('レジストリに登録する…', 'registerWithRegistryFromMenu')
       .addItem('初期設定コードを作り直す', 'regenerateInitialSetupCodeFromMenu')
       .addToUi()
   } catch (e) {
     // スプレッドシートを開いた時以外(エディタからの実行など)は何もしない
+  }
+}
+
+// メニューの「初期設定」: エディタを開かずに setupOhsumi を実行する(初めての時は Google の許可の画面が出る)
+function setupOhsumiFromMenu() {
+  var ui = SpreadsheetApp.getUi()
+  try {
+    setupOhsumi()
+    ui.alert('Ohsumi', '初期設定が終わりました。\n\n次は「デプロイ → 新しいデプロイ」でウェブアプリとして公開し、' +
+      'メニューの「Ohsumi → レジストリに登録する…」に進んでください(手順は Ohsumi の案内のとおりです)。', ui.ButtonSet.OK)
+  } catch (e) {
+    ui.alert('Ohsumi', '初期設定を最後まで実行できませんでした: ' + toErrorMessage_(e) +
+      '\n\nもう一度「Ohsumi → 初期設定」を選んでください。続く時は、表示された内容を FSIF にお伝えください。', ui.ButtonSet.OK)
   }
 }
 
@@ -1123,6 +1186,9 @@ var TASKS_HEADERS = [
   'related_review_task_id', // APR-007: このタスクが確認タスクである場合、確認対象の元タスクのid
   'hold_reason_note',  // 保留の理由(ステータスを保留にしたときのメモ)
   'hold_reason_since', // 保留にした日(YYYY-MM-DD)
+  'calendar_event_id', // カレンダーの予定の ID(syncCalendarForTask_ が書く。画面には返さない)
+  'deleted_at',        // ゴミ箱に入れた日時(ISO)。空なら使っているタスク。30日後に毎日の処理が行を消す
+  'deleted_by',        // ゴミ箱に入れた人(メンバーID)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
@@ -1133,6 +1199,8 @@ var CANDIDATES_HEADERS = ['id', 'name', 'email', 'phone', 'resume_text', 'interv
   // 採用しなかった日時と、消す日時を延ばした時の日時(「個人情報の削除」)
   'rejected_at', 'purge_at']
 
+// 本人だけが読み書きできる保存(getMyStorage・setMyStorage)。画面が決めたキーごとに、値を40000文字ずつの行に分けて持つ
+var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id はメンバーID(1人に何行もある)
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -1143,6 +1211,7 @@ var SHEET_HEADERS = {
   FormSubmissions: FORM_SUBMISSIONS_HEADERS,
   DailyReports: DAILY_REPORTS_HEADERS,
   Candidates: CANDIDATES_HEADERS,
+  PersonalStore: PERSONAL_STORE_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
@@ -2181,7 +2250,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus', 'getGasUpdateStatus',
+  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2241,7 +2310,7 @@ var SHEET_AUTH_ACTIONS = [
   // 代表・全権管理者だけ(役職・部門・設定・通知先・ログインの取り消し)
   'updateSetting', 'updateRoles', 'deleteRole', 'updateDepartments', 'deleteDepartment', 'moveDepartmentTasks',
   'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth',
-  'revokeMemberSessions',
+  'revokeMemberSessions', 'restoreTask', 'purgeTask',
   // メンバーの状態・部門・プロジェクトの担当(班長の担当範囲の判定に使う)
   'updateMemberInactive', 'updateMemberDepartmentPath', 'updateProjectMembers',
 ]
@@ -2519,7 +2588,7 @@ function renewSessionIfNeeded_(payload) {
 // 成功したら { email, iat } を返す
 function verifyGoogleIdToken_(idToken, nonceSecret) {
   var props = requestProps_()
-  var clientId = props.GOOGLE_OAUTH_CLIENT_ID
+  var clientId = googleOAuthClientIdOf_(props)
   if (!clientId) throw userError_('サーバー側の設定(GOOGLE_OAUTH_CLIENT_ID)が未設定です。管理者にお問い合わせください。')
   if (!props.ORG_ID) throw userError_('ログインの設定が完了していません。管理者に setupOhsumi の実行を依頼してください。')
   if (!/^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+$/.test(String(idToken || '')) || String(idToken).length > 4096) {
@@ -2589,7 +2658,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.04-1'
+var OHSUMI_GAS_VERSION = '2026.10.05-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2697,7 +2766,7 @@ function claimInitialSetup_(email, code, nowMs) {
     // 1回限り: 使う前に消す(代表が既にいる時も使えなくする)
     clearInitialSetupCode_(props)
     if (hasTopMember_()) throw userError_('この団体には既に代表がいます。代表に、メンバーとして追加してもらってください。')
-    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_())
+    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_(), { firstLeader: true })
     // メンバーが増えたので、読み取りのキャッシュ(スナップショット)を作り直させる
     bumpSnapshotVersion_()
     console.log('初期設定コードで、最初の代表を登録しました(メンバーID: ' + added.id + ')')
@@ -2707,17 +2776,70 @@ function claimInitialSetup_(email, code, nowMs) {
   }
 }
 
-// この GAS のウェブアプリの URL(レジストリに伝える接続先)
+// ---- テンプレートから作る団体の既定値 ----
+// スプレッドシートを「コピーを作成」しても、スクリプトプロパティはコピーされない。そこで、FSIF の共通の値
+// (レジストリの URL・ログインの OAuth クライアント ID)をコードの既定値として持ち、スクリプトプロパティがあればそちらを使う。
+// 値はどちらもサイトの画面に入っている公開の値なので、ここに書いてよい(gas/README.md の「2.2.」。今は空)。
+// setupOhsumi は、プロパティが無ければ既定値をプロパティに保存する(後でコードを貼り替えて既定値が空になっても動くように)
+var DEFAULT_REGISTRY_URL = ''
+var DEFAULT_GOOGLE_OAUTH_CLIENT_ID = ''
+
+function registryUrlOf_(all) {
+  return String((all || {}).REGISTRY_URL || DEFAULT_REGISTRY_URL || '').trim()
+}
+function registryUrl_() {
+  return registryUrlOf_({ REGISTRY_URL: PropertiesService.getScriptProperties().getProperty('REGISTRY_URL') })
+}
+function googleOAuthClientIdOf_(all) {
+  return String((all || {}).GOOGLE_OAUTH_CLIENT_ID || DEFAULT_GOOGLE_OAUTH_CLIENT_ID || '').trim()
+}
+
+// プロパティが無い時に、コードの既定値をプロパティに保存する(setupOhsumi から)
+function saveCodeDefaultsToProps_(props) {
+  var saved = []
+  if (!props.getProperty('REGISTRY_URL') && REGISTRY_URL_PATTERN.test(DEFAULT_REGISTRY_URL)) {
+    props.setProperty('REGISTRY_URL', DEFAULT_REGISTRY_URL)
+    saved.push('REGISTRY_URL')
+  }
+  if (!props.getProperty('GOOGLE_OAUTH_CLIENT_ID') && /\.apps\.googleusercontent\.com$/.test(DEFAULT_GOOGLE_OAUTH_CLIENT_ID)) {
+    props.setProperty('GOOGLE_OAUTH_CLIENT_ID', DEFAULT_GOOGLE_OAUTH_CLIENT_ID)
+    saved.push('GOOGLE_OAUTH_CLIENT_ID')
+  }
+  return saved
+}
+
+// この GAS のウェブアプリの URL(レジストリに伝える接続先)。
+//   1. スクリプトプロパティ OHSUMI_WEBAPP_URL
+//   2. ScriptApp.getService().getUrl() が …/exec の形なら、それ
+//   3. ウェブアプリの URL をブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL。doGet が覚える)
+// メニュー・エディタから実行すると、getService().getUrl() は /dev(エディタで試すための URL)を返すことがある
 function ownWebAppUrl_(all) {
-  var url = String((all || {}).OHSUMI_WEBAPP_URL || '').trim()
+  all = all || {}
+  var url = String(all.OHSUMI_WEBAPP_URL || '').trim()
   if (url) return url
-  try { return String(ScriptApp.getService().getUrl() || '') } catch (e) { return '' }
+  var live = ''
+  try { live = String(ScriptApp.getService().getUrl() || '') } catch (e) { live = '' }
+  if (REGISTRY_URL_PATTERN.test(live)) return live
+  var seen = String(all.DETECTED_WEBAPP_URL || '').trim()
+  if (REGISTRY_URL_PATTERN.test(seen)) return seen
+  return live
+}
+
+// ウェブアプリとして開かれた時(doGet)に、その URL を覚える(…/exec の形の時だけ)
+function rememberWebAppUrl_() {
+  try {
+    var url = String(ScriptApp.getService().getUrl() || '')
+    if (!REGISTRY_URL_PATTERN.test(url)) return
+    if (requestProps_().DETECTED_WEBAPP_URL === url) return
+    setRequestProp_('DETECTED_WEBAPP_URL', url)
+  } catch (e) { /* 覚えられなくても、GET の応答は返す */ }
 }
 
 // レジストリに伝えてよい URL か。問題があれば、直し方の文を返す(無ければ '')
 function checkOwnWebAppUrl_(url) {
-  var how = 'デプロイの画面(デプロイ → デプロイを管理)に出るウェブアプリの URL(https://script.google.com/macros/s/…/exec)を、' +
-    'そのままスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。'
+  var how = 'デプロイの画面(デプロイ → デプロイを管理)に出るウェブアプリの URL(https://script.google.com/macros/s/…/exec)を' +
+    'ブラウザで一度開いてから、もう一度試してください(開くと、この GAS がその URL を覚えます)。' +
+    'うまくいかない時は、その URL をスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてください。'
   url = String(url || '')
   if (!url) return 'この GAS のウェブアプリの URL が分かりません。先にウェブアプリとしてデプロイし、' + how
   if (REGISTRY_URL_PATTERN.test(url)) return ''
@@ -2739,7 +2861,7 @@ function registerWithRegistry_(code, deps) {
   ensureSessionSecrets_()
   var props = PropertiesService.getScriptProperties()
   var all = props.getProperties() || {}
-  var registryUrl = String(all.REGISTRY_URL || '').trim()
+  var registryUrl = registryUrlOf_(all)
   if (!REGISTRY_URL_PATTERN.test(registryUrl)) {
     throw userError_('スクリプトプロパティ REGISTRY_URL に、FSIF から伝えられたレジストリの URL(https://script.google.com/macros/s/…/exec)を入れてください。')
   }
@@ -2833,7 +2955,7 @@ var CONTRACT_RESTRICTED_MESSAGE = 'アンケートへの回答をお願いしま
 // 機能停止中にも受け付ける操作(読み取りの一覧)。ここに無い操作は、すべて断る(新しく足した操作も、ここに足さない限り断る)。
 // 読み取り・ログイン(初期設定コードで代表を入れる時を除く)・ログインの記録・自分や管理者によるログインの無効化だけを入れる
 var READ_ONLY_ACTIONS = [
-  'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getExpenses', 'getFiles',
+  'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getExpenses', 'getFiles',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
@@ -3116,7 +3238,7 @@ function announcementsStatus_(nowMs, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return { registered: false, announcements: [], fetchedAt: '', stale: false }
@@ -3256,7 +3378,7 @@ function refreshContractState_(deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) return null
@@ -3973,9 +4095,10 @@ function skillEvidenceOf_(memberRow, memberId) {
   try {
     var t = snapshotTableOrSheet_(SHEET_TASKS)
     var col = function (name) { return t.headers.indexOf(name) }
-    var aCol = col('assignee_id'), sCol = col('status'), kCol = col('skills')
+    var aCol = col('assignee_id'), sCol = col('status'), kCol = col('skills'), delCol = col('deleted_at')
     ;(t.rows || []).forEach(function (r) {
       if (normalizeCode_('status', r[sCol]) !== 'done') return
+      if (delCol >= 0 && String(r[delCol] || '') !== '') return
       var assignees = String(r[aCol] || '').split(',').map(function (x) { return x.trim() })
       if (assignees.indexOf(String(memberId)) < 0) return
       String(r[kCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean).forEach(function (s) { counts[s] = (counts[s] || 0) + 1 })
@@ -4012,9 +4135,21 @@ function computeAutoLevels_(currentLevels, cumulativePoints, rules, evidence) {
  * 「累計加算→レベル自動繰り上げ」ロジックだが、タスクには紐付けない。
  * 資格は名前+取得日が一致するものは重複とみなしスキップして追記する。
  */
-function importPortableRecord_(memberId, skillPoints, qualifications) {
+// 他の団体の実績の持ち込み。点数は0以上の整数だけ(負の点数は断る)。
+// 本人が自分の分を持ち込む時は、点数を足さない(資格だけ「外部」の印なしで足す)。点数は管理者が持ち込む
+function importPortableRecord_(memberId, skillPoints, qualifications, acting) {
   var memberRow = findRow_(SHEET_MEMBERS, memberId)
   if (!memberRow) throw userError_('メンバーが見つかりません: ' + memberId)
+  if (!skillPoints || typeof skillPoints !== 'object' || Array.isArray(skillPoints)) throw userError_('点数の形式が不正です。')
+  Object.keys(skillPoints).forEach(function (k) {
+    var v = Number(skillPoints[k])
+    if (typeof skillPoints[k] === 'boolean' || !isFinite(v) || v < 0 || Math.floor(v) !== v) throw userError_('持ち込む点数は0以上の整数で入れてください。')
+  })
+  var pointsSkipped = false
+  if (acting && selfRestricted_(acting, memberId) && Object.keys(skillPoints).length) {
+    skillPoints = {}
+    pointsSkipped = true
+  }
 
   var currentPoints = {}
   try { currentPoints = JSON.parse(memberRow.skill_points_json || '{}') } catch (_) {}
@@ -4058,7 +4193,7 @@ function importPortableRecord_(memberId, skillPoints, qualifications) {
     skill_levels_json: JSON.stringify(newLevels),
     qualifications_json: JSON.stringify(currentQualifications),
   })
-  return { ok: true, newPoints: currentPoints, newLevels: newLevels, qualifications: currentQualifications }
+  return { ok: true, newPoints: currentPoints, newLevels: newLevels, qualifications: currentQualifications, pointsSkipped: pointsSkipped }
 }
 
 /**
@@ -4079,6 +4214,7 @@ function awardSkillPoints_(taskId, memberId, points, acting) {
   var task = findRow_(SHEET_TASKS, taskId)
   if (!task) throw userError_('タスクが見つかりません。')
   if (normalizeCode_('status', task.status) !== 'done') throw userError_('完了したタスクにだけ、スキルの点数を付けられます。')
+  if (String(task.awarded_points_json || '').indexOf('"__noAward":true') >= 0) throw userError_('完了として取り込んだタスクには、スキルの点数を付けられません。')
   var assignees = splitCsvList_(task.assignee_id)
   if (assignees.indexOf(memberId) < 0) throw userError_('このタスクの担当者にだけ、スキルの点数を付けられます。')
   var taskSkills = String(task.skills || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
@@ -4218,6 +4354,12 @@ var REMOVED_ACTION_MESSAGE = 'この操作は使えなくなりました。ペ�
 
 function authorizeAction_(acting, action, body) {
   if (REMOVED_ACTIONS.indexOf(action) >= 0) throw userError_(REMOVED_ACTION_MESSAGE)
+  // ゴミ箱のタスクは、元に戻す・完全に消す以外の操作を受け付けない(代表も)
+  if (body && body.taskId && TRASH_ACTIONS.indexOf(action) < 0) {
+    var trashed = null
+    try { trashed = authFindRow_(SHEET_TASKS, String(body.taskId)) } catch (e) { trashed = null }
+    if (trashed && String(trashed.deleted_at || '') !== '') throw userError_(TRASHED_TASK_MESSAGE)
+  }
   var role = acting.role
   // isLeader: true for any role that is not '一般' (i.e. any admin-level role).
   // We cannot enumerate all possible role names (they are user-configurable in Admin → Tags),
@@ -4281,7 +4423,7 @@ function authorizeAction_(acting, action, body) {
   // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
   // daihyoOnly固定ではなくこちらを使う。
   if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
-      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'restoreTask' || action === 'purgeTask' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
     if (isActingFullAdmin_(acting)) return
     if (checkPermissionOverride_(acting, action, body)) return
     throw userError_('この操作は代表または全権管理者のみ実行できます。')
@@ -4566,6 +4708,8 @@ function authorizeAction_(acting, action, body) {
     'approveTaskReview',       // 複数確認者の承認（本人が確認者かどうかは下記でチェック）
     'checkAndGenerateRecurringTasks', // item 2/TSK-051: 生成はルール定義に従うだけなので誰でも呼べる
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
+    'getMyStorage',            // 本人だけの保存を読む・書く(常に acting.id の分だけ)
+    'setMyStorage',
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
     'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)
@@ -4654,6 +4798,17 @@ function authorizeAction_(acting, action, body) {
       return
     }
 
+    // 日程調整・フォーム: 担当者・確認者・作成者・全権管理者と、招待された人(自分の回答だけ。mergeAnswers_)
+    if (action === 'updateTaskSchedule' || action === 'updateTaskForm') {
+      var ansTask = authFindRow_(SHEET_TASKS, String(body.taskId || ''))
+      if (!ansTask) throw userError_('対象のタスクが見つかりません。')
+      var ansKind = action === 'updateTaskSchedule' ? 'schedule' : 'form'
+      if (!isTaskOwner_(ansTask, acting) && answerInvitedIds_(ansTask, ansKind).indexOf(String(acting.id)) < 0) {
+        throw userError_('この日程調整・フォームに招待されていないため、回答できません。')
+      }
+      return
+    }
+
     // タスクに紐づく更新のうち、担当者・確認者・作成者・全権管理者のみに限るもの(TASK_OWNER_SCOPED_ACTIONS)
     if (TASK_OWNER_SCOPED_ACTIONS.indexOf(action) >= 0) {
       var tosTask = authFindRow_(SHEET_TASKS, String(body.taskId || ''))
@@ -4701,17 +4856,18 @@ function authorizeAction_(acting, action, body) {
 var TASK_OWNER_SCOPED_ACTIONS = [
   'updateDeliverables', 'updateHistory',
   'updateEstimatedHours', 'updateActualHours', 'updateRetrospective',
-  'updateTaskSchedule', 'updateTaskForm',
   'updateProgress',   // 進捗のメモ・進捗率・進捗の記録(他人の記録は変えられない: validateProgressHistoryUpdate_)
   'setHoldReason',    // 保留の理由
 ]
 var TASK_ANY_MEMBER_ACTIONS = {
-  createTasks: '新しいタスクの登録。承認待ちとして作られ、既存のタスクは書き換えない',
+  createTasks: '新しいタスクの登録。一般のメンバーが作るタスクは承認待ち(確認タスク・日程調整/フォームのクイック追加は除く。prepareCreateTasks_)。既存のタスクは書き換えない',
   updateTaskStatus: '担当者だけが状態を変えられ、完了にできるのは確認者だけ(authorizeAction_ で確かめる)。担当者の決まっていないタスクは、誰でも着手できる',
   approveTaskReview: '確認者だけが承認できる(authorizeAction_ で確かめる)',
   updateComments: 'タスクを見られる人は誰でもコメントできる。他人のコメントは変え・消せない(validateCommentsUpdate_)',
   applyToOpenBid: '公募への応募・取り下げ。自分の分しか変えられない(authorizeAction_ で確かめる)',
   checkAndGenerateRecurringTasks: '定期タスクを、保存した規則どおりに作るだけ(内容は画面から受け取らない)',
+  updateTaskSchedule: '日程調整に招待された人は、自分の回答だけを変えられる。候補・招待を変えられるのは担当者・確認者・作成者・全権管理者だけ(authorizeAction_・mergeAnswers_)',
+  updateTaskForm: 'フォームに招待された人は、自分の回答だけを変えられる。項目・招待を変えられるのは担当者・確認者・作成者・全権管理者だけ(authorizeAction_・mergeAnswers_)',
 }
 
 // updateProgress の進捗の記録(progressHistory)。コメントと同じく、新しい記録の書いた人は本人にそろえ、
@@ -4742,6 +4898,172 @@ function validateProgressHistoryUpdate_(task, entries, acting) {
       if (h && h.id && !newIds[h.id] && h.byId !== acting.id) throw userError_('他のメンバーが書いた進捗の記録は削除できません。')
     })
   }
+}
+
+// タスクの担当者・確認者・作成者・全権管理者か
+function isTaskOwner_(task, acting) {
+  if (isActingFullAdmin_(acting)) return true
+  var id = String(acting.id)
+  return splitCsvList_(task.assignee_id).indexOf(id) >= 0 ||
+    splitCsvList_(task.reviewer_ids || task.reviewer_id).indexOf(id) >= 0 ||
+    String(task.creator_id || '').trim() === id
+}
+
+function parseAnswerCell_(task, kind) {
+  var raw = String(task[kind === 'schedule' ? 'schedule_json' : 'form_json'] || '')
+  var obj = null
+  try { obj = raw ? JSON.parse(raw) : null } catch (e) { obj = null }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+  return kind === 'schedule' ? mapScheduleCodes_(obj, normalizeCode_) : obj
+}
+
+function answerInvitedIds_(task, kind) {
+  var obj = parseAnswerCell_(task, kind)
+  return obj && Array.isArray(obj.invitedIds) ? obj.invitedIds.map(String) : []
+}
+
+// 日程調整・フォームの書き込みを、今の保存に当てる。回答は本人の分だけ変え、ほかの人の回答は今の保存のまま。
+// 候補・項目・招待(回答以外)は、担当者・確認者・作成者・全権管理者だけが変えられる(ほかの人の分は今の保存のまま)。
+// 消す(null)のも同じ人たちだけ
+function mergeAnswers_(taskId, kind, next, acting) {
+  var task = lockedRow_(SHEET_TASKS, taskId)
+  if (!task) throw userError_('対象のタスクが見つかりません。')
+  var owner = isTaskOwner_(task, acting)
+  var prev = parseAnswerCell_(task, kind)
+  if (!next) {
+    if (!owner) throw userError_('日程調整・フォームを消せるのは、担当者・確認者・作成者・管理者だけです。')
+    return null
+  }
+  if (typeof next !== 'object' || Array.isArray(next)) throw userError_('日程調整・フォームの形式が不正です。')
+  var base = owner ? next : (prev || {})
+  var out = {}
+  Object.keys(base).forEach(function (k) { if (k !== 'responses') out[k] = base[k] })
+  var responses = {}
+  var prevResponses = (prev && prev.responses && typeof prev.responses === 'object') ? prev.responses : {}
+  Object.keys(prevResponses).forEach(function (m) { responses[m] = prevResponses[m] })
+  var me = String(acting.id)
+  var mine = next.responses && typeof next.responses === 'object' ? next.responses[me] : undefined
+  if (mine === undefined || mine === null) delete responses[me]
+  else responses[me] = mine
+  out.responses = responses
+  return out
+}
+
+// 新しい変更の記録の、記録した人・日時を GAS が決める(画面から届いた値は使わない)
+function stampNewHistoryEntries_(taskId, entries, actorId) {
+  if (!Array.isArray(entries)) return
+  var task = lockedRow_(SHEET_TASKS, String(taskId || ''))
+  var old = []
+  try { old = JSON.parse((task && task.history_json) || '[]') } catch (e) { old = [] }
+  var oldIds = {}
+  ;(Array.isArray(old) ? old : []).forEach(function (h) { if (h && h.id) oldIds[h.id] = true })
+  var now = new Date().toISOString()
+  entries.forEach(function (h) {
+    if (h && h.id && !oldIds[h.id]) {
+      h.byId = String(actorId)
+      h.at = now
+    }
+  })
+}
+
+// 本人が自分の実績を変える時の制限(代表は除く。代表の上には確認する人がいないため)
+function selfRestricted_(acting, memberId) {
+  return String(acting.id) === String(memberId) && !isTopRoleRef_(getRoles_(), acting.role)
+}
+
+function memberJsonList_(memberId, column) {
+  var row = lockedRow_(SHEET_MEMBERS, memberId)
+  if (!row) throw userError_('メンバーが見つかりません。')
+  var list = []
+  try { list = JSON.parse(row[column] || '[]') } catch (e) { list = [] }
+  return Array.isArray(list) ? list : []
+}
+
+// スキルのレベル: 1〜5 の整数。本人は、保存したレベルを上げられない(新しいスキルは Lv.1 だけ。下げる・消すのはよい)
+function checkSkillLevels_(memberId, levels, acting) {
+  if (!Array.isArray(levels)) throw userError_('スキルのレベルの形式が不正です。')
+  levels.forEach(function (l) {
+    if (!l || typeof l.skill !== 'string' || !l.skill.trim()) throw userError_('スキルのレベルの形式が不正です。')
+    if ([1, 2, 3, 4, 5].indexOf(l.level) < 0) throw userError_('スキルのレベルは1〜5で入れてください。')
+  })
+  if (!selfRestricted_(acting, memberId)) return levels
+  var stored = {}
+  memberJsonList_(memberId, 'skill_levels_json').forEach(function (l) { if (l && l.skill) stored[l.skill] = Number(l.level) || 0 })
+  levels.forEach(function (l) {
+    var max = Object.prototype.hasOwnProperty.call(stored, l.skill) ? stored[l.skill] : 1
+    if (l.level > max) throw userError_('自分のスキルのレベルは上げられません(新しいスキルは Lv.1 で登録されます)。管理者に依頼してください。')
+  })
+  return levels
+}
+
+// 資格: 取った日の形。本人は「外部」の印を変えられない(新しい資格は印なし)
+function checkQualifications_(memberId, entries, acting) {
+  if (!Array.isArray(entries)) throw userError_('資格の形式が不正です。')
+  entries.forEach(function (q) {
+    if (!q || typeof q !== 'object') throw userError_('資格の形式が不正です。')
+    checkDate_(q.acquiredDate, '資格を取った日')
+  })
+  if (!selfRestricted_(acting, memberId)) return entries
+  var stored = {}
+  memberJsonList_(memberId, 'qualifications_json').forEach(function (q) { if (q && q.id) stored[q.id] = !!q.external })
+  entries.forEach(function (q) {
+    var before = q.id && Object.prototype.hasOwnProperty.call(stored, q.id) ? stored[q.id] : false
+    if (!!q.external !== before) throw userError_('資格の「外部」の印は、本人は変えられません。管理者に確認を依頼してください。')
+  })
+  return entries
+}
+
+// 研修: 日付の形。本人は承認の状態を変えられない(新しい研修は「申請中」だけ。状態の無い以前の記録は承認済み扱い)
+function checkTrainingHistory_(memberId, entries, acting) {
+  if (!Array.isArray(entries)) throw userError_('研修の記録の形式が不正です。')
+  entries.forEach(function (t) {
+    if (!t || typeof t !== 'object') throw userError_('研修の記録の形式が不正です。')
+    checkDate_(t.date, '研修の日')
+  })
+  if (!selfRestricted_(acting, memberId)) return entries
+  var statusOf = function (t) { return t.status || 'approved' }
+  var stored = {}
+  memberJsonList_(memberId, 'training_history_json').forEach(function (t) { if (t && t.id) stored[t.id] = statusOf(t) })
+  entries.forEach(function (t) {
+    var known = t.id && Object.prototype.hasOwnProperty.call(stored, t.id)
+    if (known ? statusOf(t) !== stored[t.id] : t.status !== 'pending') {
+      throw userError_('研修の承認の状態は、本人は変えられません(新しい研修は申請中で登録し、管理者の承認を待ってください)。')
+    }
+  })
+  return entries
+}
+
+// 評価: 評価した人は操作した本人(既存の記録の評価した人は変えさせない)。日付の形
+function stampEvaluators_(memberId, entries, acting) {
+  if (!Array.isArray(entries)) throw userError_('評価の記録の形式が不正です。')
+  var stored = {}
+  memberJsonList_(memberId, 'evaluation_history_json').forEach(function (e) { if (e && e.id) stored[e.id] = e })
+  entries.forEach(function (e) {
+    if (!e || typeof e !== 'object') throw userError_('評価の記録の形式が不正です。')
+    checkDate_(e.date, '評価の日')
+    e.evaluatorId = stored[e.id] ? String(stored[e.id].evaluatorId || '') : String(acting.id)
+  })
+  return entries
+}
+
+// 1on1: 相手(行った人)は操作した本人(本人が自分の記録に書く時は、在籍しているほかのメンバー)。既存の記録の相手は変えさせない。日付の形
+function stampOneOnOnes_(memberId, entries, acting) {
+  if (!Array.isArray(entries)) throw userError_('1on1 の記録の形式が不正です。')
+  var stored = {}
+  memberJsonList_(memberId, 'one_on_ones_json').forEach(function (e) { if (e && e.id) stored[e.id] = e })
+  entries.forEach(function (e) {
+    if (!e || typeof e !== 'object') throw userError_('1on1 の記録の形式が不正です。')
+    checkDate_(e.date, '1on1 の日')
+    if (stored[e.id]) {
+      e.withId = String(stored[e.id].withId || '')
+    } else if (String(acting.id) !== String(memberId)) {
+      e.withId = String(acting.id)
+    } else {
+      e.withId = checkActiveMember_(e.withId, '1on1 の相手')
+      if (!e.withId || e.withId === String(memberId)) throw userError_('1on1 の相手を選んでください。')
+    }
+  })
+  return entries
 }
 
 // lib/ohsumi/store.tsx の appendHistory と同じ値。history_json は
@@ -4804,7 +5126,8 @@ function validateCommentsUpdate_(task, newComments, acting) {
 // のに古いエントリが消えている場合は拒否する。全権管理者は制限なし。
 function validateHistoryUpdate_(task, newHistory, acting) {
   if (!Array.isArray(newHistory)) throw userError_('履歴の形式が不正です。')
-  if (isActingFullAdmin_(acting)) return
+  // 全権管理者も、既存の記録は書き換え・削除できない(新しい記録の記録した人・日時は GAS が書く: stampNewHistoryEntries_)
+  var isAdmin = isActingFullAdmin_(acting)
 
   var oldHistory = []
   try { oldHistory = JSON.parse(task.history_json || '[]') } catch (e) {}
@@ -4833,7 +5156,7 @@ function validateHistoryUpdate_(task, newHistory, acting) {
   var remainingEntries = newHistory.slice(addedCount)
 
   addedEntries.forEach(function (h) {
-    if (h.byId !== acting.id) {
+    if (!isAdmin && h.byId !== acting.id) {
       throw userError_('新しい履歴の記録者は本人である必要があります。')
     }
   })
@@ -4889,7 +5212,7 @@ function toErrorMessage_(err) {
 // Webhookへの疎通確認(UrlFetchApp、数百ms〜数秒かかりうる)のみなので、
 // ロック保持時間を最小限にするため対象外にする(レビュー指摘対応4)。
 var LOCK_EXEMPT_ACTIONS = [
-  'translateText', 'getMyEmails', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
+  'translateText', 'getMyEmails', 'getMyStorage', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
   'getCandidates', 'getFormSubmissions',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
@@ -5439,7 +5762,8 @@ function runWriteAction_(body, actingMember) {
   switch (body.action) {
     case 'createTasks':
       // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
-      result = createTasks_(body.tasks, actingMember.id)
+      prepareCreateTasks_(body.tasks, actingMember)
+      result = createTasks_(body.tasks, actingMember.id, { allowImport: isAdminRoleRef_(getRoles_(), actingMember.role) })
       break
     case 'updateTaskStatus':
       // body.status は入口でコードにそろえている(normalizeRequestCodes_)
@@ -5454,9 +5778,8 @@ function runWriteAction_(body, actingMember) {
       break
     case 'assignTask':
       result = updateTaskFields_(body.taskId, {
-        assignee_id: (body.assigneeIds || []).join(','),
+        assignee_id: checkActiveMembers_(body.assigneeIds, '担当者').join(','),
       })
-      syncCalendarForTask_(body.taskId)
       break
     case 'applyToOpenBid':
       // TSK-027: 公募タスクへの応募(承認制)。担当者(assignee_id)には
@@ -5495,7 +5818,7 @@ function runWriteAction_(body, actingMember) {
       if (Array.isArray(body.progressHistory)) stampNewEntries_(body.progressHistory, taskProgressIds_(body.taskId), actingMember.id)
       if (body.text !== undefined) progressFields.progress_note = body.text
       if (body.progressHistory !== undefined) progressFields.progress_history_json = JSON.stringify(body.progressHistory)
-      if (body.progressPercent !== undefined) progressFields.progress_percent = body.progressPercent
+      if (body.progressPercent !== undefined) progressFields.progress_percent = checkPercent_(body.progressPercent)
       result = updateTaskFields_(body.taskId, progressFields)
       break
     case 'translateText':
@@ -5537,12 +5860,27 @@ function runWriteAction_(body, actingMember) {
       result = rejectTask_(body.taskId, body.reason)
       break
     case 'removeTask':
-      result = removeTask_(body.taskId)
+      // 完了・確認待ちのタスクは、団体の経験の記録として残すので消さない
+      ;(function () {
+        var t = findRow_(SHEET_TASKS, String(body.taskId || ''))
+        if (t && ['done', 'review'].indexOf(normalizeCode_('status', t.status)) >= 0) {
+          throw userError_('完了・確認待ちのタスクは、団体の経験の記録として残すため削除できません。')
+        }
+      })()
+      result = trashTask_(String(body.taskId || ''), actingMember.id)
+      break
+    case 'restoreTask':
+      result = restoreTrashedTask_(String(body.taskId || ''))
+      break
+    case 'purgeTask':
+      result = purgeTrashedTask_(String(body.taskId || ''))
       break
     case 'createProject':
       result = createProject_(body.name, body.description, body.type)
       break
     case 'removeProject':
+      // タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。終わったものはアーカイブにしてもらう
+      assertProjectRemovable_(String(body.projectId || ''))
       result = removeProject_(body.projectId)
       break
     case 'removeMember':
@@ -5585,20 +5923,24 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateReportsTo':
-      result = updateMemberFields_(body.memberId, { reports_to_id: body.reportsToId || '' })
+      result = updateMemberFields_(body.memberId, { reports_to_id: checkReportsTo_(String(body.memberId || ''), body.reportsToId) })
       break
     case 'updateMentor':
-      result = updateMemberFields_(body.memberId, { mentor_id: body.mentorId || '' })
+      ;(function () {
+        var mentor = checkActiveMember_(body.mentorId, 'メンター')
+        if (mentor && mentor === String(body.memberId)) throw userError_('メンターに、自分自身は選べません。')
+        result = updateMemberFields_(body.memberId, { mentor_id: mentor })
+      })()
       break
     case 'updateDisplayName':
       result = updateMemberFields_(body.memberId, { display_name: body.displayName || '' })
       break
     case 'updateJoinedAt':
-      result = updateMemberFields_(body.memberId, { joined_at: body.joinedAt || '' })
+      result = updateMemberFields_(body.memberId, { joined_at: checkDate_(body.joinedAt, '所属を始めた日') })
       break
     case 'updateUnavailableDates':
       result = updateMemberFields_(body.memberId, {
-        unavailable_dates: (body.dates || []).join(','),
+        unavailable_dates: checkDateList_(body.dates, '稼働できない日').join(','),
       })
       break
     case 'updateAvailableHours':
@@ -5608,14 +5950,14 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateSchedule':
       result = updateTaskFields_(body.taskId, {
-        start_date: body.startDate || '',
-        due_date: body.deadline || '',
+        start_date: checkDate_(body.startDate, '開始日'),
+        due_date: checkDate_(body.deadline, '期限'),
       })
       notifyScheduleChange_(body.taskId)
       break
     case 'updateDependsOn':
       result = updateTaskFields_(body.taskId, {
-        depends_on_ids: (body.dependsOnIds || []).join(','),
+        depends_on_ids: checkDependsOn_(String(body.taskId || ''), body.dependsOnIds || []).join(','),
       })
       break
     case 'updateVisibility':
@@ -5624,14 +5966,18 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateReviewer':
-      result = updateTaskFields_(body.taskId, { reviewer_id: body.reviewerId || '' })
+      result = updateTaskFields_(body.taskId, { reviewer_id: checkActiveMember_(body.reviewerId, '確認者') })
       break
     case 'updateReviewers':
-      result = updateTaskFields_(body.taskId, {
-        reviewer_ids: (body.reviewerIds || []).join(','),
-        reviewer_id: (body.reviewerIds && body.reviewerIds[0]) || '',
-        required_approvals: body.requiredApprovals != null ? String(body.requiredApprovals) : '',
-      })
+      ;(function () {
+        var reviewers = checkActiveMembers_(body.reviewerIds || [], '確認者')
+        var required = checkRequiredApprovals_(body.requiredApprovals, reviewers.length)
+        result = updateTaskFields_(body.taskId, {
+          reviewer_ids: reviewers.join(','),
+          reviewer_id: reviewers[0] || '',
+          required_approvals: required === '' ? '' : String(required),
+        })
+      })()
       break
     case 'approveTaskReview':
       result = approveTaskReview_(body.taskId, actingMember.id, body.comment)
@@ -5639,13 +5985,13 @@ function runWriteAction_(body, actingMember) {
     case 'setBlocker':
       result = updateTaskFields_(body.taskId, {
         blocker_note: body.note || '',
-        blocker_since: body.note ? body.since || todayStr_() : '',
+        blocker_since: body.note ? checkDate_(body.since, '困りごとの日') || todayStr_() : '',
       })
       break
     case 'setHoldReason':
       result = updateTaskFields_(body.taskId, {
         hold_reason_note: body.note || '',
-        hold_reason_since: body.note ? body.since || todayStr_() : '',
+        hold_reason_since: body.note ? checkDate_(body.since, '保留にした日') || todayStr_() : '',
       })
       break
     case 'updateDeliverables':
@@ -5660,6 +6006,8 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateHistory':
+      // 新しい記録の、記録した人・日時は GAS が決める(既存の記録を変えていないことは authorizeAction_ で確かめた)
+      stampNewHistoryEntries_(body.taskId, body.history, actingMember.id)
       result = updateTaskFields_(body.taskId, {
         history_json: JSON.stringify((body.history || []).map(sheetHistoryEntry_)),
       })
@@ -5676,12 +6024,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateEstimatedHours':
       result = updateTaskFields_(body.taskId, {
-        estimated_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
+        estimated_hours: checkHours_(body.hours, '予定の工数'),
       })
       break
     case 'updateActualHours':
       result = updateTaskFields_(body.taskId, {
-        actual_hours: body.hours === null || body.hours === undefined ? '' : body.hours,
+        actual_hours: checkHours_(body.hours, '実績の工数'),
       })
       break
     case 'updateRetrospective':
@@ -5690,32 +6038,37 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateTaskSchedule':
-      result = updateTaskFields_(body.taskId, {
-        schedule_json: body.schedule ? JSON.stringify(mapScheduleCodes_(body.schedule, sheetCode_)) : '',
-      })
+      ;(function () {
+        // 回答は本人の分だけ変える(ほかの人の回答は今の保存のまま)。候補・招待は作成者などだけが変えられる
+        var merged = mergeAnswers_(String(body.taskId || ''), 'schedule', body.schedule, actingMember)
+        result = updateTaskFields_(body.taskId, {
+          schedule_json: merged ? JSON.stringify(mapScheduleCodes_(merged, sheetCode_)) : '',
+        })
+      })()
       break
     case 'notifyScheduleResult':
       // 保存した回答が揃っている時だけ、1回だけ送る
       result = { sent: notifyScheduleResult_(body.taskId, actingMember.id) }
       break
     case 'updateTaskForm':
-      result = updateTaskFields_(body.taskId, {
-        form_json: body.form ? JSON.stringify(body.form) : '',
-      })
+      ;(function () {
+        var merged = mergeAnswers_(String(body.taskId || ''), 'form', body.form, actingMember)
+        result = updateTaskFields_(body.taskId, { form_json: merged ? JSON.stringify(merged) : '' })
+      })()
       break
     case 'notifyFormResult':
       result = { sent: notifyFormResult_(body.taskId, actingMember.id) }
       break
     case 'updateProjectMembers':
       result = updateProjectFields_(body.projectId, {
-        member_ids: (body.memberIds || []).join(','),
+        member_ids: checkActiveMembers_(body.memberIds || [], 'プロジェクトのメンバー').join(','),
       })
       break
     case 'updateProjectOwner':
-      result = updateProjectFields_(body.projectId, { owner_id: body.ownerId || '' })
+      result = updateProjectFields_(body.projectId, { owner_id: checkActiveMember_(body.ownerId, 'プロジェクトの責任者') })
       break
     case 'updateProjectParent':
-      result = updateProjectFields_(body.projectId, { parent_id: body.parentId || '' })
+      result = updateProjectFields_(body.projectId, { parent_id: checkProjectParent_(String(body.projectId || ''), body.parentId) })
       break
     case 'updateProjectDetails':
       result = updateProjectFields_(body.projectId, {
@@ -5723,8 +6076,8 @@ function runWriteAction_(body, actingMember) {
         description: body.description || '',
         type: body.type || '',
         goal: body.goal || '',
-        start_date: body.startDate || '',
-        end_date: body.endDate || '',
+        start_date: checkDate_(body.startDate, '開始日'),
+        end_date: checkDate_(body.endDate, '終了予定日'),
       })
       break
     case 'updateProjectArchived':
@@ -5794,7 +6147,7 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'updateEmail':
-      setMemberEmail_(body.memberId, body.email || '')
+      setMemberEmail_(body.memberId, checkEmailList_(body.email))
       result = { updated: true }
       break
     case 'revokeMySessions':
@@ -5813,6 +6166,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'sendInviteLinkToMe':
       result = sendInviteLinkToMe_(actingMember.id, body, Date.now())
+      break
+    case 'getMyStorage':
+      result = getMyStorage_(actingMember.id, body.keys)
+      break
+    case 'setMyStorage':
+      result = setMyStorage_(actingMember.id, body.key, body.value)
       break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
@@ -5954,22 +6313,23 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateQualifications':
       result = updateMemberFields_(body.memberId, {
-        qualifications_json: JSON.stringify(body.entries || []),
+        qualifications_json: JSON.stringify(checkQualifications_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
     case 'updateEvaluationHistory':
       result = updateMemberFields_(body.memberId, {
-        evaluation_history_json: JSON.stringify(body.entries || []),
+        evaluation_history_json: JSON.stringify(stampEvaluators_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
     case 'updateTransferHistory':
+      ;(body.entries || []).forEach(function (e) { if (e) checkDate_(e.date, '異動の日') })
       result = updateMemberFields_(body.memberId, {
         transfer_history_json: JSON.stringify(body.entries || []),
       })
       break
     case 'updateSkillLevels':
       result = updateMemberFields_(body.memberId, {
-        skill_levels_json: JSON.stringify(body.levels || []),
+        skill_levels_json: JSON.stringify(checkSkillLevels_(String(body.memberId || ''), body.levels || [], actingMember)),
       })
       break
     case 'updateCompetencies':
@@ -5986,7 +6346,7 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateTrainingHistory':
       result = updateMemberFields_(body.memberId, {
-        training_history_json: JSON.stringify(body.entries || []),
+        training_history_json: JSON.stringify(checkTrainingHistory_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
     case 'notifyTrainingRequest':
@@ -5997,20 +6357,21 @@ function runWriteAction_(body, actingMember) {
       result = { sent: notifyTrainingDecision_(body.memberId, body.trainingId, actingMember.id) }
       break
     case 'updateDevelopmentPlan':
+      ;(body.entries || []).forEach(function (e) { if (e) checkDate_(e.targetDate, '目標の日') })
       result = updateMemberFields_(body.memberId, {
         development_plan_json: JSON.stringify(body.entries || []),
       })
       break
     case 'updateOneOnOnes':
       result = updateMemberFields_(body.memberId, {
-        one_on_ones_json: JSON.stringify(body.entries || []),
+        one_on_ones_json: JSON.stringify(stampOneOnOnes_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
     case 'awardSkillPoints':
       result = awardSkillPoints_(body.taskId, body.memberId, body.points || {}, actingMember)
       break
     case 'importPortableRecord':
-      result = importPortableRecord_(body.memberId, body.skillPoints || {}, body.qualifications || [])
+      result = importPortableRecord_(body.memberId, body.skillPoints || {}, body.qualifications || [], actingMember)
       break
     case 'submitQuizResult':
       result = submitQuizResult_(body.quizId, body.memberId, body.answers || [], actingMember)
@@ -6076,7 +6437,7 @@ function runWriteAction_(body, actingMember) {
       result = bulkUpdateSkillLevels_(body.updates || [])
       break
     case 'updateAbsentDates':
-      result = updateMemberFields_(body.memberId, { absent_dates: (body.dates || []).join(',') })
+      result = updateMemberFields_(body.memberId, { absent_dates: checkDateList_(body.dates, '不在の日').join(',') })
       break
     case 'updateLastLogin':
       result = updateMemberFields_(body.memberId, { last_login: new Date().toISOString() })
@@ -6108,16 +6469,35 @@ function runWriteAction_(body, actingMember) {
 // New rows are built by walking the sheet's actual header row (see
 // gas/README.md for the full column list), so this works regardless of
 // column order and leaves any column not listed below blank.
-function createTasks_(tasks, actingMemberId) {
+// タスクを作る。opts.allowImport: 幹部の取り込み(t.import === true)の項目を受け付ける(createTasks の操作で、幹部の時だけ)。
+// 取り込みでは、状態・確認者・必要な承認数・想定/実績の時間・成果物・前提タスク(同じ取り込みの中のタスク)・公募かどうか・
+// 保留の理由も入れられる。取り込んだタスクは承認待ちにしない。完了として取り込んだタスクには、スキルの点数を付けない
+// (awarded_points_json の __noAward。awardSkillPoints_ が断る)。値を確かめてから書く(1つでもおかしければ、何も作らない)
+var IMPORT_MAX_HOURS = 10000
+var IMPORT_MAX_DELIVERABLES = 50
+function createTasks_(tasks, actingMemberId, opts) {
+  opts = opts || {}
   var sheet = getSheet_(SHEET_TASKS)
   var headers = headerRow_(sheet)
   var nextId = nextIntId_(sheet, headers)
   var today = todayStr_()
   var created = []
+  tasks = (tasks || []).filter(Boolean)
+  // 同じ取り込みの中の前提タスク(仮の ID → 作る ID)
+  var idOfTemp = {}
+  tasks.forEach(function (t, i) { if (t.tempId) idOfTemp[String(t.tempId)] = String(nextId + i) })
+  var activeMembers = null
 
-  tasks.forEach(function (t) {
-    var id = String(nextId++)
+  var rows = tasks.map(function (t, i) {
+    var id = String(nextId + i)
+    var imp = null
+    if (t.import === true) {
+      if (!opts.allowImport) throw userError_('タスクの取り込み(状態・確認者などを入れて作る)は、幹部だけができます。')
+      if (!activeMembers) activeMembers = importActiveMemberIds_()
+      imp = importTaskValues_(t, id, idOfTemp, activeMembers, today)
+    }
     var row = headers.map(function (h) {
+      if (imp && Object.prototype.hasOwnProperty.call(imp, h)) return imp[h]
       switch (h) {
         case 'id':
           return id
@@ -6169,24 +6549,348 @@ function createTasks_(tasks, actingMemberId) {
           return t.importance ? sheetCode_('importance', t.importance) : ''
         case 'related_review_task_id':
           return t.relatedReviewTaskId || ''
+        // 日程調整・フォームのクイック追加の中身(prepareCreateTasks_ で確かめたもの)
+        case 'schedule_json':
+          return t.quickKind === 'schedule' ? JSON.stringify(mapScheduleCodes_(t.schedule, sheetCode_)) : ''
+        case 'form_json':
+          return t.quickKind === 'form' ? JSON.stringify(t.form) : ''
         default:
           return ''
       }
     })
     // F4: 値を書き込む前に対象列を書式なしテキスト(@)にする
     assertRowCellLengths_('Tasks', headers, row)
+    return { t: t, id: id, row: row, imported: !!imp }
+  })
+
+  rows.forEach(function (r) {
+    var row = r.row
     protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Tasks')
     sheet.appendRow(row)
-    created.push({ tempId: t.tempId, id: id })
-    if (t.assigneeIds && t.assigneeIds.length > 0) syncCalendarForTask_(id)
+    created.push({ tempId: r.t.tempId, id: r.id })
+    if (r.t.assigneeIds && r.t.assigneeIds.length > 0) syncCalendarForTask_(r.id)
   })
 
   // template tasks (pendingApproval === false) don't need an approval-queue email
-  var needsApproval = tasks.filter(function (t) {
-    return t.pendingApproval !== false
-  })
+  var needsApproval = rows.filter(function (r) {
+    return !r.imported && r.t.pendingApproval !== false
+  }).map(function (r) { return r.t })
   if (needsApproval.length > 0) notifyNewTasks_(needsApproval)
   return created
+}
+
+// createTasks の前に、画面から届いた値を確かめる。
+//   - 日付・時刻・予定の工数の形。担当者は在籍しているメンバーだけ
+//   - 承認なし(pendingApproval: false)は、管理者の役職の時だけ受け付ける。一般のメンバーは承認待ちにする。
+//     ただし次の3つは、一般のメンバーでも承認なしで作れる(GAS で形を確かめる):
+//       ① 確認タスク: 元のタスクがあり、操作した人がその担当者で、担当がその確認者だけ
+//       ② 日程調整・③ フォームのクイック追加(quickKind): 担当者なし・日程調整/フォームの中身(候補・項目が1つ以上、回答なし)
+function prepareCreateTasks_(tasks, acting) {
+  if (!Array.isArray(tasks)) throw userError_('タスクの一覧の形式が不正です。')
+  var isAdmin = isAdminRoleRef_(getRoles_(), acting.role)
+  tasks.forEach(function (t) {
+    if (!t || typeof t !== 'object') throw userError_('タスクの形式が不正です。')
+    t.startDate = checkDate_(t.startDate, '開始日')
+    t.deadline = checkDate_(t.deadline, '期限')
+    t.dueTime = checkTime_(t.dueTime, '期限の時刻')
+    t.estimatedHours = checkHours_(t.estimatedHours, '予定の工数')
+    t.assigneeIds = checkActiveMembers_(t.assigneeIds || [], '担当者')
+    if (t.quickKind !== undefined && t.quickKind !== 'schedule' && t.quickKind !== 'form') throw userError_('クイック追加の種類が不正です。')
+    if (t.quickKind) checkQuickTaskContent_(t)
+    if (t.pendingApproval === false && !isAdmin && !approvalExemptTask_(t, acting)) t.pendingApproval = true
+  })
+}
+
+function checkQuickTaskContent_(t) {
+  if ((t.assigneeIds || []).length) throw userError_('日程調整・フォームのクイック追加には、担当者を付けられません。')
+  var c = t.quickKind === 'schedule' ? t.schedule : t.form
+  var items = c && (t.quickKind === 'schedule' ? c.candidates : c.fields)
+  if (!c || typeof c !== 'object' || !Array.isArray(items) || !items.length) {
+    throw userError_(t.quickKind === 'schedule' ? '日程調整の候補を1つ以上入れてください。' : 'フォームの項目を1つ以上入れてください。')
+  }
+  c.invitedIds = checkActiveMembers_(c.invitedIds || [], '招待するメンバー')
+  c.responses = {}
+}
+
+function approvalExemptTask_(t, acting) {
+  if (t.quickKind) return true
+  if (!t.relatedReviewTaskId || !(t.assigneeIds || []).length) return false
+  var orig = null
+  try { orig = lockedRow_(SHEET_TASKS, String(t.relatedReviewTaskId)) } catch (e) { orig = null }
+  if (!orig) return false
+  if (splitCsvList_(orig.assignee_id).indexOf(String(acting.id)) < 0) return false
+  var reviewers = splitCsvList_(orig.reviewer_ids || orig.reviewer_id)
+  return t.assigneeIds.every(function (id) { return reviewers.indexOf(id) >= 0 })
+}
+
+// 取り込みで確認者・担当者にできる人(在籍しているメンバー)
+function importActiveMemberIds_() {
+  var out = {}
+  snapshotMembers_().forEach(function (m) {
+    if (String(m.withdrawn_at || '') === '') out[String(m.id)] = true
+  })
+  return out
+}
+
+// ---- 画面から届いた値の確かめ(日付・数・メンバー・タスク・プロジェクト・輪) ----
+// どれも、おかしな値は保存せずに断る(userError_)。空の値は「消す」として受け付ける(呼ぶ側で必須を確かめる)
+var DATE_VALUE_RE = /^\d{4}-\d{2}-\d{2}$/
+var TIME_VALUE_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+var HOURS_MAX = 10000
+
+function isRealDate_(s) {
+  if (!DATE_VALUE_RE.test(s)) return false
+  var d = new Date(s + 'T00:00:00Z')
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+
+// YYYY-MM-DD(空はそのまま空)
+function checkDate_(v, label) {
+  if (v === undefined || v === null || v === '') return ''
+  var s = String(v)
+  if (!isRealDate_(s)) throw userError_(label + 'は YYYY-MM-DD の形(例: 2026-10-05)で入れてください。')
+  return s
+}
+
+function checkDateList_(list, label) {
+  if (list === undefined || list === null) return []
+  if (!Array.isArray(list)) throw userError_(label + 'の形式が不正です。')
+  return list.map(function (d) {
+    if (d === '' || d === null || d === undefined) throw userError_(label + 'に空の日付があります。')
+    return checkDate_(d, label)
+  })
+}
+
+// HH:MM(空はそのまま空)
+function checkTime_(v, label) {
+  if (v === undefined || v === null || v === '') return ''
+  var s = String(v)
+  if (!TIME_VALUE_RE.test(s)) throw userError_(label + 'は HH:MM の形(例: 09:30)で入れてください。')
+  return s
+}
+
+// 0〜100 の数
+function checkPercent_(v) {
+  var n = Number(v)
+  if (v === '' || v === null || typeof v === 'boolean' || !isFinite(n) || n < 0 || n > 100) throw userError_('進み具合は0〜100の数で入れてください。')
+  return n
+}
+
+// 0 以上の時間(空はそのまま空)
+function checkHours_(v, label) {
+  if (v === undefined || v === null || v === '') return ''
+  var n = Number(v)
+  if (typeof v === 'boolean' || !isFinite(n) || n < 0 || n > HOURS_MAX) throw userError_(label + 'は0〜' + HOURS_MAX + 'の数で入れてください。')
+  return n
+}
+
+// 必要な承認の数: 1 以上で確認者の数以下、または all(空はそのまま空)
+function checkRequiredApprovals_(v, reviewerCount) {
+  if (v === undefined || v === null || v === '') return ''
+  if (v === 'all') return 'all'
+  var n = Number(v)
+  if (Math.floor(n) !== n || n < 1 || n > reviewerCount) {
+    throw userError_('必要な承認の数は、1〜確認者の数(' + reviewerCount + ')、または all で入れてください。')
+  }
+  return n
+}
+
+// 在籍しているメンバー(退会していない)の ID の一覧
+function activeMemberIdSet_() {
+  var out = {}
+  snapshotMembers_().forEach(function (m) {
+    if (String(m.withdrawn_at || '') === '') out[String(m.id)] = true
+  })
+  return out
+}
+
+// メンバーの ID の一覧を確かめる(在籍しているメンバーだけ。重ねて入っていれば1つにする)
+function checkActiveMembers_(list, label) {
+  if (list === undefined || list === null) return []
+  if (!Array.isArray(list)) throw userError_(label + 'の形式が不正です。')
+  var active = activeMemberIdSet_()
+  var ids = list.map(function (x) { return String(x === null || x === undefined ? '' : x).trim() }).filter(Boolean)
+  ids.forEach(function (id) {
+    if (!active[id]) throw userError_(label + 'に、登録されていない(または退会した)メンバーがいます。')
+  })
+  return ids.filter(function (id, i) { return ids.indexOf(id) === i })
+}
+
+// メンバーを1人(空はそのまま空)
+function checkActiveMember_(id, label) {
+  var s = String(id === null || id === undefined ? '' : id).trim()
+  if (!s) return ''
+  return checkActiveMembers_([s], label)[0]
+}
+
+function snapshotRowsOf_(sheetName) {
+  var t = snapshotTableOrSheet_(sheetName) || { headers: [], rows: [] }
+  return (t.rows || []).map(function (r) {
+    var o = {}
+    ;(t.headers || []).forEach(function (h, i) { o[h] = r[i] })
+    return o
+  })
+}
+
+// 前提タスク: あるタスクだけ・自分自身でない・輪にならない
+function checkDependsOn_(taskId, list) {
+  if (list === undefined || list === null) return []
+  if (!Array.isArray(list)) throw userError_('前提タスクの形式が不正です。')
+  var deps = list.map(function (x) { return String(x).trim() }).filter(Boolean)
+  deps = deps.filter(function (d, i) { return deps.indexOf(d) === i })
+  var graph = {}
+  snapshotRowsOf_(SHEET_TASKS).forEach(function (t) { graph[String(t.id)] = splitCsvList_(t.depends_on_ids) })
+  deps.forEach(function (d) {
+    if (d === String(taskId)) throw userError_('前提タスクに、そのタスク自身は選べません。')
+    if (!graph[d]) throw userError_('前提タスクに、見つからないタスクがあります。')
+  })
+  graph[String(taskId)] = deps
+  // taskId からたどって taskId に戻れば輪
+  var seen = {}
+  var stack = deps.slice()
+  while (stack.length) {
+    var cur = stack.pop()
+    if (cur === String(taskId)) throw userError_('前提タスクが輪になります(AがBの前提で、BがAの前提、など)。')
+    if (seen[cur]) continue
+    seen[cur] = true
+    ;(graph[cur] || []).forEach(function (n) { stack.push(n) })
+  }
+  return deps
+}
+
+// 1つの親をたどる関係(親プロジェクト・報告先)が、自分自身・輪にならないか
+function checkNoParentLoop_(id, parentId, parentOf, label) {
+  var start = String(parentId || '')
+  if (!start) return
+  if (start === String(id)) throw userError_(label + 'に、自分自身は選べません。')
+  var seen = {}
+  var cur = start
+  while (cur) {
+    if (cur === String(id)) throw userError_(label + 'が輪になります(AがBの' + label + 'で、BがAの' + label + '、など)。')
+    if (seen[cur]) break
+    seen[cur] = true
+    cur = String(parentOf[cur] || '')
+  }
+}
+
+function checkProjectParent_(projectId, parentId) {
+  var p = String(parentId || '').trim()
+  if (!p) return ''
+  var parentOf = {}
+  snapshotRowsOf_(SHEET_PROJECTS).forEach(function (r) { parentOf[String(r.id)] = String(r.parent_id || '') })
+  if (!Object.prototype.hasOwnProperty.call(parentOf, p)) throw userError_('親プロジェクトが見つかりません。')
+  checkNoParentLoop_(projectId, p, parentOf, '親プロジェクト')
+  return p
+}
+
+function checkReportsTo_(memberId, reportsToId) {
+  var r = checkActiveMember_(reportsToId, '報告先')
+  if (!r) return ''
+  var parentOf = {}
+  snapshotMembers_().forEach(function (m) { parentOf[String(m.id)] = String(m.reports_to_id || '') })
+  checkNoParentLoop_(memberId, r, parentOf, '報告先')
+  return r
+}
+
+// メールアドレス(カンマで区切って複数も可)。空にはさせない
+function checkEmailList_(v) {
+  var list = String(v === null || v === undefined ? '' : v).split(',').map(function (s) { return s.trim() }).filter(Boolean)
+  if (!list.length) throw userError_('メールアドレスを入れてください(空にはできません)。')
+  list.forEach(function (e) {
+    if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e)) throw userError_('メールアドレスの形が正しくありません: ' + e)
+  })
+  return list.join(',')
+}
+
+function importHours_(v, label, title) {
+  if (v === undefined || v === null || v === '') return ''
+  var n = Number(v)
+  if (!isFinite(n) || n < 0 || n > IMPORT_MAX_HOURS) throw userError_('「' + title + '」の' + label + 'は、0〜' + IMPORT_MAX_HOURS + 'の数で入れてください。')
+  return n
+}
+
+// 取り込みの項目を確かめて、列の値にする
+function importTaskValues_(t, id, idOfTemp, activeMembers, today) {
+  var title = String(t.title || '')
+  var out = { approval_status: sheetCode_('approval', 'approved') }
+
+  // 状態(コード・日本語の表示名のどちらでもよい)
+  var status = 'todo'
+  if (t.status !== undefined && t.status !== null && String(t.status).trim() !== '') {
+    var raw = String(t.status).trim()
+    var table = VALUE_CODES.status
+    var known = table.codes.indexOf(raw) >= 0 || table.codes.some(function (c) { return table.sheetLabels[c] === raw })
+    if (!known) throw userError_('「' + title + '」の状態「' + raw + '」は使えません。')
+    status = normalizeCode_('status', raw)
+  }
+  out.status = sheetCode_('status', status)
+  if (status === 'done') {
+    out.completed_date = /^\d{4}-\d{2}-\d{2}$/.test(String(t.completedDate || '')) ? String(t.completedDate) : today
+    out.awarded_points_json = JSON.stringify({ __noAward: true, __imported: true })
+  }
+
+  // 担当者・確認者は、在籍しているメンバーだけ
+  var checkMembers = function (list, label) {
+    var ids = (Array.isArray(list) ? list : []).map(function (x) { return String(x).trim() }).filter(Boolean)
+    ids.forEach(function (m) {
+      if (!activeMembers[m]) throw userError_('「' + title + '」の' + label + 'に、登録されていない(または退会した)メンバーがいます。')
+    })
+    return ids.filter(function (m, i) { return ids.indexOf(m) === i })
+  }
+  checkMembers(t.assigneeIds, '担当者')
+  var reviewers = checkMembers(t.reviewerIds, '確認者')
+  if (reviewers.length) {
+    out.reviewer_ids = reviewers.join(',')
+    out.reviewer_id = reviewers[0]
+  }
+  if (t.requiredApprovals !== undefined && t.requiredApprovals !== null && t.requiredApprovals !== '') {
+    var ra = t.requiredApprovals
+    if (ra !== 'all') {
+      ra = Number(ra)
+      if (!reviewers.length || Math.floor(ra) !== ra || ra < 1 || ra > reviewers.length) {
+        throw userError_('「' + title + '」の必要な承認の数は、1〜確認者の人数(または all)で入れてください。')
+      }
+    }
+    out.required_approvals = String(ra)
+  }
+
+  out.estimated_hours = importHours_(t.estimatedHours, '想定の時間', title)
+  out.actual_hours = importHours_(t.actualHours, '実績の時間', title)
+
+  // 成果物(http/https のリンクだけ)
+  if (t.deliverables !== undefined && t.deliverables !== null) {
+    if (!Array.isArray(t.deliverables) || t.deliverables.length > IMPORT_MAX_DELIVERABLES) {
+      throw userError_('「' + title + '」の成果物は、' + IMPORT_MAX_DELIVERABLES + '件までの一覧で入れてください。')
+    }
+    out.deliverables_json = JSON.stringify(t.deliverables.map(function (d, i) {
+      var url = String((d && d.url) || '').trim()
+      if (!isSafeHttpUrl_(url)) throw userError_('成果物のURLは http または https で始まるURLのみ登録できます。')
+      return { id: 'd-' + id + '-' + (i + 1), label: String((d && d.label) || url).slice(0, 200), url: url }
+    }))
+  }
+
+  // 前提タスク: 同じ取り込みの中のタスク(仮の ID)
+  if (t.dependsOnTempIds !== undefined && t.dependsOnTempIds !== null) {
+    var deps = (Array.isArray(t.dependsOnTempIds) ? t.dependsOnTempIds : []).map(function (x) {
+      var real = idOfTemp[String(x)]
+      if (!real) throw userError_('「' + title + '」の前提タスクは、同じ取り込みの中のタスクだけを選べます。')
+      if (real === id) throw userError_('「' + title + '」の前提タスクに、そのタスク自身は選べません。')
+      return real
+    })
+    out.depends_on_ids = deps.filter(function (d, i) { return deps.indexOf(d) === i }).join(',')
+  }
+
+  // 公募にしない(担当を決めて割り当てる)
+  if (t.openBid === false) out.assign_type = 'manager_assign'
+
+  // 保留の理由(状態が保留の時だけ)
+  var hold = String(t.holdReason || '').trim()
+  if (hold) {
+    if (status !== 'hold') throw userError_('「' + title + '」の保留の理由は、状態が保留の時だけ入れられます。')
+    out.hold_reason_note = hold.slice(0, 1000)
+    out.hold_reason_since = today
+  }
+  return out
 }
 
 function updateTaskFields_(taskId, fields) {
@@ -6452,7 +7156,9 @@ function notifyNewTasks_(tasks) {
 // before this fix.
 function notifyReview_(taskId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
     var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
       .split(',')
@@ -7376,7 +8082,9 @@ function formComplete_(form) {
 // 日程調整の回答が揃ったら、作成者に知らせる。宛先・本文はシートのタスクから決め、揃っていなければ送らない。送ったら true
 function notifyScheduleResult_(taskId, actorId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return false
     var schedule = null
     try {
@@ -7437,7 +8145,9 @@ function notifyScheduleResult_(taskId, actorId) {
 // 呼ばれ、作成者へ回答結果をメールする。
 function notifyFormResult_(taskId, actorId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task || !task.creator_id) return false
     var form = null
     try {
@@ -7503,7 +8213,9 @@ function notifyFormResult_(taskId, actorId) {
 // the detail drawer.
 function notifyScheduleChange_(taskId) {
   try {
-    var task = requestRow_(SHEET_TASKS, taskId)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
     var assigneeIds = String(task.assignee_id || '')
       .split(',')
@@ -7537,64 +8249,151 @@ function notifyScheduleChange_(taskId) {
   }
 }
 
-// Creates/updates a Google Calendar event (on this script's default
-// calendar) for a task's assignees, inviting them by email if known.
-// Best-effort — never throws back to the caller.
-function syncCalendarForTask_(taskId) {
-  return measureAction_('calendarMs', function () { return syncCalendarForTaskUnmeasured_(taskId) })
+// タスクの予定(この GAS を実行するアカウントの既定のカレンダー)。担当者をゲストにする。
+// 予定にはタスクの ID を記録し(タグ ohsumiTaskId と、タスクの calendar_event_id の列)、そのタスクの予定だけを扱う。
+//   - 予定があれば作り直さずに書き換える(日時・名前・ゲスト)。招待のメールは、予定を作った時の1回だけ送る
+//     (あとから足した担当者には、カレンダーに予定が入るだけで、メールは届かない)
+//   - 期限を変えた時は同じ予定を動かすので、前の日の予定は残らない
+//   - 同じ名前の別のタスクの予定は消さない(ID で探す。ID の無い以前の予定は、同じ日・同じ名前で ID の無いものが
+//     1つだけの時に限り、そのタスクの予定として引き継ぐ)
+//   - 完了・削除(ゴミ箱を含む)・担当者や期限が無くなった時は、予定を消す
+//   - ゲストどうしは、互いのメールアドレスを見られない(setGuestsCanSeeGuests(false))
+// 失敗しても呼び出し元には投げない(カレンダーの上限・権限で、タスクの保存を止めない)
+var CALENDAR_TASK_TAG = 'ohsumiTaskId'
+// 予定に関わる列。これらを書き換えた時に予定を合わせる(updateRowFields_)
+var CALENDAR_TASK_FIELDS = ['title', 'due_date', 'due_time', 'assignee_id', 'deleted_at']
+
+function syncCalendarForTask_(taskId, hints) {
+  return measureAction_('calendarMs', function () { return syncCalendarForTaskUnmeasured_(taskId, hints || {}) })
 }
 
-function syncCalendarForTaskUnmeasured_(taskId) {
+// タスクの行を書き換える時、予定を合わせる必要があるか(書き換える前の行 before と比べる)。合わせるなら、前の期限・名前を返す
+function calendarSyncHints_(fields, before) {
+  var keys = Object.keys(fields || {})
+  var touches = keys.some(function (k) { return CALENDAR_TASK_FIELDS.indexOf(k) >= 0 })
+  if (!touches && keys.indexOf('status') >= 0) {
+    // 状態は、完了にした時・完了から戻した時だけ(ほかの状態の変化では予定は変わらない)
+    touches = normalizeCode_('status', fields.status) === 'done' || normalizeCode_('status', before && before.status) === 'done'
+  }
+  if (!touches) return null
+  return { oldDueDate: before ? calendarDateStr_(before.due_date) : '', oldTitle: before ? String(before.title || '') : '' }
+}
+
+function calendarDateStr_(v) {
+  if (!v) return ''
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  return String(v).slice(0, 10)
+}
+
+function syncCalendarForTaskUnmeasured_(taskId, hints) {
   try {
     if (featureDisabled_('calendarSync')) return
-    var task = findRow_(SHEET_TASKS, taskId)
-    if (!task || !task.due_date) return
-
+    // 書き込みの後なら、このリクエストで覚えている表から読む(シートを読み直さない)
+    // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
+    var grid = _sheetGrids[SHEET_TASKS]
+    var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
+    if (!task) return
+    var dueDate = calendarDateStr_(task.due_date)
     var assigneeIds = String(task.assignee_id || '')
       .split(',')
       .map(function (s) {
         return s.trim()
       })
       .filter(Boolean)
-    if (assigneeIds.length === 0) return
-
-    var emailMap = getAllMemberEmails_()
+    var emailMap = assigneeIds.length ? getAllMemberEmails_() : {}
     var guests = assigneeIds.map(function (aid) { return emailMap[String(aid)] }).filter(Boolean)
-    if (guests.length === 0) return
+    var wanted = !hints.remove && !!dueDate && guests.length > 0 && !task.deleted_at &&
+      normalizeCode_('status', task.status) !== 'done'
 
-    // テスト環境では招待(メール)を本来の宛先に送らない。予定は作るが、ゲストは付けない
-    var eventOptions = isTestEnvironment_()
-      ? {}
-      : { guests: guests.join(','), sendInvites: true }
+    var cal = CalendarApp.getDefaultCalendar()
+    var title = CALENDAR_PREFIX_OHSUMI + task.title
+    var ev = findTaskCalendarEvent_(cal, taskId, task, [dueDate, hints.oldDueDate], [title, hints.oldTitle ? CALENDAR_PREFIX_OHSUMI + hints.oldTitle : ''])
+    var hasColumn = Object.prototype.hasOwnProperty.call(task, 'calendar_event_id')
+
+    if (!wanted) {
+      if (ev) ev.deleteEvent()
+      if (hasColumn && task.calendar_event_id && !hints.remove) updateRowFields_(SHEET_TASKS, taskId, { calendar_event_id: '' })
+      return
+    }
+
+    var testEnv = isTestEnvironment_()
     // 予定からサイトを開けるようにする(レジストリに確かめていない団体では付けない)
     var eventLink = ''
     try { eventLink = canonicalInviteLink_() } catch (linkErr) { eventLink = '' }
-    if (eventLink) eventOptions.description = 'Ohsumi を開く / Open Ohsumi: ' + eventLink
-    if (isTestEnvironment_()) {
+    var description = eventLink ? 'Ohsumi を開く / Open Ohsumi: ' + eventLink : ''
+    if (testEnv) {
       console.log('[テスト環境] カレンダーの招待を送りませんでした。予定: ' + task.title + ' / 本来のゲスト: ' + maskEmailsIn_(guests.join(',')))
     }
+    var day = new Date(dueDate + 'T00:00:00')
+    var start = task.due_time ? new Date(dueDate + 'T' + String(task.due_time).slice(0, 5) + ':00') : null
+    var end = start ? new Date(start.getTime() + 60 * 60 * 1000) : null
 
-    var cal = CalendarApp.getDefaultCalendar()
-    var title = '[Ohsumi] ' + task.title
-    var existing = cal.getEvents(
-      new Date(task.due_date + 'T00:00:00'),
-      new Date(task.due_date + 'T23:59:59'),
-      { search: title },
-    )
-    existing.forEach(function (ev) {
-      ev.deleteEvent()
-    })
-
-    if (task.due_time) {
-      var start = new Date(task.due_date + 'T' + task.due_time + ':00')
-      var end = new Date(start.getTime() + 60 * 60 * 1000)
-      cal.createEvent(title, start, end, eventOptions)
+    if (ev) {
+      if (ev.getTitle() !== title) ev.setTitle(title)
+      if (start) {
+        if (ev.isAllDayEvent() || ev.getStartTime().getTime() !== start.getTime() || ev.getEndTime().getTime() !== end.getTime()) ev.setTime(start, end)
+      } else if (!ev.isAllDayEvent() || ev.getAllDayStartDate().getTime() !== day.getTime()) {
+        ev.setAllDayDate(day)
+      }
+      if (description && ev.getDescription() !== description) ev.setDescription(description)
+      // テスト環境ではゲストを付けない(本来の宛先に予定を入れない)
+      if (!testEnv) {
+        var want = guests.map(function (g) { return String(g).toLowerCase() })
+        var have = (ev.getGuestList() || []).map(function (g) { return String(g.getEmail()).toLowerCase() })
+        want.forEach(function (g) { if (have.indexOf(g) < 0) ev.addGuest(g) })
+        have.forEach(function (g) { if (want.indexOf(g) < 0) ev.removeGuest(g) })
+      }
+      if (ev.guestsCanSeeGuests()) ev.setGuestsCanSeeGuests(false)
+      if (ev.getTag(CALENDAR_TASK_TAG) !== String(taskId)) ev.setTag(CALENDAR_TASK_TAG, String(taskId))
     } else {
-      cal.createAllDayEvent(title, new Date(task.due_date + 'T00:00:00'), eventOptions)
+      // テスト環境では招待(メール)を本来の宛先に送らない。予定は作るが、ゲストは付けない
+      var eventOptions = testEnv ? {} : { guests: guests.join(','), sendInvites: true }
+      if (description) eventOptions.description = description
+      ev = start ? cal.createEvent(title, start, end, eventOptions) : cal.createAllDayEvent(title, day, eventOptions)
+      if (!ev || typeof ev.setTag !== 'function') return
+      ev.setTag(CALENDAR_TASK_TAG, String(taskId))
+      ev.setGuestsCanSeeGuests(false)
     }
+    var eventId = String(ev.getId())
+    if (hasColumn && String(task.calendar_event_id || '') !== eventId) updateRowFields_(SHEET_TASKS, taskId, { calendar_event_id: eventId })
   } catch (err) {
     // best-effort — Calendar quota/permissions issues shouldn't break assignment
+    console.warn('カレンダーの予定を合わせられませんでした: ' + maskEmailsIn_(String(err)))
   }
+}
+
+// そのタスクの予定を探す。記録した予定の ID → 期限の日(今と前)の予定のうちタグが同じもの →
+// ID の無い以前の予定(同じ日・同じ名前で ID の無いものが1つだけの時)。同じタスクの予定が2つ以上あれば、1つを残して消す
+function findTaskCalendarEvent_(cal, taskId, task, dates, titles) {
+  var id = String(taskId)
+  var recorded = String(task.calendar_event_id || '')
+  if (recorded) {
+    var byId = null
+    try { byId = cal.getEventById(recorded) } catch (e) { byId = null }
+    if (byId) {
+      var tag = byId.getTag(CALENDAR_TASK_TAG)
+      if (!tag || tag === id) return byId
+    }
+  }
+  var found = null
+  var seen = {}
+  dates.forEach(function (d) {
+    if (!d || seen[d]) return
+    seen[d] = true
+    var events = cal.getEvents(new Date(d + 'T00:00:00'), new Date(d + 'T23:59:59'), { search: CALENDAR_PREFIX_OHSUMI.trim() }) || []
+    var legacy = []
+    events.forEach(function (ev) {
+      var tag = ev.getTag(CALENDAR_TASK_TAG)
+      if (tag === id) {
+        if (found) ev.deleteEvent()
+        else found = ev
+      } else if (!tag && titles.indexOf(String(ev.getTitle())) >= 0) {
+        legacy.push(ev)
+      }
+    })
+    if (!found && legacy.length === 1) found = legacy[0]
+  })
+  return found
 }
 
 // ---- Projects ---------------------------------------------------------------
@@ -7622,6 +8421,19 @@ function createProject_(name, description, type, parentId) {
 // tasks are removed too, not just unassigned like removeMember does for
 // members. Any admin scoped to this project (see project_ids) has it
 // dropped from their scope so they don't end up referencing a dead id.
+function assertProjectRemovable_(projectId) {
+  var count = function (sheetName, col) {
+    var t = snapshotTableOrSheet_(sheetName) || { headers: [], rows: [] }
+    var c = (t.headers || []).indexOf(col)
+    if (c < 0) return 0
+    return (t.rows || []).filter(function (r) { return String(r[c] || '') === projectId }).length
+  }
+  var tasks = count(SHEET_TASKS, 'project_id'), children = count(SHEET_PROJECTS, 'parent_id')
+  if (tasks > 0 || children > 0) {
+    throw userError_('このプロジェクトには、タスクが ' + tasks + ' 件(ゴミ箱のタスクを含む)・子プロジェクトが ' + children + ' 件あるため削除できません。終わったプロジェクトは「アーカイブ」にしてください。')
+  }
+}
+
 function removeProject_(projectId) {
   var projects = getSheet_(SHEET_PROJECTS)
   var projectHeaders = headerRow_(projects)
@@ -7685,7 +8497,64 @@ function removeProject_(projectId) {
 // which removes the row. Any other task that listed this one in
 // depends_on_ids has that reference scrubbed so 依存関係 doesn't point at
 // a dead id.
+// ---- タスクのゴミ箱 ----
+//
+// 削除(removeTask)は、行を消さずに deleted_at・deleted_by を書いてゴミ箱に入れる(画面・検索・集計・通知・カレンダーから外す)。
+// ゴミ箱のタスクは、代表・全権管理者だけに返し、元に戻す(restoreTask)・すぐに完全に消す(purgeTask)ことができる。
+// 毎日の処理が、入れてから TRASH_RETENTION_DAYS 日たったタスクを完全に消す。前提タスクの一覧からは、完全に消す時に外す。
+// deleted_at の列が無い古いシート(setupOhsumi を実行していない)では、これまでどおりすぐに消す
+var TRASH_RETENTION_DAYS = 30
+var TRASH_ACTIONS = ['restoreTask', 'purgeTask']
+var TRASHED_TASK_MESSAGE = 'このタスクはゴミ箱にあります。元に戻してから変えてください。'
+
+function trashTask_(taskId, actorId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task) throw userError_('タスクが見つかりません。')
+  if (!Object.prototype.hasOwnProperty.call(task, 'deleted_at')) return removeTask_(taskId)
+  if (String(task.deleted_at || '') !== '') throw userError_(TRASHED_TASK_MESSAGE)
+  updateRowFields_(SHEET_TASKS, taskId, { deleted_at: new Date().toISOString(), deleted_by: String(actorId || '') })
+  return { trashed: taskId }
+}
+
+function restoreTrashedTask_(taskId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task || String(task.deleted_at || '') === '') throw userError_('ゴミ箱にこのタスクはありません。')
+  updateRowFields_(SHEET_TASKS, taskId, { deleted_at: '', deleted_by: '' })
+  return { restored: taskId }
+}
+
+function purgeTrashedTask_(taskId) {
+  var task = findRow_(SHEET_TASKS, taskId)
+  if (!task || String(task.deleted_at || '') === '') throw userError_('ゴミ箱にこのタスクはありません。')
+  return removeTask_(taskId)
+}
+
+// 毎日の処理: ゴミ箱に入れてから TRASH_RETENTION_DAYS 日たったタスクを完全に消す
+function purgeExpiredTrashLocked_(nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    var limit = nowMs - TRASH_RETENTION_DAYS * 24 * 3600 * 1000
+    var ids = sheetRowsAsObjects_(SHEET_TASKS).filter(function (t) {
+      var at = cellTimeMs_(t.deleted_at)
+      return String(t.deleted_at || '') !== '' && isFinite(at) && at <= limit
+    }).map(function (t) { return String(t.id) })
+    ids.forEach(function (id) { removeTask_(id) })
+    if (ids.length) bumpSnapshotVersion_()
+    return ids
+  } finally {
+    SpreadsheetApp.flush()
+    lock.releaseLock()
+  }
+}
+
+function isTrashedTask_(t) {
+  return !!t && String(t.deleted_at || '') !== ''
+}
+
 function removeTask_(taskId) {
+  // カレンダーの予定を消してから、行を消す
+  syncCalendarForTask_(taskId, { remove: true })
   var tasks = getSheet_(SHEET_TASKS)
   var taskHeaders = headerRow_(tasks)
   var idCol = taskHeaders.indexOf('id') + 1
@@ -7731,7 +8600,12 @@ function updateMemberFields_(memberId, fields) {
 
 // Adds a brand-new member row — used by Admin → Members "メンバーを登録",
 // including registering someone directly as an admin (role != 一般).
-function addMember_(name, email, affiliation, role) {
+function addMember_(name, email, affiliation, role, opts) {
+  // メンバーにはメールアドレスが要る(メールアドレスで本人を照合してログインさせるため)
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(email || '').trim())) {
+    throw userError_('メールアドレスが無い・形が正しくないため、メンバーを追加できません(メールアドレスが無いとログインできません)。')
+  }
+  email = String(email).trim()
   var sheet = getSheet_(SHEET_MEMBERS)
   var headers = headerRow_(sheet)
   var id = String(nextIntId_(sheet, headers))
@@ -7756,7 +8630,74 @@ function addMember_(name, email, affiliation, role) {
   // for admin roles with none, defaulted client-side), so nothing to store
   // for it here; kept as a param for parity with the client-side call.
   if (email) setMemberEmail_(id, email)
+  // 初期タスク(メンバーを作った時に1回だけ。失敗してもメンバーの追加は止めない)
+  try { createInitialTasksForMember_(id, !!(opts && opts.firstLeader)) } catch (e) { console.error('初期タスクを作れませんでした: ' + maskEmailsIn_(String(e))) }
   return { id: id }
+}
+
+// ---- 初期タスク(メンバーを作った時に GAS で作る) ----
+//
+// メンバーを作った時(メンバーの追加・候補者のメンバー化・初期設定コードで最初の代表が入った時)に1回だけ作る。
+// ログインの時には作らない(以前は画面だけで作っていたため、保存されず端末ごとに何度も付いた)。すでにいるメンバーには作らない。
+//   新しいメンバー: Settings の initial_tasks_json([{ name, description }])があればそれ、無ければ INITIAL_MEMBER_TASKS
+//   最初の代表: INITIAL_LEADER_TASKS(団体を使い始めるためにやること)
+// タスクは「はじめに」のプロジェクトに入れる(無ければ作る)。承認待ちにせず、担当は本人
+var INITIAL_TASKS_PROJECT_NAME = 'はじめに'
+var INITIAL_TASKS_MAX = 20
+var INITIAL_MEMBER_TASKS = [
+  { name: 'Ohsumiの使い方を確認する', description: 'INPUT の画面で「今日やること」を入れて、承認を受けてみましょう。' },
+  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、Will とスキルを登録しましょう。' },
+  { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」で、団体のタスク全体を見てみましょう。' },
+]
+var INITIAL_LEADER_TASKS = [
+  { name: '団体の情報を設定する', description: 'ADMIN →「団体の設定」で、団体名・ロゴ・テーマの色を入れます。' },
+  { name: '役職と部門を決める', description: 'ADMIN →「Tags」で役職(班長など)を、「Org Tree」で部門を作ります。' },
+  { name: 'メンバーを追加して招待する', description: 'ADMIN →「Members」の「メンバーを登録」で、名前とメールアドレスを入れ、「招待メールを送る」を選びます。' },
+  { name: '最初のプロジェクトを作る', description: 'ADMIN →「Projects」で、プロジェクトを1つ作ります(このタスクの「はじめに」とは別に作ります)。' },
+  { name: '最初のタスクを作って担当を決める', description: 'INPUT の画面でタスクを入れ、担当者と期限を決めます。' },
+  { name: '通知の受け取り方を決める', description: 'ADMIN →「Tags」で Discord・Slack の通知先を、各自のプロフィールの「通知の設定」でメールのまとめを決めます。' },
+  { name: '安全の設定を確かめる', description: 'スプレッドシートを誰とも共有していないか、管理画面の上部の知らせ・団体の設定の「バックアップ」、団体のアカウントの2段階認証を確かめます。' },
+  { name: '引き継ぎの準備をする', description: '団体の Google アカウントを誰が持ち、代替わりの時に誰に渡すかを決めて、メモに残します。' },
+]
+
+function initialTaskDefs_(firstLeader) {
+  if (firstLeader) return INITIAL_LEADER_TASKS
+  var custom = null
+  try { custom = JSON.parse(String(getSettingValue_('initial_tasks_json') || '') || 'null') } catch (e) { custom = null }
+  if (Array.isArray(custom)) {
+    var list = custom.filter(function (t) { return t && String(t.name || '').trim() }).slice(0, INITIAL_TASKS_MAX).map(function (t) {
+      return { name: String(t.name).trim().slice(0, 200), description: String(t.description || '').slice(0, 2000) }
+    })
+    if (list.length) return list
+  }
+  return INITIAL_MEMBER_TASKS
+}
+
+// 「はじめに」のプロジェクトの ID(無ければ作る)
+function initialTasksProjectId_() {
+  var table = snapshotTableOrSheet_(SHEET_PROJECTS) || { headers: [], rows: [] }
+  var idCol = table.headers.indexOf('id'), nameCol = table.headers.indexOf('name')
+  for (var i = 0; i < (table.rows || []).length; i++) {
+    if (String(table.rows[i][nameCol] || '').trim() === INITIAL_TASKS_PROJECT_NAME) return String(table.rows[i][idCol])
+  }
+  // スナップショットが古い時のため、シートでも探す
+  var sheet = getSheet_(SHEET_PROJECTS)
+  var values = sheet.getDataRange().getValues()
+  var h = (values[0] || []).map(function (x) { return String(x).trim() })
+  for (var j = 1; j < values.length; j++) {
+    if (String(values[j][h.indexOf('name')] || '').trim() === INITIAL_TASKS_PROJECT_NAME) return String(values[j][h.indexOf('id')])
+  }
+  return createProject_(INITIAL_TASKS_PROJECT_NAME, '新しいメンバー・代表が最初にやることのタスクを入れるプロジェクトです。', '').id
+}
+
+function createInitialTasksForMember_(memberId, firstLeader) {
+  var defs = initialTaskDefs_(firstLeader)
+  if (!defs.length) return []
+  var projectId = initialTasksProjectId_()
+  return createTasks_(defs.map(function (t, i) {
+    return { tempId: 'init-' + i, projectId: projectId, title: t.name, description: t.description, assigneeIds: [String(memberId)],
+      visibility: firstLeader ? 'leaders' : 'all', pendingApproval: false, difficulty: 'beginner', priority: 'medium' }
+  }), String(memberId))
 }
 
 // ---- MemberEmails (非公開シート) ---------------------------------------------
@@ -7764,6 +8705,106 @@ function addMember_(name, email, affiliation, role) {
 // メールアドレスはMembersシート(公開CSV)には置かず、こちらの非公開シートに
 // id(=Members.idと同じ値)をキーとして1人1行で保持する。読み書きは必ず
 // このセクションの関数経由で行い、Membersシート側に書き戻さないこと。
+
+// ---- 本人だけの保存(getMyStorage・setMyStorage) ----
+//
+// 画面が決めたキー(英小文字・数字・. _ -、64文字まで)ごとに、文字列の値を保存する。
+// 読み書きできるのは本人の分だけ(メンバーID は認証済みの acting.id。画面が送るメンバーID は使わない)。
+// 1人あたり PERSONAL_STORE_MAX_KEYS 個のキー・合わせて PERSONAL_STORE_MAX_CHARS 文字まで。
+// 値は1つのセルの上限を超えないよう、PERSONAL_STORE_CHUNK 文字ずつの行に分ける。
+// 初期データ・スナップショットには入れない(ほかの人には返さない)。個人情報の削除で消す
+var SHEET_PERSONAL_STORE = 'PersonalStore'
+var PERSONAL_STORE_CHUNK = 40000
+var PERSONAL_STORE_MAX_CHARS = 150000
+var PERSONAL_STORE_MAX_KEYS = 20
+var PERSONAL_STORE_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+
+function personalStoreSheet_(create) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var sheet = ss.getSheetByName(SHEET_PERSONAL_STORE)
+  if (!sheet && create) sheet = getOrCreateSheet_(SHEET_PERSONAL_STORE, PERSONAL_STORE_HEADERS)
+  return sheet
+}
+
+// 本人の行(行番号・キー・何番目か・値)。メンバーID の列だけを読んで探し、本人の行だけを読む
+function personalStoreRows_(sheet, memberId) {
+  var last = sheet ? sheet.getLastRow() : 0
+  if (last < 2) return []
+  var headers = headerRow_(sheet)
+  var col = function (h) { return headers.indexOf(h) }
+  var ids = sheet.getRange(2, col('id') + 1, last - 1, 1).getValues()
+  var out = []
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) !== String(memberId)) continue
+    var r = sheet.getRange(i + 2, 1, 1, headers.length).getValues()[0]
+    out.push({ row: i + 2, key: String(r[col('key')]), part: Number(r[col('part')]) || 0, value: String(r[col('value')] == null ? '' : r[col('value')]) })
+  }
+  return out
+}
+
+function personalStoreValues_(rows) {
+  var byKey = {}
+  rows.forEach(function (r) { (byKey[r.key] = byKey[r.key] || []).push(r) })
+  var out = {}
+  Object.keys(byKey).forEach(function (k) {
+    out[k] = byKey[k].sort(function (a, b) { return a.part - b.part }).map(function (r) { return r.value }).join('')
+  })
+  return out
+}
+
+function getMyStorage_(memberId, keys) {
+  var values = personalStoreValues_(personalStoreRows_(personalStoreSheet_(false), memberId))
+  if (Array.isArray(keys)) {
+    var picked = {}
+    keys.forEach(function (k) { if (Object.prototype.hasOwnProperty.call(values, String(k))) picked[String(k)] = values[String(k)] })
+    values = picked
+  }
+  return { values: values }
+}
+
+// value: 文字列(画面が JSON にして送る)。null・空の文字列はキーを消す
+function setMyStorage_(memberId, key, value) {
+  key = String(key || '')
+  if (!PERSONAL_STORE_KEY_RE.test(key)) throw userError_('保存のキーが正しくありません。')
+  if (value !== null && value !== undefined && typeof value !== 'string') throw userError_('保存する値は文字列にしてください。')
+  var text = value == null ? '' : value
+  var sheet = personalStoreSheet_(true)
+  var rows = personalStoreRows_(sheet, memberId)
+  var current = personalStoreValues_(rows)
+  var others = Object.keys(current).filter(function (k) { return k !== key })
+  if (text) {
+    if (others.length + 1 > PERSONAL_STORE_MAX_KEYS) throw userError_('保存できるキーは1人' + PERSONAL_STORE_MAX_KEYS + '個までです。')
+    var total = text.length + others.reduce(function (n, k) { return n + current[k].length }, 0)
+    if (total > PERSONAL_STORE_MAX_CHARS) throw userError_('保存できる大きさ(1人' + PERSONAL_STORE_MAX_CHARS + '文字)を超えています。')
+  }
+  var chunks = []
+  for (var i = 0; i < text.length; i += PERSONAL_STORE_CHUNK) chunks.push(text.slice(i, i + PERSONAL_STORE_CHUNK))
+  var mine = rows.filter(function (r) { return r.key === key }).sort(function (a, b) { return a.part - b.part })
+  var headers = headerRow_(sheet)
+  var now = new Date().toISOString()
+  var rowOf = function (part, chunk) {
+    var o = { id: String(memberId), key: key, part: part, value: chunk, updated_at: now }
+    return headers.map(function (h) { return Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '' })
+  }
+  chunks.forEach(function (chunk, part) {
+    var target = mine[part] ? mine[part].row : sheet.getLastRow() + 1
+    // 数式として扱われないよう、書式なしテキストにしてから書く
+    sheet.getRange(target, 1, 1, headers.length).setNumberFormat('@')
+    sheet.getRange(target, 1, 1, headers.length).setValues([rowOf(part, chunk)])
+  })
+  // 余った行は下から消す(行番号がずれないように)
+  mine.slice(chunks.length).map(function (r) { return r.row }).sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
+  return { key: key, size: text.length }
+}
+
+// 個人情報の削除: 本人だけの保存を消す
+function deletePersonalStore_(memberId) {
+  var sheet = personalStoreSheet_(false)
+  if (!sheet) return 0
+  var rows = personalStoreRows_(sheet, memberId).map(function (r) { return r.row }).sort(function (a, b) { return b - a })
+  rows.forEach(function (r) { sheet.deleteRow(r) })
+  return rows.length
+}
 
 function getMemberEmailsSheet_() {
   return getOrCreateSheet_(SHEET_MEMBER_EMAILS, MEMBER_EMAILS_HEADERS)
@@ -7907,23 +8948,20 @@ function getAllMemberEmails_() {
 // hotlinked from an <img> tag, replaces any previous upload for this
 // member, and records the resulting URL on their Members row.
 function uploadAvatar_(memberId, dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'avatar_' + memberId + '_'
 
-  // remove any previous upload for this member so the folder doesn't
-  // accumulate orphaned files every time someone changes their picture
-  var existing = folder.getFiles()
-  while (existing.hasNext()) {
-    var f = existing.next()
-    if (f.getName().indexOf(namePrefix) === 0) f.setTrashed(true)
-  }
+  // 前の画像は、メンバーの行に記録した URL のファイルだけを消す(フォルダ全体は調べない。
+  // 領収書などが増えると遅くなるため)
+  try {
+    var prev = findRow_(SHEET_MEMBERS, memberId)
+    trashUploadedImageByUrl_(prev && prev.avatar_url, namePrefix)
+  } catch (e) { console.error('前のプロフィール画像を消せませんでした: ' + e) }
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -7938,24 +8976,43 @@ function uploadAvatar_(memberId, dataUrl, filename) {
   return { url: url }
 }
 
+// 画像のアップロードの確かめ: 種類は jpeg・png・gif・webp だけ、大きさは IMAGE_UPLOAD_MAX_BYTES まで
+var IMAGE_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+var IMAGE_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+function parseImageDataUrl_(dataUrl) {
+  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
+  if (!match) throw userError_('画像を読み取れませんでした。')
+  var mimeType = String(match[1]).toLowerCase()
+  if (IMAGE_UPLOAD_TYPES.indexOf(mimeType) < 0) throw userError_('画像は JPEG・PNG・GIF・WebP のどれかを選んでください。')
+  // base64 の長さから、元の大きさを先に見積もって断る(大きなデータを読み込む前に)
+  if (match[2].length * 3 / 4 > IMAGE_UPLOAD_MAX_BYTES + 4) throw userError_('画像が大きすぎます(2MB まで)。')
+  var bytes = Utilities.base64Decode(match[2])
+  if (bytes.length > IMAGE_UPLOAD_MAX_BYTES) throw userError_('画像が大きすぎます(2MB まで)。')
+  return { mimeType: mimeType, bytes: bytes }
+}
+
+// アップロードした画像の URL(https://lh3.googleusercontent.com/d/<ファイルID>=...)から、そのファイルだけをゴミ箱に移す。
+// 名前が namePrefix で始まる、アップロード用のフォルダのファイルだけを消す(ほかのファイルを消さないため)
+function trashUploadedImageByUrl_(url, namePrefix) {
+  var m = String(url || '').match(/\/d\/([A-Za-z0-9_-]{10,})/)
+  if (!m) return
+  var file = DriveApp.getFileById(m[1])
+  if (String(file.getName()).indexOf(namePrefix) === 0) file.setTrashed(true)
+}
+
 // 団体ロゴをDriveにアップロードし、Settingsシートのorg_logo_urlを更新する。
 // uploadAvatarと異なりMembersシートは変更しない。
 function uploadOrgLogo_(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'org_logo_'
 
-  var existing = folder.getFiles()
-  while (existing.hasNext()) {
-    var f = existing.next()
-    if (f.getName().indexOf(namePrefix) === 0) f.setTrashed(true)
-  }
+  // 前のロゴは、設定に記録した URL のファイルだけを消す
+  try { trashUploadedImageByUrl_(getSettingValue_('org_logo_url'), namePrefix) } catch (e) { console.error('前のロゴを消せませんでした: ' + e) }
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -7995,15 +9052,13 @@ function uploadExpenseReceipt_(dataUrl, filename) {
 // 既存ファイルの削除はしない)。ただしこちらは画像専用なので、
 // アバターと同じgoogleusercontent.comホットリンク形式のURLを返す。
 function uploadSurveyImage_(dataUrl, filename) {
-  var match = String(dataUrl || '').match(/^data:([^;]+);base64,(.*)$/)
-  if (!match) throw userError_('Expected a base64 data URL')
-  var mimeType = match[1]
-  var base64Data = match[2]
+  var img = parseImageDataUrl_(dataUrl)
+  var mimeType = img.mimeType
 
   var folder = getUploadFolder_()
   var namePrefix = 'survey_image_'
 
-  var blob = Utilities.newBlob(Utilities.base64Decode(base64Data), mimeType, filename)
+  var blob = Utilities.newBlob(img.bytes, mimeType, filename)
   var file = folder.createFile(blob)
   file.setName(namePrefix + Date.now())
   applyUploadSharing_(file)
@@ -8064,6 +9119,7 @@ function removeMember_(memberId, actorId, nowMs) {
       }
     }
   }
+  var cleanup = withdrawCleanupRoles_(String(memberId))
   var withdrawnAt = new Date(nowMs).toISOString()
   // 未アサインに戻したタスク(退会を取り消した時に、代表に一覧を出す)
   updateMemberFields_(memberId, { inactive: 'TRUE', withdrawn_at: withdrawnAt, purge_at: '', withdrawal_unassigned_task_ids: unassigned.join(',') })
@@ -8072,7 +9128,85 @@ function removeMember_(memberId, actorId, nowMs) {
   bumpSessionGeneration_(memberId)
   var purgeAt = new Date(nowMs + personalDataRetentionDays_() * 24 * 3600 * 1000).toISOString()
   appendOrgAudit_(actorId, 'removeMember', String(memberId), { withdrawnAt: withdrawnAt, purgeAt: purgeAt })
-  return { removed: String(memberId), withdrawnAt: withdrawnAt, purgeAt: purgeAt }
+  notifyWithdrawCleanup_(member, cleanup)
+  return { removed: String(memberId), withdrawnAt: withdrawnAt, purgeAt: purgeAt, cleanup: cleanup }
+}
+
+// 退会したメンバーの、担当以外の役割を外す(確認者・ほかのメンバーの報告先とメンター・プロジェクトの責任者とメンバー)。
+// 外したものを返す(代表への知らせに使う)。経費・申請フォームの承認の段は変えない(進行中のものは代表が確かめる)
+function withdrawCleanupRoles_(memberId) {
+  var out = { reviewerTasks: [], reviewShort: [], reportsTo: [], mentees: [], ownerProjects: [], memberProjects: [] }
+  var dropId = function (csv) {
+    var list = splitCsvList_(csv)
+    var next = list.filter(function (id) { return id !== memberId })
+    return next.length === list.length ? null : next.join(',')
+  }
+  // タスクの確認者(完了したタスクは記録として残す)
+  try {
+    var ts = getSheet_(SHEET_TASKS), th = headerRow_(ts), tv = ts.getDataRange().getValues()
+    var c = function (n) { return th.indexOf(n) }
+    for (var i = 1; i < tv.length; i++) {
+      var row = tv[i]
+      if (normalizeCode_('status', row[c('status')]) === 'done') continue
+      var changed = false
+      if (c('reviewer_ids') >= 0) {
+        var next = dropId(row[c('reviewer_ids')])
+        if (next !== null) { ts.getRange(i + 1, c('reviewer_ids') + 1).setValue(next); changed = true; row[c('reviewer_ids')] = next }
+      }
+      if (c('reviewer_id') >= 0 && String(row[c('reviewer_id')] || '') === memberId) { ts.getRange(i + 1, c('reviewer_id') + 1).setValue(''); changed = true; row[c('reviewer_id')] = '' }
+      if (!changed) continue
+      var title = String(row[c('title')] || '')
+      out.reviewerTasks.push(title)
+      // 確認待ちで、残りの確認者が必要な承認の数に届かない
+      if (normalizeCode_('status', row[c('status')]) === 'review') {
+        var left = splitCsvList_(row[c('reviewer_ids')]).concat(splitCsvList_(row[c('reviewer_id')])).filter(function (v, k, a) { return a.indexOf(v) === k }).length
+        var need = c('required_approvals') >= 0 ? String(row[c('required_approvals')] || '1') : '1'
+        if (left === 0 || (need !== 'all' && left < Number(need))) out.reviewShort.push(title)
+      }
+    }
+  } catch (e) { console.error('退会: 確認者を外せませんでした: ' + e) }
+  // ほかのメンバーの報告先・メンター
+  try {
+    var ms = getSheet_(SHEET_MEMBERS), mh = headerRow_(ms), mv = ms.getDataRange().getValues()
+    var name = function (r) { return String(r[mh.indexOf('display_name')] || r[mh.indexOf('name')] || '') }
+    for (var j = 1; j < mv.length; j++) {
+      if (mh.indexOf('reports_to_id') >= 0 && String(mv[j][mh.indexOf('reports_to_id')] || '') === memberId) {
+        ms.getRange(j + 1, mh.indexOf('reports_to_id') + 1).setValue(''); out.reportsTo.push(name(mv[j]))
+      }
+      if (mh.indexOf('mentor_id') >= 0 && String(mv[j][mh.indexOf('mentor_id')] || '') === memberId) {
+        ms.getRange(j + 1, mh.indexOf('mentor_id') + 1).setValue(''); out.mentees.push(name(mv[j]))
+      }
+    }
+  } catch (e) { console.error('退会: 報告先・メンターを外せませんでした: ' + e) }
+  // プロジェクトの責任者・メンバー
+  try {
+    var ps = getSheet_(SHEET_PROJECTS), ph = headerRow_(ps), pv = ps.getDataRange().getValues()
+    for (var k = 1; k < pv.length; k++) {
+      var pname = String(pv[k][ph.indexOf('name')] || '')
+      if (ph.indexOf('owner_id') >= 0 && String(pv[k][ph.indexOf('owner_id')] || '') === memberId) {
+        ps.getRange(k + 1, ph.indexOf('owner_id') + 1).setValue(''); out.ownerProjects.push(pname)
+      }
+      if (ph.indexOf('member_ids') >= 0) {
+        var nm = dropId(pv[k][ph.indexOf('member_ids')])
+        if (nm !== null) { ps.getRange(k + 1, ph.indexOf('member_ids') + 1).setValue(nm); out.memberProjects.push(pname) }
+      }
+    }
+  } catch (e) { console.error('退会: プロジェクトから外せませんでした: ' + e) }
+  return out
+}
+
+// 退会の後に、設定し直しが要るものを代表・管理者に知らせる(1日のまとめのメール)
+function notifyWithdrawCleanup_(member, cleanup) {
+  try {
+    var who = String((member && (member.display_name || member.name)) || '')
+    var lines = []
+    if (cleanup.reviewShort.length) lines.push('・確認者が足りなくなった確認待ちのタスク: ' + cleanup.reviewShort.join('、'))
+    if (cleanup.reportsTo.length) lines.push('・報告先(上長)の設定が必要なメンバー: ' + cleanup.reportsTo.join('、'))
+    if (cleanup.mentees.length) lines.push('・メンターの設定が必要なメンバー: ' + cleanup.mentees.join('、'))
+    if (cleanup.ownerProjects.length) lines.push('・責任者がいなくなったプロジェクト: ' + cleanup.ownerProjects.join('、'))
+    lines.push('・進行中の経費・申請フォームで、' + who + 'さんが承認の段に指定されているものがあれば、承認の段を見直してください')
+    notifyAdmins_('[Ohsumi] 退会したメンバーの役割の引き継ぎ', who + 'さんが退会しました。次の設定を見直してください。\n\n' + lines.join('\n') + '\n\nOhsumiで確認してください。')
+  } catch (e) { console.error('退会の知らせを送れませんでした: ' + maskEmailsIn_(String(e))) }
 }
 
 // ---- Settings (optional key/value sync sheet) ------------------------------
@@ -8235,7 +9369,21 @@ function protectRowFromFormulaInjection_(sheet, headers, rowNumber, sheetName) {
 }
 
 function updateRowFields_(sheetName, rowId, fields) {
-  return measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  // タスクの期限・担当者・名前・完了などを変えた時は、カレンダーの予定を合わせる(syncCalendarForTask_)
+  var calendarHints = null
+  if (sheetName === SHEET_TASKS) {
+    var beforeRow = null
+    try {
+      // 書き込みで読む表(このリクエストで覚えている表)から、書き換える前の値を取る
+      var at = sheetGridRow_(SHEET_TASKS, rowId)
+      var vals = at.row > 0 ? at.grid.values[at.row - 1] : null
+      if (vals) beforeRow = { status: vals[at.grid.headers.indexOf('status')], due_date: vals[at.grid.headers.indexOf('due_date')], title: vals[at.grid.headers.indexOf('title')] }
+    } catch (e) { beforeRow = null }
+    calendarHints = calendarSyncHints_(fields, beforeRow)
+  }
+  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  if (calendarHints) syncCalendarForTask_(rowId, calendarHints)
+  return result
 }
 
 // 1回の実行(リクエスト)の中で読んだシートの形(見出しと、ID → 行番号)を覚えて、同じシートへの
@@ -8345,7 +9493,7 @@ var ROW_VERSION_SHEETS = ['Members', 'Projects', 'Tasks']
 var ROW_VERSION_IGNORED_FIELDS = [
   'row_version', 'row_updated_by',
   // 記録・通知のための列
-  'last_login', 'last_inactive_notified', 'last_notified_health', 'last_activity',
+  'last_login', 'last_inactive_notified', 'last_notified_health', 'last_activity', 'calendar_event_id',
   // 項目ごとの差分で確かめる記録の一覧と、GAS が足し算でまとめる列
   'comments_json', 'progress_history_json', 'history_json', 'deliverables_json',
   'career_history_json', 'qualifications_json', 'evaluation_history_json', 'transfer_history_json',
@@ -9065,24 +10213,27 @@ function generateRecurringTasksInternal_() {
 
   var now = new Date()
   var today = todayStr_()
-  var dow = now.getDay()
-  var dom = now.getDate()
   var changed = false
   var generated = []
 
   rules.forEach(function (rule) {
     if (!rule.active || rule.lastGeneratedDate === today) return
-    var due = rule.frequency === 'weekly' ? rule.dayOfWeek === dow : rule.dayOfMonth === dom
-    if (!due) return
+    // 作る日: 前回作った日の次の日から今日まで(最大31日さかのぼる)のうち、規則に合う日。
+    // 毎朝の処理が動かなかった日の分も作る。初めての規則は今日の分だけ。
+    // 毎月の規則で指定の日(29〜31日)が無い月は、その月の最終日に作る
+    var dates = recurringDueDates_(rule, rule.lastGeneratedDate || '', today)
+    if (!dates.length) return
 
     // isolate each rule — one bad rule (e.g. a stale projectId, a transient
     // Sheets error) must not abort the whole daily trigger and skip both
     // the remaining rules' lastGeneratedDate writes and the overdue-task
     // Discord sweep that runs after this function in dailyMaintenance()
+    dates.forEach(function (onDate) {
     try {
       var deadline = null
       if (rule.dueInDays != null) {
-        var d = new Date(now.getTime() + rule.dueInDays * 86400000)
+        var base = new Date(onDate + 'T12:00:00')
+        var d = new Date(base.getTime() + rule.dueInDays * 86400000)
         deadline = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd')
       }
       // same payload shape/columns the client sends for a recurring-generated
@@ -9102,15 +10253,41 @@ function generateRecurringTasksInternal_() {
         },
       ])
       generated = generated.concat(created)
-      rule.lastGeneratedDate = today
+      rule.lastGeneratedDate = onDate === dates[dates.length - 1] ? today : onDate
       changed = true
     } catch (err) {
       // best-effort — skip this rule today, try again on the next run
     }
+    })
   })
 
   if (changed) updateSetting_(SETTINGS_KEY_RECURRING_RULES, JSON.stringify(rules))
   return { generated: generated }
+}
+
+// 定期タスクを作る日(YYYY-MM-DD)の一覧。lastDate の次の日から today まで(最大31日)のうち、規則に合う日。
+// lastDate が空(初めての規則)なら、今日が規則に合う時だけ今日。
+// 毎月の規則で dayOfMonth がその月に無い(29〜31日)時は、その月の最終日を作る日にする
+function recurringDueDates_(rule, lastDate, today) {
+  var DAY = 86400000
+  var toDate = function (str) { return new Date(str + 'T12:00:00') }
+  var fmt = function (d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd') }
+  var end = toDate(today)
+  var start = lastDate ? new Date(toDate(lastDate).getTime() + DAY) : end
+  if (end.getTime() - start.getTime() > 31 * DAY) start = new Date(end.getTime() - 31 * DAY)
+  var out = []
+  for (var t = start.getTime(); t <= end.getTime(); t += DAY) {
+    var d = new Date(t)
+    var hit
+    if (rule.frequency === 'weekly') {
+      hit = d.getDay() === Number(rule.dayOfWeek)
+    } else {
+      var lastDom = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+      hit = d.getDate() === Math.min(Number(rule.dayOfMonth), lastDom)
+    }
+    if (hit) out.push(fmt(d))
+  }
+  return out
 }
 
 // 一定期間アクセスのないメンバーを管理者に通知する日次スイープ。
@@ -9204,6 +10381,7 @@ function notifyOverdueTasksToAssignees_() {
       var due = cellDateStr_(r[dueCol])
       var status = String(r[statusCol] || '')
       if (!due || due >= today || normalizeCode_('status', status) === 'done') return
+      if (headers.indexOf('deleted_at') >= 0 && String(r[headers.indexOf('deleted_at')] || '') !== '') return
       var title = String(r[titleCol] || '')
       var assigneeIds = String(r[assigneeCol] || '')
         .split(',')
@@ -9497,9 +10675,11 @@ function notifyOverdueTasksToDiscord_() {
         return {
           title: r[titleCol], due: cellDateStr_(r[dueCol]), status: String(r[statusCol] || ''),
           visibility: visCol >= 0 ? r[visCol] : '', approval_status: apprCol >= 0 ? r[apprCol] : '',
+          deleted_at: headers.indexOf('deleted_at') >= 0 ? r[headers.indexOf('deleted_at')] : '',
         }
       })
       .filter(function (t) {
+        if (isTrashedTask_(t)) return false
         // 承認待ち(まだ承認されていない)のタスクは、チャンネルには出さない
         if (normalizeCode_('approval', t.approval_status) === 'pending') return false
         return t.due && t.due < today && normalizeCode_('status', t.status) !== 'done'
@@ -9553,30 +10733,52 @@ function saveSurveyResponse_(memberId, answers) {
   return { id: responseId }
 }
 
+// 経費の金額: 0 以上の数
+function checkExpenseAmount_(v) {
+  var n = Number(v)
+  if (v === '' || v === null || v === undefined || typeof v === 'boolean' || !isFinite(n) || n < 0) throw userError_('金額は0以上の数で入れてください。')
+  return n
+}
+
+// 経費のカテゴリ(団体の設定 expense_categories)。承認の段は、ここから GAS が決める(画面から送られた段は使わない)
+function expenseCategoryOf_(categoryId) {
+  var list = []
+  try { list = JSON.parse(getSettingValue_('expense_categories') || '[]') } catch (e) { list = [] }
+  var found = (Array.isArray(list) ? list : []).filter(function (c) { return c && String(c.id) === String(categoryId || '') })[0]
+  if (!found) throw userError_('経費のカテゴリが見つかりません。団体の設定のカテゴリから選んでください。')
+  return found
+}
+
+// 経費の申請: 申請者はログインしている本人、ID・作った日時は GAS が決める。承認の段はカテゴリの設定から決める
 function saveExpenseApplication_(application, acting) {
+  application = application || {}
   // F5: javascript:等の危険なURLを保存させない
   if (application.receiptUrl && !isSafeHttpUrl_(application.receiptUrl)) {
     throw userError_('領収書URLは http または https で始まるURLのみ登録できます。')
   }
+  var amount = checkExpenseAmount_(application.amount)
+  var category = expenseCategoryOf_(application.categoryId)
+  var steps = Array.isArray(category.approvalSteps) ? category.approvalSteps : []
+  var id = 'exp-' + Utilities.getUuid()
   var sheet = ensureExpensesSheet_()
   appendRowByHeaders_(sheet, SHEET_EXPENSES, {
-    id: application.id,
-    applicant_id: application.applicantId,
-    amount: application.amount,
-    category_id: application.categoryId,
+    id: id,
+    applicant_id: String(acting.id),
+    amount: amount,
+    category_id: String(category.id),
     receipt_url: application.receiptUrl || '',
     justification: application.justification || '',
     purpose: application.purpose || '',
     custom_field_answers_json: JSON.stringify(application.customFieldAnswers || {}),
-    approval_steps_json: JSON.stringify(application.approvalSteps || []),
+    approval_steps_json: JSON.stringify(steps),
     approvals_json: '[]',
     current_step_index: 0,
     status: 'pending',
-    created_at: application.createdAt || new Date().toISOString(),
+    created_at: new Date().toISOString(),
     rejection_reason: '',
   })
+  application = { id: id, amount: amount }
   // 1次承認者への通知
-  var steps = application.approvalSteps || []
   if (steps.length > 0) {
     var firstStep = steps[0]
     var emails = []
@@ -9608,12 +10810,15 @@ function resubmitExpense_(applicationId, fields, actorId) {
   if (fields.receiptUrl && !isSafeHttpUrl_(fields.receiptUrl)) {
     throw userError_('領収書URLは http または https で始まるURLのみ登録できます。')
   }
-  var approvalSteps = fields.approvalSteps || JSON.parse(String(found.data[headers.indexOf('approval_steps_json')] || '[]'))
-  var amount = fields.amount != null ? fields.amount : found.data[headers.indexOf('amount')]
+  // 承認の段は、画面から送られた段を使わず、カテゴリの設定から GAS が決める
+  var categoryId = fields.categoryId || found.data[headers.indexOf('category_id')]
+  var category = expenseCategoryOf_(categoryId)
+  var approvalSteps = Array.isArray(category.approvalSteps) ? category.approvalSteps : []
+  var amount = checkExpenseAmount_(fields.amount != null ? fields.amount : found.data[headers.indexOf('amount')])
 
   var updates = {
     amount: amount,
-    category_id: fields.categoryId || found.data[headers.indexOf('category_id')],
+    category_id: String(category.id),
     receipt_url: fields.receiptUrl || '',
     justification: fields.justification || '',
     purpose: fields.purpose || '',
@@ -9814,26 +11019,31 @@ function setExpenseStatus_(applicationId, status, reason, actorId) {
 // パターンだが、フォーム定義(approvalSteps)はSettingsの
 // custom_form_defsから引く必要がある点が経費申請と異なる
 // (経費申請はapplication自体にステップのスナップショットを持つ)。
+// 申請フォームの提出: 提出者はログインしている本人、ID・作った日時は GAS が決める。フォームは団体の設定にあるものだけ
 function saveCustomFormSubmission_(submission, acting) {
-  var sheet = ensureFormSubmissionsSheet_()
-  appendRowByHeaders_(sheet, SHEET_FORM_SUBMISSIONS, {
-    id: submission.id,
-    form_id: submission.formId,
-    submitter_id: submission.submitterId,
-    answers_json: JSON.stringify(submission.answers || {}),
-    approvals_json: '[]',
-    current_step_index: 0,
-    status: 'pending',
-    created_at: submission.createdAt || new Date().toISOString(),
-    rejection_reason: '',
-  })
-
+  submission = submission || {}
   var customFormDefs = []
   try {
     var raw = getSettingValue_('custom_form_defs')
     if (raw) customFormDefs = JSON.parse(raw)
   } catch (e) {}
-  var formDef = customFormDefs.filter(function (f) { return f.id === submission.formId })[0]
+  if (!Array.isArray(customFormDefs)) customFormDefs = []
+  var formDef = customFormDefs.filter(function (f) { return f && String(f.id) === String(submission.formId || '') })[0]
+  if (!formDef) throw userError_('申請フォームが見つかりません。')
+  var id = 'fs-' + Utilities.getUuid()
+  var sheet = ensureFormSubmissionsSheet_()
+  appendRowByHeaders_(sheet, SHEET_FORM_SUBMISSIONS, {
+    id: id,
+    form_id: String(formDef.id),
+    submitter_id: String(acting.id),
+    answers_json: JSON.stringify(submission.answers || {}),
+    approvals_json: '[]',
+    current_step_index: 0,
+    status: 'pending',
+    created_at: new Date().toISOString(),
+    rejection_reason: '',
+  })
+  submission = { id: id, formId: String(formDef.id), submitterId: String(acting.id) }
   var steps = formDef ? (formDef.approvalSteps || []) : []
   if (steps.length > 0) {
     var firstStep = steps[0]
@@ -10007,19 +11217,25 @@ function ensureDailyReportsSheet_() {
 }
 
 // REP-004: 日報・週報の保存(追記のみ)。
+// 日報・週報: メンバーはログインしている本人、ID・作った日時は GAS が決める。種類と日付の形を確かめる
 function saveDailyReport_(report, acting) {
+  report = report || {}
+  if (report.type !== 'daily' && report.type !== 'weekly') throw userError_('日報・週報の種類が不正です。')
+  var date = checkDate_(report.date, '日報・週報の日付')
+  if (!date) throw userError_('日報・週報の日付を入れてください。')
+  var id = 'dr-' + Utilities.getUuid()
   var sheet = ensureDailyReportsSheet_()
   appendRowByHeaders_(sheet, SHEET_DAILY_REPORTS, {
-    id: report.id,
-    member_id: report.memberId,
+    id: id,
+    member_id: String(acting.id),
     type: report.type,
-    report_date: report.date,
+    report_date: date,
     done_text: report.done || '',
     todo_text: report.todo || '',
     issues_text: report.issues || '',
-    created_at: report.createdAt || new Date().toISOString(),
+    created_at: new Date().toISOString(),
   })
-  return { id: report.id }
+  return { id: id }
 }
 
 // REP-005: 管理者が日報・週報の閲覧画面を開いたときに呼ぶ読み取り専用action。
@@ -10261,7 +11477,7 @@ var TABLE_WRITE_ACTIONS = {
     'restoreBackup', 'restoreTasks', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal'],
 }
 // Members・Projects・Tasks・Settings に書かない操作(スナップショットの版を変えない)
-var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport']
+var SNAPSHOT_UNTOUCHED_ACTIONS = ['addCandidate', 'removeCandidate', 'updateEmail', 'rejectFormSubmission', 'submitDailyReport', 'setMyStorage']
 
 // actions は操作の名前、または名前の配列(まとめて送られた書き込み)。表ごとに1回だけ新しくする
 function bumpVersionsAfterWrite_(actions) {
@@ -10678,7 +11894,8 @@ var READ_POLICY = {
       blocker_note: 'all', blocker_since: 'all', hold_reason_note: 'all', hold_reason_since: 'all',
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
-      open_bid_applicant_ids: 'all', related_review_task_id: 'all',
+      open_bid_applicant_ids: 'all', related_review_task_id: 'all', calendar_event_id: 'none',
+      deleted_at: 'all', deleted_by: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },
@@ -10763,8 +11980,14 @@ function checkReadRule_(rule, viewer, ownerId) {
 //   幹部限定: 一般以外の役職のみ
 //   承認待ち: 一般以外の役職と、作成者・担当者
 function canViewTaskRow_(viewer, task) {
+  // ゴミ箱のタスクは、元に戻す・完全に消すことのできる代表・全権管理者だけに返す
+  if (String(task.deleted_at || '') !== '' && !viewer.isFullAdmin) return false
   // 値は移行前の日本語・コードのどちらでもよい
-  if (normalizeCode_('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) return false
+  // 幹部限定のタスクも、担当者・確認者・作成者には見せる(自分の担当のタスクが見えなくならないように)
+  if (normalizeCode_('visibility', task.visibility) === 'leaders' && !viewer.isAdminRole) {
+    var involved = splitCsvList_(task.assignee_id).concat(splitCsvList_(task.reviewer_ids), splitCsvList_(task.reviewer_id), [String(task.creator_id || '')])
+    if (involved.indexOf(viewer.id) < 0) return false
+  }
   if (normalizeCode_('approval', task.approval_status) === 'pending' && !viewer.isAdminRole) {
     if (String(task.creator_id || '') === viewer.id) return true
     return splitCsvList_(task.assignee_id).indexOf(viewer.id) >= 0
@@ -14361,6 +15584,7 @@ function purgeMember_(memberId, nowMs) {
   var emails = String(getAllMemberEmails_()[String(memberId)] || '')
   updateRowFields_(SHEET_MEMBERS, memberId, fields)
   deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
+  deletePersonalStore_(memberId)
   forgetPersonalProps_(memberId, emails)
   bumpMemberEmailsVersion_()
   // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)
@@ -14768,6 +15992,8 @@ function dailyMaintenanceUnrecorded_() {
   dailyBackup_(Date.now())
   // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
   try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
+  // ゴミ箱に入れてから30日たったタスクを消す
+  try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -15182,7 +16408,7 @@ function metricsSnapshot_(nowMs) {
   var members = table(SHEET_MEMBERS).filter(function (m) {
     return String(m.id || '') && !boolCellValue_(m.inactive) && !String(m.withdrawn_at || '') && !String(m.personal_data_purged_at || '')
   })
-  var tasks = table(SHEET_TASKS).filter(function (t) { return String(t.id || '') })
+  var tasks = table(SHEET_TASKS).filter(function (t) { return String(t.id || '') && !isTrashedTask_(t) })
   var projects = table(SHEET_PROJECTS).filter(function (p) { return String(p.id || '') && !boolCellValue_(p.archived) })
   var today = Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd')
   var isDone = function (t) { return normalizeCode_('status', t.status) === 'done' }
@@ -15262,7 +16488,7 @@ function sendMetricsNow_(nowMs, period, state, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   var attempts = state.retry && state.retry.period === period ? Number(state.retry.attempts) + 1 : 1
@@ -15384,7 +16610,7 @@ function diagnosticsSnapshot_(nowMs) {
     timeZone: diagnosticsPart_(function () { return Session.getScriptTimeZone() }),
     registry: diagnosticsPart_(function () {
       return {
-        registered: REGISTRY_URL_PATTERN.test(String(props.getProperty('REGISTRY_URL') || '').trim()) && !!props.getProperty('REGISTRY_SHARED_KEY') && !!props.getProperty('ORG_ID'),
+        registered: REGISTRY_URL_PATTERN.test(registryUrl_()) && !!props.getProperty('REGISTRY_SHARED_KEY') && !!props.getProperty('ORG_ID'),
         plan: String(contract.plan || ''),
         contractPhase: String(contract.phase || ''),
         contractKind: String(contract.kind || ''),
@@ -15477,7 +16703,7 @@ function sendDiagnostics_(diagId, nowMs, deps) {
   deps = deps || {}
   var fetch = deps.fetch || function (url, options) { return UrlFetchApp.fetch(url, options) }
   var props = PropertiesService.getScriptProperties()
-  var registryUrl = String(props.getProperty('REGISTRY_URL') || '').trim()
+  var registryUrl = registryUrl_()
   var key = String(props.getProperty('REGISTRY_SHARED_KEY') || '')
   var orgId = String(props.getProperty('ORG_ID') || '')
   if (!REGISTRY_URL_PATTERN.test(registryUrl) || !key || !orgId) throw userError_('この団体は、レジストリに登録していないため、診断情報を送れません。表示した内容を FSIF にお伝えください。')

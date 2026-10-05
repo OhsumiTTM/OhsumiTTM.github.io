@@ -7,6 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
+import { TaskTrash } from './task-trash'
 import { Button } from '@/components/ui/button'
 import { DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import type {
@@ -69,6 +70,7 @@ export function AdminProjects() {
     adminProjects: projects,
     adminTasks: visibleTasks,
     tasks: allTasks,
+    trashedTasks,
     members,
     addProject,
     removeProject,
@@ -161,7 +163,7 @@ export function AdminProjects() {
 
   // 消そうとしているプロジェクトのタスク(見えないものも含めた全部)と子プロジェクトの数
   const removeBlock = removing
-    ? { tasks: allTasks.filter((task) => task.projectId === removing.id).length, children: projects.filter((p) => p.parentId === removing.id).length }
+    ? { tasks: [...allTasks, ...trashedTasks].filter((task) => task.projectId === removing.id).length, children: projects.filter((p) => p.parentId === removing.id).length }
     : { tasks: 0, children: 0 }
 
   return (
@@ -617,6 +619,9 @@ export function AdminProjects() {
         </ul>
       </div>
       )}
+
+      {/* タスクのゴミ箱(代表・全権管理者だけ) */}
+      <TaskTrash />
 
       <Modal open={!!applyingTo} onClose={() => setApplyingTo(null)}>
         <h2 className="text-base font-semibold">{t('admin.projects.applyModal.title', { name: applyingTo?.name ?? '' })}</h2>

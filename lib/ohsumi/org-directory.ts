@@ -360,6 +360,7 @@ export const ORG_SCOPED_STORAGE_KEYS = [
   'ohsumi-org-logo-url',
   'ohsumi-theme-color',
   'ohsumi-dismissed-notifications',
+  'ohsumi-notification-history',
   'ohsumi-1on1-questions',
   'ohsumi-seen-mention-ids',
   'ohsumi-onboarded-ids',

@@ -136,6 +136,10 @@ import {
   saveSession,
 } from './session'
 import { clearFileCache, primeFiles } from './files'
+import {
+  EMPTY_HISTORY, NOTIFICATION_HISTORY_KEY, markAllNotificationsRead as markAllReadIn, markNotificationRead as markReadIn,
+  mergeNotifications, migrateDismissed, parseNotificationHistory, unreadNotifications, type NotificationHistory, type NotificationRecord,
+} from './notification-history'
 import { clearTranslateCache } from './translate'
 
 type Mode = 'input' | 'output'
@@ -349,7 +353,9 @@ interface OhsumiContextValue extends OhsumiState {
   skillCertifiedEvent: { memberName: string; skill: string } | null
   clearSkillCertifiedEvent: () => void
   markMentionSeen: (commentId: string) => void
-  dismissNotification: (notificationId: string) => void
+  // 通知を既読にする(「未読」から外し、履歴に残す。lib/ohsumi/notification-history.ts)
+  markNotificationRead: (notificationId: string) => void
+  markAllNotificationsRead: () => void
   setSlackWebhookUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
   // Discord / Slack の連携状態(null = 未取得、または取得する権限が無い)
   webhookStatus: WebhookStatus | null
@@ -410,7 +416,12 @@ interface OhsumiContextValue extends OhsumiState {
   updateWill: (memberId: string, will: string[]) => void
   updateJudgment: (memberId: string, judgment: string[]) => void
   approveTask: (id: string) => void
+  // ゴミ箱に入れる(30日後に GAS が完全に消す)
   removeTask: (id: string) => void
+  // ゴミ箱のタスク(代表・全権管理者だけに届く)。元に戻す・すぐに完全に消す
+  trashedTasks: Task[]
+  restoreTask: (id: string) => void
+  purgeTask: (id: string) => void
   rejectTask: (id: string, reason?: string) => void
   addProject: (name: string, description: string, type?: string, parentId?: string) => void
   updateProjectParent: (projectId: string, parentId: string | null) => void
@@ -541,7 +552,10 @@ interface OhsumiContextValue extends OhsumiState {
   updateAvatar: (memberId: string, avatarColor: string, initials: string) => void
   uploadAvatarImage: (memberId: string, dataUrl: string, filename: string) => Promise<void>
   uploadOrgLogo: (dataUrl: string, filename: string) => Promise<void>
+  // 今の通知のうち、まだ読んでいないもの(ベルの数・「未読」の一覧)
   notifications: import('./types').NotificationItem[]
+  // 通知の履歴(新しい順。既読・対応済みを含む。「すべて(履歴)」の一覧)
+  notificationHistory: NotificationRecord[]
   getMember: (id: string | null) => Member | undefined
   getProject: (id: string) => Project | undefined
   getInput: (id: string | undefined) => TaskInput | undefined
@@ -644,7 +658,10 @@ const RESTRICTED_ROLES_STORAGE_KEY = 'ohsumi-restricted-roles'
 // currentUserId -> 既読にしたコメントID配列、で複数メンバーを同一端末で
 // 切り替えて使う場合にも既読状態が混ざらないようにする
 const SEEN_MENTIONS_STORAGE_KEY = 'ohsumi-seen-mention-ids'
+// 以前の「消す」の記録(この端末)。通知の履歴に移した後は消す
 const DISMISSED_NOTIFICATIONS_STORAGE_KEY = 'ohsumi-dismissed-notifications'
+// GAS に繋いでいない時(デモ)の通知の履歴。userId -> 履歴
+const NOTIFICATION_HISTORY_STORAGE_KEY = 'ohsumi-notification-history'
 const ORG_NAME_STORAGE_KEY = 'ohsumi-org-name'
 const ORG_LOGO_URL_STORAGE_KEY = 'ohsumi-org-logo-url'
 const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
@@ -864,6 +881,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // below replaces it. Start empty instead and let the loading gates in
   // ohsumi-app.tsx / admin-screen.tsx cover the wait.
   const [tasks, setTasks] = useState<Task[]>(isRemoteConfigured ? [] : SEED_TASKS)
+  // ゴミ箱のタスク(tasks には入れない。画面の一覧・検索・集計・通知から外すため)
+  const [trashedTasks, setTrashedTasks] = useState<Task[]>([])
   // GAS書き込み直後は公開CSV(fetchRemoteData)側の反映に数分ラグがあるため
   // (下のavatarUrlフォールバックと同種の問題)、承認/却下した直後に情報更新
   // すると古いCSVスナップショットでtasksが丸ごと上書きされ、「承認したのに
@@ -990,14 +1009,20 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [projectOrder, setProjectOrderState] = useState<string[]>([])
   const [onboardedIds, setOnboardedIds] = useState<Set<string>>(new Set())
   const [seenMentionIds, setSeenMentionIds] = useState<Record<string, string[]>>({})
-  // 通知の個別dismiss — userId -> 無視した通知IDの配列。通知はMemoで動的生成
-  // されるので、dismissedは端末ローカルのlocalStorageで管理する（item 7）
-  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<Record<string, string[]>>(() => {
+  // 以前の通知の「消す」— userId -> 消した通知IDの配列(この端末)。通知の履歴を読み込むまでの表示と、
+  // 履歴が無い人の初めての読み込みで既読に移すためだけに読む(書き込まない)
+  const [dismissedNotificationIds] = useState<Record<string, string[]>>(() => {
     try {
       const raw = typeof window !== 'undefined' ? window.localStorage.getItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY) : null
       return raw ? JSON.parse(raw) : {}
     } catch { return {} }
   })
+  // 通知の履歴(読み込んだメンバーの分。読み込むまでは null)
+  const [notifHistory, setNotifHistory] = useState<{ userId: string; history: NotificationHistory } | null>(null)
+  // 履歴が無かった時に、以前の「消す」を既読にするための ID(初めての1回だけ)
+  const pendingDismissedRef = useRef<string[] | null>(null)
+  // 裏での読み込み(経費など)が済んだか。済む前に通知を履歴に入れると、経費の通知を「対応済み」にしてしまう
+  const [recordsLoaded, setRecordsLoaded] = useState(false)
   const [skillCertifiedEvent, setSkillCertifiedEvent] = useState<{
     memberName: string
     skill: string
@@ -1260,7 +1285,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (res.data) {
         setMembers(res.data.members)
         setProjects(res.data.projects)
-        setTasks(applyLocalApprovalOverrides(res.data.tasks))
+        const all = applyLocalApprovalOverrides(res.data.tasks)
+        setTasks(all.filter((t) => !t.deletedAt))
+        setTrashedTasks(all.filter((t) => t.deletedAt))
       }
       if (res.settings) applySettings(res.settings)
       if (res.version) dataVersionRef.current = res.version
@@ -1301,6 +1328,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (data.candidates) setCandidates(data.candidates)
       if (typeof data.myEmail === 'string') setMyEmail(data.myEmail)
       primeFiles(data.files)
+      setRecordsLoaded(true)
       const failed = Object.entries(data.errors ?? {}).filter(([key]) => key !== 'myEmail')
       if (failed.length) reportLoadError(new Error(failed.map(([key, msg]) => `${key}: ${msg}`).join(' / ')))
     },
@@ -1315,7 +1343,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         if (err instanceof Error && /Unknown action/.test(err.message)) return loadRecordsSeparately()
         reportLoadError(err)
       })
-      .finally(reportLoadTime)
+      .finally(() => {
+        setRecordsLoaded(true)
+        reportLoadTime()
+      })
   }, [reportLoadError, loadRecordsSeparately, reportLoadTime, applyBackgroundData])
   // 初期データ(ログイン・再読み込み・情報更新)の応答に裏での読み込みが入っていれば、それを使う
   // (通信は1回で済む)。GAS が古い・裏での読み込みだけ失敗した時は、別に getBackgroundData を送る
@@ -1988,7 +2019,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const importPortableRecord = useCallback(
     (memberId: string, skillPoints: SkillPoints, qualifications: Qualification[]) => {
       const commonSkills = new Set(DEFAULT_SKILL_OPTIONS)
-      const filteredPoints = Object.fromEntries(
+      // 本人が自分の分を持ち込む時は、点数を足さない(GAS の importPortableRecord_ と同じ。代表は除く)
+      const me = members.find((m) => m.id === currentUserId)
+      const selfImport = memberId === currentUserId && !isTopRoleRef(roles, me?.role)
+      const filteredPoints = selfImport ? {} : Object.fromEntries(
         Object.entries(skillPoints).filter(([skill]) => commonSkills.has(skill)),
       )
       setMembers((prev) =>
@@ -2028,7 +2062,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (isRemoteConfigured)
         runRemote(remoteApi.importPortableRecord(memberId, filteredPoints, qualifications))
     },
-    [runRemote],
+    [runRemote, members, currentUserId, roles],
   )
 
   // 検定定義の更新（Admin）
@@ -2202,7 +2236,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       }
       setExpenseApplications((prev) => [newApp, ...prev])
-      if (isRemoteConfigured) runRemote(remoteApi.submitExpenseApplication(newApp))
+      // GAS が決めた ID に差し替える(申請者・作った日時・承認の段も GAS が決める)
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.submitExpenseApplication(newApp).then((res) => {
+            if (res?.id) setExpenseApplications((prev) => prev.map((a) => (a.id === newApp.id ? { ...a, id: res.id } : a)))
+          }),
+        )
+      }
     },
     [runRemote],
   )
@@ -2304,12 +2345,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         }),
       )
       if (isRemoteConfigured) {
-        const category = expenseCategories.find((c) => c.id === fields.categoryId)
         runRemote(
-          remoteApi.resubmitExpense(applicationId, {
-            ...fields,
-            approvalSteps: category?.approvalSteps ?? [],
-          }),
+          remoteApi.resubmitExpense(applicationId, fields),
         )
       }
     },
@@ -2376,7 +2413,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
       }
       setCustomFormSubmissions((prev) => [submission, ...prev])
-      if (isRemoteConfigured) runRemote(remoteApi.submitCustomForm(submission))
+      // GAS が決めた ID に差し替える(提出者・作った日時も GAS が決める)
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.submitCustomForm(submission).then((res) => {
+            if (res?.id) setCustomFormSubmissions((prev) => prev.map((x) => (x.id === submission.id ? { ...x, id: res.id } : x)))
+          }),
+        )
+      }
     },
     [customFormDefs, currentUserId, runRemote],
   )
@@ -3562,22 +3606,41 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
 
-  // distinct from the automatic archive (14 days after completion) — this
-  // is a permanent, manual delete. Any other task that lists this one in
-  // dependsOnIds has that reference scrubbed so 依存関係 doesn't point at a
-  // dead id.
+  // 削除はゴミ箱に入れる(自動のアーカイブとは別)。30日後に GAS が完全に消す。
+  // 前提タスクの一覧からは、完全に消す時(purgeTask・GAS の毎日の処理)に外す
   const removeTask = useCallback(
     (id: string) => {
-      setTasks((prev) =>
-        prev
-          .filter((t) => t.id !== id)
-          .map((t) =>
-            t.dependsOnIds?.includes(id)
-              ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) }
-              : t,
-          ),
-      )
+      const target = tasks.find((t) => t.id === id)
+      setTasks((prev) => prev.filter((t) => t.id !== id))
+      if (target) {
+        setTrashedTasks((prev) => [{ ...target, deletedAt: new Date().toISOString(), deletedById: currentUserId ?? undefined }, ...prev.filter((t) => t.id !== id)])
+      }
       if (isRemoteConfigured) runRemote(remoteApi.removeTask(id))
+    },
+    [tasks, currentUserId, runRemote],
+  )
+
+  const restoreTask = useCallback(
+    (id: string) => {
+      const target = trashedTasks.find((t) => t.id === id)
+      if (!target) return
+      setTrashedTasks((prev) => prev.filter((t) => t.id !== id))
+      setTasks((prev) => [{ ...target, deletedAt: undefined, deletedById: undefined }, ...prev.filter((t) => t.id !== id)])
+      if (isRemoteConfigured) runRemote(remoteApi.restoreTask(id))
+    },
+    [trashedTasks, runRemote],
+  )
+
+  // すぐに完全に消す。ほかのタスクの前提タスクの一覧からも外す
+  const purgeTask = useCallback(
+    (id: string) => {
+      setTrashedTasks((prev) => prev.filter((t) => t.id !== id))
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.dependsOnIds?.includes(id) ? { ...t, dependsOnIds: t.dependsOnIds.filter((depId) => depId !== id) } : t,
+        ),
+      )
+      if (isRemoteConfigured) runRemote(remoteApi.purgeTask(id))
     },
     [runRemote],
   )
@@ -4465,6 +4528,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
+              // 一般のメンバーでも承認なしで作れるクイック追加(GAS が中身を確かめて、作る時に保存する)
+              quickKind: 'schedule',
+              schedule,
             },
           ])
           .then((mapping) => {
@@ -4575,6 +4641,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               deadline: null,
               creatorId: currentUserId ?? undefined,
               pendingApproval: false,
+              quickKind: 'form',
+              form,
             },
           ])
           .then((mapping) => {
@@ -4773,22 +4841,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   const clearSkillCertifiedEvent = useCallback(() => setSkillCertifiedEvent(null), [])
 
-  // 通知の個別dismiss（item 7）— userId単位で管理し、端末ローカルにのみ保持
-  const dismissNotification = useCallback(
+  // 通知を既読にする(item 7 の「消す」の代わり)。履歴は GAS の本人だけの保存に残す
+  const markNotificationRead = useCallback(
     (notificationId: string) => {
-      if (!currentUserId) return
-      setDismissedNotificationIds((prev) => {
-        const mine = prev[currentUserId] ?? []
-        if (mine.includes(notificationId)) return prev
-        const next = { ...prev, [currentUserId]: [...mine, notificationId] }
-        try {
-          window.localStorage.setItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(next))
-        } catch { /* ignore */ }
-        return next
-      })
+      setNotifHistory((prev) => (prev ? { ...prev, history: markReadIn(prev.history, notificationId) } : prev))
     },
-    [currentUserId],
+    [],
   )
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifHistory((prev) => (prev ? { ...prev, history: markAllReadIn(prev.history) } : prev))
+  }, [])
 
   // Slack Incoming Webhook（item 8）— Discordと同様GAS PropertiesServiceに保存。
   // 保存直後に実際にテストメッセージを送信して接続確認する（setDiscordWebhookUrlと同じ理由）
@@ -4992,7 +5054,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     runRemote(remoteApi.reportProjectHealth(reports))
   }, [hydrated, currentUser, adminProjects, adminTasks, runRemote])
 
-  const notifications = useMemo(() => {
+  // 今の状態から作る通知(既読かどうかは見ない)
+  const allNotifications = useMemo(() => {
     if (!currentUser) return []
     const items: import('./types').NotificationItem[] = []
     const isAdmin = isAdminRoleRef(roles, currentUser.role)
@@ -5177,9 +5240,98 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       detail: t('notification.calendarScope.detail'),
       taskId: '',
     })
+    return items
+  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, archivedTasks, seenMentionIds, members, expenseApplications, t])
+
+  // ---- 通知の履歴(lib/ohsumi/notification-history.ts) ----
+  // 保存できない(GAS が古い・読み込みに失敗した)時は、この画面の中だけで持つ
+  const notifSaveDisabledRef = useRef(false)
+  // 最後に保存した(または読み込んだ)履歴。同じなら保存しない
+  const notifSavedRef = useRef<NotificationHistory | null>(null)
+  // 読み込み: GAS の本人だけの保存(デモはこの端末)。履歴が無ければ、以前の「消す」を既読に移す
+  useEffect(() => {
+    if (!currentUserId) return
+    if (notifHistory?.userId === currentUserId) return
+    let cancelled = false
+    const start = (raw: string | null | undefined, canSave = true) => {
+      if (cancelled) return
+      const legacy = dismissedNotificationIds[currentUserId] ?? []
+      pendingDismissedRef.current = raw ? null : legacy
+      const history = raw ? parseNotificationHistory(raw) : { ...EMPTY_HISTORY, items: [] }
+      notifSavedRef.current = history
+      notifSaveDisabledRef.current = !canSave
+      setNotifHistory({ userId: currentUserId, history })
+    }
+    if (isRemoteConfigured) {
+      if (remoteStatus !== 'ready') return
+      remoteApi
+        .getMyStorage([NOTIFICATION_HISTORY_KEY])
+        .then((res) => start(res.values?.[NOTIFICATION_HISTORY_KEY]))
+        // GAS が古い(本人だけの保存が無い)・通信に失敗した時は、この画面の中だけで履歴を持つ(保存しない)
+        .catch(() => start(null, false))
+    } else {
+      let raw: string | null = null
+      try {
+        const all = JSON.parse(window.localStorage.getItem(NOTIFICATION_HISTORY_STORAGE_KEY) || '{}') as Record<string, unknown>
+        raw = all[currentUserId] ? JSON.stringify(all[currentUserId]) : null
+      } catch { raw = null }
+      start(raw)
+    }
+    return () => { cancelled = true }
+  }, [currentUserId, remoteStatus, notifHistory?.userId, dismissedNotificationIds])
+
+  // 今の通知を履歴に入れる(データと裏での読み込みがそろってから。そろう前に入れると、まだ読んでいない通知を「対応済み」にしてしまう)
+  const notifDataReady = isRemoteConfigured ? remoteStatus === 'ready' && recordsLoaded : hydrated
+  useEffect(() => {
+    if (!notifDataReady || !currentUser || notifHistory?.userId !== currentUser.id) return
+    const legacy = pendingDismissedRef.current
+    pendingDismissedRef.current = null
+    setNotifHistory((prev) => {
+      if (!prev || prev.userId !== currentUser.id) return prev
+      const next = legacy && legacy.length ? migrateDismissed(prev.history, legacy, allNotifications) : mergeNotifications(prev.history, allNotifications)
+      return next === prev.history ? prev : { ...prev, history: next }
+    })
+    if (legacy && legacy.length) {
+      // 移した後は、以前の「消す」の記録を消す(この人の分だけ)
+      try {
+        const all = JSON.parse(window.localStorage.getItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY) || '{}') as Record<string, string[]>
+        delete all[currentUser.id]
+        window.localStorage.setItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(all))
+      } catch { /* ignore */ }
+    }
+  }, [notifDataReady, currentUser, notifHistory?.userId, allNotifications])
+
+  // 保存(変わってから1.5秒後にまとめて)。読み取り専用の間は保存しない
+  useEffect(() => {
+    if (!notifHistory) return
+    if (notifSavedRef.current === notifHistory.history) return
+    const { userId, history } = notifHistory
+    const timer = setTimeout(() => {
+      notifSavedRef.current = history
+      if (isRemoteConfigured) {
+        if (readOnly || notifSaveDisabledRef.current) return
+        remoteApi.setMyStorage(NOTIFICATION_HISTORY_KEY, JSON.stringify(history)).catch(() => { /* 次の変更で保存し直す */ })
+      } else {
+        try {
+          const all = JSON.parse(window.localStorage.getItem(NOTIFICATION_HISTORY_STORAGE_KEY) || '{}') as Record<string, unknown>
+          all[userId] = history
+          window.localStorage.setItem(NOTIFICATION_HISTORY_STORAGE_KEY, JSON.stringify(all))
+        } catch { /* ignore */ }
+      }
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [notifHistory, readOnly])
+
+  const notifications = useMemo(() => {
+    if (!currentUser) return []
+    if (notifHistory?.userId === currentUser.id) return unreadNotifications(notifHistory.history, allNotifications)
     const dismissedHere = dismissedNotificationIds[currentUser.id] ?? []
-    return items.filter((n) => !dismissedHere.includes(n.id))
-  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, archivedTasks, seenMentionIds, dismissedNotificationIds, members, expenseApplications, t])
+    return allNotifications.filter((n) => !dismissedHere.includes(n.id))
+  }, [currentUser, notifHistory, allNotifications, dismissedNotificationIds])
+  const notificationHistory = useMemo(
+    () => (currentUser && notifHistory?.userId === currentUser.id ? notifHistory.history.items : []),
+    [currentUser, notifHistory],
+  )
 
   const projectTypes = useMemo(
     () =>
@@ -5332,7 +5484,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     skillCertifiedEvent,
     clearSkillCertifiedEvent,
     markMentionSeen,
-    dismissNotification,
+    markNotificationRead,
+    markAllNotificationsRead,
     setSlackWebhookUrl,
     webhookStatus,
     refreshWebhookStatus,
@@ -5363,6 +5516,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateJudgment,
     approveTask,
     removeTask,
+    trashedTasks,
+    restoreTask,
+    purgeTask,
     rejectTask,
     addProject,
     removeProject,
@@ -5454,6 +5610,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     uploadAvatarImage,
     uploadOrgLogo,
     notifications,
+    notificationHistory,
     getMember,
     getProject,
     getInput,

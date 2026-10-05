@@ -86,6 +86,8 @@ export const READ_ACTIONS = new Set([
   'getCandidates',
   'getFiles',
   'getMyEmails',
+  // 本人だけの保存(通知の履歴など)
+  'getMyStorage',
   'getWebhookStatus',
   'getMailQuotaStatus',
   'getGasUpdateStatus',

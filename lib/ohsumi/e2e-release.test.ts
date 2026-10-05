@@ -130,7 +130,12 @@ describe('5. 団体間のデータの分離', () => {
     const a = w.call(A.org, tok.topA, 'getInitialData')
     const b = w.call(B.org, tok.topB, 'getInitialData')
     expect(taskIds(a.result).length).toBeGreaterThan(0)
-    expect(taskIds(b.result)).toEqual([])
+    // 団体B のタスクは、団体B の最初の代表の初期タスク(8件)だけ
+    const bt = b.result.sheets.Tasks
+    const titles = bt.rows.map((r: string[]) => r[bt.headers.indexOf('title')])
+    expect(titles).toHaveLength(8)
+    expect(titles).toContain('団体の情報を設定する')
+    expect(titles).not.toContain('公開前の確認')
     const text = JSON.stringify(b.result)
     for (const leak of ['一般さん', '管理者さん', 'base@a.example', 'top@a.example', '公開前の確認']) expect(text).not.toContain(leak)
   })

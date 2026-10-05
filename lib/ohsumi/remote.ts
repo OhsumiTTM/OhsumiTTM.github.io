@@ -598,6 +598,8 @@ function mapTaskRow(r: Record<string, string>, departments: DepartmentDef[]): Ta
     reviewApprovals: parseJsonArray<{ memberId: string; at: string }>(r.review_approvals_json),
     requiredSkillLevels: parseJsonObject<Partial<Record<string, SkillLevelValue>>>(r.required_skill_levels_json),
     relatedReviewTaskId: r.related_review_task_id || undefined,
+    deletedAt: r.deleted_at || undefined,
+    deletedById: r.deleted_by || undefined,
   }
 }
 
@@ -905,6 +907,24 @@ export interface CreateTaskPayload {
   estimatedHours?: number
   importance?: TaskImportance
   relatedReviewTaskId?: string
+  // 日程調整・フォームのクイック追加(一般のメンバーでも承認なしで作れる。GAS が中身を確かめて、作る時に保存する)
+  quickKind?: 'schedule' | 'form'
+  schedule?: import('./types').TaskSchedule
+  form?: import('./types').TaskForm
+  // 幹部の取り込み(GAS は幹部の時だけ受け付ける)。承認待ちにせず、次の項目も入れられる
+  import?: boolean
+  status?: TaskStatus
+  completedDate?: string
+  reviewerIds?: string[]
+  requiredApprovals?: number | 'all'
+  actualHours?: number
+  deliverables?: { label: string; url: string }[]
+  // 前提タスク: 同じ取り込みの中のタスクの tempId
+  dependsOnTempIds?: string[]
+  // false: 公募にしない(担当を決めて割り当てる)
+  openBid?: boolean
+  // 保留の理由(status が hold の時だけ)
+  holdReason?: string
 }
 
 // 認証なしで GAS を呼ぶ(getLoginConfig・exchangeIdToken)
@@ -1130,7 +1150,10 @@ export const remoteApi = {
   updateJudgment: (memberId: string, judgment: string[]) =>
     postToGas('updateJudgment', { memberId, judgment }),
   approveTask: (taskId: string) => postToGas('approveTask', { taskId }),
+  // ゴミ箱に入れる(GAS は行を消さずに deleted_at を書く)。元に戻す・完全に消すのは代表・全権管理者だけ
   removeTask: (taskId: string) => postToGas('removeTask', { taskId }),
+  restoreTask: (taskId: string) => postToGas('restoreTask', { taskId }),
+  purgeTask: (taskId: string) => postToGas('purgeTask', { taskId }),
   // 却下: タスクを消し、GAS がシートのタスクの作成者・名前で知らせる
   rejectTask: (taskId: string, reason: string | undefined) => postToGas('rejectTask', { taskId, reason }),
   createProject: (name: string, description: string, type?: string, parentId?: string) =>
@@ -1221,6 +1244,9 @@ export const remoteApi = {
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
   // サーバー側が自分の分のみ返すため、他人のメールを取得する手段にはならない
   getMyEmails: () => postToGas<{ email: string }>('getMyEmails', {}),
+  // 本人だけの保存(gas/Code.gs の getMyStorage・setMyStorage)。値は文字列(null で消す)
+  getMyStorage: (keys?: string[]) => postToGas<{ values: Record<string, string> }>('getMyStorage', keys ? { keys } : {}),
+  setMyStorage: (key: string, value: string | null) => postToGas<{ key: string; size: number }>('setMyStorage', { key, value }),
   // 全端末でログアウト(自分)。発行済みのセッションがすべて無効になる
   revokeMySessions: () => postToGas<{ revoked: boolean }>('revokeMySessions', {}),
   // ほかの端末で開く: 本人の登録済みのアドレスにだけ招待リンクを送る(宛先は送らない。GAS が決める)
@@ -1444,8 +1470,9 @@ export const remoteApi = {
   updateCustomFields: (memberId: string, customFields: Record<string, string>) =>
     postToGas('updateCustomFields', { memberId, customFields }),
   // ---- 経費申請 ----
+  // 申請者・ID・作った日時・承認の段は GAS が決める(返ってきた id に差し替える)
   submitExpenseApplication: (application: import('./types').ExpenseApplication) =>
-    postToGas('submitExpenseApplication', { application }),
+    postToGas<{ id: string }>('submitExpenseApplication', { application }),
   approveExpenseStep: (applicationId: string, stepId: string, actorId: string, comment?: string) =>
     postToGas('approveExpenseStep', { applicationId, stepId, actorId, comment }),
   rejectExpense: (applicationId: string, reason: string) =>
@@ -1463,12 +1490,13 @@ export const remoteApi = {
       justification?: string
       purpose?: string
       customFieldAnswers?: Record<string, string>
-      approvalSteps: import('./types').ApprovalStep[]
     },
+    // 承認の段は送らない(GAS がカテゴリの設定から決める)
   ) => postToGas('resubmitExpense', { applicationId, fields }),
   // ---- カスタムフォーム ----
+  // 提出者・ID・作った日時は GAS が決める(返ってきた id に差し替える)
   submitCustomForm: (submission: import('./types').CustomFormSubmission) =>
-    postToGas('submitCustomForm', { submission }),
+    postToGas<{ id: string }>('submitCustomForm', { submission }),
   approveFormStep: (submissionId: string, stepId: string, actorId: string, comment?: string) =>
     postToGas('approveFormStep', { submissionId, stepId, actorId, comment }),
   rejectFormSubmission: (submissionId: string, reason: string) =>

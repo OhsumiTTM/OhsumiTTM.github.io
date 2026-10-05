@@ -651,6 +651,9 @@ export interface Task {
   // APR-007: このタスクが「◯◯の確認待ち」タスクである場合、確認対象の
   // 元タスクのID。通常のタスクではundefined
   relatedReviewTaskId?: string
+  // ゴミ箱に入れた日時(ISO)と、入れた人。ゴミ箱のタスクは代表・全権管理者にだけ届き、store の trashedTasks に入る
+  deletedAt?: string
+  deletedById?: string
   // "困っている/作業が止まっている" — separate from status so a task can be
   // flagged blocked without losing its in-progress status; cleared (undefined)
   // once resolved
