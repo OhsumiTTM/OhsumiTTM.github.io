@@ -2729,7 +2729,7 @@ function claimInitialSetup_(email, code, nowMs) {
     // 1回限り: 使う前に消す(代表が既にいる時も使えなくする)
     clearInitialSetupCode_(props)
     if (hasTopMember_()) throw userError_('この団体には既に代表がいます。代表に、メンバーとして追加してもらってください。')
-    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_())
+    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_(), { firstLeader: true })
     // メンバーが増えたので、読み取りのキャッシュ(スナップショット)を作り直させる
     bumpSnapshotVersion_()
     console.log('初期設定コードで、最初の代表を登録しました(メンバーID: ' + added.id + ')')
@@ -7785,7 +7785,7 @@ function updateMemberFields_(memberId, fields) {
 
 // Adds a brand-new member row — used by Admin → Members "メンバーを登録",
 // including registering someone directly as an admin (role != 一般).
-function addMember_(name, email, affiliation, role) {
+function addMember_(name, email, affiliation, role, opts) {
   // メンバーにはメールアドレスが要る(メールアドレスで本人を照合してログインさせるため)
   if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(email || '').trim())) {
     throw userError_('メールアドレスが無い・形が正しくないため、メンバーを追加できません(メールアドレスが無いとログインできません)。')
@@ -7815,7 +7815,74 @@ function addMember_(name, email, affiliation, role) {
   // for admin roles with none, defaulted client-side), so nothing to store
   // for it here; kept as a param for parity with the client-side call.
   if (email) setMemberEmail_(id, email)
+  // 初期タスク(メンバーを作った時に1回だけ。失敗してもメンバーの追加は止めない)
+  try { createInitialTasksForMember_(id, !!(opts && opts.firstLeader)) } catch (e) { console.error('初期タスクを作れませんでした: ' + maskEmailsIn_(String(e))) }
   return { id: id }
+}
+
+// ---- 初期タスク(メンバーを作った時に GAS で作る) ----
+//
+// メンバーを作った時(メンバーの追加・候補者のメンバー化・初期設定コードで最初の代表が入った時)に1回だけ作る。
+// ログインの時には作らない(以前は画面だけで作っていたため、保存されず端末ごとに何度も付いた)。すでにいるメンバーには作らない。
+//   新しいメンバー: Settings の initial_tasks_json([{ name, description }])があればそれ、無ければ INITIAL_MEMBER_TASKS
+//   最初の代表: INITIAL_LEADER_TASKS(団体を使い始めるためにやること)
+// タスクは「はじめに」のプロジェクトに入れる(無ければ作る)。承認待ちにせず、担当は本人
+var INITIAL_TASKS_PROJECT_NAME = 'はじめに'
+var INITIAL_TASKS_MAX = 20
+var INITIAL_MEMBER_TASKS = [
+  { name: 'Ohsumiの使い方を確認する', description: 'INPUT の画面で「今日やること」を入れて、承認を受けてみましょう。' },
+  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、Will とスキルを登録しましょう。' },
+  { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」で、団体のタスク全体を見てみましょう。' },
+]
+var INITIAL_LEADER_TASKS = [
+  { name: '団体の情報を設定する', description: 'ADMIN →「団体の設定」で、団体名・ロゴ・テーマの色を入れます。' },
+  { name: '役職と部門を決める', description: 'ADMIN →「Tags」で役職(班長など)を、「Org Tree」で部門を作ります。' },
+  { name: 'メンバーを追加して招待する', description: 'ADMIN →「Members」の「メンバーを登録」で、名前とメールアドレスを入れ、「招待メールを送る」を選びます。' },
+  { name: '最初のプロジェクトを作る', description: 'ADMIN →「Projects」で、プロジェクトを1つ作ります(このタスクの「はじめに」とは別に作ります)。' },
+  { name: '最初のタスクを作って担当を決める', description: 'INPUT の画面でタスクを入れ、担当者と期限を決めます。' },
+  { name: '通知の受け取り方を決める', description: 'ADMIN →「Tags」で Discord・Slack の通知先を、各自のプロフィールの「通知の設定」でメールのまとめを決めます。' },
+  { name: '安全の設定を確かめる', description: 'スプレッドシートを誰とも共有していないか、管理画面の上部の知らせ・団体の設定の「バックアップ」、団体のアカウントの2段階認証を確かめます。' },
+  { name: '引き継ぎの準備をする', description: '団体の Google アカウントを誰が持ち、代替わりの時に誰に渡すかを決めて、メモに残します。' },
+]
+
+function initialTaskDefs_(firstLeader) {
+  if (firstLeader) return INITIAL_LEADER_TASKS
+  var custom = null
+  try { custom = JSON.parse(String(getSettingValue_('initial_tasks_json') || '') || 'null') } catch (e) { custom = null }
+  if (Array.isArray(custom)) {
+    var list = custom.filter(function (t) { return t && String(t.name || '').trim() }).slice(0, INITIAL_TASKS_MAX).map(function (t) {
+      return { name: String(t.name).trim().slice(0, 200), description: String(t.description || '').slice(0, 2000) }
+    })
+    if (list.length) return list
+  }
+  return INITIAL_MEMBER_TASKS
+}
+
+// 「はじめに」のプロジェクトの ID(無ければ作る)
+function initialTasksProjectId_() {
+  var table = snapshotTableOrSheet_(SHEET_PROJECTS) || { headers: [], rows: [] }
+  var idCol = table.headers.indexOf('id'), nameCol = table.headers.indexOf('name')
+  for (var i = 0; i < (table.rows || []).length; i++) {
+    if (String(table.rows[i][nameCol] || '').trim() === INITIAL_TASKS_PROJECT_NAME) return String(table.rows[i][idCol])
+  }
+  // スナップショットが古い時のため、シートでも探す
+  var sheet = getSheet_(SHEET_PROJECTS)
+  var values = sheet.getDataRange().getValues()
+  var h = (values[0] || []).map(function (x) { return String(x).trim() })
+  for (var j = 1; j < values.length; j++) {
+    if (String(values[j][h.indexOf('name')] || '').trim() === INITIAL_TASKS_PROJECT_NAME) return String(values[j][h.indexOf('id')])
+  }
+  return createProject_(INITIAL_TASKS_PROJECT_NAME, '新しいメンバー・代表が最初にやることのタスクを入れるプロジェクトです。', '').id
+}
+
+function createInitialTasksForMember_(memberId, firstLeader) {
+  var defs = initialTaskDefs_(firstLeader)
+  if (!defs.length) return []
+  var projectId = initialTasksProjectId_()
+  return createTasks_(defs.map(function (t, i) {
+    return { tempId: 'init-' + i, projectId: projectId, title: t.name, description: t.description, assigneeIds: [String(memberId)],
+      visibility: firstLeader ? 'leaders' : 'all', pendingApproval: false, difficulty: 'beginner', priority: 'medium' }
+  }), String(memberId))
 }
 
 // ---- MemberEmails (非公開シート) ---------------------------------------------
