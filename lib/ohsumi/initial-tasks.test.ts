@@ -48,7 +48,7 @@ describe('初期タスク', () => {
     w.call(A.org, tok, 'addMember', { name: '新人さん', email: 'new@a.example', affiliation: '', role: 'base', sendInvite: false })
     expect(tasksOf(A.org, memberByName(A.org, '新人さん').id).map((t) => t.title)).toEqual(['団体の決まりを読む'])
 
-    const cand = w.call(A.org, tok, 'addCandidate', { candidate: { name: '候補さん', email: 'cand@a.example', status: 'interview' } })
+    const cand = w.call(A.org, tok, 'addCandidate', { candidate: { name: '候補さん', email: 'cand@a.example', status: 'candidate' } })
     expect(cand.ok, JSON.stringify(cand)).toBe(true)
     const conv = w.call(A.org, tok, 'convertCandidateToMember', { candidateId: cand.result.id, role: 'base' })
     expect(conv.ok, JSON.stringify(conv)).toBe(true)
