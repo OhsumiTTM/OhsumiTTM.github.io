@@ -46,7 +46,7 @@ describe('スマホの幅の表示の確認', () => {
       if (s.do === 'click' && s.text && s.text !== 'INPUT') expect(values.has(s.text) || /^[A-Za-z ]+$/.test(s.text), s.text).toBe(true)
       if (s.do === 'openTask' && s.view) expect(values.has(s.view), s.view).toBe(true)
     }
-    for (const label of ['団体設定', 'ダークモードに切替']) expect(values.has(label), label).toBe(true)
+    for (const label of ['団体設定', '暗い', '端末に合わせる']) expect(values.has(label), label).toBe(true)
     expect((layout.ORG_SWITCH_STEPS as { do: string }[]).map((s) => s.do)).toEqual(['orgSwitcher', 'orgSwitcherSingle'])
   })
 

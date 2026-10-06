@@ -1686,7 +1686,7 @@ function RecurringRuleRow({
               : 'border-border text-muted-foreground hover:bg-secondary',
           )}
         >
-          {rule.active ? 'ON' : 'OFF'}
+          {rule.active ? tr('common.on') : tr('common.off')}
         </button>
         <button
           onClick={onEdit}

@@ -1185,7 +1185,7 @@ export function PersonDetail({ id }: { id: string }) {
       <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
         <TalentCard
           icon={<Target className="size-4 text-primary" />}
-          title="Will"
+          title={t('person.overview.will.title')}
           subtitle={t('person.overview.will.subtitle')}
         >
           <EditableTags
@@ -1201,7 +1201,7 @@ export function PersonDetail({ id }: { id: string }) {
 
         <TalentCard
           icon={<Sparkles className="size-4 text-primary" />}
-          title="Judgment"
+          title={t('person.overview.judgment.title')}
           subtitle={t('person.overview.judgment.subtitle')}
         >
           <EditableTags

@@ -2585,7 +2585,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const INITIAL_TASKS_KEY = 'ohsumi-initial-tasks-given'
   const HARDCODED_INITIAL_TASKS = [
     { name: 'Ohsumiの使い方を確認する', description: 'まずINPUT画面で「今日やること」を入力し、承認を受けてみましょう。' },
-    { name: 'プロフィールを設定する', description: 'ヘッダーのアカウントメニュー →「プロフィール」でWillとスキルを登録しましょう。' },
+    { name: 'プロフィールを設定する', description: 'ヘッダーのアカウントメニュー →「プロフィール」でやりたいこととスキルを登録しましょう。' },
     { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」タブで組織のタスク全体を把握しましょう。' },
   ]
   const login = useCallback(

@@ -578,7 +578,7 @@ export function AdminMembers() {
                         }`}
                       >
                         <Bell className="size-3.5" />
-                        {m.notify ? 'ON' : 'OFF'}
+                        {m.notify ? t('common.on') : t('common.off')}
                       </button>
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
