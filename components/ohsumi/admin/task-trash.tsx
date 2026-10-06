@@ -28,9 +28,8 @@ export function TaskTrash() {
   const sorted = [...trashedTasks].sort((a, b) => String(b.deletedAt ?? '').localeCompare(String(a.deletedAt ?? '')))
 
   return (
-    <div className="mt-10">
-      <h2 className="text-base font-semibold">{t('admin.trash.heading')}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">{t('admin.trash.desc', { days: TRASH_DAYS })}</p>
+    <div>
+      <p className="text-sm text-muted-foreground">{t('admin.trash.desc', { days: TRASH_DAYS })}</p>
       <ul className="mt-4 flex flex-col gap-1.5">
         {sorted.map((task) => (
           <li key={task.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border px-3 py-2">

@@ -34,7 +34,7 @@ export function SurveyScreen() {
   const { go } = useNav()
   const { t } = useI18n()
   const DEFAULT_QUESTIONS = surveyQuestions.length > 0 ? surveyQuestions : buildDefaultQuestions(t)
-  const [mode, setMode] = useState<'form' | 'history' | 'admin'>('form')
+  const [mode, setMode] = useState<'form' | 'history'>('form')
   const [answers, setAnswers] = useState<Record<string, number | string>>({})
   const [submitted, setSubmitted] = useState(false)
 
@@ -44,7 +44,6 @@ export function SurveyScreen() {
     surveyInvitedIds.length === 0 || isAdmin || (!!currentUser && surveyInvitedIds.includes(currentUser.id))
 
   const myHistory = currentUser ? surveyResponses.filter((r) => r.memberId === currentUser.id) : []
-  const allResponses = surveyResponses
 
   const canSubmit = DEFAULT_QUESTIONS
     .filter((q) => q.type === 'scale')
@@ -107,16 +106,6 @@ export function SurveyScreen() {
             {label}
           </button>
         ))}
-        {isAdmin && (
-          <button
-            onClick={() => { setMode('admin'); setSubmitted(false) }}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              mode === 'admin' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t('survey.tab.admin')}
-          </button>
-        )}
       </div>
 
       {mode === 'form' && !submitted && (
@@ -216,7 +205,21 @@ export function SurveyScreen() {
         </div>
       )}
 
-      {mode === 'admin' && isAdmin && (
+    </div>
+  )
+}
+
+// 団体内アンケートの全員の回答(管理画面の「1on1・アンケート」のタブ。以前はこの画面の「全回答(管理者)」)
+export function SurveyAllResponses() {
+  const { members, surveyResponses, surveyQuestions } = useOhsumi()
+  const { t } = useI18n()
+  const DEFAULT_QUESTIONS = surveyQuestions.length > 0 ? surveyQuestions : buildDefaultQuestions(t)
+  const allResponses = surveyResponses
+  const memberName = (id: string) => {
+    const m = members.find((m) => m.id === id)
+    return m ? (m.displayName || m.name) : id
+  }
+  return (
         <div className="space-y-3">
           {allResponses.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">{t('survey.admin.empty')}</p>
@@ -268,7 +271,5 @@ export function SurveyScreen() {
             </>
           )}
         </div>
-      )}
-    </div>
   )
 }

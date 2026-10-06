@@ -786,7 +786,7 @@ export function googleCalendarUrl(
 
   const details = [
     extra.projectName && `プロジェクト: ${extra.projectName}`,
-    extra.department && `部門: ${extra.department}`,
+    extra.department && `領域: ${extra.department}`,
     extra.category && `カテゴリ: ${extra.category}`,
     task.description,
     extra.appLink ? `Ohsumiから追加: ${extra.appLink}` : 'Ohsumiから追加',

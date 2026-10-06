@@ -7,7 +7,6 @@
 // 保存されたレベルは下げない(決め方を変えても、上がった人はそのまま)
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { SectionLabel } from '@/components/ohsumi/primitives'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { conditionText } from '@/components/ohsumi/skill-condition-text'
@@ -107,8 +106,7 @@ export function SkillLevelRulesEditor() {
   const skillsWithRules = Object.keys(skillLevelRules.skills ?? {})
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4" data-skill-level-rules>
-      <SectionLabel>{t('admin.skillRules.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4" data-skill-level-rules>
       <p className="mt-1 text-xs text-muted-foreground">{t('admin.skillRules.desc')}</p>
       <label className="mt-3 block text-xs">
         {t('admin.skillRules.target')}

@@ -26,7 +26,7 @@ function taskRows(tasks: Task[], projects: Project[], members: Member[]) {
   return tasks.map((t) => ({
     タスク名: t.name,
     プロジェクト: projects.find((p) => p.id === t.projectId)?.name ?? '',
-    部門: sheetLabel('department', t.department),
+    領域: sheetLabel('department', t.department),
     担当: t.assigneeIds.map((id) => memberLabel(members, id)).join('、'),
     ステータス: STATUS_LABEL[t.status],
     優先度: sheetLabel('priority', t.priority),

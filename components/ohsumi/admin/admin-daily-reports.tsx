@@ -43,9 +43,8 @@ export function AdminDailyReports() {
   )
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">{t('admin.dailyReports.title')}</h2>
+    <div className="space-y-6">
+      <div className="flex items-center justify-end">
         <button
           onClick={load}
           disabled={loading}

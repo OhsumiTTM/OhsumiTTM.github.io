@@ -8,6 +8,8 @@ import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
 import { TaskTrash } from './task-trash'
+import { AdminBlocks } from './admin-page'
+import { TaskCategoriesEditor, TaskDomainsEditor } from './admin-tags'
 import { Button } from '@/components/ui/button'
 import { DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import type {
@@ -65,7 +67,9 @@ function calcStaffingRatio(projectId: string, tasks: Task[], members: Member[]):
   return uniqueAssignees.size === 0 ? Infinity : incomplete.length / uniqueAssignees.size
 }
 
-export function AdminProjects() {
+// プロジェクトのタブ(part='projects': 一覧・追加・編集・アーカイブ)と、タスクの設定のタブ
+// (part='taskSettings': カテゴリ・領域・プロジェクトの種類・業務テンプレート・定期タスク・ゴミ箱)。状態を共有するので1つにしている
+export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
   const { isTopRef,
     adminProjects: projects,
     adminTasks: visibleTasks,
@@ -166,463 +170,8 @@ export function AdminProjects() {
     ? { tasks: [...allTasks, ...trashedTasks].filter((task) => task.projectId === removing.id).length, children: projects.filter((p) => p.parentId === removing.id).length }
     : { tasks: 0, children: 0 }
 
-  return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <h1 className="text-xl font-semibold tracking-tight">{t('admin.projects.title')}</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {isFullAdmin
-          ? t('admin.projects.subtitleFull')
-          : t('admin.projects.subtitleLimited')}
-      </p>
-
-      {isFullAdmin && (
-        <div className="mt-6 rounded-lg border border-border bg-card p-4">
-          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr]">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                {t('admin.projects.form.nameLabel')}
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('admin.projects.form.namePlaceholder')}
-                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.descLabel')}</label>
-              <input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder={t('feedback.optional')}
-                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.typeLabel')}</label>
-              <select
-                value={type}
-                onChange={(e) => setType(e.target.value)}
-                className="h-9 w-full cursor-pointer rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
-              >
-                <option value="">{t('common.notSet')}</option>
-                {projectTypes.map((pt) => (
-                  <option key={pt} value={pt}>
-                    {pt}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="mt-2">
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.parentLabel')}</label>
-            <select
-              value={parentId}
-              onChange={(e) => setParentId(e.target.value)}
-              className="h-9 w-full cursor-pointer rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary sm:w-80"
-            >
-              <option value="">{t('admin.projects.form.parentNone')}</option>
-              {activeList.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-          <Button className="mt-3 h-9" disabled={!name.trim()} onClick={handleCreate}>
-            <Plus className="size-4" />
-            {t('admin.projects.form.submit')}
-          </Button>
-        </div>
-      )}
-
-      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-card">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs text-muted-foreground">
-              {isFullAdmin && <th className="w-8 px-2 py-2.5" />}
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colProject')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colParent')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.typeLabel')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.descLabel')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colAssignee')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colOwner')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colTaskCount')}</th>
-              <th className="px-4 py-2.5 font-medium" title={t('admin.projects.staffingTooltip')}>{t('admin.projects.colStaffing')}</th>
-              {isFullAdmin && <th className="px-4 py-2.5 font-medium" />}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {activeList.map((p) => {
-              const pm = getProjectMembers(p.id)
-              const owner = members.find((m) => m.id === p.ownerId)
-              const parentProject = projects.find((pp) => pp.id === p.parentId)
-              const taskCount = visibleTasks.filter((t) => t.projectId === p.id).length
-              const staffingRatio = calcStaffingRatio(p.id, visibleTasks, members)
-              const isUnderstaffed = staffingRatio >= UNDERSTAFFED_RATIO_THRESHOLD
-              return (
-                <tr
-                  key={p.id}
-                  draggable={isFullAdmin}
-                  onDragStart={() => setDraggingProjectId(p.id)}
-                  onDragOver={(e) => isFullAdmin && e.preventDefault()}
-                  onDrop={() => {
-                    if (draggingProjectId) reorderProjects(draggingProjectId, p.id)
-                    setDraggingProjectId(null)
-                  }}
-                  onDragEnd={() => setDraggingProjectId(null)}
-                  className={cn(draggingProjectId === p.id && 'opacity-40')}
-                >
-                  {isFullAdmin && (
-                    <td className="w-8 cursor-grab px-2 py-3 text-muted-foreground">
-                      <GripVertical className="size-3.5" />
-                    </td>
-                  )}
-                  <td className="px-4 py-3 font-medium">
-                    {p.parentId && <span className="mr-1 text-muted-foreground">└</span>}
-                    {p.name}
-                  </td>
-                  <td className="px-4 py-3">
-                    {parentProject ? (
-                      <div className="flex items-center gap-1">
-                        <span className="max-w-[120px] truncate text-xs text-muted-foreground">{parentProject.name}</span>
-                        {isFullAdmin && (
-                          <button
-                            onClick={() => updateProjectParent(p.id, null)}
-                            className="text-muted-foreground hover:text-foreground"
-                            title={t('admin.projects.unlinkParentTitle')}
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    ) : isFullAdmin ? (
-                      <select
-                        value=""
-                        onChange={(e) => e.target.value && updateProjectParent(p.id, e.target.value)}
-                        className="h-7 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary"
-                      >
-                        <option value="">{t('admin.projects.parentSetOption')}</option>
-                        {activeList.filter((pp) => pp.id !== p.id).map((pp) => (
-                          <option key={pp.id} value={pp.id}>{pp.name}</option>
-                        ))}
-                      </select>
-                    ) : <span className="text-muted-foreground">—</span>}
-                  </td>
-                  <td className="px-4 py-3">
-                    {p.type ? <Tag>{p.type}</Tag> : <span className="text-muted-foreground">—</span>}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    <div className="flex items-center gap-1.5">
-                      <span className="min-w-0 flex-1 truncate">{p.description || '—'}</span>
-                      <button
-                        onClick={() => {
-                          setDetailsDraft({
-                            name: p.name,
-                            description: p.description,
-                            type: p.type ?? '',
-                            goal: p.goal ?? '',
-                            startDate: p.startDate ?? '',
-                            endDate: p.endDate ?? '',
-                          })
-                          setEditingDetailsOf(p)
-                        }}
-                        className="shrink-0 text-muted-foreground hover:text-foreground"
-                        aria-label={t('admin.projects.editDetailsAria')}
-                        title={t('admin.projects.editDetailsAria')}
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      {pm.length > 0 ? (
-                        <div className="flex -space-x-1.5">
-                          {pm.slice(0, 6).map((m) => (
-                            <span key={m.id} className="rounded-full ring-2 ring-card" title={m.displayName || m.name}>
-                              <Avatar member={m} size={22} />
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                      <button
-                        onClick={() => setManagingMembersOf(p)}
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label={t('admin.projects.manageMembersAria')}
-                      >
-                        <UserPlus className="size-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5">
-                      {owner ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <Avatar member={owner} size={22} />
-                          <span className="text-xs">{owner.displayName || owner.name}</span>
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                      <button
-                        onClick={() => setManagingOwnerOf(p)}
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label={t('admin.projects.editOwnerAria')}
-                      >
-                        <UserCog className="size-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 tabular-nums text-muted-foreground">{taskCount}</td>
-                  <td className="px-4 py-3">
-                    {isUnderstaffed ? (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
-                        title={t('admin.projects.staffingRatioTitle', {
-                          ratio: staffingRatio === Infinity ? '∞' : staffingRatio.toFixed(1),
-                          threshold: UNDERSTAFFED_RATIO_THRESHOLD,
-                        })}
-                      >
-                        <AlertTriangle className="size-3" />
-                        {t('admin.projects.staffingShort')}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  {isFullAdmin && (
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1.5">
-                        {taskSetTemplates.length > 0 && (
-                          <button
-                            onClick={() => setApplyingTo(p)}
-                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
-                          >
-                            <LayoutTemplate className="size-3.5" />
-                            {t('admin.projects.applyTemplateButton')}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => {
-                            setImportingTo(p)
-                            setImportSourceId('')
-                            setImportSelectedIds(new Set())
-                          }}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
-                        >
-                          <FolderInput className="size-3.5" />
-                          {t('admin.projects.importTasksButton')}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setProjectArchived(p.id, true)
-                            toast(t('admin.projects.archiveToast', { name: p.name }))
-                          }}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
-                        >
-                          <Archive className="size-3.5" />
-                          {t('admin.projects.archiveButton')}
-                        </button>
-                        <button
-                          onClick={() => setRemoving(p)}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-                        >
-                          <Trash2 className="size-3.5" />
-                          {t('common.delete')}
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {isFullAdmin && archivedList.length > 0 && (
-        <div className="mt-6 overflow-hidden rounded-lg border border-border bg-card">
-          <div className="border-b border-border px-4 py-2.5 text-sm font-medium text-muted-foreground">
-            {t('admin.projects.archivedHeading', { count: archivedList.length })}
-          </div>
-          <ul className="divide-y divide-border">
-            {archivedList.map((p) => (
-              <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
-                <span className="min-w-0 truncate text-muted-foreground">{p.name}</span>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    onClick={() => {
-                      setProjectArchived(p.id, false)
-                      toast(t('admin.projects.unarchiveToast', { name: p.name }))
-                    }}
-                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
-                  >
-                    <ArchiveRestore className="size-3.5" />
-                    {t('admin.projects.unarchiveButton')}
-                  </button>
-                  <button
-                    onClick={() => setRemoving(p)}
-                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-                  >
-                    <Trash2 className="size-3.5" />
-                    {t('common.delete')}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Project-type templates */}
-      {isFullAdmin && (
-      <div className="mt-10">
-        <h2 className="text-base font-semibold">{t('admin.projects.types.heading')}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t('admin.projects.types.desc')}
-        </p>
-
-        <div className="mt-3 flex items-center gap-1.5">
-          <input
-            value={newType}
-            onChange={(e) => setNewType(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) return
-              if (e.key === 'Enter' && newType.trim()) {
-                setProjectTemplateTasks(newType.trim(), projectTemplates[newType.trim()] ?? [])
-                setNewType('')
-              }
-            }}
-            placeholder={t('admin.projects.types.newTypePlaceholder')}
-            className="h-9 w-64 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
-          />
-          <Button
-            variant="outline"
-            className="h-9"
-            disabled={!newType.trim()}
-            onClick={() => {
-              setProjectTemplateTasks(newType.trim(), projectTemplates[newType.trim()] ?? [])
-              setNewType('')
-            }}
-          >
-            <Plus className="size-4" />
-            {t('admin.projects.types.addButton')}
-          </Button>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4">
-          {projectTypes.map((pt) => (
-            <TemplateTypeCard
-              key={pt}
-              type={pt}
-              tasks={projectTemplates[pt] ?? []}
-              onChange={(tasks) => setProjectTemplateTasks(pt, tasks)}
-              onRemoveType={() => removeProjectType(pt)}
-            />
-          ))}
-          {projectTypes.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('admin.projects.types.empty')}</p>
-          )}
-        </div>
-      </div>
-      )}
-
-      {/* 業務テンプレート (item 1) — reusable task-set templates, applicable
-          on demand to any existing project, with dependency structure */}
-      {isFullAdmin && (
-      <div className="mt-10">
-        <h2 className="text-base font-semibold">{t('admin.projects.taskSets.heading')}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t('admin.projects.taskSets.desc')}
-        </p>
-
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <input
-            value={newTemplateName}
-            onChange={(e) => setNewTemplateName(e.target.value)}
-            placeholder={t('admin.projects.taskSets.namePlaceholder')}
-            className="h-9 w-56 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
-          />
-          <input
-            value={newTemplateDesc}
-            onChange={(e) => setNewTemplateDesc(e.target.value)}
-            placeholder={t('admin.projects.taskSets.descPlaceholder')}
-            className="h-9 w-56 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
-          />
-          <Button
-            variant="outline"
-            className="h-9"
-            disabled={!newTemplateName.trim()}
-            onClick={() => {
-              addTaskSetTemplate(newTemplateName.trim(), newTemplateDesc.trim())
-              setNewTemplateName('')
-              setNewTemplateDesc('')
-            }}
-          >
-            <Plus className="size-4" />
-            {t('admin.projects.taskSets.addButton')}
-          </Button>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4">
-          {taskSetTemplates.map((tst) => (
-            <TaskSetTemplateCard
-              key={tst.id}
-              template={tst}
-              onChangeItems={(items) => updateTaskSetTemplateItems(tst.id, items)}
-              onRemove={() => removeTaskSetTemplate(tst.id)}
-            />
-          ))}
-          {taskSetTemplates.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('admin.projects.taskSets.empty')}</p>
-          )}
-        </div>
-      </div>
-      )}
-
-      {/* 定期タスク (item 2) */}
-      {isFullAdmin && (
-      <div className="mt-10">
-        <h2 className="text-base font-semibold">{t('admin.projects.recurring.heading')}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {t('admin.projects.recurring.desc')}
-        </p>
-        <RecurringRuleForm
-          projects={projects}
-          editingRule={recurringRules.find((r) => r.id === editingRuleId) ?? null}
-          onAdd={addRecurringRule}
-          onUpdate={(fields) => {
-            if (editingRuleId) updateRecurringRule(editingRuleId, fields)
-            setEditingRuleId(null)
-          }}
-          onCancelEdit={() => setEditingRuleId(null)}
-        />
-        <ul className="mt-4 flex flex-col gap-1.5">
-          {recurringRules.map((r) => (
-            <RecurringRuleRow
-              key={r.id}
-              rule={r}
-              editing={editingRuleId === r.id}
-              projectName={projects.find((p) => p.id === r.projectId)?.name ?? ''}
-              onEdit={() => setEditingRuleId(r.id)}
-              onToggle={() => toggleRecurringRule(r.id)}
-              onRemove={() => {
-                if (editingRuleId === r.id) setEditingRuleId(null)
-                removeRecurringRule(r.id)
-              }}
-            />
-          ))}
-          {recurringRules.length === 0 && (
-            <li className="text-sm text-muted-foreground">{t('admin.projects.recurring.empty')}</li>
-          )}
-        </ul>
-      </div>
-      )}
-
-      {/* タスクのゴミ箱(代表・全権管理者だけ) */}
-      <TaskTrash />
-
+  const modals = (
+    <>
       <Modal open={!!applyingTo} onClose={() => setApplyingTo(null)}>
         <h2 className="text-base font-semibold">{t('admin.projects.applyModal.title', { name: applyingTo?.name ?? '' })}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -940,6 +489,460 @@ export function AdminProjects() {
           </Button>
         </div>
       </Modal>
+    </>
+  )
+
+  if (part === 'taskSettings') {
+    return (
+      <>
+        <AdminBlocks
+          blocks={[
+            { id: 'task-categories', title: t('admin.tags.categories'), desc: t('admin.taskSettings.categoriesDesc'), content: <TaskCategoriesEditor /> },
+            { id: 'task-domains', title: t('admin.tags.departments.title'), content: <TaskDomainsEditor /> },
+            ...(isFullAdmin ? [
+              { id: 'project-types', title: t('admin.projects.types.heading'), desc: t('admin.projects.types.desc'), content: (
+                <div>
+
+        <div className="mt-3 flex items-center gap-1.5">
+          <input
+            value={newType}
+            onChange={(e) => setNewType(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              if (e.key === 'Enter' && newType.trim()) {
+                setProjectTemplateTasks(newType.trim(), projectTemplates[newType.trim()] ?? [])
+                setNewType('')
+              }
+            }}
+            placeholder={t('admin.projects.types.newTypePlaceholder')}
+            className="h-9 w-64 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
+          />
+          <Button
+            variant="outline"
+            className="h-9"
+            disabled={!newType.trim()}
+            onClick={() => {
+              setProjectTemplateTasks(newType.trim(), projectTemplates[newType.trim()] ?? [])
+              setNewType('')
+            }}
+          >
+            <Plus className="size-4" />
+            {t('admin.projects.types.addButton')}
+          </Button>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-4">
+          {projectTypes.map((pt) => (
+            <TemplateTypeCard
+              key={pt}
+              type={pt}
+              tasks={projectTemplates[pt] ?? []}
+              onChange={(tasks) => setProjectTemplateTasks(pt, tasks)}
+              onRemoveType={() => removeProjectType(pt)}
+            />
+          ))}
+          {projectTypes.length === 0 && (
+            <p className="text-sm text-muted-foreground">{t('admin.projects.types.empty')}</p>
+          )}
+        </div>
+      </div>
+              ) },
+              { id: 'task-sets', title: t('admin.projects.taskSets.heading'), desc: t('admin.projects.taskSets.desc'), content: (
+                <div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <input
+            value={newTemplateName}
+            onChange={(e) => setNewTemplateName(e.target.value)}
+            placeholder={t('admin.projects.taskSets.namePlaceholder')}
+            className="h-9 w-56 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
+          />
+          <input
+            value={newTemplateDesc}
+            onChange={(e) => setNewTemplateDesc(e.target.value)}
+            placeholder={t('admin.projects.taskSets.descPlaceholder')}
+            className="h-9 w-56 rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
+          />
+          <Button
+            variant="outline"
+            className="h-9"
+            disabled={!newTemplateName.trim()}
+            onClick={() => {
+              addTaskSetTemplate(newTemplateName.trim(), newTemplateDesc.trim())
+              setNewTemplateName('')
+              setNewTemplateDesc('')
+            }}
+          >
+            <Plus className="size-4" />
+            {t('admin.projects.taskSets.addButton')}
+          </Button>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-4">
+          {taskSetTemplates.map((tst) => (
+            <TaskSetTemplateCard
+              key={tst.id}
+              template={tst}
+              onChangeItems={(items) => updateTaskSetTemplateItems(tst.id, items)}
+              onRemove={() => removeTaskSetTemplate(tst.id)}
+            />
+          ))}
+          {taskSetTemplates.length === 0 && (
+            <p className="text-sm text-muted-foreground">{t('admin.projects.taskSets.empty')}</p>
+          )}
+        </div>
+      </div>
+              ) },
+              { id: 'recurring-tasks', title: t('admin.projects.recurring.heading'), desc: t('admin.projects.recurring.desc'), content: (
+                <div>
+        <RecurringRuleForm
+          projects={projects}
+          editingRule={recurringRules.find((r) => r.id === editingRuleId) ?? null}
+          onAdd={addRecurringRule}
+          onUpdate={(fields) => {
+            if (editingRuleId) updateRecurringRule(editingRuleId, fields)
+            setEditingRuleId(null)
+          }}
+          onCancelEdit={() => setEditingRuleId(null)}
+        />
+        <ul className="mt-4 flex flex-col gap-1.5">
+          {recurringRules.map((r) => (
+            <RecurringRuleRow
+              key={r.id}
+              rule={r}
+              editing={editingRuleId === r.id}
+              projectName={projects.find((p) => p.id === r.projectId)?.name ?? ''}
+              onEdit={() => setEditingRuleId(r.id)}
+              onToggle={() => toggleRecurringRule(r.id)}
+              onRemove={() => {
+                if (editingRuleId === r.id) setEditingRuleId(null)
+                removeRecurringRule(r.id)
+              }}
+            />
+          ))}
+          {recurringRules.length === 0 && (
+            <li className="text-sm text-muted-foreground">{t('admin.projects.recurring.empty')}</li>
+          )}
+        </ul>
+      </div>
+              ) },
+              { id: 'task-trash', title: t('admin.trash.heading'), content: <TaskTrash /> },
+            ] : []),
+          ]}
+        />
+        {modals}
+      </>
+    )
+  }
+  return (
+    <div>
+      <p className="text-sm text-muted-foreground">
+        {isFullAdmin
+          ? t('admin.projects.subtitleFull')
+          : t('admin.projects.subtitleLimited')}
+      </p>
+
+      {isFullAdmin && (
+        <div className="mt-6 rounded-lg border border-border bg-card p-4">
+          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr]">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                {t('admin.projects.form.nameLabel')}
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('admin.projects.form.namePlaceholder')}
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.descLabel')}</label>
+              <input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t('feedback.optional')}
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.typeLabel')}</label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                className="h-9 w-full cursor-pointer rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+              >
+                <option value="">{t('common.notSet')}</option>
+                {projectTypes.map((pt) => (
+                  <option key={pt} value={pt}>
+                    {pt}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mt-2">
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('admin.projects.form.parentLabel')}</label>
+            <select
+              value={parentId}
+              onChange={(e) => setParentId(e.target.value)}
+              className="h-9 w-full cursor-pointer rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary sm:w-80"
+            >
+              <option value="">{t('admin.projects.form.parentNone')}</option>
+              {activeList.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+          <Button className="mt-3 h-9" disabled={!name.trim()} onClick={handleCreate}>
+            <Plus className="size-4" />
+            {t('admin.projects.form.submit')}
+          </Button>
+        </div>
+      )}
+
+      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-card">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs text-muted-foreground">
+              {isFullAdmin && <th className="w-8 px-2 py-2.5" />}
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colProject')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colParent')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.typeLabel')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.descLabel')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colAssignee')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colOwner')}</th>
+              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colTaskCount')}</th>
+              <th className="px-4 py-2.5 font-medium" title={t('admin.projects.staffingTooltip')}>{t('admin.projects.colStaffing')}</th>
+              {isFullAdmin && <th className="px-4 py-2.5 font-medium" />}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {activeList.map((p) => {
+              const pm = getProjectMembers(p.id)
+              const owner = members.find((m) => m.id === p.ownerId)
+              const parentProject = projects.find((pp) => pp.id === p.parentId)
+              const taskCount = visibleTasks.filter((t) => t.projectId === p.id).length
+              const staffingRatio = calcStaffingRatio(p.id, visibleTasks, members)
+              const isUnderstaffed = staffingRatio >= UNDERSTAFFED_RATIO_THRESHOLD
+              return (
+                <tr
+                  key={p.id}
+                  draggable={isFullAdmin}
+                  onDragStart={() => setDraggingProjectId(p.id)}
+                  onDragOver={(e) => isFullAdmin && e.preventDefault()}
+                  onDrop={() => {
+                    if (draggingProjectId) reorderProjects(draggingProjectId, p.id)
+                    setDraggingProjectId(null)
+                  }}
+                  onDragEnd={() => setDraggingProjectId(null)}
+                  className={cn(draggingProjectId === p.id && 'opacity-40')}
+                >
+                  {isFullAdmin && (
+                    <td className="w-8 cursor-grab px-2 py-3 text-muted-foreground">
+                      <GripVertical className="size-3.5" />
+                    </td>
+                  )}
+                  <td className="px-4 py-3 font-medium">
+                    {p.parentId && <span className="mr-1 text-muted-foreground">└</span>}
+                    {p.name}
+                  </td>
+                  <td className="px-4 py-3">
+                    {parentProject ? (
+                      <div className="flex items-center gap-1">
+                        <span className="max-w-[120px] truncate text-xs text-muted-foreground">{parentProject.name}</span>
+                        {isFullAdmin && (
+                          <button
+                            onClick={() => updateProjectParent(p.id, null)}
+                            className="text-muted-foreground hover:text-foreground"
+                            title={t('admin.projects.unlinkParentTitle')}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    ) : isFullAdmin ? (
+                      <select
+                        value=""
+                        onChange={(e) => e.target.value && updateProjectParent(p.id, e.target.value)}
+                        className="h-7 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary"
+                      >
+                        <option value="">{t('admin.projects.parentSetOption')}</option>
+                        {activeList.filter((pp) => pp.id !== p.id).map((pp) => (
+                          <option key={pp.id} value={pp.id}>{pp.name}</option>
+                        ))}
+                      </select>
+                    ) : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {p.type ? <Tag>{p.type}</Tag> : <span className="text-muted-foreground">—</span>}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground">
+                    <div className="flex items-center gap-1.5">
+                      <span className="min-w-0 flex-1 truncate">{p.description || '—'}</span>
+                      <button
+                        onClick={() => {
+                          setDetailsDraft({
+                            name: p.name,
+                            description: p.description,
+                            type: p.type ?? '',
+                            goal: p.goal ?? '',
+                            startDate: p.startDate ?? '',
+                            endDate: p.endDate ?? '',
+                          })
+                          setEditingDetailsOf(p)
+                        }}
+                        className="shrink-0 text-muted-foreground hover:text-foreground"
+                        aria-label={t('admin.projects.editDetailsAria')}
+                        title={t('admin.projects.editDetailsAria')}
+                      >
+                        <Pencil className="size-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      {pm.length > 0 ? (
+                        <div className="flex -space-x-1.5">
+                          {pm.slice(0, 6).map((m) => (
+                            <span key={m.id} className="rounded-full ring-2 ring-card" title={m.displayName || m.name}>
+                              <Avatar member={m} size={22} />
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                      <button
+                        onClick={() => setManagingMembersOf(p)}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={t('admin.projects.manageMembersAria')}
+                      >
+                        <UserPlus className="size-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      {owner ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Avatar member={owner} size={22} />
+                          <span className="text-xs">{owner.displayName || owner.name}</span>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                      <button
+                        onClick={() => setManagingOwnerOf(p)}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={t('admin.projects.editOwnerAria')}
+                      >
+                        <UserCog className="size-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 tabular-nums text-muted-foreground">{taskCount}</td>
+                  <td className="px-4 py-3">
+                    {isUnderstaffed ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                        title={t('admin.projects.staffingRatioTitle', {
+                          ratio: staffingRatio === Infinity ? '∞' : staffingRatio.toFixed(1),
+                          threshold: UNDERSTAFFED_RATIO_THRESHOLD,
+                        })}
+                      >
+                        <AlertTriangle className="size-3" />
+                        {t('admin.projects.staffingShort')}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </td>
+                  {isFullAdmin && (
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        {taskSetTemplates.length > 0 && (
+                          <button
+                            onClick={() => setApplyingTo(p)}
+                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
+                          >
+                            <LayoutTemplate className="size-3.5" />
+                            {t('admin.projects.applyTemplateButton')}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            setImportingTo(p)
+                            setImportSourceId('')
+                            setImportSelectedIds(new Set())
+                          }}
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
+                        >
+                          <FolderInput className="size-3.5" />
+                          {t('admin.projects.importTasksButton')}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setProjectArchived(p.id, true)
+                            toast(t('admin.projects.archiveToast', { name: p.name }))
+                          }}
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
+                        >
+                          <Archive className="size-3.5" />
+                          {t('admin.projects.archiveButton')}
+                        </button>
+                        <button
+                          onClick={() => setRemoving(p)}
+                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                          {t('common.delete')}
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {isFullAdmin && archivedList.length > 0 && (
+        <div className="mt-6 overflow-hidden rounded-lg border border-border bg-card">
+          <div className="border-b border-border px-4 py-2.5 text-sm font-medium text-muted-foreground">
+            {t('admin.projects.archivedHeading', { count: archivedList.length })}
+          </div>
+          <ul className="divide-y divide-border">
+            {archivedList.map((p) => (
+              <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                <span className="min-w-0 truncate text-muted-foreground">{p.name}</span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      setProjectArchived(p.id, false)
+                      toast(t('admin.projects.unarchiveToast', { name: p.name }))
+                    }}
+                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
+                  >
+                    <ArchiveRestore className="size-3.5" />
+                    {t('admin.projects.unarchiveButton')}
+                  </button>
+                  <button
+                    onClick={() => setRemoving(p)}
+                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                    {t('common.delete')}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {modals}
     </div>
   )
 }

@@ -25,7 +25,7 @@ export type ImportField =
 export const IMPORT_FIELD_LABEL: Record<ImportField, string> = {
   name: 'タスク名',
   project: 'プロジェクト',
-  department: '部門',
+  department: '領域',
   assignee: '担当',
   priority: '優先度',
   difficulty: '難易度',
@@ -43,7 +43,8 @@ export type ValueMappedField = (typeof VALUE_MAPPED_FIELDS)[number]
 const HEADER_ALIASES: Record<ImportField, string[]> = {
   name: ['タスク名', 'タスク', '件名', '名前', 'title', 'name', 'task'],
   project: ['プロジェクト', 'project'],
-  department: ['部門', '部署', 'department'],
+  // 以前の書き出し(部門)のファイルも読めるよう、部門も見出しとして受け付ける
+  department: ['領域', '部門', '部署', 'area', 'department'],
   assignee: ['担当', '担当者', 'アサイン', 'assignee', 'assignees'],
   priority: ['優先度', 'priority'],
   difficulty: ['難易度', 'difficulty'],

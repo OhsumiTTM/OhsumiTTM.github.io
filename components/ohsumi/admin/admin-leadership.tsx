@@ -5,17 +5,28 @@ import { useMemo } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { STATUS_LABEL } from '@/lib/ohsumi/types'
-import { Crown, AlertTriangle, Users, TrendingUp, CheckCircle2, Clock, UserCheck } from 'lucide-react'
+import { AlertTriangle, Users, TrendingUp, CheckCircle2, Clock } from 'lucide-react'
 import { isOverdue, deadlineLevel, isActiveMember } from '@/lib/ohsumi/utils'
 import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
-// item 21: 幹部が見れるダッシュボードページ。
-// 組織全体の運用状況（承認待ち・期限超過・停滞タスク・稼働率）を1画面で把握。
-export function AdminLeadership() {
-  const { isAdminRef, visibleTasks, pendingTasks, members, projects, archivedTasks, currentUser } = useOhsumi()
-  const roleName = useRoleLabel()
+// 管理画面のホームの「団体の状況」(以前の幹部 View。item 21): 30日の完了数などの数字・プロジェクト別の状況・稼働の上位10人。
+// 全権管理者には団体全体、担当プロジェクトのある管理者には、その範囲(担当プロジェクトのタスク・メンバー)で出す。
+// 後継者・候補者の提案(item 19)は「部署と役職」のタブ(SuccessorSuggestions)
+export function LeadershipOverview() {
+  const { adminTasks: visibleTasks, adminPendingTasks: pendingTasks, adminProjects: projects, members: allMembers, archivedTasks: allArchived, currentUser, isFullAdmin } = useOhsumi()
+  // 担当プロジェクトの範囲: そのプロジェクトのメンバーと、そのタスクの担当者
+  const members = useMemo(() => {
+    if (isFullAdmin) return allMembers
+    const ids = new Set<string>([...projects.flatMap((p) => p.memberIds ?? []), ...visibleTasks.flatMap((t) => t.assigneeIds)])
+    return allMembers.filter((m) => ids.has(m.id))
+  }, [isFullAdmin, allMembers, projects, visibleTasks])
+  const archivedTasks = useMemo(() => {
+    if (isFullAdmin) return allArchived
+    const scope = new Set(projects.map((p) => p.id))
+    return allArchived.filter((t) => scope.has(t.projectId))
+  }, [isFullAdmin, allArchived, projects])
   const { go } = useNav()
   const { t } = useI18n()
   const tz = currentUser?.timezone ?? DEFAULT_TIMEZONE
@@ -71,35 +82,8 @@ export function AdminLeadership() {
       .slice(0, 10)
   }, [members, visibleTasks, tz])
 
-  // item 19: 後継者・候補者サジェスト
-  // Will/Judgment/skillsのベクトル類似度で現役幹部に近いメンバーをサジェスト
-  const successorSuggestions = useMemo(() => {
-    const leaders = members.filter((m) => isAdminRef(m.role) && isActiveMember(m))
-    if (leaders.length === 0) return []
-    const nonLeaders = members.filter((m) => !isAdminRef(m.role) && isActiveMember(m))
-
-    return leaders.slice(0, 5).map((leader) => {
-      const leaderTags = new Set([...leader.will, ...leader.judgment, ...leader.skills])
-      const candidates = nonLeaders
-        .map((m) => {
-          const tags = [...m.will, ...m.judgment, ...m.skills]
-          const matches = tags.filter((t) => leaderTags.has(t))
-          const score = leaderTags.size > 0 ? matches.length / leaderTags.size : 0
-          return { member: m, matches, score }
-        })
-        .filter((c) => c.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3)
-      return { leader, candidates }
-    }).filter((s) => s.candidates.length > 0)
-  }, [members])
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2.5">
-        <Crown className="size-5 text-primary" />
-        <h2 className="text-lg font-semibold">{t('admin.leadership.title')}</h2>
-      </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <KpiCard
@@ -242,12 +226,42 @@ export function AdminLeadership() {
         </div>
       </div>
 
-      {successorSuggestions.length > 0 && (
+    </div>
+  )
+}
+
+// 後継者・候補者の提案(item 19): Will・判断・スキルのタグが、今の幹部に近いメンバー(「部署と役職」のタブ)
+export function SuccessorSuggestions() {
+  const { isAdminRef, members } = useOhsumi()
+  const roleName = useRoleLabel()
+  const { go } = useNav()
+  const { t } = useI18n()
+  // item 19: 後継者・候補者サジェスト
+  // Will/Judgment/skillsのベクトル類似度で現役幹部に近いメンバーをサジェスト
+  const successorSuggestions = useMemo(() => {
+    const leaders = members.filter((m) => isAdminRef(m.role) && isActiveMember(m))
+    if (leaders.length === 0) return []
+    const nonLeaders = members.filter((m) => !isAdminRef(m.role) && isActiveMember(m))
+
+    return leaders.slice(0, 5).map((leader) => {
+      const leaderTags = new Set([...leader.will, ...leader.judgment, ...leader.skills])
+      const candidates = nonLeaders
+        .map((m) => {
+          const tags = [...m.will, ...m.judgment, ...m.skills]
+          const matches = tags.filter((t) => leaderTags.has(t))
+          const score = leaderTags.size > 0 ? matches.length / leaderTags.size : 0
+          return { member: m, matches, score }
+        })
+        .filter((c) => c.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3)
+      return { leader, candidates }
+    }).filter((s) => s.candidates.length > 0)
+  }, [members])
+
+  if (successorSuggestions.length === 0) return <p className="text-sm text-muted-foreground">{t('admin.leadership.successor.empty')}</p>
+  return (
         <div>
-          <div className="mb-3 flex items-center gap-2">
-            <UserCheck className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold text-muted-foreground">{t('admin.leadership.successor.title')}</h3>
-          </div>
           <div className="space-y-3">
             {successorSuggestions.map(({ leader, candidates }) => (
               <div key={leader.id} className="rounded-xl border border-border bg-card p-4">
@@ -281,8 +295,6 @@ export function AdminLeadership() {
             ))}
           </div>
         </div>
-      )}
-    </div>
   )
 }
 

@@ -6,199 +6,154 @@ import { useToast } from '@/components/ohsumi/toast'
 import { Tag, SectionLabel, Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
 import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS } from '@/lib/ohsumi/types'
+import { adminSectionTitleKey } from '@/lib/ohsumi/admin-section-labels'
 import { sameRole, TOP_ROLE_ID, DEFAULT_TOP_ROLE_NAME } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import type { AdminSection, CustomMemberColumn, SurveyQuestion } from '@/lib/ohsumi/types'
-import { SkillLevelRulesEditor } from '@/components/ohsumi/admin/skill-level-rules-editor'
 import { Plus, Check, ChevronUp, ChevronDown, X, Trash2, ImageUp, Loader2 } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { checkImageFile } from '@/lib/ohsumi/image-upload'
 import { isActiveMember } from '@/lib/ohsumi/utils'
 
-// dashboard always stays visible (it's the redirect target for a
-// disallowed section — see store.tsx's visibleAdminSections), so there's
-// nothing useful to toggle for it
-const TOGGLEABLE_SECTIONS = ADMIN_SECTIONS.filter((s) => s.key !== 'dashboard')
+// ホーム(dashboard)は常に見られる(見られないタブを開いた時の戻り先)。団体設定は全権管理者だけなので、選ぶものに入れない
+const TOGGLEABLE_SECTIONS = ADMIN_SECTIONS.filter((s) => s.key !== 'dashboard' && s.key !== 'orgSettings')
 
-export function AdminTags() {
-  const {
-    skillOptions,
-    categoryOptions,
-    addSkillOption,
-    removeSkillOption,
-    addCategoryOption,
-    removeCategoryOption,
-    roleLevels,
-    baseRoleId,
-    addRoleLevel,
-    restrictedRoles,
-    rolePermissions,
-    setRolePermissions,
-    jobRequirements,
-    setJobRequirements,
-    skillFieldOptions,
-    addSkillFieldOption,
-    removeSkillFieldOption,
-    skillFieldSkills,
-    setSkillFieldSkills,
-    skillFieldThreshold,
-    setSkillFieldThreshold,
-    isFullAdmin,
-  } = useOhsumi()
-  const toast = useToast()
+// 以前の Tags の画面の中身。今は、それぞれ次のタブに入る(components/ohsumi/admin/admin-screen.tsx):
+//   タスクの設定: TaskCategoriesEditor・TaskDomainsEditor
+//   部署と役職: RolesEditor・RoleVisibilityEditor
+//   スキルの決まり: SkillOptionsEditor・FieldCompositionEditor・PositionRequirementsEditor・SkillLevelRulesEditor
+//   人材データベース: CustomMemberColumnsEditor
+//   1on1・アンケート: OneOnOneQuestionsEditor・SurveyQuestionsEditor・SurveyInviteEditor
+//   団体設定: NotifySettingsEditor
+// 見出しはタブの側(AdminBlock)で付ける。設定はすべて updateSetting(全権管理者)で保存する
+
+export function TaskCategoriesEditor() {
+  const { categoryOptions, addCategoryOption, removeCategoryOption } = useOhsumi()
+  return <TagGroup options={categoryOptions} onAdd={addCategoryOption} onRemove={removeCategoryOption} />
+}
+
+export function TaskDomainsEditor() {
   const { t } = useI18n()
-  // item 17: ポジション要件 — every role, including 一般, has a position
-  const jobTypes = [baseRoleId, ...roleLevels]
-  const roleName = useRoleLabel()
-
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      <h1 className="text-xl font-semibold tracking-tight">Tags</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {t('admin.tags.subtitle')}
-      </p>
-      {/* このページの設定はすべてupdateSetting経由（isActingFullAdmin基準）
-          なので、ページ単位で1つ出せば十分（個々のセクション毎に重複させない） */}
-      <AdminAccessNote level="fullAdmin" className="mt-2" />
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{t('admin.tags.departments.desc')}</p>
+      <DepartmentEditor />
+    </div>
+  )
+}
 
-      <div className="mt-6 grid gap-6 sm:grid-cols-2">
-        <TagGroup
-          title={t('admin.tags.requiredSkills')}
-          options={skillOptions}
-          onAdd={addSkillOption}
-          onRemove={removeSkillOption}
-        />
-        <div>
-          <TagGroup
-            title={t('admin.tags.requiredFields')}
-            options={skillFieldOptions}
-            onAdd={addSkillFieldOption}
-            onRemove={removeSkillFieldOption}
+export function RolesEditor() {
+  const { addRoleLevel } = useOhsumi()
+  const { t } = useI18n()
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{t('admin.tags.permissionLevelsDesc')}</p>
+      <RoleEditor />
+      <RoleLevelAdd onAdd={addRoleLevel} />
+    </div>
+  )
+}
+
+export function RoleVisibilityEditor() {
+  const { roleLevels, restrictedRoles, rolePermissions, setRolePermissions } = useOhsumi()
+  const { t } = useI18n()
+  const roleName = useRoleLabel()
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{t('admin.tags.visibilityByLevelDesc')}</p>
+      {restrictedRoles.length === 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">{t('admin.tags.noRestrictedLevels')}</p>
+      )}
+      <div className="mt-4 flex flex-col gap-4">
+        {restrictedRoles.filter((r) => roleLevels.includes(r)).map((role) => (
+          <RolePermissionRow
+            key={role}
+            role={roleName(role)}
+            sections={rolePermissions[role] ?? DEFAULT_NON_TOP_SECTIONS}
+            onChange={(next) => setRolePermissions(role, next)}
           />
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t('admin.tags.requiredFieldsDesc')}
-          </p>
-        </div>
-        <TagGroup
-          title={t('admin.tags.categories')}
-          options={categoryOptions}
-          onAdd={addCategoryOption}
-          onRemove={removeCategoryOption}
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export function SkillOptionsEditor() {
+  const { skillOptions, addSkillOption, removeSkillOption, skillFieldOptions, addSkillFieldOption, removeSkillFieldOption } = useOhsumi()
+  const { t } = useI18n()
+  return (
+    <div className="grid gap-6 sm:grid-cols-2">
+      <TagGroup title={t('admin.tags.requiredSkills')} options={skillOptions} onAdd={addSkillOption} onRemove={removeSkillOption} />
+      <div>
+        <TagGroup title={t('admin.tags.requiredFields')} options={skillFieldOptions} onAdd={addSkillFieldOption} onRemove={removeSkillFieldOption} />
+        <p className="mt-2 text-xs text-muted-foreground">{t('admin.tags.requiredFieldsDesc')}</p>
+      </div>
+    </div>
+  )
+}
+
+export function FieldCompositionEditor() {
+  const { skillOptions, skillFieldOptions, skillFieldSkills, setSkillFieldSkills, skillFieldThreshold, setSkillFieldThreshold } = useOhsumi()
+  const { t } = useI18n()
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{t('admin.tags.fieldCompositionDesc')}</p>
+      <div className="mt-3 flex items-center gap-2">
+        <label className="text-xs font-medium text-muted-foreground" htmlFor="skill-field-threshold">
+          {t('admin.tags.thresholdLabel')}
+        </label>
+        <input
+          id="skill-field-threshold"
+          type="number"
+          min={0}
+          max={100}
+          step={5}
+          value={Math.round(skillFieldThreshold * 100)}
+          onChange={(e) => setSkillFieldThreshold(Number(e.target.value) / 100)}
+          className="h-8 w-20 rounded-md border border-border bg-background px-2 text-sm outline-none focus:border-primary"
         />
-        <div>
-          <SectionLabel>{t('admin.tags.permissionLevels')}</SectionLabel>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('admin.tags.permissionLevelsDesc')}
-          </p>
-          <RoleEditor />
-          <RoleLevelAdd onAdd={addRoleLevel} />
-        </div>
+        <span className="text-xs text-muted-foreground">{t('admin.tags.thresholdUnitNote')}</span>
       </div>
-
-      <div className="mt-6 rounded-lg border border-border bg-card p-4">
-        <SectionLabel>{t('admin.tags.departments.title')}</SectionLabel>
-        <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.departments.desc')}</p>
-        <DepartmentEditor />
-      </div>
-
-      <div className="mt-6 rounded-lg border border-border bg-card p-4">
-        <SectionLabel>{t('admin.tags.fieldComposition')}</SectionLabel>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t('admin.tags.fieldCompositionDesc')}
-        </p>
-        <div className="mt-3 flex items-center gap-2">
-          <label className="text-xs font-medium text-muted-foreground" htmlFor="skill-field-threshold">
-            {t('admin.tags.thresholdLabel')}
-          </label>
-          <input
-            id="skill-field-threshold"
-            type="number"
-            min={0}
-            max={100}
-            step={5}
-            value={Math.round(skillFieldThreshold * 100)}
-            onChange={(e) => setSkillFieldThreshold(Number(e.target.value) / 100)}
-            className="h-8 w-20 rounded-md border border-border bg-background px-2 text-sm outline-none focus:border-primary"
-          />
-          <span className="text-xs text-muted-foreground">{t('admin.tags.thresholdUnitNote')}</span>
-        </div>
-        {skillFieldOptions.length === 0 ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {t('admin.tags.addFieldsFirst')}
-          </p>
-        ) : (
-          <div className="mt-4 flex flex-col gap-4">
-            {skillFieldOptions.map((field) => (
-              <JobRequirementsRow
-                key={field}
-                role={field}
-                skills={skillFieldSkills[field] ?? []}
-                options={skillOptions}
-                onChange={(next) => setSkillFieldSkills(field, next)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 rounded-lg border border-border bg-card p-4">
-        <SectionLabel>{t('admin.tags.positionRequirements')}</SectionLabel>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t('admin.tags.positionRequirementsDesc')}
-        </p>
+      {skillFieldOptions.length === 0 ? (
+        <p className="mt-3 text-xs text-muted-foreground">{t('admin.tags.addFieldsFirst')}</p>
+      ) : (
         <div className="mt-4 flex flex-col gap-4">
-          {jobTypes.map((role) => (
+          {skillFieldOptions.map((field) => (
             <JobRequirementsRow
-              key={role}
-              role={roleName(role)}
-              skills={jobRequirements[role] ?? []}
+              key={field}
+              role={field}
+              skills={skillFieldSkills[field] ?? []}
               options={skillOptions}
-              onChange={(next) => setJobRequirements(role, next)}
+              onChange={(next) => setSkillFieldSkills(field, next)}
             />
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+export function PositionRequirementsEditor() {
+  const { skillOptions, roleLevels, baseRoleId, jobRequirements, setJobRequirements } = useOhsumi()
+  const { t } = useI18n()
+  const roleName = useRoleLabel()
+  // item 17: ポジション要件 — every role, including 一般, has a position
+  const jobTypes = [baseRoleId, ...roleLevels]
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <p className="text-xs text-muted-foreground">{t('admin.tags.positionRequirementsDesc')}</p>
+      <div className="mt-4 flex flex-col gap-4">
+        {jobTypes.map((role) => (
+          <JobRequirementsRow
+            key={role}
+            role={roleName(role)}
+            skills={jobRequirements[role] ?? []}
+            options={skillOptions}
+            onChange={(next) => setJobRequirements(role, next)}
+          />
+        ))}
       </div>
-
-      <div className="mt-6 rounded-lg border border-border bg-card p-4">
-          <SectionLabel>{t('admin.tags.visibilityByLevel')}</SectionLabel>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('admin.tags.visibilityByLevelDesc')}
-          </p>
-          {restrictedRoles.length === 0 && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t('admin.tags.noRestrictedLevels')}
-            </p>
-          )}
-          <div className="mt-4 flex flex-col gap-4">
-            {restrictedRoles.filter((r) => roleLevels.includes(r)).map((role) => (
-              <RolePermissionRow
-                key={role}
-                role={roleName(role)}
-                sections={rolePermissions[role] ?? DEFAULT_NON_TOP_SECTIONS}
-                onChange={(next) => setRolePermissions(role, next)}
-              />
-            ))}
-          </div>
-        </div>
-
-      {/* SKL-010・PR Z: スキルのレベルの決め方(点数の一覧と条件) */}
-      <SkillLevelRulesEditor />
-
-      {/* item 20: 1on1ワークシート質問項目 */}
-      <OneOnOneQuestionsEditor />
-
-      {/* FRM-006/FRM-007: アンケート設問のカスタマイズ */}
-      <SurveyQuestionsEditor />
-
-      {/* item 26: 通知種別・頻度設定 */}
-      <NotifySettingsEditor />
-
-      {/* アンケート回答対象者の限定 */}
-      <SurveyInviteEditor />
-
-      {/* 人材DBのカスタム列 */}
-      <CustomMemberColumnsEditor />
     </div>
   )
 }
@@ -221,6 +176,7 @@ function RolePermissionRow({
   sections: AdminSection[]
   onChange: (next: AdminSection[]) => void
 }) {
+  const { t } = useI18n()
   const toggle = (key: AdminSection) => {
     onChange(sections.includes(key) ? sections.filter((s) => s !== key) : [...sections, key])
   }
@@ -241,7 +197,7 @@ function RolePermissionRow({
               }`}
             >
               {checked && <Check className="size-3" strokeWidth={3} />}
-              {s.label}
+              {t(adminSectionTitleKey(s.key))}
             </button>
           )
         })}
@@ -626,7 +582,7 @@ function TagGroup({
   onAdd,
   onRemove,
 }: {
-  title: string
+  title?: string
   options: string[]
   onAdd: (name: string) => void
   onRemove: (name: string) => void
@@ -642,7 +598,7 @@ function TagGroup({
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{title}</SectionLabel>
+      {title && <SectionLabel>{title}</SectionLabel>}
       <div className="mt-3 flex flex-wrap gap-1.5">
         {options.length === 0 && (
           <span className="text-sm text-muted-foreground">{t('admin.tags.noOptions')}</span>
@@ -681,7 +637,7 @@ function TagGroup({
 }
 
 // item 20: 1on1ワークシート質問項目エディタ
-function OneOnOneQuestionsEditor() {
+export function OneOnOneQuestionsEditor() {
   const { oneOnOneQuestions, setOneOnOneQuestions } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -697,8 +653,7 @@ function OneOnOneQuestionsEditor() {
   const remove = (q: string) => setOneOnOneQuestions(oneOnOneQuestions.filter((x) => x !== q))
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.oneOnOne.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4">
       <p className="mt-1 text-xs text-muted-foreground">
         {t('admin.tags.oneOnOne.desc')}
       </p>
@@ -744,7 +699,7 @@ function OneOnOneQuestionsEditor() {
 // 持つため、1操作=1コミットではなくローカルstateで編集してまとめて
 // 「保存」する構造にする（キー入力ごとに通信が飛ぶのを避けるため）。
 // 空配列(未設定)ならsurvey-screen.tsxが既存の固定6問にフォールバックする。
-function SurveyQuestionsEditor() {
+export function SurveyQuestionsEditor() {
   const { surveyQuestions, updateSurveyQuestions } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -771,8 +726,7 @@ function SurveyQuestionsEditor() {
   const handleReset = () => setDraft(surveyQuestions)
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.surveyQuestions.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4">
       <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.surveyQuestions.desc')}</p>
 
       <div className="mt-3 flex flex-col gap-2">
@@ -935,11 +889,10 @@ function SurveyQuestionImageInput({
 
 // 通知の受け取り方の案内。以前の「通知種別・頻度」の選択(ブラウザに保存するだけで、通知には
 // 何も効いていなかった)は消した。通知はメンバーごとの通知の設定と、Discord・Slack・団体の通知先で決まる
-function NotifySettingsEditor() {
+export function NotifySettingsEditor() {
   const { t } = useI18n()
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.notify.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4">
       <p className="mt-1 text-xs text-muted-foreground">
         {t('admin.tags.notify.desc')}
       </p>
@@ -949,7 +902,7 @@ function NotifySettingsEditor() {
 
 // アンケートの回答対象者限定（item 3） — 選択したメンバーのみが
 // survey-screen.tsxの経験値アンケートに回答できる。空選択=全員回答可。
-function SurveyInviteEditor() {
+export function SurveyInviteEditor() {
   const { members, surveyInvitedIds, updateSurveyInvitedIds } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -963,8 +916,7 @@ function SurveyInviteEditor() {
   }
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.surveyInvite.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4">
       <p className="mt-1 text-xs text-muted-foreground">
         {t('admin.tags.surveyInvite.desc')}
       </p>
@@ -998,7 +950,7 @@ function SurveyInviteEditor() {
 // のみ）を追加できる。列定義はSettings、値はMember.customFieldsに保持。
 // 既存キーの削除は表示上外れるだけで、Members側のcustom_fields_jsonに
 // 残ったデータを一括削除する必要はない（仕様通り）。
-function CustomMemberColumnsEditor() {
+export function CustomMemberColumnsEditor() {
   const { customMemberColumns, updateCustomMemberColumns } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -1025,8 +977,7 @@ function CustomMemberColumnsEditor() {
   }
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-card p-4">
-      <SectionLabel>{t('admin.tags.customColumns.title')}</SectionLabel>
+    <div className="rounded-lg border border-border bg-card p-4">
       <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.customColumns.desc')}</p>
       <div className="mt-3 flex flex-col gap-1.5">
         {customMemberColumns.length === 0 ? (
