@@ -124,6 +124,10 @@ export const ja = {
   'otherDevice.homeScreen': 'スマホで開いた後、ブラウザのメニューの「ホーム画面に追加」をすると、次からアイコンですぐに開けます。',
   'otherDevice.close': '閉じる',
   'header.menu.logout': 'ログアウト',
+  'header.mode.aria': '画面の切り替え',
+  'header.home.aria': 'OUTPUT に戻る',
+  'header.org.menuAria': '団体を切り替える(今は {name})',
+  'header.org.current': '今の団体',
   'header.logoAlt': 'ロゴ',
 
   // ---- login ---------------------------------------------------------

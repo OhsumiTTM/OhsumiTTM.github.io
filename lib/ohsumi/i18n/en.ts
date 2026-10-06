@@ -124,6 +124,10 @@ export const en = {
   'otherDevice.homeScreen': 'After opening it on your phone, choose "Add to Home Screen" in the browser menu to open it from an icon next time.',
   'otherDevice.close': 'Close',
   'header.menu.logout': 'Log out',
+  'header.mode.aria': 'Switch screen',
+  'header.home.aria': 'Back to OUTPUT',
+  'header.org.menuAria': 'Switch organization (current: {name})',
+  'header.org.current': 'Current',
   'header.logoAlt': 'Logo',
 
   // ---- login ---------------------------------------------------------
