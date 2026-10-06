@@ -546,7 +546,7 @@ export const ja = {
   'admin.projects.saveChangesButton': '変更を保存',
   'admin.projects.taskSets.addTaskButton': 'タスクを追加',
   'admin.projects.recurring.heading': '定期タスク',
-  'admin.projects.recurring.desc': '毎週・毎月発生する業務を自動生成します。サーバー側の定期実行はないため、該当日に誰かが\n          Ohsumiを開いたタイミングで1回だけ生成されます。',
+  'admin.projects.recurring.desc': '毎週・毎月発生する業務を自動で作ります。その日の朝の毎日の処理(または、その日に誰かが Ohsumi を開いた時)に1回だけ作られます。',
   'admin.projects.recurring.empty': 'まだ定期タスクがありません。',
   'admin.trash.heading': 'タスクのゴミ箱',
   'admin.trash.desc': '削除したタスクは{days}日間ここに残ります。元に戻すか、すぐに完全に消せます。{days}日たったタスクは自動で完全に消えます。',
