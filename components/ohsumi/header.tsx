@@ -148,9 +148,9 @@ export function Header() {
 
   if (!currentUser) return null
 
+  // INPUT に書きかけの項目がある時は、離れる前に確かめる(確かめで止めたら、表示も切り替えない)
   const handleMode = (m: 'input' | 'output') => {
-    setMode(m)
-    go({ name: m })
+    go({ name: m }, () => setMode(m))
   }
 
   // item 19: 組織ナレッジ横断検索 — searches task names/descriptions/

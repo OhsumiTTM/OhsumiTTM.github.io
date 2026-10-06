@@ -31,6 +31,7 @@ import { useI18n, DEPARTMENT_KEY, DIFFICULTY_KEY, PRIORITY_KEY } from '@/lib/ohs
 import type { TranslationKey } from '@/lib/ohsumi/i18n'
 import { formatDateTime, findSimilarTasks, isActiveMember } from '@/lib/ohsumi/utils'
 import { buildParsedTasks, detectColumns, readExcelFile } from '@/lib/ohsumi/import-excel'
+import { blankParsedTask, formHistoryText, hasBlockingProblems, isFormDirty, nextParsedTask } from '@/lib/ohsumi/input-form'
 import type {
   ColumnMapping,
   ImportField,
@@ -94,12 +95,16 @@ export function InputScreen() {
     departments,
   } = useOhsumi()
   const deptLabel = useDepartmentLabel()
-  const { go } = useNav()
+  const { go, setLeaveGuard } = useNav()
   const toast = useToast()
   const { t } = useI18n()
 
   const [text, setText] = useState(() => loadDraft(currentUser?.id))
   const [phase, setPhase] = useState<Phase>('input')
+  // どこから確認の画面に来たか(text: 文章から整理・Excel / form: 「項目を入れて追加」)
+  const [entry, setEntry] = useState<'text' | 'form'>('text')
+  // 書きかけの項目を消してよいかの確かめ(画面を離れる・やり直す)。proceed は続ける時の操作
+  const [pendingLeave, setPendingLeave] = useState<{ proceed: () => void } | null>(null)
   const [parsed, setParsed] = useState<ParsedTask[]>([])
   const [emptyError, setEmptyError] = useState(false)
   const [parseFailed, setParseFailed] = useState(false)
@@ -160,6 +165,22 @@ export function InputScreen() {
       }
     }, 1600)
   }
+
+  // 「項目を入れて追加」: 文章から整理した後と同じ確認の画面に、空の枠を1つ入れて移る。文章の欄はそのまま残す
+  const startForm = () => {
+    if (projects.length === 0) return
+    setEntry('form')
+    setParsed([blankParsedTask()])
+    setSelectedIds(new Set())
+    setImportSource(null)
+    setEmptyError(false)
+    setParseFailed(false)
+    setRegistered(false)
+    setPhase('result')
+  }
+
+  // 「＋ もう1件」: 直前の枠のプロジェクト・領域・カテゴリを引き継いだ空の枠を足す
+  const addAnother = () => setParsed((prev) => [...prev, nextParsedTask(prev[prev.length - 1])])
 
   // Excelファイルは列の並び・型が保証されないので、まずヘッダー文字列から
   // 「たぶんこの列だろう」を推測して確認画面（ExcelColumnMapping）を出し、
@@ -274,13 +295,55 @@ export function InputScreen() {
     )
   }
 
+  // 登録する枠に、タスク名かプロジェクトの足りない枠があれば登録しない(その欄に理由を出す)
+  const registerBlocked = hasBlockingProblems(parsed, projects)
+  const formDirty = phase === 'result' && entry === 'form' && isFormDirty(parsed)
+
+  // 書きかけの項目があるまま画面を離れる時は、消えることを確かめる(INPUT のまま、は確かめない)
+  useEffect(() => {
+    if (!formDirty) return
+    setLeaveGuard((proceed, target) => {
+      if (target?.name === 'input') return false
+      setPendingLeave({ proceed })
+      return true
+    })
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      setLeaveGuard(null)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+    }
+  }, [formDirty, setLeaveGuard])
+
+  const backToInput = () => {
+    setPhase('input')
+    setEntry('text')
+    setParsed([])
+    setSelectedIds(new Set())
+    setImportSource(null)
+    setSheetData(null)
+    setColumnMapping({})
+    setValueMaps({})
+  }
+  // 「やり直す」: 文章の入力に戻る(文章はそのまま)。項目で書きかけなら、消えることを確かめる
+  const handleRetry = () => {
+    if (formDirty) setPendingLeave({ proceed: backToInput })
+    else backToInput()
+  }
+
   const handleRegister = () => {
     const approved = parsed.filter((p) => p.approved)
-    if (approved.length === 0) return
-    addTasksFromInput(importSource ?? text, approved)
+    if (approved.length === 0 || registerBlocked) return
+    const fromForm = entry === 'form'
+    addTasksFromInput(fromForm ? formHistoryText(approved) : importSource ?? text, approved, fromForm ? 'form' : 'text')
     toast(t('input.toast.registered', { count: approved.length }))
     setPhase('input')
-    setText('')
+    setEntry('text')
+    // 項目で入れた時は、文章の欄に書いてあったものを消さない
+    if (!fromForm) setText('')
     setParsed([])
     setSelectedIds(new Set())
     setImportSource(null)
@@ -361,6 +424,22 @@ export function InputScreen() {
               </div>
             </div>
           </div>
+
+          {/* 文章から整理するほかに、最初から入力欄のある枠でも書ける */}
+          {phase === 'input' && (
+            <div className="mt-2 flex">
+              <Button
+                variant="outline"
+                onClick={startForm}
+                disabled={projects.length === 0}
+                className="h-9 px-3"
+                data-input-form-start
+              >
+                <Plus className="size-4" />
+                {t('input.form.start')}
+              </Button>
+            </div>
+          )}
 
           {emptyError && (
             <p className="mt-2.5 flex items-center gap-1.5 text-sm text-destructive">
@@ -512,7 +591,15 @@ export function InputScreen() {
                     onClick={() => setHistoryInput(i)}
                     className="flex items-start justify-between gap-3 rounded-xl border border-border bg-card px-3.5 py-2.5 text-left transition-colors hover:border-border-strong hover:bg-secondary/50"
                   >
-                    <p className="min-w-0 flex-1 truncate text-sm text-foreground">{i.text}</p>
+                    <p className="min-w-0 flex-1 truncate text-sm text-foreground">
+                      {i.kind === 'form' && (
+                        <span className="mr-1.5 inline-flex items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 align-middle text-[11px] font-medium text-muted-foreground" data-input-kind="form">
+                          <Pencil className="size-3" />
+                          {t('input.history.kindForm')}
+                        </span>
+                      )}
+                      {i.text.split('\n').join(t('input.listSeparator'))}
+                    </p>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {t('input.history.itemMeta', {
                         count: i.generatedTaskIds.length,
@@ -550,18 +637,20 @@ export function InputScreen() {
         <div className="animate-in fade-in slide-in-from-bottom-2">
           <div className="mb-5">
             <div className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
-              {importSource ? (
+              {entry === 'form' ? (
+                <Pencil className="size-3.5 text-primary" />
+              ) : importSource ? (
                 <FileSpreadsheet className="size-3.5 text-primary" />
               ) : (
                 <Sparkles className="size-3.5 text-primary" />
               )}
-              {importSource ? t('input.result.badgeExcel') : t('input.result.badgeParsed')}
+              {entry === 'form' ? t('input.form.badge') : importSource ? t('input.result.badgeExcel') : t('input.result.badgeParsed')}
             </div>
             <h2 className="text-xl font-semibold tracking-tight">
-              {t('input.result.title', { count: parsed.length })}
+              {entry === 'form' ? t('input.form.title') : t('input.result.title', { count: parsed.length })}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {t('input.result.subtitle')}
+              {entry === 'form' ? t('input.form.subtitle') : t('input.result.subtitle')}
             </p>
           </div>
 
@@ -732,33 +821,41 @@ export function InputScreen() {
                 {t('input.result.emptyState')}
               </div>
             )}
+            <button
+              type="button"
+              onClick={addAnother}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-border-strong bg-card px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              data-input-add-another
+            >
+              <Plus className="size-4" />
+              {t('input.form.addAnother')}
+            </button>
           </div>
 
-          <div className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+          {registerBlocked && (
+            <p className="mt-4 flex items-center gap-1.5 text-sm text-destructive" data-register-blocked>
+              <TriangleAlert className="size-4 shrink-0" />
+              {t('input.form.registerBlocked')}
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
             <span className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">{approvedCount}</span>
               {t('input.result.ofTotalApproving', { total: parsed.length })}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="ghost"
                 className="h-9"
-                onClick={() => {
-                  setPhase('input')
-                  setParsed([])
-                  setSelectedIds(new Set())
-                  setImportSource(null)
-                  setSheetData(null)
-                  setColumnMapping({})
-                  setValueMaps({})
-                }}
+                onClick={handleRetry}
               >
                 {t('input.result.retryButton')}
               </Button>
               <Button
                 className="h-9 px-4"
-                disabled={approvedCount === 0}
+                disabled={approvedCount === 0 || registerBlocked}
                 onClick={handleRegister}
+                data-input-register
               >
                 {t('input.result.registerButton')}
                 <ArrowRight className="size-4" />
@@ -783,6 +880,12 @@ export function InputScreen() {
                 <X className="size-4 text-muted-foreground" />
               </button>
             </div>
+            {historyInput.kind === 'form' && (
+              <p className="mb-2 inline-flex items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                <Pencil className="size-3" />
+                {t('input.history.kindForm')}
+              </p>
+            )}
             <p className="whitespace-pre-wrap rounded-lg border border-border bg-secondary/50 p-3 text-sm leading-relaxed">
               {historyInput.text}
             </p>
@@ -809,6 +912,34 @@ export function InputScreen() {
             </div>
           </>
         )}
+      </Modal>
+
+      <Modal open={!!pendingLeave} onClose={() => setPendingLeave(null)} labelledBy="input-leave-title">
+        <div data-input-leave-confirm>
+          <h2 id="input-leave-title" className="text-base font-semibold">
+            {t('input.form.leave.title')}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">{t('input.form.leave.body')}</p>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" className="h-9" onClick={() => setPendingLeave(null)}>
+              {t('input.form.leave.stay')}
+            </Button>
+            <Button
+              variant="destructive"
+              className="h-9"
+              data-input-leave-discard
+              onClick={() => {
+                const next = pendingLeave
+                setPendingLeave(null)
+                // 確かめを外してから移動する(移動の後に、書きかけの確かめが残らないように)
+                setLeaveGuard(null)
+                next?.proceed()
+              }}
+            >
+              {t('input.form.leave.discard')}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </main>
   )
@@ -1421,7 +1552,10 @@ function parseText(text: string, projects: Project[]): ParsedTask[] {
   const normalized = text.replace(/\s+/g, '')
   const demoNorm = DEMO_INPUT.replace(/\s+/g, '')
   if (normalized === demoNorm || normalized.includes('イベント用のポスター')) {
-    return buildDemoParse()
+    // 見本のプロジェクト(p-event など)が無い団体では、最初のプロジェクトにする(無いプロジェクトでは登録できない)
+    return buildDemoParse().map((p) =>
+      projects.some((pr) => pr.id === p.projectId) ? p : { ...p, projectId: projects[0]?.id ?? '' },
+    )
   }
 
   const lines = text

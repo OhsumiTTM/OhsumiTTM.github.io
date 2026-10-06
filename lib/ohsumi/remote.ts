@@ -1569,6 +1569,7 @@ export function toCreatePayload(tempId: string, p: ParsedTask, creatorId?: strin
   return {
     tempId,
     title: p.name,
+    description: p.description ?? '',
     projectId: p.projectId,
     department: p.department,
     category: p.category,

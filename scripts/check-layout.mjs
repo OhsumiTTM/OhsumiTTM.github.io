@@ -58,6 +58,9 @@ export const STEPS = [
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // INPUT の「項目を入れて追加」: 空の枠(必須の理由・登録の止め方)・「＋ もう1件」の引き継ぎ・離れる時の確かめ・
+  // 「やり直す」で文章が残ること。スマートフォンの幅では枠の項目が縦に1列に並ぶ
+  { name: 'INPUT(項目を入れて追加)', do: 'inputForm' },
   // ほかの端末で開く(メニュー): 招待リンク・QR コード・コピー・共有・自分のメールに送る。スマホの幅とパソコンの幅の両方で開く
   // (ラベルは ja.ts の header.menu.otherDevice・otherDevice.*)
   { name: 'ほかの端末で開く', do: 'otherDevice', labels: OTHER_DEVICE_LABELS },
@@ -107,6 +110,7 @@ export const DARK_STEPS = [
   ...['ワークフロー', 'リスト', 'カレンダー', '難易度', '依存関係', 'ガント', '公募'].map((text) => ({ name: `暗い表示: ${text}`, do: 'click', text })),
   { name: '暗い表示: タスク詳細', do: 'openTask', view: 'リスト', text: '担当者が多いタスク' },
   { name: '暗い表示: INPUT', do: 'click', text: 'INPUT' },
+  { name: '暗い表示: INPUT(項目を入れて追加)', do: 'inputForm' },
   { name: '暗い表示: 個人ページ', do: 'profile' },
   { name: '暗い表示: アカウントのメニュー', do: 'accountMenu', height: 560 },
 ]
@@ -1295,6 +1299,57 @@ async function run({ build = true } = {}) {
           await clickText('団体の既定を変える', 'button'); await sleep(600)
           const fields = await evaluate(`document.querySelectorAll('[data-skill-level-rules] [data-skill-rule-level] input').length`)
           if (fields < 25) throw new Error('スキルのレベルの決め方の入力欄が出ません: ' + fields)
+        }
+        if (step.do === 'inputForm') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
+          await clickText('INPUT'); await sleep(1000)
+          const setValue = (selector, value) => evaluate(`(() => {
+            const el = document.querySelector(${JSON.stringify(selector)})
+            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+            el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+            return true
+          })()`)
+          const state = () => evaluate(`JSON.stringify({
+            cards: document.querySelectorAll('[data-parsed-task]').length,
+            errors: [...document.querySelectorAll('[data-parsed-error]')].map((e) => e.getAttribute('data-parsed-error')),
+            registerDisabled: !!document.querySelector('[data-input-register]')?.disabled,
+            blocked: !!document.querySelector('[data-register-blocked]'),
+            projects: [...document.querySelectorAll('[data-parsed-field="project"]')].map((e) => e.value),
+            confirm: !!document.querySelector('[data-input-leave-confirm]'),
+            text: document.querySelector('main textarea')?.value ?? null,
+          })`).then(JSON.parse)
+          const kept = '文章の欄に書きかけの文章'
+          await setValue('main textarea', kept); await sleep(200)
+          await evaluate(`document.querySelector('[data-input-form-start]').click()`); await sleep(500)
+          let st = await state()
+          if (st.cards !== 1 || !st.errors.includes('name') || !st.errors.includes('project') || !st.registerDisabled || !st.blocked) throw new Error('項目を入れて追加で、空の枠・必須の理由・登録の止め方が出ません: ' + JSON.stringify(st))
+          const project = await evaluate(`[...document.querySelector('[data-parsed-field="project"]').options].map((o) => o.value).find(Boolean)`)
+          await setValue('[data-parsed-field="name"]', '項目で書いたタスク')
+          await setValue('[data-parsed-field="project"]', project)
+          await setValue('[data-parsed-field="description"]', '詳細の説明です。\n2行目')
+          await sleep(300); st = await state()
+          if (st.errors.length || st.registerDisabled || st.blocked) throw new Error('必須を入れても、登録のボタンが押せません: ' + JSON.stringify(st))
+          await evaluate(`document.querySelector('[data-input-add-another]').click()`); await sleep(300); st = await state()
+          if (st.cards !== 2 || st.projects[1] !== project || !st.errors.includes('name') || !st.registerDisabled) throw new Error('「＋ もう1件」で、プロジェクトを引き継いだ空の枠が足されません: ' + JSON.stringify(st))
+          // 書きかけのまま画面を離れる: 確かめを出し、「入力に戻る」で残る
+          await clickText('OUTPUT'); await sleep(400); st = await state()
+          if (!st.confirm || st.cards !== 2) throw new Error('書きかけのまま画面を離れる時に、消えることを確かめません: ' + JSON.stringify(st))
+          await clickText('入力に戻る'); await sleep(300); st = await state()
+          if (st.confirm || st.cards !== 2) throw new Error('「入力に戻る」で、書きかけが残りません: ' + JSON.stringify(st))
+          // 「やり直す」: 確かめてから文章の入力に戻り、文章の欄はそのまま
+          await clickText('やり直す'); await sleep(300)
+          if (!(await state()).confirm) throw new Error('書きかけで「やり直す」を押しても、確かめません')
+          await evaluate(`document.querySelector('[data-input-leave-discard]').click()`); await sleep(500); st = await state()
+          if (st.cards !== 0 || st.text !== kept) throw new Error('「やり直す」で文章の入力に戻らないか、文章が消えました: ' + JSON.stringify(st))
+          // 測る状態: 文章の欄を空にしてから、空の枠を1つ開く(書きかけではないので、次の手順で離れても確かめない)
+          await clickText('クリア').catch(() => setValue('main textarea', ''))
+          await sleep(200)
+          await evaluate(`document.querySelector('[data-input-form-start]').click()`); await sleep(500)
+          if (WIDTH < 600) {
+            const cols = await evaluate(`getComputedStyle(document.querySelector('[data-parsed-task] .grid')).gridTemplateColumns.split(' ').length`)
+            if (cols !== 1) throw new Error('スマートフォンの幅で、枠の項目が縦に1列に並びません: ' + cols + ' 列')
+          }
         }
         if (step.do === 'workloadRules') {
           await clickText('タスクの設定', 'aside nav button'); await sleep(1200)

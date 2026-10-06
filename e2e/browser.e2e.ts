@@ -566,3 +566,56 @@ describe.skipIf(!available)('稼働の目安(workload_rules): 団体のルール
     await waitFor(async () => savedRules() === null, '既定に戻した時に、設定が消えません')
   })
 })
+
+describe.skipIf(!available)('INPUT の「項目を入れて追加」: 一般のメンバーが項目で書いたタスクは、詳細つきで承認待ちになる', () => {
+  const setValue = (selector: string, value: string, index = 0) => page.evaluate(`(() => {
+    const el = document.querySelectorAll(${JSON.stringify(selector)})[${index}]
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+    return true
+  })()`)
+  const taskRow = (title: string) => {
+    const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+    const row = rows.find((r) => r[head.indexOf('title')] === title)
+    return row ? Object.fromEntries(head.map((h, i) => [h, row[i]])) : null
+  }
+
+  it('2件を項目で書いて登録すると、GAS に詳細つき・承認待ちで残り、入力履歴に「項目で入力」と出る', async () => {
+    // プロジェクトが要る(代表が作る)
+    if (!A.org.sheets.Projects.rows.slice(1).length) {
+      const made = world.call(A.org, topTokenA, 'createProject', { name: 'E2E プロジェクト', description: '' })
+      if (!made.ok) throw new Error('プロジェクトを作れません: ' + made.error)
+      A.org.cache.clear()
+    }
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('base@a.example')
+    await waitFor(loggedIn, '一般のメンバーがログインできません')
+    const inputButton = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('INPUT'))`
+    await waitFor(() => page.evaluate<boolean>(`!!${inputButton}`), 'INPUT のボタンが出ません')
+    await page.evaluate(`${inputButton}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-input-form-start]") && !document.querySelector("[data-input-form-start]").disabled'), '「項目を入れて追加」が押せません')
+    await page.evaluate(`document.querySelector('[data-input-form-start]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>('document.querySelectorAll("[data-parsed-task]").length === 1'), '空の枠が出ません')
+    expect(await page.evaluate<boolean>('document.querySelector("[data-input-register]").disabled')).toBe(true)
+    const project = await page.evaluate<string>(`[...document.querySelector('[data-parsed-field="project"]').options].map((o) => o.value).find(Boolean)`)
+    await setValue('[data-parsed-field="name"]', '項目で書いたE2Eのタスク1')
+    await setValue('[data-parsed-field="project"]', project)
+    await setValue('[data-parsed-field="description"]', '背景: 受付を早くしたい\n完了の条件: 名簿ができている')
+    await page.evaluate(`document.querySelector('[data-input-add-another]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>('document.querySelectorAll("[data-parsed-task]").length === 2'), '「＋ もう1件」で枠が足されません')
+    expect(await page.evaluate<string>(`document.querySelectorAll('[data-parsed-field="project"]')[1].value`)).toBe(project)
+    await setValue('[data-parsed-field="name"]', '項目で書いたE2Eのタスク2', 1)
+    await waitFor(() => page.evaluate<boolean>('!document.querySelector("[data-input-register]").disabled'), '必須を入れても登録のボタンが押せません')
+    await page.evaluate(`document.querySelector('[data-input-register]').click(); true`)
+    await waitFor(async () => !!taskRow('項目で書いたE2Eのタスク1') && !!taskRow('項目で書いたE2Eのタスク2'), 'GAS にタスクが残りません')
+    const first = taskRow('項目で書いたE2Eのタスク1')!
+    expect(first.description).toBe('背景: 受付を早くしたい\n完了の条件: 名簿ができている')
+    expect(first.project_id).toBe(project)
+    expect(first.approval_status).toMatch(/pending|承認待ち/)
+    expect(taskRow('項目で書いたE2Eのタスク2')!.project_id).toBe(project)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector(\'[data-input-kind="form"]\')'), '入力履歴に「項目で入力」が出ません')
+  })
+})
