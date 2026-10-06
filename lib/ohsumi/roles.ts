@@ -289,3 +289,16 @@ export function roleAssignBlock(
   if (!containsAll(roleCapabilities(roles, role.id)) || (!actorFull && isFullAdminRoleRef(roles, role.id))) return 'strongerRole'
   return null
 }
+
+// 画面で使うできる操作。GAS が送った一覧があればそれを、無ければ(古い GAS・画面だけで動く時)同じ計算をする。
+// GAS が送った一覧は、中身を省いた応答(unchanged)や読み込み直しで消さない(store.tsx が持ち続ける)
+export function resolveMemberCapabilities(opts: {
+  remote: boolean
+  server: Capability[] | null
+  roles: RoleDef[]
+  role: string | null | undefined
+  overrides: readonly PermissionOverride[] | undefined
+}): Capability[] {
+  if (opts.remote && opts.server) return opts.server
+  return memberCapabilities(opts.roles, opts.role, opts.overrides)
+}

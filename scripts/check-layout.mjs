@@ -79,6 +79,8 @@ export const STEPS = [
   // ほかの人が先に変えていた時(PR J): 書いたコメントをコピーできるように出し、最新の内容に読み直す
   { name: 'ほかの人が先に変えていた時(送れなかったコメントを出す・読み直す)', do: 'unsaved', fail: 'conflict', view: 'リスト', text: '担当者が多いタスク' },
   { name: 'ログインの期限が近い時の知らせ', do: 'sessionExpiry' },
+  // 右上のアカウントのメニュー(見出し付きのまとまり・団体の切り替え・表示の3択)。低い画面では、メニューの中でスクロールする
+  { name: 'アカウントのメニュー(ほかの団体あり・低い画面)', do: 'accountMenu', height: 560 },
 ]
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
@@ -108,6 +110,7 @@ export const DARK_STEPS = [
   { name: '暗い表示: INPUT', do: 'click', text: 'INPUT' },
   { name: '暗い表示: INPUT(項目を入れて追加)', do: 'inputForm' },
   { name: '暗い表示: 個人ページ', do: 'profile' },
+  { name: '暗い表示: アカウントのメニュー', do: 'accountMenu', height: 560 },
 ]
 export const DARK_ADMIN_STEPS = [
   { name: '暗い表示: 管理画面(ホーム)', do: 'admin' },
@@ -516,7 +519,9 @@ async function run({ build = true } = {}) {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps }
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps,
+          // 最上位の役職の人にだけ、団体のスプレッドシート・Apps Script の URL を渡す(団体設定の「GAS とスプレッドシート」)
+          ...(member === ADMIN_MEMBER ? { adminLinks: { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/layout-check-sheet/edit', scriptEditUrl: 'https://script.google.com/d/layout-check-script/edit' } } : {}) }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
         case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
@@ -1223,7 +1228,7 @@ async function run({ build = true } = {}) {
           }
           await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
           await sleep(500)
-          await clickText(step.do === 'orgSettings' ? '団体設定' : 'ダークモードに切替'); await sleep(1500)
+          await clickText(step.do === 'orgSettings' ? '団体設定' : '暗い', step.do === 'orgSettings' ? undefined : '[data-theme-choice] button'); await sleep(1500)
           if (step.do === 'themeToggle') {
             const st = await evaluate(`JSON.stringify({ dark: document.documentElement.classList.contains('dark'), saved: localStorage.getItem('ohsumi-theme'), scheme: document.documentElement.style.colorScheme, meta: [...document.querySelectorAll('meta[name=theme-color]')].map((m) => m.getAttribute('content')) })`)
             const v = JSON.parse(st)
@@ -1232,6 +1237,12 @@ async function run({ build = true } = {}) {
             // 読み込み直しても、選んだ表示のまま(最初の描画の前に決まる)
             await navigate('/')
             if (!(await evaluate(`document.documentElement.classList.contains('dark')`))) throw new Error('読み込み直すと、選んだ暗い表示が消えました')
+            // 「端末に合わせる」: 保存した選択を消して、端末の設定(明るい)に戻る
+            await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
+            await sleep(500)
+            await clickText('端末に合わせる', '[data-theme-choice] button'); await sleep(800)
+            const back = JSON.parse(await evaluate(`JSON.stringify({ dark: document.documentElement.classList.contains('dark'), saved: localStorage.getItem('ohsumi-theme') })`))
+            if (back.dark || back.saved !== null) throw new Error('「端末に合わせる」で、端末の設定(明るい)に戻りません: ' + JSON.stringify(back))
             await evaluate(`localStorage.removeItem('ohsumi-theme')`)
           }
         }
@@ -1342,6 +1353,45 @@ async function run({ build = true } = {}) {
           await clickText(step.view); await sleep(800)
           await clickText(step.text, 'td, span, div, button'); await sleep(1200)
         }
+        if (step.do === 'accountMenu') {
+          await signIn(); await saveOrgs(true); await navigate('/')
+          await clickText('あとで設定する').catch(() => {}); await sleep(800)
+          await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: step.height, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
+          await sleep(300)
+          const openMenu = () => evaluate(`(() => { const b = document.querySelector('[data-account-menu]'); b.click(); return true })()`)
+          await openMenu(); await sleep(500)
+          const got = JSON.parse(await evaluate(`JSON.stringify((() => {
+            const panel = document.querySelector('[data-account-menu-panel]')
+            const r = panel.getBoundingClientRect()
+            return {
+              groups: [...panel.querySelectorAll('[data-menu-group]')].map((g) => g.getAttribute('aria-label')),
+              emptyGroups: [...panel.querySelectorAll('[data-menu-group]')].filter((g) => !g.querySelector('[data-menu-item]')).length,
+              bottom: r.bottom, right: r.right, left: r.left, vh: innerHeight, vw: innerWidth,
+              scrolls: panel.scrollHeight > panel.clientHeight, overflowY: getComputedStyle(panel).overflowY,
+              switchOrg: !!panel.querySelector('[data-switch-org]'),
+              themes: [...panel.querySelectorAll('[data-theme-option]')].map((b) => b.getAttribute('data-theme-option')),
+              focused: document.activeElement?.hasAttribute('data-menu-item') ?? false,
+              last: panel.lastElementChild?.textContent.trim(),
+            }
+          })())`))
+          const want = ['自分の記録', '成長', '団体', 'この端末', 'ヘルプ']
+          if (got.groups.join(',') !== want.join(',')) throw new Error('メニューのまとまりの順番が違います: ' + got.groups.join(','))
+          if (got.emptyGroups) throw new Error('項目の無いまとまりが出ています')
+          if (got.bottom > got.vh + 1 || got.right > got.vw + 1 || got.left < -1) throw new Error('メニューが画面からはみ出しています: ' + JSON.stringify(got))
+          if (got.scrolls && got.overflowY !== 'auto') throw new Error('メニューの中でスクロールできません')
+          if (!got.switchOrg) throw new Error('ほかの団体があるのに、団体の切り替えがありません')
+          if (got.themes.join(',') !== 'system,light,dark') throw new Error('表示の3択がありません: ' + got.themes.join(','))
+          if (!got.focused) throw new Error('メニューを開いても、最初の項目に移りません(キーボードで操作できません)')
+          if (got.last !== 'ログアウト') throw new Error('一番下がログアウトではありません: ' + got.last)
+          // キーボード: 下の矢印で次の項目へ、Esc で閉じてボタンに戻る
+          const moved = await evaluate(`(() => { const a = document.activeElement; a.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })); return document.activeElement !== a && document.activeElement.hasAttribute('data-menu-item') })()`)
+          if (!moved) throw new Error('下の矢印で次の項目に移りません')
+          await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`); await sleep(300)
+          const closed = await evaluate(`!document.querySelector('[data-account-menu-panel]') && document.activeElement === document.querySelector('[data-account-menu]')`)
+          if (!closed) throw new Error('Esc で閉じて、メニューのボタンに戻りません')
+          // 開いたままにして、はみ出し・色の確かめに回す
+          await openMenu(); await sleep(500)
+        }
         if (step.do === 'profile') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(400)
           await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
@@ -1350,7 +1400,7 @@ async function run({ build = true } = {}) {
         const m = JSON.parse(await evaluate(MEASURE))
         const problems = []
         const width = step.width || WIDTH
-        if (step.width) await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
+        if (step.width || step.height) await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
         if (m.page > width + 1 || m.window > width + 1) problems.push(`ページの幅が ${Math.max(m.page, m.window)}px(画面は ${width}px)`)
         m.off.forEach((o) => problems.push('はみ出し: ' + o))
         m.squashed.forEach((o) => problems.push('文字が折り返した短いラベル: ' + o))

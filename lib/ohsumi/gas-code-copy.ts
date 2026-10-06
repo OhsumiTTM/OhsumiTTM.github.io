@@ -44,3 +44,17 @@ export async function copySiteGasCode(
   }
   return check
 }
+
+/** 版の一覧のうち一番新しい版(「YYYY.MM.DD-N」を日付・番号の順に比べる。日付の形でない版は数えない) */
+export function newestGasVersion(versions: readonly string[]): string | null {
+  const key = (v: string) => {
+    const m = /^(\d{4})\.(\d{2})\.(\d{2})-(\d+)$/.exec(v)
+    return m ? Number(m[1] + m[2] + m[3]) * 10000 + Number(m[4]) : null
+  }
+  let best: string | null = null
+  for (const v of versions) {
+    const k = key(v)
+    if (k !== null && (best === null || k > key(best)!)) best = v
+  }
+  return best
+}

@@ -1,5 +1,6 @@
 'use client'
 
+import { OrgAdminLinks } from '@/components/ohsumi/admin/org-admin-links'
 import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
@@ -52,6 +53,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
     isTopRef,
     currentUser,
     can,
+    adminLinks,
   } = useOhsumi()
   // バックアップ・個人情報の削除・利用の状況・集計値・診断情報は代表だけ(どの設定でも渡さない)
   const isDaihyo = isTopRef(currentUser?.role)
@@ -104,6 +106,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
               { id: 'org-metrics', label: t('orgSettings.toc.metrics') },
               { id: 'org-diagnostics', label: t('orgSettings.toc.diagnostics') },
             ] : []),
+            ...(isDaihyo && adminLinks ? [{ id: 'org-gas', label: t('orgAdminLinks.title') }] : []),
           ]}
         />
       </div>
@@ -316,6 +319,14 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
         {isDaihyo && remoteOk && (
           <Section id="org-diagnostics">
             <DiagnosticsPanel />
+          </Section>
+        )}
+        {/* GAS とスプレッドシート(最上位の役職の人だけ。新しい GAS が URL を渡した時だけ) */}
+        {isDaihyo && adminLinks && (
+          <Section id="org-gas">
+            <SectionLabel>{t('orgAdminLinks.title')}</SectionLabel>
+            <p className="mt-1 text-xs text-muted-foreground">{t('orgAdminLinks.desc')}</p>
+            <OrgAdminLinks className="mt-3" />
           </Section>
         )}
       </div>

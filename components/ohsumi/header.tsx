@@ -1,7 +1,7 @@
 'use client'
 
 import { useCanOpenOrgSettings } from '@/lib/ohsumi/use-capabilities'
-import { useEffect, useRef, useState } from 'react'
+import { Children, useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useTheme } from '@/lib/ohsumi/theme'
@@ -38,6 +38,8 @@ import {
   GraduationCap,
   Smartphone,
   Repeat,
+  Monitor,
+  CircleHelp,
 } from 'lucide-react'
 import { OtherDeviceModal, currentInviteLink } from './other-device'
 import { getCurrentOrgId, loadSavedOrgs, switchToOrg } from '@/lib/ohsumi/org-directory'
@@ -68,7 +70,7 @@ export function Header() {
     isFullAdmin ||
     (!!currentUser && surveyInvitedIds.includes(currentUser.id))
   const { screen, go, goBack, canGoBack } = useNav()
-  const { theme, toggle } = useTheme()
+  const { theme, choice, setChoice } = useTheme()
   const canOpenOrgSettings = useCanOpenOrgSettings()
   const { t } = useI18n()
   const { openTask } = useTaskDrawer()
@@ -109,6 +111,40 @@ export function Header() {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
+
+  // アカウントのメニュー: 開いたら最初の項目へ。上下の矢印・Home・End で項目を移り、Esc で閉じてボタンに戻る
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const menuItems = () => [...(menuRef.current?.querySelectorAll<HTMLElement>('[data-menu-item]') ?? [])]
+  useEffect(() => {
+    if (menuOpen) menuItems()[0]?.focus()
+  }, [menuOpen])
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setMenuOpen(false)
+      menuButtonRef.current?.focus()
+      return
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+    // 検索の入力欄の中では、矢印は文字の移動に使う
+    if ((e.target as HTMLElement).tagName === 'INPUT' && (e.key === 'Home' || e.key === 'End')) return
+    const items = menuItems()
+    if (!items.length) return
+    e.preventDefault()
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length
+    items[next]?.focus()
+  }
+  // 項目を選んだら閉じてから動く
+  const openMenuItem = (action: () => void) => {
+    setMenuOpen(false)
+    action()
+  }
+  // この端末に保存したほかの団体(団体の切り替え)
+  const otherOrgs = (() => {
+    const current = getCurrentOrgId()
+    return loadSavedOrgs().filter((o) => o.orgId !== current)
+  })()
 
   if (!currentUser) return null
 
@@ -353,7 +389,9 @@ export function Header() {
           )}
           <div className="relative" ref={menuRef}>
             <button
+              ref={menuButtonRef}
               type="button"
+              aria-haspopup="menu"
               onClick={() => setMenuOpen((o) => !o)}
               className="flex items-center gap-2 rounded-lg py-1 pl-1 pr-1.5 transition-colors hover:bg-secondary"
               aria-expanded={menuOpen}
@@ -367,8 +405,34 @@ export function Header() {
             </button>
 
             {menuOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-72 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1">
-                {/* Search */}
+              <div
+                role="menu"
+                aria-label={t('header.menu.accountAria')}
+                onKeyDown={onMenuKeyDown}
+                data-account-menu-panel
+                className="ohsumi-scroll absolute right-0 top-full mt-1.5 max-h-[calc(100dvh-4.5rem)] w-72 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-popover p-1 shadow-lg animate-in fade-in slide-in-from-top-1"
+              >
+                {/* 名前と所属(押すとプロフィール) */}
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-menu-item
+                  onClick={() => openMenuItem(() => go({ name: 'person', id: currentUser.id }))}
+                  aria-label={t('header.menu.openProfile')}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
+                >
+                  <Avatar member={currentUser} size={34} />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {currentUser.displayName || currentUser.name}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {currentUser.affiliation}
+                    </div>
+                  </div>
+                </button>
+                <div className="my-1 h-px bg-border" />
+                {/* 過去事例の検索 */}
                 <div className="px-1 pb-1">
                   <div className="flex items-center gap-1.5 rounded-lg bg-secondary px-2.5 py-1.5">
                     <Search className="size-3.5 shrink-0 text-muted-foreground" />
@@ -417,136 +481,114 @@ export function Header() {
                     </div>
                   )}
                 </div>
-                <div className="my-1 h-px bg-border" />
-                {/* User info */}
-                <div className="flex items-center gap-2.5 px-2.5 py-2">
-                  <Avatar member={currentUser} size={34} />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">
-                      {currentUser.displayName || currentUser.name}
+
+                <MenuGroup title={t('header.menu.group.records')}>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'person', id: currentUser.id }))}>
+                    <User className="size-4" />
+                    {t('header.menu.profile')}
+                  </MenuItem>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'dailyreport' }))}>
+                    <BookOpen className="size-4" />
+                    {t('header.menu.dailyreport')}
+                  </MenuItem>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'activity' }))}>
+                    <Activity className="size-4" />
+                    {t('header.menu.activity')}
+                  </MenuItem>
+                </MenuGroup>
+                <MenuGroup title={t('header.menu.group.growth')}>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'skillgrid' }))}>
+                    <Grid3x3 className="size-4" />
+                    {t('header.menu.skillGrid')}
+                  </MenuItem>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'learning' }))}>
+                    <GraduationCap className="size-4" />
+                    {t('header.menu.learning')}
+                  </MenuItem>
+                  {canAccessSurvey && (
+                    <MenuItem onClick={() => openMenuItem(() => go({ name: 'survey' }))}>
+                      <ClipboardList className="size-4" />
+                      {t('header.menu.survey')}
+                    </MenuItem>
+                  )}
+                </MenuGroup>
+                <MenuGroup title={t('header.menu.group.org')}>
+                  {canOpenOrgSettings && (
+                    <MenuItem onClick={() => openMenuItem(() => go({ name: 'org-settings' }))}>
+                      <Building2 className="size-4" />
+                      {t('header.menu.orgSettings')}
+                    </MenuItem>
+                  )}
+                  {/* 団体の切り替え: この端末に保存したほかの団体へ移る(団体ごとのログインはそのまま)。読み込み直す */}
+                  {otherOrgs.map((o) => (
+                    <MenuItem key={o.orgId} onClick={() => openMenuItem(() => switchToOrg(o.orgId))}>
+                      <Repeat className="size-4" />
+                      <span className="min-w-0 truncate" data-switch-org={o.orgId}>
+                        {t('header.menu.switchOrgTo', { name: o.name || o.orgId })}
+                      </span>
+                    </MenuItem>
+                  ))}
+                </MenuGroup>
+                <MenuGroup title={t('header.menu.group.device')}>
+                  {/* 表示: 端末に合わせる・明るい・暗い */}
+                  <div className="py-0.5">
+                    <div className="flex items-center gap-2.5 px-2.5 py-1.5 text-sm">
+                      {theme === 'dark' ? <Moon className="size-4" /> : <Sun className="size-4" />}
+                      {t('header.theme.label')}
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {currentUser.affiliation}
+                    <div role="radiogroup" aria-label={t('header.theme.label')} className="flex flex-col gap-0.5" data-theme-choice>
+                      {([
+                        [null, 'header.theme.system', Monitor],
+                        ['light', 'header.theme.lightOption', Sun],
+                        ['dark', 'header.theme.darkOption', Moon],
+                      ] as const).map(([value, key, Icon]) => {
+                        const selected = choice === value
+                        return (
+                          <button
+                            key={key}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            data-menu-item
+                            data-theme-option={value ?? 'system'}
+                            onClick={() => setChoice(value)}
+                            className={cn(
+                              'flex w-full items-center gap-2.5 rounded-lg py-1.5 pl-6 pr-2.5 text-left text-sm transition-colors hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none',
+                              selected ? 'font-semibold text-foreground' : 'text-muted-foreground hover:text-foreground',
+                            )}
+                          >
+                            <Icon className="size-4 shrink-0" />
+                            <span className="min-w-0 flex-1">{t(key)}</span>
+                            {selected && <Check className="size-4 shrink-0 text-primary" />}
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
-                </div>
-                <div className="my-1 h-px bg-border" />
-                {/* Theme toggle */}
-                <MenuItem onClick={toggle}>
-                  {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
-                  {theme === 'dark' ? t('header.theme.light') : t('header.theme.dark')}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'person', id: currentUser.id })
-                  }}
-                >
-                  <User className="size-4" />
-                  {t('header.menu.profile')}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'activity' })
-                  }}
-                >
-                  <Activity className="size-4" />
-                  {t('header.menu.activity')}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'dailyreport' })
-                  }}
-                >
-                  <BookOpen className="size-4" />
-                  {t('header.menu.dailyreport')}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'skillgrid' })
-                  }}
-                >
-                  <Grid3x3 className="size-4" />
-                  {t('header.menu.skillGrid')}
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'learning' })
-                  }}
-                >
-                  <GraduationCap className="size-4" />
-                  {t('header.menu.learning')}
-                </MenuItem>
-                {canAccessSurvey && (
-                  <MenuItem
-                    onClick={() => {
-                      setMenuOpen(false)
-                      go({ name: 'survey' })
-                    }}
+                  {currentInviteLink() && (
+                    <MenuItem onClick={() => openMenuItem(() => setOtherDeviceOpen(true))}>
+                      <Smartphone className="size-4" />
+                      {t('header.menu.otherDevice')}
+                    </MenuItem>
+                  )}
+                </MenuGroup>
+                <MenuGroup title={t('header.menu.group.help')}>
+                  {/* 使い方・よくある質問(サイトの /faq/ を同じタブで開く) */}
+                  <a
+                    href="/faq/"
+                    role="menuitem"
+                    data-menu-item
+                    onClick={() => setMenuOpen(false)}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none"
                   >
-                    <ClipboardList className="size-4" />
-                    {t('header.menu.survey')}
+                    <CircleHelp className="size-4" />
+                    {t('header.menu.help')}
+                  </a>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'feedback' }))}>
+                    <MessageSquare className="size-4" />
+                    {t('header.menu.feedback')}
                   </MenuItem>
-                )}
-                {canOpenOrgSettings && (
-                  <MenuItem
-                    onClick={() => {
-                      setMenuOpen(false)
-                      go({ name: 'org-settings' })
-                    }}
-                  >
-                    <Building2 className="size-4" />
-                    {t('header.menu.orgSettings')}
-                  </MenuItem>
-                )}
-                <MenuItem
-                  onClick={() => {
-                    setMenuOpen(false)
-                    go({ name: 'feedback' })
-                  }}
-                >
-                  <MessageSquare className="size-4" />
-                  {t('header.menu.feedback')}
-                </MenuItem>
-                {currentInviteLink() && (
-                  <MenuItem
-                    onClick={() => {
-                      setMenuOpen(false)
-                      setOtherDeviceOpen(true)
-                    }}
-                  >
-                    <Smartphone className="size-4" />
-                    {t('header.menu.otherDevice')}
-                  </MenuItem>
-                )}
-                {/* 団体の切り替え: この端末に保存したほかの団体へ移る(団体ごとのログインはそのまま)。読み込み直す */}
-                {(() => {
-                  const current = getCurrentOrgId()
-                  const others = loadSavedOrgs().filter((o) => o.orgId !== current)
-                  if (others.length === 0) return null
-                  return (
-                    <>
-                      <div className="my-1 h-px bg-border" />
-                      <div className="px-3 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">{t('header.menu.switchOrg')}</div>
-                      {others.map((o) => (
-                        <MenuItem
-                          key={o.orgId}
-                          onClick={() => {
-                            setMenuOpen(false)
-                            switchToOrg(o.orgId)
-                          }}
-                        >
-                          <Repeat className="size-4" />
-                          <span className="truncate" data-switch-org={o.orgId}>{o.name || o.orgId}</span>
-                        </MenuItem>
-                      ))}
-                    </>
-                  )
-                })()}
+                </MenuGroup>
                 <div className="my-1 h-px bg-border" />
                 <MenuItem onClick={logout}>
                   <LogOut className="size-4" />
@@ -593,14 +635,27 @@ function MenuItem({
   return (
     <button
       type="button"
+      role="menuitem"
+      data-menu-item
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-secondary',
+        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none',
         highlight ? 'font-medium text-accent-foreground' : 'text-foreground',
       )}
     >
       {children}
     </button>
+  )
+}
+
+// 見出し付きのまとまり。項目が1つも無ければ、見出しごと出さない
+function MenuGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  if (Children.toArray(children).length === 0) return null
+  return (
+    <div role="group" aria-label={title} data-menu-group className="border-t border-border pt-1 mt-1 first:mt-0 first:border-t-0">
+      <div className="px-2.5 pb-0.5 pt-1 text-[11px] font-semibold text-muted-foreground">{title}</div>
+      {children}
+    </div>
   )
 }
 

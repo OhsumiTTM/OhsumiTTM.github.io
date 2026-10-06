@@ -4,6 +4,7 @@
 // (gas/Code.gs の gasUpdateStatus_。代表には、最新の版ごとに1回メールでも知らせる)。
 // 「コードをコピー」は、このサイトの /gas/Code.gs(ビルドの時に置く)を読み、最新の版と同じ時だけクリップボードに入れる
 // (lib/ohsumi/gas-code-copy.ts)。GitHub を開かずに更新できるよう、短い手順も出す
+import { OrgAdminLinks } from './org-admin-links'
 import { useEffect, useState } from 'react'
 import { Copy, ShieldAlert } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -54,6 +55,8 @@ export function GasUpdateBanner() {
           <li>{t('admin.gasUpdate.step.setup')}</li>
           <li>{t('admin.gasUpdate.step.deploy')}</li>
         </ol>
+        {/* Apps Script・スプレッドシートを直接開く(最上位の役職の人だけ。新しい GAS が URL を渡した時だけ) */}
+        <OrgAdminLinks compact className="mt-1.5" />
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <button
             type="button"
