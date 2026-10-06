@@ -30,6 +30,7 @@ import { SkillGridScreen } from './skill-grid-screen'
 import { LearningContentScreen } from './learning-content-screen'
 import { TaskDetailDrawer } from './output/task-detail-drawer'
 import { OhsumiMark } from './primitives'
+import { themeColorCss } from '@/lib/ohsumi/theme-color'
 import { TriangleAlert } from 'lucide-react'
 import { LegalLinks } from './legal-links'
 
@@ -140,34 +141,26 @@ function SkillCertifiedWatcher() {
   return null
 }
 
-// 団体設定（org-settings-screen.tsx）で選択したテーマカラーを、Tailwindの
-// CSS変数（--primary等、app/globals.cssではプレーンな16進色）に動的に
-// 反映する。未設定時はglobals.cssのデフォルト色のまま（何もしない）。
-function hexToForeground(hex: string): string {
-  const m = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(hex)
-  if (!m) return '#ffffff'
-  const full = m[1].length === 3 ? m[1].split('').map((c) => c + c).join('') : m[1]
-  const r = parseInt(full.slice(0, 2), 16)
-  const g = parseInt(full.slice(2, 4), 16)
-  const b = parseInt(full.slice(4, 6), 16)
-  // 相対輝度が高い（明るい）色には黒文字、それ以外は白文字
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
-  return luminance > 0.6 ? '#0d0d0f' : '#ffffff'
-}
-
+// 団体設定（org-settings-screen.tsx）で選んだテーマの色を、--primary・--primary-foreground に反映する。
+// 明るい表示はそのままの色、暗い表示は暗い背景の上で読める明るさにした色(lib/ohsumi/theme-color.ts)。
+// <html> に直接書くと .dark の色より強くなってしまうので、表示ごとの規則を <style> で入れる。未設定なら何もしない
+const THEME_COLOR_STYLE_ID = 'ohsumi-theme-color'
 function ThemeColorWatcher() {
   const { themeColor } = useOhsumi()
 
   useEffect(() => {
-    const root = document.documentElement
-    const valid = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(themeColor)
-    if (!valid) {
-      root.style.removeProperty('--primary')
-      root.style.removeProperty('--primary-foreground')
+    const css = themeColorCss(themeColor)
+    let el = document.getElementById(THEME_COLOR_STYLE_ID)
+    if (!css) {
+      el?.remove()
       return
     }
-    root.style.setProperty('--primary', themeColor)
-    root.style.setProperty('--primary-foreground', hexToForeground(themeColor))
+    if (!el) {
+      el = document.createElement('style')
+      el.id = THEME_COLOR_STYLE_ID
+      document.head.appendChild(el)
+    }
+    el.textContent = css
   }, [themeColor])
 
   return null

@@ -327,7 +327,7 @@ export function FeedbackScreen() {
                   <button
                     type="button"
                     onClick={() => removeScreenshot(i)}
-                    className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-white shadow"
+                    className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
                     aria-label={t('common.delete')}
                   >
                     <X className="size-3" />

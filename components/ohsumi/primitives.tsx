@@ -1,5 +1,6 @@
 'use client'
 
+import { readableAvatar } from '@/lib/ohsumi/theme-color'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { cn } from '@/lib/utils'
 import { isSafeHttpUrl } from '@/lib/ohsumi/utils'
@@ -57,14 +58,16 @@ export function Avatar({
     <span
       className={cn(
         // イニシャル(漢字2文字など)が小さな丸の中で2行に折り返さないようにする
-        'inline-flex shrink-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-full font-medium leading-none text-white',
+        'inline-flex shrink-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-full font-medium leading-none',
         className,
       )}
       style={{
         width: size,
         height: size,
         fontSize: size * 0.36,
-        backgroundColor: member.avatarColor,
+        // 文字は、丸の色の上で 4.5:1 以上になるようにする(lib/ohsumi/theme-color.ts の readableAvatar)
+        backgroundColor: readableAvatar(member.avatarColor).bg,
+        color: readableAvatar(member.avatarColor).fg,
       }}
       title={member.displayName || member.name}
     >
@@ -317,7 +320,7 @@ export function OhsumiMark({ size = 22 }: { size?: number }) {
       fill="none"
       aria-hidden
       data-ohsumi-symbol
-      style={{ width: size, height: size, minWidth: size, flexShrink: 0, aspectRatio: '1 / 1', color: 'var(--ohsumi-blue)' }}
+      style={{ width: size, height: size, minWidth: size, flexShrink: 0, aspectRatio: '1 / 1', color: 'var(--ohsumi-symbol)' }}
     >
       <circle cx={ring.cx} cy={ring.cy} r={ring.r} stroke="currentColor" strokeWidth={ring.strokeWidth} />
       <circle cx={dot.cx} cy={dot.cy} r={dot.r} fill="currentColor" />

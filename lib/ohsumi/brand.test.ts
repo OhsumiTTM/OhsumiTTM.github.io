@@ -27,7 +27,11 @@ describe('ブランド', () => {
   it('ロゴは団体のテーマの色(--primary)ではなく、ブランドの変数を使う。回転しない', () => {
     const src = read('components/ohsumi/primitives.tsx')
     const mark = src.slice(src.indexOf('export function OhsumiMark'), src.indexOf('/** シンボル + 「Ohsumi」の文字'))
-    expect(mark).toContain("color: 'var(--ohsumi-blue)'")
+    expect(mark).toContain("color: 'var(--ohsumi-symbol)'")
+    // シンボルの色: 明るい表示は Ohsumi Blue、暗い表示は明るい青(案 C)
+    const css = read('app/globals.css')
+    expect(css).toContain('--ohsumi-symbol: var(--ohsumi-blue);')
+    expect(css.slice(css.indexOf('.dark {'))).toContain('--ohsumi-symbol: #7d9bff;')
     expect(mark).not.toMatch(/text-primary|--primary|rotate|transform/)
     expect(mark).toContain("aspectRatio: '1 / 1'")
     expect(read('app/icon.svg')).not.toMatch(/rotate|transform|<rect/)

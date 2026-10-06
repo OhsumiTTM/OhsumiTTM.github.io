@@ -104,6 +104,7 @@ export function OtherDeviceModal({ open, onClose }: { open: boolean; onClose: ()
           viewBox={`0 0 ${qr.size} ${qr.size}`}
           shapeRendering="crispEdges"
           className="size-48 rounded-lg border border-border bg-white"
+          data-allow-light
         >
           <path d={qr.d} fill="#000" />
         </svg>

@@ -1437,7 +1437,7 @@ function DrawerBody({
                   {task.dueTime && <span className="tabular-nums">　{task.dueTime}</span>}
                 </>
               ) : (
-                <span className="text-muted-foreground/50">{t('common.notSet')}</span>
+                <span className="text-muted-foreground">{t('common.notSet')}</span>
               )}
               {isAdmin && (
                 <button
@@ -1555,7 +1555,7 @@ function DrawerBody({
             ) : (
               <p className="mt-1 text-sm">
                 {task.holdReason?.note || (
-                  <span className="text-muted-foreground/50">{t('common.notSet')}</span>
+                  <span className="text-muted-foreground">{t('common.notSet')}</span>
                 )}
               </p>
             )}
@@ -1713,7 +1713,7 @@ function DrawerBody({
                   ))}
                 </div>
               ) : (
-                <span className="text-muted-foreground/50">{t('common.notSet')}</span>
+                <span className="text-muted-foreground">{t('common.notSet')}</span>
               )}
             </InfoField>
             <InfoField label={t('taskDrawer.edit.priorityLabel')}>
@@ -1765,7 +1765,7 @@ function DrawerBody({
                 {task.startDate ? (
                   formatDeadlineFull(task.startDate)
                 ) : (
-                  <span className="text-muted-foreground/50">{t('common.notSet')}</span>
+                  <span className="text-muted-foreground">{t('common.notSet')}</span>
                 )}
                 {isAdmin && (
                   <button
@@ -1793,7 +1793,7 @@ function DrawerBody({
                     </button>
                   ))
                 ) : (
-                  <span className="text-muted-foreground/50">{t('common.none')}</span>
+                  <span className="text-muted-foreground">{t('common.none')}</span>
                 )}
                 {isAdmin && (
                   <button
@@ -1815,7 +1815,7 @@ function DrawerBody({
                     </span>
                   ))
                 ) : (
-                  <span className="text-muted-foreground/50">{t('common.notSet')}</span>
+                  <span className="text-muted-foreground">{t('common.notSet')}</span>
                 )}
                 {isAdmin && (
                   <button
@@ -1846,7 +1846,7 @@ function DrawerBody({
                 placeholder={t('common.notSet')}
               />
             </span>
-            <span className="text-border">｜</span>
+            <span className="text-border" aria-hidden>｜</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="text-muted-foreground">{t('taskDrawer.effortCard.actual')}</span>
               <HoursField
@@ -1858,7 +1858,7 @@ function DrawerBody({
             </span>
             {(isAdmin || isAssignee) && currentUserId && (
               <>
-                <span className="text-border">｜</span>
+                <span className="text-border" aria-hidden>｜</span>
                 <TimerWidget
                   taskId={task.id}
                   userId={currentUserId}

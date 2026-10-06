@@ -35,7 +35,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             className="pointer-events-auto flex items-center gap-2.5 rounded-lg border border-border bg-foreground px-4 py-2.5 text-sm font-medium text-background shadow-lg animate-in fade-in slide-in-from-bottom-2"
           >
-            <span className="flex size-4 items-center justify-center rounded-full bg-success text-white">
+            <span className="flex size-4 items-center justify-center rounded-full bg-success text-white dark:text-background">
               <Check className="size-3" strokeWidth={3} />
             </span>
             {t.message}

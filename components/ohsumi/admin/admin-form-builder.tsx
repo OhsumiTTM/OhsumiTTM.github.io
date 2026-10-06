@@ -500,7 +500,7 @@ export function AdminFormBuilder() {
                   setRejectTarget(null)
                   setRejectReason('')
                 }}
-                className="rounded-md bg-destructive px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                className="rounded-md bg-destructive px-3 py-1.5 text-sm text-destructive-foreground disabled:opacity-50"
               >
                 {t('admin.expenses.rejectModal.submit')}
               </button>
