@@ -80,12 +80,15 @@ export const STEPS = [
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
 // buildNav と、ja.ts の admin.nav.*)と同じ文字にする(lib/ohsumi/check-layout.test.ts で確かめる)
+// 管理画面のタブ(メニューの並び。lib/ohsumi/admin-sections.ts の ADMIN_GROUPS と、ja.ts の admin.section.*.title。
+// 一致することを lib/ohsumi/check-layout.test.ts で確かめる)
+export const ADMIN_TAB_TITLES = ['ホーム', '分析', '承認待ち', '担当を決める', 'プロジェクト', 'タスクの設定', 'メンバー', '部署と役職',
+  '人材データベース', '採用', 'スキルの決まり', '検定', '学習コンテンツ', '1on1・アンケート', '経費申請', '申請フォーム', '日報・週報', '団体設定']
 export const ADMIN_STEPS = [
-  { name: '管理画面(Dashboard)', do: 'admin' },
-  ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', 'Org Tree', '検定', '学習コンテンツ',
-    'レーダー', '経費申請', 'フォーム', '人材DB', '日報・週報', '採用'].map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  { name: '管理画面(ホーム)', do: 'admin' },
+  ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
   // スキルのレベルの決め方(PR Z): 団体の既定を変える欄(5つのレベルの点数・条件)を開いた状態
-  { name: '管理画面(Tags・スキルのレベルの決め方の入力欄)', do: 'skillRules' },
+  { name: '管理画面(スキルの決まり・スキルのレベルの決め方の入力欄)', do: 'skillRules' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -103,8 +106,8 @@ export const DARK_STEPS = [
   { name: '暗い表示: 個人ページ', do: 'profile' },
 ]
 export const DARK_ADMIN_STEPS = [
-  { name: '暗い表示: 管理画面(Dashboard)', do: 'admin' },
-  ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', '人材DB', '経費申請', 'フォーム'].map((text) => ({ name: `暗い表示: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  { name: '暗い表示: 管理画面(ホーム)', do: 'admin' },
+  ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `暗い表示: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
   { name: '暗い表示: 団体設定', do: 'orgSettings' },
   // 団体のテーマの色(暗い青)を入れても、暗い表示では読める明るさになる
   { name: '暗い表示: 団体のテーマの色', do: 'themeColor', color: '#123456' },
@@ -127,13 +130,13 @@ export const READ_ONLY_STEPS = [
     labels: ['一覧', 'すべてのプロジェクト', '表示項目', '表示順', 'ワークフロー', 'リスト', 'カレンダー', 'ガント'] },
   { name: '機能停止中: リスト(検索・Excel 出力)', do: 'readOnlyList', labels: ['リスト', 'Excel出力'] },
   { name: '機能停止中: タスク詳細(書く欄は使えない)', do: 'readOnlyTask', view: 'リスト', text: '担当者が多いタスク' },
-  { name: '機能停止中: 管理画面(検索・絞り込み・書き出し)', do: 'readOnlyAdmin', labels: ['全データをExcel出力', 'Members', '日報・週報', '人材DB'] },
+  { name: '機能停止中: 管理画面(検索・絞り込み・書き出し)', do: 'readOnlyAdmin', labels: ['全データをExcel出力', 'メンバー', '日報・週報', '人材データベース'] },
   // 主な作成の操作が、保存の手前で止まること(GAS に書き込みを送らない。止めた知らせを出し、書いた文章を残す)。
   // 偽の GAS は書き込みも受け付けるので、画面の止め方に漏れがあれば、送った書き込みとして見つかる
   { name: '機能停止中: タスクの追加が保存の手前で止まる', do: 'readOnlyAddTask', labels: ['INPUT', 'イベント準備の4タスクを入力', 'タスクを整理する', '選択したタスクを登録'] },
   { name: '機能停止中: コメントが保存の手前で止まる', do: 'readOnlyComment', view: 'リスト', text: '担当者が多いタスク', labels: ['送信'] },
   { name: '機能停止中: 経費申請が保存の手前で止まる', do: 'readOnlyExpense', labels: ['経費申請', '申請する'] },
-  { name: '機能停止中: 承認が保存の手前で止まる', do: 'readOnlyApprove', labels: ['Approvals', '承認する'] },
+  { name: '機能停止中: 承認が保存の手前で止まる', do: 'readOnlyApprove', labels: ['承認待ち', '承認する'] },
   // 書き込みではないので、機能停止中も自分のメールに送れる
   { name: '機能停止中: ほかの端末で開く(メールも送れる)', do: 'otherDevice', readOnly: true, labels: OTHER_DEVICE_LABELS },
 ]
@@ -873,18 +876,18 @@ async function run({ build = true } = {}) {
           }
           if (step.do === 'readOnlyApprove') {
             await clickText('ADMIN'); await sleep(1500)
-            await clickText('Approvals', 'aside nav button'); await sleep(1000)
+            await clickText('承認待ち', 'aside nav button'); await sleep(1000)
             await clickText('承認する', 'button', true)
             await expectBlocked('承認', '')
           }
           if (step.do === 'readOnlyAdmin') {
             await clickText('ADMIN'); await sleep(1500)
             await exported('全データをExcel出力')
-            await clickText('Members', 'aside nav button'); await sleep(1000)
+            await clickText('メンバー', 'aside nav button'); await sleep(1000)
             await usable('input[data-read-only-ok]')
             await clickText('日報・週報', 'aside nav button'); await sleep(1000)
             await usable('input[type=date][data-read-only-ok]')
-            await clickText('人材DB', 'aside nav button'); await sleep(1000)
+            await clickText('人材データベース', 'aside nav button'); await sleep(1000)
             await usable('th input[data-read-only-ok]')
           }
         }
@@ -1261,7 +1264,7 @@ async function run({ build = true } = {}) {
           }
         }
         if (step.do === 'skillRules') {
-          await clickText('Tags', 'aside nav button'); await sleep(1200)
+          await clickText('スキルの決まり', 'aside nav button'); await sleep(1200)
           await clickText('団体の既定を変える', 'button'); await sleep(600)
           const fields = await evaluate(`document.querySelectorAll('[data-skill-level-rules] [data-skill-rule-level] input').length`)
           if (fields < 25) throw new Error('スキルのレベルの決め方の入力欄が出ません: ' + fields)

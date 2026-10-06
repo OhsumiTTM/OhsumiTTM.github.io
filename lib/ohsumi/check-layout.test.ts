@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import * as layout from '../../scripts/check-layout.mjs'
 import { ja } from './i18n/ja'
+import { ADMIN_GROUPS } from './admin-sections'
 
 const ROOT = join(__dirname, '..', '..')
 
@@ -49,23 +50,16 @@ describe('スマホの幅の表示の確認', () => {
     expect((layout.ORG_SWITCH_STEPS as { do: string }[]).map((s) => s.do)).toEqual(['orgSwitcher', 'orgSwitcherSingle'])
   })
 
-  it('代表で、管理画面のすべてのセクションを開く(ラベルは管理画面のメニューと同じ)', () => {
-    const steps = layout.ADMIN_STEPS as { do: string; text?: string; from?: string }[]
-    expect(steps[0].do).toBe('admin')
-    const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
-    // メニューの項目(buildNav と採用)の数だけ開く(ダッシュボードは最初の手順)
-    const navKeys = [...nav.matchAll(/\{ key: '(\w+)', label:/g)].map((m) => m[1])
-    expect(navKeys.length).toBeGreaterThan(10)
-    const texts = steps.filter((s) => s.do === 'click').map((s) => s.text!)
-    expect(texts.length + 1).toBe(navKeys.length + (navKeys.includes('recruiting') ? 0 : 1))
-    for (const text of texts) {
-      // ラベルは buildNav に直接書いた英語か、ja.ts の admin.nav.* の値
-      const inNav = nav.includes(`label: '${text}'`)
-      const inJa = Object.entries(ja).some(([k, v]) => k.startsWith('admin.nav.') && v === text)
-      expect(inNav || inJa, text).toBe(true)
+  it('代表で、管理画面のすべてのタブを開く(ラベルは管理画面のメニューと同じ並び・名前。明るい表示・暗い表示とも)', () => {
+    const titles = ADMIN_GROUPS.flatMap((g) => g.sections).map((key) => (ja as Record<string, string>)[`admin.section.${key}.title`])
+    expect(layout.ADMIN_TAB_TITLES).toEqual(titles)
+    for (const steps of [layout.ADMIN_STEPS, layout.DARK_ADMIN_STEPS] as { do: string; text?: string; from?: string }[][]) {
+      expect(steps[0].do).toBe('admin')
+      const clicked = steps.filter((s) => s.do === 'click').map((s) => s.text)
+      expect(clicked).toEqual(titles.slice(1))
+      // 管理画面のメニューのボタンだけを押す(同じ名前のほかのボタンを押さないように)
+      expect(steps.filter((s) => s.do === 'click').every((s) => s.from === 'aside nav button')).toBe(true)
     }
-    // 管理画面のメニューのボタンだけを押す(同じ名前のほかのボタンを押さないように)
-    expect(steps.filter((s) => s.do === 'click').every((s) => s.from === 'aside nav button')).toBe(true)
   })
 
   it('管理画面は、サンプルのデータの代表(最上位の役職)で開く', () => {
@@ -104,11 +98,10 @@ describe('機能停止中(読み取り専用)の閲覧・書き出し', () => {
       'readOnlyAddTask', 'readOnlyComment', 'readOnlyExpense', 'readOnlyApprove', 'otherDevice'])
     expect(layout.READ_ONLY_CONTRACT).toMatchObject({ phase: 'inEffect', kind: 'restrict' })
     const values = new Set(Object.values(ja))
-    const nav = readFileSync(join(ROOT, 'components', 'ohsumi', 'admin', 'admin-screen.tsx'), 'utf8')
     // 画面の上のメニュー(INPUT・OUTPUT・ADMIN)は header.tsx に直接書いてある
     const header = readFileSync(join(ROOT, 'components', 'ohsumi', 'header.tsx'), 'utf8')
     for (const label of steps.flatMap((s) => s.labels ?? [])) {
-      expect(values.has(label) || nav.includes(`label: '${label}'`) || new RegExp(`>\\s*${label}\\s*<`).test(header), label).toBe(true)
+      expect(values.has(label) || new RegExp(`>\\s*${label}\\s*<`).test(header), label).toBe(true)
     }
   })
 })
