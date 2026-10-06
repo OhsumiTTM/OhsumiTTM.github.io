@@ -99,6 +99,8 @@ export interface TaskInput {
   createdById: string
   createdAt: string // ISO datetime
   generatedTaskIds: string[]
+  // どう入れたか(text: 文章から整理・Excel / form: 項目で入力)。無ければ text
+  kind?: 'text' | 'form'
 }
 
 export interface Member {
@@ -792,6 +794,8 @@ export interface TaskComment {
 export interface ParsedTask {
   id: string
   name: string
+  // 詳細(説明)。文章から整理した時は空から始める
+  description?: string
   projectId: string
   department: Department
   startDate?: string | null

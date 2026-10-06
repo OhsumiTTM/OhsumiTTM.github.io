@@ -215,14 +215,18 @@ export function Card({
   className,
   onClick,
   as: As = 'div',
+  ...data
 }: {
   children: React.ReactNode
   className?: string
   onClick?: () => void
   as?: 'div' | 'button'
+  // data-* の印(画面の確かめに使う)
+  [data: `data-${string}`]: string | undefined
 }) {
   return (
     <As
+      {...data}
       onClick={onClick}
       className={cn(
         'rounded-xl border border-border bg-card text-card-foreground shadow-[0_1px_2px_rgba(16,24,40,0.04)]',

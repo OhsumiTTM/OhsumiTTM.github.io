@@ -2,9 +2,11 @@
 
 import { useState } from 'react'
 import type { ParsedTask } from '@/lib/ohsumi/types'
-import { DIFFICULTY_LABEL, TASK_IMPORTANCE } from '@/lib/ohsumi/types'
+import { DIFFICULTY_LABEL, PRIORITIES, TASK_IMPORTANCE } from '@/lib/ohsumi/types'
 import { useOhsumi } from '@/lib/ohsumi/store'
-import { useI18n, DIFFICULTY_KEY, IMPORTANCE_KEY } from '@/lib/ohsumi/i18n'
+import { useI18n, DIFFICULTY_KEY, IMPORTANCE_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
+import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
+import { parsedTaskProblems } from '@/lib/ohsumi/input-form'
 import { Card, DifficultyBadge, Tag, Avatar, SimilarTaskSummary } from '../primitives'
 import { cn } from '@/lib/utils'
 import { findSimilarTasks, rankCandidates, suggestSkillsForCategory, suggestCategoriesForTitle, isActiveMember } from '@/lib/ohsumi/utils'
@@ -34,8 +36,15 @@ export function ParsedTaskCard({
     addSkillOption,
     addCategoryOption,
     can,
+    departmentOptions,
   } = useOhsumi()
   const { t } = useI18n()
+  const deptLabel = useDepartmentLabel()
+  // 必須(タスク名・プロジェクト)の足りない所。その欄に理由を出す(登録のボタンは画面の側で止める)
+  const problems = parsedTaskProblems(task, projects)
+  const nameMissing = problems.includes('name')
+  const projectMissing = problems.includes('project')
+  const fieldId = (k: string) => `parsed-${task.id}-${k}`
   const [skillDraft, setSkillDraft] = useState('')
   const [addingCategory, setAddingCategory] = useState(false)
   const [categoryDraft, setCategoryDraft] = useState('')
@@ -120,6 +129,7 @@ export function ParsedTaskCard({
         'overflow-hidden transition-opacity',
         !task.approved && 'opacity-55',
       )}
+      data-parsed-task={task.id}
     >
       <div className="flex items-start gap-3 border-b border-border px-4 py-3">
         <input
@@ -129,12 +139,25 @@ export function ParsedTaskCard({
           className="mt-1.5 size-3.5 shrink-0 cursor-pointer accent-primary"
           aria-label={t('input.parsedTask.selectAria')}
         />
-        <input
-          value={task.name}
-          onChange={(e) => set('name', e.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-[15px] font-medium outline-none placeholder:text-muted-foreground focus:underline focus:decoration-border-strong focus:underline-offset-4"
-          aria-label={t('input.parsedTask.nameAria')}
-        />
+        <div className="min-w-0 flex-1">
+          <input
+            value={task.name}
+            onChange={(e) => set('name', e.target.value)}
+            maxLength={500}
+            placeholder={t('input.parsedTask.namePlaceholder')}
+            aria-invalid={nameMissing}
+            aria-describedby={nameMissing ? fieldId('name-error') : undefined}
+            data-parsed-field="name"
+            className="w-full bg-transparent text-[15px] font-medium outline-none placeholder:text-muted-foreground focus:underline focus:decoration-border-strong focus:underline-offset-4"
+            aria-label={t('input.parsedTask.nameAria')}
+          />
+          {nameMissing && (
+            <p id={fieldId('name-error')} className="mt-0.5 flex items-center gap-1 text-xs text-destructive" data-parsed-error="name">
+              <TriangleAlert className="size-3.5 shrink-0" />
+              {t('input.parsedTask.error.name')}
+            </p>
+          )}
+        </div>
         <button
           type="button"
           onClick={onToggle}
@@ -174,12 +197,33 @@ export function ParsedTaskCard({
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-3.5 sm:grid-cols-4">
-        <Field label={t('taskDrawer.row.project')}>
+      {/* スマートフォンでは縦に1列、広い画面では4列 */}
+      <div className="grid grid-cols-1 gap-x-4 gap-y-3 px-4 py-3.5 sm:grid-cols-4">
+        <Field label={t('input.parsedTask.description')} className="sm:col-span-4" htmlFor={fieldId('description')}>
+          <textarea
+            id={fieldId('description')}
+            value={task.description ?? ''}
+            onChange={(e) => set('description', e.target.value)}
+            rows={2}
+            maxLength={20000}
+            placeholder={t('input.parsedTask.descriptionPlaceholder')}
+            data-parsed-field="description"
+            className="w-full resize-y rounded-md border border-border bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground focus:border-border-strong"
+          />
+        </Field>
+
+        <Field label={t('taskDrawer.row.project')} htmlFor={fieldId('project')}>
           <select
+            id={fieldId('project')}
             value={task.projectId}
             onChange={(e) => set('projectId', e.target.value)}
-            className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
+            aria-invalid={projectMissing}
+            aria-describedby={projectMissing ? fieldId('project-error') : undefined}
+            data-parsed-field="project"
+            className={cn(
+              'w-full cursor-pointer rounded-md border bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong',
+              projectMissing ? 'border-destructive' : 'border-transparent',
+            )}
           >
             {!projects.some((p) => p.id === task.projectId) && (
               <option value={task.projectId}>{t('input.parsedTask.projectPlaceholder')}</option>
@@ -187,6 +231,30 @@ export function ParsedTaskCard({
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+              </option>
+            ))}
+          </select>
+          {projectMissing && (
+            <p id={fieldId('project-error')} className="mt-0.5 flex items-center gap-1 text-xs text-destructive" data-parsed-error="project">
+              <TriangleAlert className="size-3.5 shrink-0" />
+              {t('input.parsedTask.error.project')}
+            </p>
+          )}
+        </Field>
+
+        <Field label={t('taskDrawer.row.department')}>
+          <select
+            value={task.department}
+            onChange={(e) => set('department', e.target.value as ParsedTask['department'])}
+            data-parsed-field="department"
+            className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
+          >
+            {!departmentOptions().includes(task.department) && (
+              <option value={task.department}>{deptLabel(task.department)}</option>
+            )}
+            {departmentOptions().map((d) => (
+              <option key={d} value={d}>
+                {deptLabel(d)}
               </option>
             ))}
           </select>
@@ -255,6 +323,7 @@ export function ParsedTaskCard({
               }}
               className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
             >
+              {!task.category && <option value="">{t('input.parsedTask.categoryPlaceholder')}</option>}
               {!categoryOptions.includes(task.category) && task.category && (
                 <option value={task.category}>{task.category}</option>
               )}
@@ -292,6 +361,21 @@ export function ParsedTaskCard({
             {DIFFICULTY_LABEL.map((d) => (
               <option key={d} value={d}>
                 {t(DIFFICULTY_KEY[d])}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label={t('taskDrawer.edit.priorityLabel')}>
+          <select
+            value={task.priority}
+            onChange={(e) => set('priority', e.target.value as ParsedTask['priority'])}
+            data-parsed-field="priority"
+            className="w-full cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-sm outline-none hover:border-border focus:border-border-strong"
+          >
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {t(PRIORITY_KEY[p])}
               </option>
             ))}
           </select>
@@ -348,7 +432,7 @@ export function ParsedTaskCard({
           </select>
         </Field>
 
-        <Field label={t('taskDrawer.row.skills')} className="col-span-2 sm:col-span-4">
+        <Field label={t('taskDrawer.row.skills')} className="sm:col-span-4">
           <div className="flex flex-wrap items-center gap-1.5">
             {task.skills.map((s) => (
               <Tag
@@ -409,7 +493,7 @@ export function ParsedTaskCard({
           </div>
         </Field>
 
-        <Field label={t('taskDrawer.row.assignee')} className="col-span-2 sm:col-span-4">
+        <Field label={t('taskDrawer.row.assignee')} className="sm:col-span-4">
           <div className="flex flex-wrap items-center gap-1.5">
             {assignees.map((m) => (
               <Tag key={m.id} onRemove={() => removeAssignee(m.id)}>
@@ -470,16 +554,21 @@ function Field({
   label,
   children,
   className,
+  htmlFor,
 }: {
   label: string
   children: React.ReactNode
   className?: string
+  htmlFor?: string
 }) {
+  const labelClass = 'mb-0.5 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground'
   return (
-    <div className={className}>
-      <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
+    <div className={cn('min-w-0', className)}>
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className={labelClass}>{label}</label>
+      ) : (
+        <div className={labelClass}>{label}</div>
+      )}
       {children}
     </div>
   )

@@ -400,7 +400,7 @@ interface OhsumiContextValue extends OhsumiState {
   revokeMemberSessions: (memberId: string) => Promise<void>
   setMode: (m: Mode) => void
   // Register approved parsed tasks as a single natural-language input.
-  addTasksFromInput: (text: string, parsed: ParsedTask[]) => void
+  addTasksFromInput: (text: string, parsed: ParsedTask[], kind?: 'text' | 'form') => void
   updateTaskStatus: (id: string, status: TaskStatus) => void
   updatePriority: (id: string, priority: Priority) => void
   updateDifficulty: (id: string, difficulty: Difficulty) => void
@@ -3166,7 +3166,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const addTasksFromInput = useCallback(
-    (text: string, parsed: ParsedTask[]) => {
+    (text: string, parsed: ParsedTask[], kind: 'text' | 'form' = 'text') => {
       const inputId = `in-${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
       const today = now.slice(0, 10)
@@ -3175,7 +3175,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       const newTasks: Task[] = parsed.map((p) => ({
         id: `t-${Math.random().toString(36).slice(2, 9)}`,
         name: p.name,
-        description: '',
+        description: p.description ?? '',
         projectId: p.projectId,
         department: p.department,
         assigneeIds: p.assigneeIds ?? [],
@@ -3204,6 +3204,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         createdById: createdById ?? '',
         createdAt: now,
         generatedTaskIds: newTasks.map((t) => t.id),
+        kind,
       }
 
       setTasks((prev) => [...newTasks, ...prev])
