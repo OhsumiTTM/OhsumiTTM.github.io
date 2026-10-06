@@ -1,5 +1,6 @@
 'use client'
 
+import { SegmentedButton, SegmentedControl } from '../segmented'
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
@@ -430,19 +431,13 @@ export function AdminLearningContent() {
         </Button>
       </div>
 
-      <div className="mb-4 flex gap-1 rounded-lg border border-border bg-secondary p-0.5" style={{ width: 'fit-content' }}>
+      <SegmentedControl className="mb-4">
         {(['contents', 'courses', 'programs'] as const).map((tb) => (
-          <button
-            key={tb}
-            onClick={() => setTab(tb)}
-            className={`rounded-md px-3 py-1 text-sm transition-all ${
-              tab === tb ? 'bg-card font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
+          <SegmentedButton key={tb} active={tab === tb} onClick={() => setTab(tb)} className="px-3">
             {tb === 'contents' ? t('admin.learningContent.tab.contents') : tb === 'courses' ? t('admin.learningContent.tab.courses') : t('admin.learningContent.tab.programs')}
-          </button>
+          </SegmentedButton>
         ))}
-      </div>
+      </SegmentedControl>
 
       {tab === 'contents' && (learningContents.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border py-12 text-muted-foreground">

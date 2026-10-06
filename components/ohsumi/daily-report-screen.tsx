@@ -1,5 +1,6 @@
 'use client'
 
+import { SegmentedButton, SegmentedControl } from './segmented'
 import { useEffect, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
@@ -100,42 +101,25 @@ export function DailyReportScreen() {
           <BookOpen className="size-5 text-primary" />
           <h1 className="text-xl font-semibold">{t('dailyReport.title')}</h1>
         </div>
-        <div className="flex gap-1 rounded-lg border border-border bg-secondary p-0.5">
+        <SegmentedControl>
           {(['write', 'history'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setViewMode(m)}
-              className={`rounded-md px-3 py-1 text-sm transition-all ${
-                viewMode === m
-                  ? 'bg-card font-medium shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
+            <SegmentedButton key={m} active={viewMode === m} onClick={() => setViewMode(m)} className="px-3">
               {m === 'write' ? t('dailyReport.tab.write') : t('dailyReport.tab.history')}
-            </button>
+            </SegmentedButton>
           ))}
-        </div>
+        </SegmentedControl>
       </div>
 
       {viewMode === 'write' ? (
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="flex gap-3">
-            <div className="flex gap-1 rounded-lg border border-border bg-secondary p-0.5">
+            <SegmentedControl>
               {(['daily', 'weekly'] as ReportType[]).map((rt) => (
-                <button
-                  key={rt}
-                  type="button"
-                  onClick={() => setType(rt)}
-                  className={`rounded-md px-3 py-1 text-sm transition-all ${
-                    type === rt
-                      ? 'bg-card font-medium shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
+                <SegmentedButton key={rt} active={type === rt} onClick={() => setType(rt)} className="px-3">
                   {rt === 'daily' ? t('dailyReport.type.daily') : t('dailyReport.type.weekly')}
-                </button>
+                </SegmentedButton>
               ))}
-            </div>
+            </SegmentedControl>
             <input
               type="date"
               value={date}

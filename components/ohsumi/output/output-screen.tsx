@@ -16,6 +16,7 @@ import { OpenBidView } from './open-bid-view'
 import { TaskDetailDrawer } from './task-detail-drawer'
 import { KANBAN_CARD_FIELDS, KANBAN_CARD_FIELD_KEY, type KanbanCardField } from './kanban-card'
 import { PROJECT_CARD_FIELDS, PROJECT_CARD_FIELD_KEY, type ProjectCardField } from './project-view'
+import { SegmentedButton, SegmentedControl } from '../segmented'
 import { cn } from '@/lib/utils'
 import {
   ArrowUpDown,
@@ -451,12 +452,12 @@ export function OutputScreen() {
                 {tg === 'archive' && <Archive className="size-3.5" />}
                 {tr(TARGET_KEY[tg])}
                 {tg === 'mine' && myTasks.length > 0 && (
-                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                  <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums text-foreground">
                     {myTasks.length}
                   </span>
                 )}
                 {tg === 'archive' && archivedTasks.length > 0 && (
-                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                  <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums text-foreground">
                     {archivedTasks.length}
                   </span>
                 )}
@@ -554,7 +555,7 @@ export function OutputScreen() {
               <Megaphone className="size-3.5" />
               {tr('output.view.openbid')}
               {openBidTasks.length > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums text-foreground">
                   {openBidTasks.length}
                 </span>
               )}
@@ -706,7 +707,7 @@ export function OutputScreen() {
                 <FolderKanban className="size-3.5" />
                 {tr('output.projectVisibility.button')}
                 {hiddenProjectIds.size > 0 && (
-                  <span className="rounded-full bg-secondary px-1.5 text-[10px] tabular-nums">
+                  <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums text-foreground">
                     {projects.length - hiddenProjectIds.size}/{projects.length}
                   </span>
                 )}
@@ -915,37 +916,12 @@ function Segment({ label, children }: { label: string; children: React.ReactNode
   return (
     <div className="flex min-w-0 max-w-full items-center gap-2.5">
       <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="ohsumi-scroll inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-lg border border-border bg-secondary/60 p-0.5">
-        {children}
-      </div>
+      <SegmentedControl ariaLabel={label}>{children}</SegmentedControl>
     </div>
   )
 }
 
-function Seg({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        // 縮めずに横に並べ、入りきらない分はタブの枠の中で横にスクロールする
-        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm font-medium transition-colors',
-        active
-          ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(16,24,40,0.06)]'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
+const Seg = SegmentedButton
 
 function EmptyState({ onInput }: { onInput: () => void }) {
   const { t } = useI18n()
