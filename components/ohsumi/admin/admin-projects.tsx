@@ -702,20 +702,20 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
         </div>
       )}
 
-      <div className="mt-6 overflow-hidden rounded-lg border border-border bg-card">
+      <div className="ohsumi-scroll mt-6 overflow-x-auto rounded-lg border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs text-muted-foreground">
               {isFullAdmin && <th className="w-8 px-2 py-2.5" />}
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colProject')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colParent')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.typeLabel')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.form.descLabel')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colAssignee')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colOwner')}</th>
-              <th className="px-4 py-2.5 font-medium">{t('admin.projects.colTaskCount')}</th>
-              <th className="px-4 py-2.5 font-medium" title={t('admin.projects.staffingTooltip')}>{t('admin.projects.colStaffing')}</th>
-              {isFullAdmin && <th className="px-4 py-2.5 font-medium" />}
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.colProject')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.colParent')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.form.typeLabel')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.form.descLabel')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.colAssignee')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.colOwner')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium">{t('admin.projects.colTaskCount')}</th>
+              <th className="whitespace-nowrap px-4 py-2.5 font-medium" title={t('admin.projects.staffingTooltip')}>{t('admin.projects.colStaffing')}</th>
+              {isFullAdmin && <th className="whitespace-nowrap px-4 py-2.5 font-medium" />}
             </tr>
           </thead>
           <tbody className="divide-y divide-border">

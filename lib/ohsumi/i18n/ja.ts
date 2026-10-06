@@ -1201,7 +1201,15 @@ export const ja = {
   'person.tab.growth': '人材育成',
   'person.tab.career': '経歴・キャリア',
   'person.tab.calendar': 'カレンダー',
-  'person.tab.settings': '設定',
+  'personalSettings.title': '個人設定',
+  'personalSettings.desc': '通知・メールアドレス・言語とタイムゾーン・ログイン中の端末・個人スプレッドシート連携を変えます。表示名・アイコン・所属は、自分のページの上で変えられます。',
+  'personalSettings.backToProfile': '自分のページに戻る',
+  'personalSettings.open': '個人設定',
+  'personalSettings.section.notify': '通知',
+  'personalSettings.section.email': 'メールアドレス',
+  'personalSettings.section.language': '言語・タイムゾーン',
+  'personalSettings.mailFrequency': 'メールの頻度',
+  'person.overview.fact.title': '活動実績',
 
   // ---- person-detail 本体 -------------------------------------------------
   'person.notFound': 'メンバーが見つかりません。',

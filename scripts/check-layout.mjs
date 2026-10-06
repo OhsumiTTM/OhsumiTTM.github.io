@@ -56,12 +56,15 @@ export const STEPS = [
   { name: 'タスク詳細(長い名前・説明)', do: 'openTask', view: 'リスト', text: 'とても長いタスク名の例' },
   // コメントへの返信: 「返信」で元のコメントの下に字下げして並べる
   { name: 'タスク詳細(コメントへの返信)', do: 'commentReply', view: 'リスト', text: 'コメントがとても多いタスク' },
-  { name: '個人ページ(タスク)', do: 'profile' },
+  // 自分のページは「概要」から開く(「設定」のタブは無い。個人の設定は別の画面「個人設定」)
+  { name: '個人ページ(概要)', do: 'profile', selfOverview: true },
+  { name: '個人ページ(タスク)', do: 'click', text: 'タスク' },
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
-  { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // 個人設定: アカウントのメニューの「個人設定」から開く。目次とまとまり(通知・メールアドレス・言語とタイムゾーンなど)
+  { name: '個人設定', do: 'personalSettings' },
   // ベルの通知の種類ごとのオン・オフ。「メンション・返信」をオフにすると、見落としの注意を1行出す
-  { name: '個人ページ(設定・ベルの通知)', do: 'bellSettings' },
+  { name: '個人設定(ベルの通知)', do: 'bellSettings' },
   // INPUT の「項目を入れて追加」: 空の枠(必須の理由・登録の止め方)・「＋ もう1件」の引き継ぎ・離れる時の確かめ・
   // 「やり直す」で文章が残ること。スマートフォンの幅では枠の項目が縦に1列に並ぶ
   { name: 'INPUT(項目を入れて追加)', do: 'inputForm' },
@@ -117,8 +120,19 @@ export const DARK_STEPS = [
   { name: '暗い表示: INPUT', do: 'click', text: 'INPUT' },
   { name: '暗い表示: INPUT(項目を入れて追加)', do: 'inputForm' },
   { name: '暗い表示: 個人ページ', do: 'profile' },
+  { name: '暗い表示: 個人設定', do: 'personalSettings' },
   { name: '暗い表示: ベルの通知の設定', do: 'bellSettings' },
   { name: '暗い表示: アカウントのメニュー', do: 'accountMenu', height: 560 },
+]
+// パソコンの幅(1280px)で開く管理画面: 表の列が縮んで、短い文字(バッジ・オン/オフ・列の見出し)が1文字ずつ折り返さないこと
+export const WIDE_WIDTH = 1280
+export const WIDE_ADMIN_STEPS = [
+  { name: 'パソコンの幅: 管理画面(ホーム)', do: 'admin' },
+  ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `パソコンの幅: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+]
+export const WIDE_DARK_ADMIN_STEPS = [
+  { name: 'パソコンの幅・暗い表示: 管理画面(ホーム)', do: 'admin' },
+  ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `パソコンの幅・暗い表示: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
 ]
 export const DARK_ADMIN_STEPS = [
   { name: '暗い表示: 管理画面(ホーム)', do: 'admin' },
@@ -357,7 +371,8 @@ const MEASURE = `(() => {
     const range = document.createRange(); range.selectNodeContents(node)
     return new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top))).size
   }
-  const squashed = [...document.querySelectorAll('button, a, [role=tab], span.rounded-md, span.rounded-full')].filter((b) => {
+  // パソコンの幅では、表の列の見出し(th)も確かめる(列が縮んで、見出しが縦に積まれないこと)
+  const squashed = [...document.querySelectorAll('button, a, [role=tab], span.rounded-md, span.rounded-full' + (window.innerWidth >= 1000 ? ', th' : ''))].filter((b) => {
     const r = b.getBoundingClientRect()
     if (!r.width || r.bottom < 0 || r.top > window.innerHeight * 3) return false
     const texts = []
@@ -694,11 +709,17 @@ async function run({ build = true } = {}) {
       // 暗い表示(端末の設定を「暗い」にする)
       { member: MEMBER, steps: DARK_STEPS, dark: true },
       { member: ADMIN_MEMBER, steps: DARK_ADMIN_STEPS, dark: true },
+      // パソコンの幅の管理画面(明るい・暗い)
+      { member: ADMIN_MEMBER, steps: WIDE_ADMIN_STEPS, width: WIDE_WIDTH },
+      { member: ADMIN_MEMBER, steps: WIDE_DARK_ADMIN_STEPS, width: WIDE_WIDTH, dark: true },
     ]
     const registrySession = () => evaluate(`sessionStorage.setItem('ohsumi-registry-admin-session', JSON.stringify({ token: 'ra1.layout.check', exp: Math.floor(Date.now() / 1000) + 1800, email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000) }))`)
     // LAYOUT_ONLY=dark: 暗い表示の確認だけを動かす(直す時の確かめ直し用。CI では使わない)
     for (const pass of passes.filter((p) => process.env.LAYOUT_ONLY !== 'dark' || p.dark)) {
     member = pass.member
+    // この回の画面の幅(パソコンの幅の回だけ広げる)
+    const baseWidth = pass.width || WIDTH
+    await send('Emulation.setDeviceMetricsOverride', { width: baseWidth, height: 800, deviceScaleFactor: baseWidth < 600 ? 2 : 1, mobile: baseWidth < 600 })
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: pass.dark ? 'dark' : 'light' }] })
     view = viewerData(pass.member)
     caps = viewerCapabilities(pass.member)
@@ -1397,8 +1418,23 @@ async function run({ build = true } = {}) {
           if (!indented) throw new Error('返信が字下げされていません')
           await evaluate(`document.querySelector('[data-comment-reply]').scrollIntoView({ block: 'center' })`); await sleep(300)
         }
+        if (step.do === 'personalSettings') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(400)
+          // 自分のページの最初のタブは「概要」で、「設定」のタブは無い
+          if ((await evaluate(`[...document.querySelectorAll('button')].find((b) => b.className.includes('-mb-px'))?.textContent.trim() ?? ''`)) !== '概要') throw new Error('自分のページの最初のタブが「概要」ではありません')
+          if (await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '設定' && b.className.includes('-mb-px'))`)) throw new Error('自分のページに「設定」のタブが残っています')
+          if (!(await evaluate(`!!document.querySelector('[data-open-personal-settings]')`))) throw new Error('自分のページの上に「個人設定」のボタンがありません')
+          // アカウントのメニューの「自分の記録」の、プロフィールのすぐ下
+          await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
+          await sleep(500)
+          const order = await evaluate(`(() => { const items = [...document.querySelectorAll('[data-menu-item]')].map((e) => e.textContent.trim()); return items.indexOf('個人設定') - items.indexOf('プロフィール') })()`)
+          if (order !== 1) throw new Error('アカウントのメニューで、「個人設定」がプロフィールのすぐ下にありません: ' + order)
+          await clickText('個人設定', '[data-menu-item]'); await sleep(1200)
+          const sections = await evaluate(`[...document.querySelectorAll('[data-personal-settings] section[id]')].map((e) => e.id).join(',')`)
+          for (const id of ['settings-notify', 'settings-email', 'settings-language']) if (!sections.includes(id)) throw new Error('個人設定に「' + id + '」のまとまりがありません: ' + sections)
+          if (!(await evaluate(`!!document.querySelector('[data-personal-settings] [data-admin-toc]')`))) throw new Error('個人設定の上に目次がありません')
+        }
         if (step.do === 'bellSettings') {
-          await clickText('設定', '[role=tab], button'); await sleep(800)
           await evaluate(`document.querySelector('[data-bell-settings]').scrollIntoView({ block: 'center' })`); await sleep(300)
           const kinds = await evaluate(`[...document.querySelectorAll('[data-bell-settings] [data-bell-kind]')].map((e) => e.getAttribute('data-bell-kind')).join(',')`)
           if (kinds !== 'approval,review,staleReview,staleProgress,deadline,mention,lowWorkload,inactive,expense,invite') throw new Error('ベルの通知の種類が足りません: ' + kinds)
@@ -1457,11 +1493,13 @@ async function run({ build = true } = {}) {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(400)
           await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
           await sleep(500); await clickText('プロフィール'); await sleep(1500)
+          // 自分のページは、ほかの人のページと同じく「概要」から開く
+          if (step.selfOverview && !(await evaluate(`[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === '概要' && b.className.includes('-mb-px') && b.className.includes('border-primary'))`))) throw new Error('自分のページが「概要」から開きません')
         }
         const m = JSON.parse(await evaluate(MEASURE))
         const problems = []
-        const width = step.width || WIDTH
-        if (step.width || step.height) await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: 800, deviceScaleFactor: WIDTH < 600 ? 2 : 1, mobile: WIDTH < 600 })
+        const width = step.width || baseWidth
+        if (step.width || step.height) await send('Emulation.setDeviceMetricsOverride', { width: baseWidth, height: 800, deviceScaleFactor: baseWidth < 600 ? 2 : 1, mobile: baseWidth < 600 })
         if (m.page > width + 1 || m.window > width + 1) problems.push(`ページの幅が ${Math.max(m.page, m.window)}px(画面は ${width}px)`)
         m.off.forEach((o) => problems.push('はみ出し: ' + o))
         m.squashed.forEach((o) => problems.push('文字が折り返した短いラベル: ' + o))

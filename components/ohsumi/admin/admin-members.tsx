@@ -432,19 +432,20 @@ export function AdminMembers() {
       </div>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-border bg-card">
-        <div className="overflow-x-auto">
+        {/* 列は縮めて折り返さず、入りきらない時は表の中で横にスクロールする */}
+        <div className="ohsumi-scroll overflow-x-auto" data-members-table>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                <th className="px-4 py-3 font-medium">{t('admin.members.colMember')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colRole')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colReportsTo')}</th>
-                {isFullAdmin && <th className="px-4 py-3 font-medium">{t('admin.members.colProjects')}</th>}
-                <th className="px-4 py-3 font-medium">{t('admin.members.colActive')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colWill')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colJudgment')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colStatus')}</th>
-                <th className="px-4 py-3 font-medium">{t('admin.members.colNotify')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colMember')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colRole')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colReportsTo')}</th>
+                {isFullAdmin && <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colProjects')}</th>}
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colActive')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colWill')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colJudgment')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colStatus')}</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">{t('admin.members.colNotify')}</th>
                 <th className="px-4 py-3 font-medium" />
               </tr>
             </thead>
@@ -455,7 +456,7 @@ export function AdminMembers() {
                 const capacity = memberWorkloadCapacity(m.id, workloadTasks, undefined, workloadRules)
                 return (
                   <tr key={m.id} className="transition-colors hover:bg-accent/40">
-                    <td className="cursor-pointer px-4 py-3" onClick={() => go({ name: 'person', id: m.id })}>
+                    <td className="min-w-[160px] cursor-pointer px-4 py-3" onClick={() => go({ name: 'person', id: m.id })}>
                       <div className="flex items-center gap-2.5">
                         <Avatar member={m} size={30} />
                         <div>
@@ -547,10 +548,10 @@ export function AdminMembers() {
                         )}
                       </td>
                     )}
-                    <td className="px-4 py-3">
+                    <td className="whitespace-nowrap px-4 py-3">
                       <span className="font-mono tabular-nums">{count}</span>
                     </td>
-                    <td className="max-w-[200px] px-4 py-3 text-xs text-muted-foreground">
+                    <td className="min-w-[140px] max-w-[200px] px-4 py-3 text-xs text-muted-foreground">
                       {m.will.length > 0 ? m.will.join(' / ') : '—'}
                     </td>
                     <td className="min-w-[220px] max-w-[280px] px-4 py-3" onClick={(e) => e.stopPropagation()}>
@@ -565,13 +566,13 @@ export function AdminMembers() {
                         onNewOption={canRules ? addSkillOption : undefined}
                       />
                     </td>
-                    <td className="px-4 py-3">
-                      <WorkloadBadge capacity={capacity} className="text-xs" />
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <WorkloadBadge capacity={capacity} className="whitespace-nowrap text-xs" />
                     </td>
                     <td className="px-4 py-3">
                       <button
                         onClick={() => updateNotify(m.id, !m.notify)}
-                        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                        className={`flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
                           m.notify
                             ? 'border-primary/30 bg-primary-muted text-accent-foreground'
                             : 'border-border text-muted-foreground hover:bg-secondary'

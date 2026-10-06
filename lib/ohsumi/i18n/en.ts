@@ -1201,7 +1201,15 @@ export const en = {
   'person.tab.growth': 'Development',
   'person.tab.career': 'Career',
   'person.tab.calendar': 'Calendar',
-  'person.tab.settings': 'Settings',
+  'personalSettings.title': 'Personal settings',
+  'personalSettings.desc': 'Change notifications, email addresses, language and time zone, signed-in devices and personal spreadsheet sync. Display name, icon and department are edited at the top of your own page.',
+  'personalSettings.backToProfile': 'Back to my page',
+  'personalSettings.open': 'Personal settings',
+  'personalSettings.section.notify': 'Notifications',
+  'personalSettings.section.email': 'Email addresses',
+  'personalSettings.section.language': 'Language and time zone',
+  'personalSettings.mailFrequency': 'Email frequency',
+  'person.overview.fact.title': 'Activity',
 
   // ---- person-detail body -------------------------------------------------
   'person.notFound': 'Member not found.',

@@ -702,12 +702,11 @@ describe.skipIf(!available)('コメントへの返信と、ベルの通知の設
   it('ベルの通知を種類ごとにオフにでき、本人の設定に残る(ほかの端末でも同じ)。オフにした種類はベルに出ない', async () => {
     await signInAs('base@a.example')
     await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
-    const profileItem = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === 'プロフィール')`
-    await waitFor(() => page.evaluate<boolean>(`!!${profileItem}`), 'アカウントのメニューが開きません')
-    await page.evaluate(`${profileItem}.click(); true`)
-    const settingsTab = `[...document.querySelectorAll('button, [role=tab]')].find((b) => b.textContent.trim() === '設定')`
-    await waitFor(() => page.evaluate<boolean>(`!!${settingsTab}`), '個人ページが開きません')
-    await page.evaluate(`${settingsTab}.click(); true`)
+    // 個人設定は、アカウントのメニューの「個人設定」から開く(自分のページのタブには無い)
+    const settingsItem = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === '個人設定')`
+    await waitFor(() => page.evaluate<boolean>(`!!${settingsItem}`), 'アカウントのメニューが開きません')
+    await page.evaluate(`${settingsItem}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-personal-settings]')`), '個人設定が開きません')
     await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-bell-kind="invite"]')`), 'ベルの通知の設定が出ません')
     await page.evaluate(`document.querySelector('[data-bell-kind="mention"]').click(); true`)
     await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-bell-mention-warning]')?.textContent ?? '').includes('見落としの原因になります')`), '見落としの注意が出ません')
