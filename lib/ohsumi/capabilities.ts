@@ -142,6 +142,7 @@ export const STORE_ACTION_CAPABILITIES: Record<string, Capability> = {
   updateRole: 'members.role',
   updateRoleDef: 'org.rules',
   updateSkillLevelRules: 'org.rules',
+  updateWorkloadRules: 'org.rules',
   updateSkillLevelThresholds: 'org.rules',
   updateSurveyInvitedIds: 'org.rules',
   updateSurveyQuestions: 'org.rules',

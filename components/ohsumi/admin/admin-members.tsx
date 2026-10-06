@@ -16,7 +16,8 @@ import { getActiveOrg, inviteLink } from '@/lib/ohsumi/org-directory'
 import { findRole, roleAssignBlock, type RoleAssignBlock, type RoleDef } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import type { Member, Role } from '@/lib/ohsumi/types'
-import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
+import { tenureYears, formatDepartmentPath, memberWorkloadCapacity } from '@/lib/ohsumi/utils'
+import { WorkloadBadge } from '@/components/ohsumi/workload-badge'
 import { PermissionOverridesButton } from './admin-permission-overrides'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { isValidEmail, needsGoogleAccountCheck } from '@/lib/ohsumi/member-email'
@@ -44,12 +45,6 @@ function parseBulkMemberRows(
     .filter((r) => r.name)
 }
 
-function workload(count: number, tr: (key: TranslationKey) => string): { label: string; className: string } {
-  if (count <= 2) return { label: tr('admin.members.workload.low'), className: 'text-muted-foreground' }
-  if (count <= 5) return { label: tr('admin.members.workload.normal'), className: 'text-foreground' }
-  return { label: tr('admin.members.workload.high'), className: 'text-[var(--status-review-fg)]' }
-}
-
 export function AdminMembers() {
   const {
     members,
@@ -73,6 +68,8 @@ export function AdminMembers() {
     currentUser,
     revokeMemberSessions,
     can,
+    workloadTasks,
+    workloadRules,
   } = useOhsumi()
   // 「代表だけ」だった操作は、できる操作(capabilities.ts)ごとに出し分ける。GAS も同じ一覧で判定する
   const canAdd = can('members.add')
@@ -454,7 +451,8 @@ export function AdminMembers() {
             <tbody className="divide-y divide-border">
               {filtered.map((m) => {
                 const count = activeCount(m)
-                const wl = workload(count, t)
+                // 稼働の目安は担当者を選ぶ画面のバッジと同じ計算(団体の設定 workload_rules)
+                const capacity = memberWorkloadCapacity(m.id, workloadTasks, undefined, workloadRules)
                 return (
                   <tr key={m.id} className="transition-colors hover:bg-accent/40">
                     <td className="cursor-pointer px-4 py-3" onClick={() => go({ name: 'person', id: m.id })}>
@@ -568,7 +566,7 @@ export function AdminMembers() {
                       />
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs font-medium ${wl.className}`}>{wl.label}</span>
+                      <WorkloadBadge capacity={capacity} className="text-xs" />
                     </td>
                     <td className="px-4 py-3">
                       <button

@@ -10,6 +10,7 @@ import { Modal } from '@/components/ohsumi/modal'
 import { TaskTrash } from './task-trash'
 import { AdminBlocks } from './admin-page'
 import { TaskCategoriesEditor, TaskDomainsEditor } from './admin-tags'
+import { WorkloadRulesEditor } from './workload-rules-editor'
 import { Button } from '@/components/ui/button'
 import { DIFFICULTY_LABEL, PRIORITIES } from '@/lib/ohsumi/types'
 import type {
@@ -68,7 +69,7 @@ function calcStaffingRatio(projectId: string, tasks: Task[], members: Member[]):
 }
 
 // プロジェクトのタブ(part='projects': 一覧・追加・編集・アーカイブ)と、タスクの設定のタブ
-// (part='taskSettings': カテゴリ・領域・プロジェクトの種類・業務テンプレート・定期タスク・ゴミ箱)。状態を共有するので1つにしている
+// (part='taskSettings': カテゴリ・領域・プロジェクトの種類・業務テンプレート・定期タスク・稼働の目安・ゴミ箱)。状態を共有するので1つにしている
 export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
   const { can,
     adminProjects: projects,
@@ -625,6 +626,8 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
       </div>
               ) },
             ] : []),
+            // 稼働の目安: 団体のルールを持たない人にも、見るだけで出す
+            { id: 'task-workload', title: t('admin.workloadRules.heading'), content: <WorkloadRulesEditor /> },
             ...(canTrash ? [{ id: 'task-trash', title: t('admin.trash.heading'), content: <TaskTrash /> }] : []),
           ]}
         />

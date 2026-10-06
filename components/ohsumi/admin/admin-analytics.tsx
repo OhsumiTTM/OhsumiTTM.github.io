@@ -167,7 +167,7 @@ const WORKLOAD_LABEL_KEY: Record<WorkloadCapacity, TranslationKey> = {
 }
 
 export function AdminAnalytics() {
-  const { members, visibleTasks, archivedTasks, surveyResponses, surveyQuestions } = useOhsumi()
+  const { members, visibleTasks, archivedTasks, surveyResponses, surveyQuestions, workloadRules } = useOhsumi()
   const roleName = useRoleLabel()
   const { t } = useI18n()
 
@@ -405,7 +405,7 @@ export function AdminAnalytics() {
       .map((m) => {
         const activeTasks = visibleTasks.filter((t) => t.assigneeIds.includes(m.id) && t.status !== 'done')
         if (activeTasks.length === 0) return null
-        const capacity = memberWorkloadCapacity(m.id, allTasks)
+        const capacity = memberWorkloadCapacity(m.id, allTasks, undefined, workloadRules)
         const avgFit = activeTasks.reduce(
           (sum, t) => sum + matchSkills(t, m).length / Math.max(1, t.skills.length),
           0,
@@ -418,7 +418,7 @@ export function AdminAnalytics() {
         }
       })
       .filter((p): p is NonNullable<typeof p> => p !== null),
-    [members, visibleTasks, allTasks],
+    [members, visibleTasks, allTasks, workloadRules],
   )
 
   // item 30: アンケート×人材データ組み合わせ分析 — 各メンバーの全アンケート
@@ -450,7 +450,7 @@ export function AdminAnalytics() {
       if (score === undefined) return
       let key: string | null = null
       if (surveyComboAxis === 'workload') {
-        key = t(WORKLOAD_LABEL_KEY[memberWorkloadCapacity(m.id, allTasks)])
+        key = t(WORKLOAD_LABEL_KEY[memberWorkloadCapacity(m.id, allTasks, undefined, workloadRules)])
       } else if (surveyComboAxis === 'role') {
         key = roleName(m.role)
       } else if (surveyComboAxis === 'affiliation') {
@@ -477,7 +477,7 @@ export function AdminAnalytics() {
         count: scores.length,
       }))
       .sort((a, b) => b.avg - a.avg)
-  }, [members, memberScores, surveyComboAxis, allTasks, t])
+  }, [members, memberScores, surveyComboAxis, allTasks, workloadRules, t])
 
   return (
     <div>

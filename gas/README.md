@@ -792,6 +792,7 @@ GAS の処理は成功しているのに、この転送先が 404 になり、�
 | `skill_field_skills` | 分野ごとの対応スキル | JSON文字列 |
 | `skill_field_threshold` | 分野認定の閾値（0〜1） | 数値文字列 |
 | `skill_level_rules` | スキルのレベルの決め方(各レベルの累計の点数と条件。「4.22」) | JSON文字列(設定の画面で編集する) |
+| `workload_rules` | 稼働の目安(余力あり・普通・余力なし)の決め方。`available_ratio`(既定 0.6)・`full_ratio`(既定 1.2。`available_ratio` より大きい)・`window_days`(既定 90。14〜365)・`fallback_hours`(既定 2。0.5〜40)・`no_history_normal_max_hours`(既定 6。0〜200)・`count_hold_and_review`(既定 true)・`low_workload_task_threshold`(既定 1。0〜10)。書いていない項目は既定。範囲の外・大小の関係の誤りは保存しない | JSON文字列(ADMIN の「タスクの設定」の「稼働の目安」で編集する。空 = 既定) |
 | `skill_level_thresholds` | (使わなくなった)以前のスキルレベルアップ閾値。レベルの計算には使いません | JSON文字列 |
 | `quiz_definitions` | 検定（クイズ）の定義 | JSON文字列 |
 | `radar_axes` | レーダーチャートの軸定義 | JSON文字列 |
