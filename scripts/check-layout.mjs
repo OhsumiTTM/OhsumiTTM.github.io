@@ -11,7 +11,7 @@
 // 使い方: node scripts/check-layout.mjs [--no-build]
 // Chrome の場所は CHROME_PATH で指定できる(未指定なら、よくある場所を探す)
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { extname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -89,6 +89,34 @@ export const ADMIN_STEPS = [
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
+]
+
+// 暗い表示(端末の設定を「暗い」にして開く)。主な画面で、はみ出しに加えて、文字と背景の明るさの比(4.5:1。大きい文字は 3:1)・
+// 白いままの広い部分が無いこと・ブラウザの上部の色を確かめる。ラベルは STEPS と同じく ja.ts の文字
+export const DARK_STEPS = [
+  { name: '暗い表示: ログイン画面', do: 'login' },
+  { name: '暗い表示: OUTPUT(自分)', do: 'home' },
+  { name: '暗い表示: OUTPUT(一覧)', do: 'click', text: '一覧' },
+  ...['ワークフロー', 'リスト', 'カレンダー', '難易度', '依存関係', 'ガント', '公募'].map((text) => ({ name: `暗い表示: ${text}`, do: 'click', text })),
+  { name: '暗い表示: タスク詳細', do: 'openTask', view: 'リスト', text: '担当者が多いタスク' },
+  { name: '暗い表示: INPUT', do: 'click', text: 'INPUT' },
+  { name: '暗い表示: 個人ページ', do: 'profile' },
+]
+export const DARK_ADMIN_STEPS = [
+  { name: '暗い表示: 管理画面(Dashboard)', do: 'admin' },
+  ...['幹部 View', 'Approvals', 'Assignments', 'Projects', 'Members', 'Analytics', 'Tags', '人材DB', '経費申請', 'フォーム'].map((text) => ({ name: `暗い表示: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  { name: '暗い表示: 団体設定', do: 'orgSettings' },
+  // 団体のテーマの色(暗い青)を入れても、暗い表示では読める明るさになる
+  { name: '暗い表示: 団体のテーマの色', do: 'themeColor', color: '#123456' },
+]
+// 画面で選んだ表示(端末の設定より優先する): 端末は明るい設定のまま、メニューから暗い表示に切り替える
+export const THEME_STEPS = [
+  { name: '表示の切り替え(端末は明るい・画面で暗いを選ぶ)', do: 'themeToggle' },
+]
+// 左上の団体名から団体を切り替える
+export const ORG_SWITCH_STEPS = [
+  { name: '団体の切り替え(ほかの団体がある)', do: 'orgSwitcher' },
+  { name: '団体の切り替え(ほかの団体が無い)', do: 'orgSwitcherSingle' },
 ]
 
 // 機能停止中(読み取り専用。R1-e)に、閲覧のための欄・ボタンと書き出しが使えること、書く欄が止まることを確かめる。
@@ -323,8 +351,79 @@ const MEASURE = `(() => {
   })
   return JSON.stringify({ page: document.documentElement.scrollWidth, window: window.innerWidth, off: off.slice(0, 5), squashed: squashed.slice(0, 5), logos })
 })()`
+// 文字と背景の明るさの比(WCAG 2.x)と、白いままの広い部分を調べる。色は canvas で rgba にそろえる(oklch・color-mix なども)。
+// 背景は、親をたどって重ねた色(半透明は下の色と混ぜる)。グラデーション・画像の上の文字は数えない。
+// 数えない文字: 使えない欄・ボタンの中、読み上げだけの文字(aria-hidden の中)、画面に出ていない文字。
+// scope: 調べる範囲の CSS セレクター(全体なら 'body')。patches: 白いままの広い部分も調べる
+const MEASURE_CONTRAST = (scope, patches, limit = 8) => `(() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 1
+  const cx = cv.getContext('2d', { willReadFrequently: true })
+  const rgba = (c) => { cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = c; cx.fillRect(0, 0, 1, 1); const d = cx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255] }
+  const color = (c) => (c === 'transparent' ? [0, 0, 0, 0] : rgba(c))
+  const mix = (top, bottom) => { const a = top[3]; return [top[0] * a + bottom[0] * (1 - a), top[1] * a + bottom[1] * (1 - a), top[2] * a + bottom[2] * (1 - a), 1] }
+  const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]) }
+  const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05) }
+  const rootBg = (() => { const c = color(getComputedStyle(document.documentElement).backgroundColor); return c[3] ? mix(c, [255, 255, 255, 1]) : [255, 255, 255, 1] })()
+  // 背景(重ねた色)。グラデーション・画像があれば null
+  const bgOf = (el) => {
+    const layers = []
+    for (let e = el; e && e !== document.documentElement; e = e.parentElement) {
+      const cs = getComputedStyle(e)
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return null
+      const c = color(cs.backgroundColor)
+      if (c[3] > 0) { layers.push(c); if (c[3] >= 1) break }
+    }
+    let out = rootBg
+    for (let i = layers.length - 1; i >= 0; i--) out = mix(layers[i], out)
+    return out
+  }
+  const desc = (el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className ? '.' + el.className.split(' ').filter(Boolean).slice(0, 4).join('.') : '') + ' "' + (el.textContent || '').trim().slice(0, 24) + '"'
+  const skip = (el) => { for (let e = el; e && e !== document.body; e = e.parentElement) {
+    if (e.matches?.('[aria-hidden=true],[disabled],[aria-disabled=true],.sr-only,option,select,svg,[data-allow-low-contrast]')) return true
+    const cs = getComputedStyle(e); if (cs.visibility === 'hidden' || cs.display === 'none' || parseFloat(cs.opacity) < 1) return true } return false }
+  const low = []
+  for (const root of document.querySelectorAll(${JSON.stringify(scope)})) {
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    const seen = new Set()
+    while (walk.nextNode()) {
+      const el = walk.currentNode.parentElement
+      if (!el || seen.has(el) || !walk.currentNode.textContent.trim()) continue
+      seen.add(el)
+      const r = el.getBoundingClientRect()
+      if (!r.width || !r.height || skip(el)) continue
+      const bg = bgOf(el)
+      if (!bg) continue
+      const cs = getComputedStyle(el)
+      const text = color(cs.color)
+      // 透明な文字(押せる場所を、触れた時だけ出すもの)は数えない
+      if (text[3] === 0) continue
+      const fg = mix(text, bg)
+      const size = parseFloat(cs.fontSize), bold = parseInt(cs.fontWeight, 10) >= 700
+      const need = size >= 24 || (size >= 18.66 && bold) ? 3 : 4.5
+      const v = ratio(fg, bg)
+      if (v < need - 0.01) low.push(desc(el) + ' ' + v.toFixed(2) + ':1')
+    }
+  }
+  const light = []
+  if (${patches ? 'true' : 'false'}) {
+    for (const el of document.querySelectorAll('body *')) {
+      if (el.matches('img, canvas, video, svg, svg *, [data-allow-light], [data-allow-light] *')) continue
+      const c = color(getComputedStyle(el).backgroundColor)
+      if (c[3] < 0.5) continue
+      const r = el.getBoundingClientRect()
+      if (r.width * r.height < 1500 || skip(el)) continue
+      const bg = bgOf(el)
+      // 白・淡い灰色(明るく、色みの少ない地)だけを数える。色の付いた帯・ボタンは数えない
+      if (bg && lum(bg) > 0.45 && Math.max(bg[0], bg[1], bg[2]) - Math.min(bg[0], bg[1], bg[2]) < 40) light.push(desc(el) + ' (' + Math.round(r.width) + '×' + Math.round(r.height) + ')')
+    }
+  }
+  return JSON.stringify({ low: [...new Set(low)].slice(0, ${limit}), lowCount: low.length, light: [...new Set(light)].slice(0, ${limit}), dark: document.documentElement.classList.contains('dark'),
+    meta: [...document.querySelectorAll('meta[name=theme-color]')].map((m) => m.getAttribute('content')) })
+})()`
 // ロゴのシンボルの色(Ohsumi Blue #2948E8)
 const LOGO_BLUE = 'rgb(41, 72, 232)'
+// 暗い表示のシンボルの色(明るい青 #7D9BFF。docs/brand.md の案 C)
+const LOGO_BLUE_DARK = 'rgb(125, 155, 255)'
 let logoChecks = 0
 // カード全体、またはカードの中の行(文字が入ったもの)が、縦に押しつぶされて切れていないか
 const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-grab.absolute')].filter((c) =>
@@ -557,10 +656,17 @@ async function run({ build = true } = {}) {
       { member: ADMIN_MEMBER, steps: ADMIN_STEPS },
       { member: ADMIN_MEMBER, steps: REGISTRY_STEPS },
       { member: ADMIN_MEMBER, steps: READ_ONLY_STEPS, contract: READ_ONLY_CONTRACT },
+      { member: MEMBER, steps: ORG_SWITCH_STEPS },
+      { member: MEMBER, steps: THEME_STEPS },
+      // 暗い表示(端末の設定を「暗い」にする)
+      { member: MEMBER, steps: DARK_STEPS, dark: true },
+      { member: ADMIN_MEMBER, steps: DARK_ADMIN_STEPS, dark: true },
     ]
     const registrySession = () => evaluate(`sessionStorage.setItem('ohsumi-registry-admin-session', JSON.stringify({ token: 'ra1.layout.check', exp: Math.floor(Date.now() / 1000) + 1800, email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000) }))`)
-    for (const pass of passes) {
+    // LAYOUT_ONLY=dark: 暗い表示の確認だけを動かす(直す時の確かめ直し用。CI では使わない)
+    for (const pass of passes.filter((p) => process.env.LAYOUT_ONLY !== 'dark' || p.dark)) {
     member = pass.member
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: pass.dark ? 'dark' : 'light' }] })
     view = viewerData(pass.member)
     for (const step of pass.steps) {
       try {
@@ -1089,6 +1195,71 @@ async function run({ build = true } = {}) {
           }
         }
         if (step.do === 'click') { await clickText(step.text, step.from); await sleep(1200) }
+        if (step.do === 'orgSettings' || step.do === 'themeToggle') {
+          if (step.do === 'themeToggle') {
+            await signIn(); await evaluate(`localStorage.removeItem('ohsumi-theme')`); await navigate('/')
+            await clickText('あとで設定する').catch(() => {}); await sleep(800)
+            if (await evaluate(`document.documentElement.classList.contains('dark')`)) throw new Error('端末が明るい設定なのに、暗い表示で開きました')
+          }
+          await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
+          await sleep(500)
+          await clickText(step.do === 'orgSettings' ? '団体設定' : 'ダークモードに切替'); await sleep(1500)
+          if (step.do === 'themeToggle') {
+            const st = await evaluate(`JSON.stringify({ dark: document.documentElement.classList.contains('dark'), saved: localStorage.getItem('ohsumi-theme'), scheme: document.documentElement.style.colorScheme, meta: [...document.querySelectorAll('meta[name=theme-color]')].map((m) => m.getAttribute('content')) })`)
+            const v = JSON.parse(st)
+            if (!v.dark || v.saved !== 'dark' || v.scheme !== 'dark') throw new Error('画面で選んだ暗い表示になりません: ' + st)
+            if (!v.meta.length || v.meta.some((c) => c !== '#08111f')) throw new Error('ブラウザの上部の色が暗い表示の色になりません: ' + v.meta.join(', '))
+            // 読み込み直しても、選んだ表示のまま(最初の描画の前に決まる)
+            await navigate('/')
+            if (!(await evaluate(`document.documentElement.classList.contains('dark')`))) throw new Error('読み込み直すと、選んだ暗い表示が消えました')
+            await evaluate(`localStorage.removeItem('ohsumi-theme')`)
+          }
+        }
+        if (step.do === 'themeColor') {
+          view.Settings.rows = view.Settings.rows.filter((r) => r[0] !== 'theme_color').concat([['theme_color', step.color]])
+          await signIn(); await navigate('/'); await clickText('あとで設定する').catch(() => {}); await sleep(800)
+          const st = JSON.parse(await evaluate(`JSON.stringify({ p: getComputedStyle(document.documentElement).getPropertyValue('--primary').trim(), dark: document.documentElement.classList.contains('dark') })`))
+          if (!st.dark) throw new Error('暗い表示になっていません')
+          if (st.p.toLowerCase() === step.color) throw new Error('団体の暗い色が、暗い表示でそのまま使われています')
+          view.Settings.rows = view.Settings.rows.filter((r) => r[0] !== 'theme_color')
+        }
+        if (step.do === 'orgSwitcher' || step.do === 'orgSwitcherSingle') {
+          await signIn()
+          if (step.do === 'orgSwitcher') await saveOrgs(true)
+          await navigate('/'); await clickText('あとで設定する').catch(() => {}); await sleep(800)
+          const has = await evaluate(`!!document.querySelector('[data-org-switcher]')`)
+          if (step.do === 'orgSwitcherSingle') {
+            if (has) throw new Error('ほかの団体が無いのに、団体を切り替えるボタンが出ています')
+            if (!(await evaluate(`!!document.querySelector('[data-org-current]')`))) throw new Error('今の団体の名前・ロゴが出ません')
+          } else {
+            if (!has) throw new Error('左上に、団体を切り替えるボタンが出ません')
+            // キーボードで開く(↓)・選ぶ(↓)・閉じる(Esc)
+            const res = JSON.parse(await evaluate(`(async () => {
+              const b = document.querySelector('[data-org-switcher]')
+              const visible = b.getBoundingClientRect().width > 0
+              b.focus(); b.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+              await new Promise((r) => setTimeout(r, 300))
+              const menu = document.querySelector('[role=menu]#ohsumi-org-menu')
+              const items = menu ? [...menu.querySelectorAll('[role=menuitemradio]')] : []
+              const first = document.activeElement === items[0]
+              menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+              const second = document.activeElement === items[1]
+              const checked = items.map((i) => i.getAttribute('aria-checked'))
+              const names = items.map((i) => i.textContent.trim())
+              const expanded = b.getAttribute('aria-expanded')
+              menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+              await new Promise((r) => setTimeout(r, 200))
+              return JSON.stringify({ visible, count: items.length, first, second, checked, names, expanded, closed: !document.querySelector('#ohsumi-org-menu'), back: document.activeElement === b })
+            })()`))
+            if (!res.visible) throw new Error('スマートフォンの幅で、団体を切り替えるボタンが見えません')
+            if (res.count !== 2 || res.checked.join() !== 'true,false') throw new Error('団体の一覧が違います: ' + JSON.stringify(res))
+            if (!res.names[1].startsWith('とても長い名前')) throw new Error('ほかの団体の名前が出ません: ' + res.names.join(' / '))
+            if (res.expanded !== 'true' || !res.first || !res.second) throw new Error('キーボードで団体の一覧を操作できません: ' + JSON.stringify(res))
+            if (!res.closed || !res.back) throw new Error('Esc で一覧が閉じて、ボタンに戻りません: ' + JSON.stringify(res))
+            // 開いた状態で、はみ出しを調べる
+            await evaluate(`document.querySelector('[data-org-switcher]').click()`); await sleep(400)
+          }
+        }
         if (step.do === 'skillRules') {
           await clickText('Tags', 'aside nav button'); await sleep(1200)
           await clickText('団体の既定を変える', 'button'); await sleep(600)
@@ -1113,11 +1284,25 @@ async function run({ build = true } = {}) {
         m.off.forEach((o) => problems.push('はみ出し: ' + o))
         m.squashed.forEach((o) => problems.push('文字が折り返した短いラベル: ' + o))
         if (step.dependencyCards) JSON.parse(await evaluate(MEASURE_CARDS)).forEach((c) => problems.push('中身が切れたカード: ' + c))
+        const darkNow = await evaluate(`document.documentElement.classList.contains('dark')`)
         for (const l of m.logos) {
           logoChecks++
           if (Math.abs(l.w - l.h) > 0.5) problems.push(`ロゴの円の縦横比が 1:1 ではありません(${l.w} × ${l.h}px)`)
-          if (l.color !== LOGO_BLUE) problems.push(`ロゴのシンボルの色が Ohsumi Blue ではありません(${l.color})`)
+          if (l.color !== (darkNow ? LOGO_BLUE_DARK : LOGO_BLUE)) problems.push(`ロゴのシンボルの色が ${darkNow ? '暗い表示の明るい青' : 'Ohsumi Blue'} ではありません(${l.color})`)
           l.effects.forEach((e) => problems.push('ロゴに効果が付いています: ' + e))
+        }
+        // 暗い表示: 全体の文字の明るさの比・白いままの部分・ブラウザの上部の色。明るい表示: 切り替えタブの文字の比
+        const c = JSON.parse(await evaluate(MEASURE_CONTRAST(pass.dark ? 'body' : '[data-segmented]', !!pass.dark, process.env.LAYOUT_ALL ? 400 : 8)))
+        if (pass.dark) {
+          if (!c.dark) problems.push('端末の設定が暗いのに、暗い表示になっていません')
+          if (c.meta.some((x) => x !== '#08111f')) problems.push('ブラウザの上部の色が暗い表示の色ではありません: ' + c.meta.join(', '))
+          c.light.forEach((x) => problems.push('白いままの部分: ' + x))
+        }
+        if (c.lowCount) problems.push(`読みにくい文字(${c.lowCount} か所): ` + c.low.join(' / '))
+        if (process.env.LAYOUT_SHOTS && pass.dark) {
+          const h = Math.min(1400, await evaluate('document.documentElement.scrollHeight'))
+          const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: WIDTH, height: h, scale: 1 } })
+          writeFileSync(join(process.env.LAYOUT_SHOTS, step.name.replace(/[^\p{L}\p{N}]+/gu, '_') + '.png'), Buffer.from(shot.result.data, 'base64'))
         }
         console.log(`${problems.length ? '✗' : '✓'} ${step.name}`)
         problems.forEach((p) => failures.push(`${step.name}: ${p}`))
@@ -1129,6 +1314,8 @@ async function run({ build = true } = {}) {
     }
     // ロゴ: どこかの画面で確かめたこと。団体がテーマの色(--primary)を変えても、シンボルの色は変わらないこと
     if (!logoChecks) failures.push('ロゴ: どの画面でも Ohsumi のロゴ(data-ohsumi-symbol)を確かめられませんでした')
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] })
+    await evaluate(`localStorage.removeItem('ohsumi-theme')`); await navigate('/'); await sleep(500)
     const themed = await evaluate(`(() => {
       document.documentElement.style.setProperty('--primary', '#ff0000')
       const el = document.querySelector('[data-ohsumi-symbol]')

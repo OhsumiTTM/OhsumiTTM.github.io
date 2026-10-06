@@ -34,6 +34,21 @@ describe('スマホの幅の表示の確認', () => {
     expect(values.has('プロフィール')).toBe(true)
   })
 
+  it('暗い表示でも主な画面(ログイン・INPUT・OUTPUT の各表示・タスク詳細・管理画面・団体設定)を開き、ラベルは ja.ts にある', () => {
+    const values = new Set(Object.values(ja))
+    const dark = [...layout.DARK_STEPS, ...layout.DARK_ADMIN_STEPS] as { do: string; text?: string; view?: string }[]
+    const kinds = new Set(dark.map((s) => s.do))
+    for (const k of ['login', 'home', 'openTask', 'admin', 'orgSettings', 'themeColor']) expect(kinds.has(k), k).toBe(true)
+    const texts = dark.map((s) => s.text)
+    for (const view of ['ワークフロー', 'リスト', 'カレンダー', '難易度', '依存関係', 'ガント', '公募', 'INPUT']) expect(texts).toContain(view)
+    for (const s of dark) {
+      if (s.do === 'click' && s.text && s.text !== 'INPUT') expect(values.has(s.text) || /^[A-Za-z ]+$/.test(s.text), s.text).toBe(true)
+      if (s.do === 'openTask' && s.view) expect(values.has(s.view), s.view).toBe(true)
+    }
+    for (const label of ['団体設定', 'ダークモードに切替']) expect(values.has(label), label).toBe(true)
+    expect((layout.ORG_SWITCH_STEPS as { do: string }[]).map((s) => s.do)).toEqual(['orgSwitcher', 'orgSwitcherSingle'])
+  })
+
   it('代表で、管理画面のすべてのセクションを開く(ラベルは管理画面のメニューと同じ)', () => {
     const steps = layout.ADMIN_STEPS as { do: string; text?: string; from?: string }[]
     expect(steps[0].do).toBe('admin')
