@@ -55,7 +55,8 @@ function setup() {
       putAll: (o: Record<string, string>) => { for (const [k, v] of Object.entries(o)) cache.set(k, v) },
     }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
-    SpreadsheetApp: { flush() {} },
+    SpreadsheetApp: { flush() {}, getActive: () => ({ getUrl: () => 'https://docs.google.com/spreadsheets/d/sheet-1/edit' }) },
+    ScriptApp: { getScriptId: () => 'script-1' },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
     Utilities: {
       formatDate: () => '2026-10-01',
@@ -126,6 +127,14 @@ describe.each(ACCOUNTS)('$label のアカウント', (account) => {
     const reload = t.post({ action: 'getInitialData', sessionToken: account.id, withBackground: true })
     expect(reload.ok).toBe(true)
     expect(reload.result.capabilities).toEqual(account.capabilities)
+    // 団体のスプレッドシートと Apps Script の URL は、最上位の役職の人にだけ渡す
+    if (account.role === 'top') {
+      expect(login.result.adminLinks).toEqual({ spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/sheet-1/edit', scriptEditUrl: 'https://script.google.com/d/script-1/edit' })
+      expect(reload.result.adminLinks).toEqual(login.result.adminLinks)
+    } else {
+      expect(login.result.adminLinks).toBeUndefined()
+      expect(reload.result.adminLinks).toBeUndefined()
+    }
     expect(reload.result.sheets.Members.rows).toHaveLength(ACCOUNTS.length)
     expect(reload.result.background.errors).toEqual({})
 

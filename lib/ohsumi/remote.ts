@@ -839,6 +839,24 @@ export interface InitialData {
   backgroundError?: string
   // ログインした人のできる操作(GAS が役職と人ごとの例外から計算する)。unchanged の時は無い
   capabilities?: Capability[]
+  // 団体のスプレッドシートと Apps Script の編集画面(最上位の役職の人にだけ届く。古い GAS では無い)
+  adminLinks?: OrgAdminLinks
+}
+
+export interface OrgAdminLinks {
+  spreadsheetUrl: string
+  scriptEditUrl: string
+}
+
+// GAS が渡した URL のうち、スプレッドシート・Apps Script の編集画面の形のものだけを使う
+export function parseOrgAdminLinks(v: unknown): OrgAdminLinks | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const o = v as Record<string, unknown>
+  const sheet = String(o.spreadsheetUrl ?? '')
+  const script = String(o.scriptEditUrl ?? '')
+  if (!/^https:\/\/docs\.google\.com\/spreadsheets\/[^\s"'<>]+$/.test(sheet)) return undefined
+  if (!/^https:\/\/script\.google\.com\/d\/[\w-]+\/edit$/.test(script)) return undefined
+  return { spreadsheetUrl: sheet, scriptEditUrl: script }
 }
 
 interface InitialDataResponse {
@@ -846,6 +864,7 @@ interface InitialDataResponse {
   version?: string
   unchanged?: boolean
   capabilities?: string[]
+  adminLinks?: unknown
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
   background?: BackgroundData
   backgroundError?: string
@@ -867,6 +886,7 @@ function toInitialData(res: InitialDataResponse): InitialData {
     background: res.background,
     backgroundError: res.backgroundError,
     ...(Array.isArray(res.capabilities) ? { capabilities: normalizeCapabilities(res.capabilities) } : {}),
+    ...(parseOrgAdminLinks(res.adminLinks) ? { adminLinks: parseOrgAdminLinks(res.adminLinks) } : {}),
   }
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }

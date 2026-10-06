@@ -47,6 +47,7 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
   const spreadsheet = noop({
     getName: () => name,
     getId: () => 'ss-' + name,
+    getUrl: () => 'https://docs.google.com/spreadsheets/d/ss-' + encodeURIComponent(name) + '/edit',
     getSheetByName: (n: string) => (sheets[n] ? noop(sheets[n]) : null),
     getSheets: () => Object.values(sheets).map((s) => noop(s)),
     insertSheet: (n: string) => { sheets[n] = new FakeSheet(n, []); return noop(sheets[n]) },
@@ -72,7 +73,7 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
       removeAll: (ks: string[]) => { ks.forEach((k) => cache.delete(k)) },
     }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
-    SpreadsheetApp: noop({ flush() {}, getActiveSpreadsheet: () => spreadsheet, openById: () => spreadsheet }),
+    SpreadsheetApp: noop({ flush() {}, getActiveSpreadsheet: () => spreadsheet, getActive: () => spreadsheet, openById: () => spreadsheet }),
     MailApp: {
       sendEmail: (a: unknown, b?: string, c?: string) => {
         const m = typeof a === 'string' ? { to: a, subject: String(b), body: String(c) } : a as { to: string; subject: string; body: string }
@@ -84,7 +85,7 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
     Session: noop({ getScriptTimeZone: () => 'Asia/Tokyo' }),
     DriveApp: noop({}),
     CalendarApp: noop({}),
-    ScriptApp: noop({ getService: () => ({ getUrl: () => gasUrl }), getProjectTriggers: () => [] }),
+    ScriptApp: noop({ getService: () => ({ getUrl: () => gasUrl }), getProjectTriggers: () => [], getScriptId: () => 'script-' + gasUrl.split('/')[5] }),
     UrlFetchApp: {
       fetch: (url: string, o: { payload?: string } = {}) => {
         if (url.startsWith('https://oauth2.googleapis.com/tokeninfo')) {

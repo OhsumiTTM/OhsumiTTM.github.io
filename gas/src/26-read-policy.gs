@@ -429,7 +429,14 @@ function getInitialDataForMember_(memberId, knownVersion) {
   if (!sheets) return { memberId: null }
   // ログインした人のできる操作(役職の分と人ごとの例外の分。画面はこれだけを見て操作の部品を出す)
   var capabilities = memberCapabilitiesFromSnapshot_(snapshot.data, memberId)
-  return { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
+  var out = { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
+  // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
+  var member = findMemberInSnapshot_(snapshot.data, memberId)
+  if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {
+    var links = orgAdminLinks_()
+    if (links) out.adminLinks = links
+  }
+  return out
 }
 
 // Sheets API のエラー応答から、原因の分かる部分(status / reason / message)を取り出す
@@ -451,3 +458,15 @@ function describeSheetsApiError_(code, text) {
   return 'Sheets API がエラーを返しました: HTTP ' + code + ' ' + detail + hint
 }
 
+
+// 団体のスプレッドシートと Apps Script の編集画面の URL(最上位の役職の人の画面に出す)。取れなければ null
+function orgAdminLinks_() {
+  try {
+    var spreadsheetUrl = String(SpreadsheetApp.getActive().getUrl() || '')
+    var scriptId = String(ScriptApp.getScriptId() || '')
+    if (!/^https:\/\/docs\.google\.com\/spreadsheets\//.test(spreadsheetUrl) || !/^[\w-]+$/.test(scriptId)) return null
+    return { spreadsheetUrl: spreadsheetUrl, scriptEditUrl: 'https://script.google.com/d/' + scriptId + '/edit' }
+  } catch (e) {
+    return null
+  }
+}

@@ -515,7 +515,9 @@ async function run({ build = true } = {}) {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps }
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps,
+          // 最上位の役職の人にだけ、団体のスプレッドシート・Apps Script の URL を渡す(団体設定の「GAS とスプレッドシート」)
+          ...(member === ADMIN_MEMBER ? { adminLinks: { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/layout-check-sheet/edit', scriptEditUrl: 'https://script.google.com/d/layout-check-script/edit' } } : {}) }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
         case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
