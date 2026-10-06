@@ -226,11 +226,9 @@ describe('書き込みの認証', () => {
     const t = setup()
     const sheetAuth = new Set(t.gas.SHEET_AUTH_ACTIONS as string[])
     const snapshotAuth = new Set(t.gas.SNAPSHOT_AUTH_ACTIONS as string[])
-    const aStart = CODE_GS.indexOf('function authorizeAction_(')
-    const auth = CODE_GS.slice(aStart, CODE_GS.indexOf('\nfunction ', aStart + 10))
-    const daihyoOnly = auth.slice(auth.indexOf('var daihyoOnly = ['), auth.indexOf('if (daihyoOnly.indexOf(action)'))
-    const fullAdmin = auth.slice(auth.indexOf("if (action === 'updateSetting'"), auth.indexOf('if (isActingFullAdmin_(acting)) return'))
-    const actions = [...daihyoOnly.matchAll(/^\s*'(\w+)'/gm), ...fullAdmin.matchAll(/action === '(\w+)'/g)].map((m) => m[1])
+    // できる操作(capability)のまとまりの操作と、最上位だけの操作(今までの代表だけ・全権管理者だけ)
+    const capabilityActions = t.gas.CAPABILITY_ACTIONS as Record<string, string[]>
+    const actions = [...Object.values(capabilityActions).flat(), ...(t.gas.TOP_ONLY_ACTIONS as string[])]
     expect(actions.length).toBeGreaterThan(25)
     // 読み取り(getWebhookStatus など)は、#31 からスナップショットで判定する
     expect(actions.filter((a) => !sheetAuth.has(a) && !snapshotAuth.has(a))).toEqual([])

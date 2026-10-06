@@ -1,4 +1,7 @@
-function authorizeAction_(acting, action, body) {
+// できる操作(capability)を入れる前の authorizeAction_(2026-10-06 の gas/src/10-authorize.gs のまま)。
+// 既定の役職で操作の可否が前と1つも変わらないことを lib/ohsumi/gas-capabilities.test.ts で比べるために残す。
+// 直さないこと。
+function authorizeActionBefore_(acting, action, body) {
   if (REMOVED_ACTIONS.indexOf(action) >= 0) throw userError_(REMOVED_ACTION_MESSAGE)
   // ゴミ箱のタスクは、元に戻す・完全に消す以外の操作を受け付けない(代表も)
   if (body && body.taskId && TRASH_ACTIONS.indexOf(action) < 0) {
@@ -32,28 +35,47 @@ function authorizeAction_(acting, action, body) {
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
-  // --- 最上位だけ(どの設定でも渡さない): 人ごとの権限の例外の編集 ---
-  if (TOP_ONLY_ACTIONS.indexOf(action) >= 0) throw userError_('この操作は代表だけが使えます。')
-
-  // --- できる操作(capability)のまとまりに入る操作(38-capabilities.gs) ---
-  // 役職のできる操作で判定する。既定は、最上位: すべて、制限なしの管理者: org.rules・trash、ほか: なし
-  // (今までの「代表のみ」「代表または全権管理者のみ」と同じ人)。
-  // 役職で断られても、人ごとの権限の例外(OVERRIDE_SCOPE_BY_ACTION — 採用の例外・プロジェクトの例外)が
-  // あれば許可するのは今までと同じ。役職を付ける操作は、最上位でなければ昇権の防止を確かめる
-  var capability = CAPABILITY_BY_ACTION[action]
-  if (capability) {
-    if (roleHasCapability_(getRoles_(), role, capability)) {
-      if (action === 'updateRole') assertRoleAssignable_(acting, body.role, body.memberId)
-      if (action === 'addMember' && body.role) assertRoleAssignable_(acting, body.role, null)
-      if (action === 'convertCandidateToMember' && roleTier_(getRoles_(), body.role) !== 'base') {
-        // 候補者を一般以外の役職で登録するのは役職の付与にあたる(メンバーの登録・役職の付与と同じ確認)
-        if (!roleHasCapability_(getRoles_(), role, 'members.add')) throw userError_(capabilityDeniedMessage_('members.add'))
-        assertRoleAssignable_(acting, body.role, null)
-      }
-      return
-    }
+  // --- 代表のみ ---
+  var daihyoOnly = [
+    'updateRole',              // ロール変更は代表のみ
+    'removeMember',            // メンバー削除は代表のみ
+    'removeProject',           // プロジェクト削除は代表のみ
+    // updateDiscordWebhookUrl/updateSlackWebhookUrl/updateSetting は
+    // isActingFullAdmin_基準の分岐（下記）に移動した
+    'uploadOrgLogo',           // 団体ロゴアップロードは代表のみ
+    'addMember',               // メンバー追加は代表のみ
+    'updateEmail',             // 他人のメールアドレス変更は代表のみ
+    'updateJoinedAt',          // 所属開始日の編集は代表のみ（人事記録）
+    'updateReportsTo',         // 報告先の設定は代表のみ（組織図操作）
+    'updateMentor',            // メンター設定は代表のみ（HR操作）
+    'notifyTrainingDecision',       // 研修承認通知は代表のみ（承認権限）
+    'updatePermissionOverrides',    // 権限例外の編集は代表のみ（人事機密）
+    'updateMemberProjects',         // プロジェクト割り当ては代表のみ（自己昇権の抜け穴防止）
+    // 採用関連は「代表のみ、ただし permission_overrides(targetType: 'recruiting')の
+    // 例外を持つメンバーのみ許可」という個別指定制にしたいため、あえてdaihyoOrLeader
+    // ではなくdaihyoOnlyに置く（班長など他の管理者ロールにもデフォルトでは開放しない）
+    'addCandidate',                 // 候補者登録
+    'updateCandidate',              // 候補者情報の編集
+    'removeCandidate',              // 候補者削除
+    'convertCandidateToMember',     // 候補者→正式メンバーへの登録
+  ]
+  // 代表は関数冒頭の if (isDaihyo) return でここに到達しないため、
+  // このブロックに到達した時点で非代表が確定している。
+  // isActingFullAdmin_ は使わない（restricted_roles 依存で穴が開くため）。
+  if (daihyoOnly.indexOf(action) >= 0) {
     if (checkPermissionOverride_(acting, action, body)) return
-    throw userError_(capabilityDeniedMessage_(capability))
+    throw userError_('この操作は代表のみ実行できます。')
+  }
+
+  // --- updateSetting / Webhook URL設定: 団体ごとに isActingFullAdmin_ (=
+  // restricted_roles に含まれないロール) であれば許可。「事業責任者を代表と
+  // 同格にするか」は団体ごとのrestricted_roles設定で選べるようにするため、
+  // daihyoOnly固定ではなくこちらを使う。
+  if (action === 'updateSetting' || action === 'updateRoles' || action === 'deleteRole' ||
+      action === 'updateDepartments' || action === 'deleteDepartment' || action === 'moveDepartmentTasks' || action === 'restoreTask' || action === 'purgeTask' || action === 'unarchiveTasks' || action === 'updateDiscordWebhookUrl' || action === 'updateSlackWebhookUrl' || action === 'testDiscordWebhook' || action === 'testSlackWebhook' || action === 'getWebhookStatus' || action === 'getMailQuotaStatus' || action === 'getGasUpdateStatus' || action === 'updateProjectHealth' || action === 'revokeMemberSessions') {
+    if (isActingFullAdmin_(acting)) return
+    if (checkPermissionOverride_(acting, action, body)) return
+    throw userError_('この操作は代表または全権管理者のみ実行できます。')
   }
 
   // --- 代表 or 班長 (任意の管理者ロール) ---

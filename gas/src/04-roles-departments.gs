@@ -1,7 +1,7 @@
 // ---- 役職 ------------------------------------------------------------------------
 //
 // 役職は Settings の roles(JSON)に、上下関係の順(一般 → … → 最上位)で持つ。
-//   { id, name, tier: 'top' | 'admin' | 'base', restricted?, sections?, requiredSkills? }
+//   { id, name, tier: 'top' | 'admin' | 'base', restricted?, sections?, requiredSkills?, capabilities? }
 // 移行(VALUE_FORMAT=codes)の前は roles が無く、今までの設定(role_levels・
 // restricted_roles・role_permissions・job_requirements)から組み立てる(ID は役職名)。
 // 役職は ID でも名前でも引ける(findRole_)ので、移行の途中でも判定は変わらない。
@@ -84,6 +84,9 @@ function parseRolesSetting_(value) {
     if (sections) role.sections = sections
     var skills = roleStringArray_(o.requiredSkills)
     if (skills) role.requiredSkills = skills
+    // できる操作(38-capabilities.gs)。管理者の役職だけ。無ければ既定
+    var caps = roleStringArray_(o.capabilities)
+    if (caps && tier === 'admin') role.capabilities = normalizeCapabilities_(caps)
     roles.push(role)
   }
   return validateRoles_(roles).length === 0 ? roles : null
@@ -237,10 +240,10 @@ function validateDepartments_(list) {
   var ids = {}
   var names = {}
   list.forEach(function (d) {
-    if (!d.id || !d.name) errors.push('部門の ID と名前は空にできません')
-    if (d.name === UNCATEGORIZED_NAME) errors.push('「未分類」は部門の名前に使えません')
-    if (ids[d.id]) errors.push('部門の ID が重複しています: ' + d.id)
-    if (names[d.name]) errors.push('部門の名前が重複しています: ' + d.name)
+    if (!d.id || !d.name) errors.push('領域の ID と名前は空にできません')
+    if (d.name === UNCATEGORIZED_NAME) errors.push('「未分類」は領域の名前に使えません')
+    if (ids[d.id]) errors.push('領域の ID が重複しています: ' + d.id)
+    if (names[d.name]) errors.push('領域の名前が重複しています: ' + d.name)
     ids[d.id] = true
     names[d.name] = true
   })
@@ -340,21 +343,21 @@ function writeDepartments_(list) {
 
 // 部門の一覧を保存する(追加・名前・並び順・アーカイブの解除)。削除は deleteDepartment
 function updateDepartments_(newList) {
-  if (!Array.isArray(newList)) throw userError_('部門の一覧の形式が正しくありません。')
+  if (!Array.isArray(newList)) throw userError_('領域の一覧の形式が正しくありません。')
   var parsed = parseDepartmentsSetting_(JSON.stringify(newList))
-  if (!parsed) throw userError_('部門の一覧が正しくありません: ' + validateDepartments_(newList.filter(Boolean)).join(' / '))
+  if (!parsed) throw userError_('領域の一覧が正しくありません: ' + validateDepartments_(newList.filter(Boolean)).join(' / '))
   var current = getDepartments_()
   var byId = {}
   current.forEach(function (d) { byId[d.id] = d })
   var newIds = {}
   parsed.forEach(function (d) { newIds[d.id] = true })
   current.forEach(function (d) {
-    if (!newIds[d.id]) throw userError_('部門「' + d.name + '」を消すには、部門の削除を使ってください。')
+    if (!newIds[d.id]) throw userError_('領域「' + d.name + '」を消すには、領域の削除を使ってください。')
   })
   if (!isCodesFormat_()) {
     parsed.forEach(function (d) {
       // 移行前はタスクの部門を部門名で持つため、名前を変えると引けなくなる
-      if (byId[d.id] && byId[d.id].name !== d.name) throw userError_('部門の名前の変更は、内部コードへの移行の後にできるようになります。')
+      if (byId[d.id] && byId[d.id].name !== d.name) throw userError_('領域の名前の変更は、内部コードへの移行の後にできるようになります。')
     })
   }
   writeDepartments_(parsed)
@@ -404,7 +407,7 @@ function departmentUsage_(deptId) {
 function deleteDepartment_(deptId) {
   var list = getDepartments_()
   var dept = findDepartment_(list, deptId)
-  if (!dept) throw userError_('部門が見つかりません: ' + deptId)
+  if (!dept) throw userError_('領域が見つかりません: ' + deptId)
   var usage = departmentUsage_(dept.id)
   var used = usage.tasks + usage.settings + usage.overrides > 0
   var next = used
@@ -418,8 +421,8 @@ function deleteDepartment_(deptId) {
 function moveDepartmentTasks_(fromId, toId) {
   var list = getDepartments_()
   var from = findDepartment_(list, fromId)
-  if (!from) throw userError_('部門が見つかりません: ' + fromId)
-  if (toId && !findDepartment_(list, toId)) throw userError_('移す先の部門が見つかりません: ' + toId)
+  if (!from) throw userError_('領域が見つかりません: ' + fromId)
+  if (toId && !findDepartment_(list, toId)) throw userError_('移す先の領域が見つかりません: ' + toId)
   var sheet = getSheet_(SHEET_TASKS)
   var headers = headerRow_(sheet)
   var idCol = headers.indexOf('id')
@@ -479,7 +482,7 @@ function assertTopRemains_(change) {
 
 // 役職の一覧を保存する(並び順・種類・制限・セクション・必要スキル・名前)。
 // 役職の削除は deleteRole で行う(使っているメンバーを移す必要があるため)。
-// 全権管理者が行える。最上位の役職にかかわる変更は、最上位の役職を持つ人だけ
+// 団体のルール(org.rules)を持つ人が行える。最上位の役職にかかわる変更・できる操作の設定は、最上位の役職を持つ人だけ
 function updateRoles_(acting, newRoles) {
   if (!Array.isArray(newRoles)) throw userError_('役職の一覧の形式が正しくありません。')
   var parsed = parseRolesSetting_(JSON.stringify(newRoles))
@@ -496,6 +499,8 @@ function updateRoles_(acting, newRoles) {
   if (topOf(current) !== topOf(parsed) && !isTopRoleRef_(current, acting.role)) {
     throw userError_('最上位の役職にかかわる変更は、最上位の役職を持つメンバーだけが行えます。')
   }
+  // できる操作の設定は最上位の役職の人だけ。ほかの人は、できる操作が増えない変更だけ(38-capabilities.gs)
+  if (!isTopRoleRef_(current, acting.role)) parsed = guardRolesChangeByNonTop_(acting, current, parsed)
   parsed.forEach(function (r) {
     var before = byId[r.id]
     if (before && before.tier === 'base' && r.tier !== 'base') throw userError_('一般の役職の種類は変えられません。')
@@ -504,6 +509,10 @@ function updateRoles_(acting, newRoles) {
       // 移行の前は役職名が ID を兼ねるため、名前の変更と、代表以外の最上位の役職は作れない
       if (r.name !== r.id) throw userError_('役職の名前の変更は、内部コードへの移行の後にできるようになります。')
       if (r.tier === 'top' && r.name !== DEFAULT_TOP_ROLE_NAME) throw userError_('代表以外の最上位の役職は、内部コードへの移行の後に作れるようになります。')
+      // 移行の前の保存先(今までの設定)には、できる操作を書けない
+      if (Array.isArray(r.capabilities) && normalizeCapabilities_(r.capabilities).join(',') !== roleCapabilities_([{ id: r.id, name: r.name, tier: r.tier, restricted: r.restricted }], r.id).join(',')) {
+        throw userError_('役職のできる操作は、内部コードへの移行の後に設定できるようになります。')
+      }
     }
   })
   assertTopRemains_({ roles: parsed })

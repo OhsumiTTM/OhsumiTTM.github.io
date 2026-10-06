@@ -300,7 +300,7 @@ function updateDiscordWebhookUrl_(url) {
   notifyAdmins_(
     '[Ohsumi] Discord Webhook URLが変更されました',
     (url ? 'Discord Webhook URLが更新されました。' : 'Discord Webhook URLが削除されました。') +
-      '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+      '\n\n心当たりがない場合は ADMIN →「団体設定」から確認してください。',
     null,
     // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
     { urgent: true, evenIfChat: true },
@@ -324,7 +324,7 @@ function updateSlackWebhookUrl_(url) {
   notifyAdmins_(
     '[Ohsumi] Slack Webhook URLが変更されました',
     (url ? 'Slack Webhook URLが更新されました。' : 'Slack Webhook URLが削除されました。') +
-      '\n\n心当たりがない場合はAdmin → Tagsから確認してください。',
+      '\n\n心当たりがない場合は ADMIN →「団体設定」から確認してください。',
     null,
     // 送り先を書き換えられた時の合図なので、急ぎとしてメールですぐ送る
     { urgent: true, evenIfChat: true },

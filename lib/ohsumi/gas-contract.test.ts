@@ -216,7 +216,8 @@ describe('この GAS の版の更新(PR E)', () => {
 
   it('代表・全権管理者は、管理画面で読める(読み取りの操作。機能停止中も使える)', () => {
     expect(CODE_GS.match(/var READ_ONLY_ACTIONS = \[[^\]]*\]/)![0]).toContain("'getGasUpdateStatus'")
-    expect(CODE_GS).toMatch(/action === 'getGasUpdateStatus' \|\|/)
+    // 団体のルール(org.rules)のまとまり。既定では代表・全権管理者(制限なしの管理者)
+    expect(CODE_GS).toMatch(/'org\.rules': \[[^\]]*'getGasUpdateStatus'/)
   })
 })
 

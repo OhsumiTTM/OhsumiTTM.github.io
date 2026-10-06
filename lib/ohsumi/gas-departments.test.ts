@@ -58,7 +58,7 @@ describe('部門の一覧の保存(updateDepartments)', () => {
     const next = [{ id: 'd_fin', name: '会計' }, ...defaultDepartments()]
     t.act(() => t.gas.updateDepartments_(next))
     expect(JSON.parse(t.writes.departments)).toEqual(next)
-    expect(() => t.act(() => t.gas.updateDepartments_(next.slice(1)))).toThrow(/部門の削除を使って/)
+    expect(() => t.act(() => t.gas.updateDepartments_(next.slice(1)))).toThrow(/領域の削除を使って/)
     expect(() => t.act(() => t.gas.updateDepartments_([...next, { id: 'x', name: '未分類' }]))).toThrow(/未分類/)
   })
 
