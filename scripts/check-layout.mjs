@@ -91,6 +91,8 @@ export const ADMIN_STEPS = [
   ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
   // スキルのレベルの決め方(PR Z): 団体の既定を変える欄(5つのレベルの点数・条件)を開いた状態
   { name: '管理画面(スキルの決まり・スキルのレベルの決め方の入力欄)', do: 'skillRules' },
+  // 稼働の目安(タスクの設定): 入力を変えると、保存の前にその場で人数を出す。範囲の外・大小の関係の誤りは理由を出して保存を止める
+  { name: '管理画面(タスクの設定・稼働の目安の入力と人数の見込み)', do: 'workloadRules' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -111,6 +113,7 @@ export const DARK_STEPS = [
 export const DARK_ADMIN_STEPS = [
   { name: '暗い表示: 管理画面(ホーム)', do: 'admin' },
   ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `暗い表示: 管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
+  { name: '暗い表示: 稼働の目安の入力と人数の見込み', do: 'workloadRules' },
   { name: '暗い表示: 団体設定', do: 'orgSettings' },
   // 団体のテーマの色(暗い青)を入れても、暗い表示では読める明るさになる
   { name: '暗い表示: 団体のテーマの色', do: 'themeColor', color: '#123456' },
@@ -1292,6 +1295,25 @@ async function run({ build = true } = {}) {
           await clickText('団体の既定を変える', 'button'); await sleep(600)
           const fields = await evaluate(`document.querySelectorAll('[data-skill-level-rules] [data-skill-rule-level] input').length`)
           if (fields < 25) throw new Error('スキルのレベルの決め方の入力欄が出ません: ' + fields)
+        }
+        if (step.do === 'workloadRules') {
+          await clickText('タスクの設定', 'aside nav button'); await sleep(1200)
+          const setRule = (key, value) => evaluate(`(() => {
+            const el = document.querySelector('[data-workload-rule="${key}"]')
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)})
+            el.dispatchEvent(new Event('input', { bubbles: true }))
+          })()`)
+          const read = () => evaluate(`JSON.stringify({ text: document.querySelector('[data-workload-rules]')?.textContent ?? '', preview: document.querySelector('[data-workload-preview]')?.textContent ?? '', saveDisabled: !!document.querySelector('[data-workload-save]')?.disabled })`).then(JSON.parse)
+          let r = await read()
+          if (!/この設定だと 余力あり \d+人・普通 \d+人・余力なし \d+人/.test(r.preview)) throw new Error('稼働の目安に、人数の見込みが出ません: ' + r.preview)
+          if (!r.saveDisabled) throw new Error('稼働の目安を変えていないのに、保存のボタンが押せます')
+          await setRule('window_days', '13'); await sleep(300); r = await read()
+          if (!r.text.includes('14〜365 の整数にしてください') || !r.saveDisabled || !r.preview.includes('入力を直すと')) throw new Error('稼働の目安の範囲の外の値で、理由が出ないか保存できます: ' + r.text)
+          await setRule('window_days', '30'); await setRule('full_ratio', '0.5'); await sleep(300); r = await read()
+          if (!r.text.includes('「余力あり」の上限より大きくしてください') || !r.saveDisabled) throw new Error('稼働の目安の大小の関係の誤りで、理由が出ないか保存できます: ' + r.text)
+          const before = r.preview
+          await setRule('full_ratio', '3'); await setRule('available_ratio', '2'); await sleep(300); r = await read()
+          if (r.saveDisabled || !/この設定だと 余力あり \d+人/.test(r.preview)) throw new Error('稼働の目安を正しく直しても、人数の見込みが出ないか保存できません: ' + r.preview + ' / ' + before)
         }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)

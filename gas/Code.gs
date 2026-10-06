@@ -2388,7 +2388,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.06-2'
+var OHSUMI_GAS_VERSION = '2026.10.06-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -11670,6 +11670,8 @@ var READ_POLICY = {
       restricted_roles: 'all',
       skill_level_thresholds: 'all',
       skill_level_rules: 'all',
+      // 稼働の目安の決め方(37-value-checks.gs の checkWorkloadRules_ で確かめてから保存する)
+      workload_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',
@@ -15725,7 +15727,7 @@ function unarchiveTasks_(taskIds) {
 //   ・プロジェクトの健康状態(手動の上書き・自動判定の記録)
 //   ・採用の候補者の項目
 //   ・updateSetting の値: フォームの定義と承認の段・検定・定期タスクの規則・項目ごとの閲覧範囲・団体の保存の権限・
-//     スキルのレベルの決め方
+//     スキルのレベルの決め方・稼働の目安の決め方
 var NOTIFY_KINDS = ['new_task', 'review', 'mention', 'rejected', 'deadline']
 var NOTIFY_FREQUENCIES = ['immediate', '3h', '6h', '1d', 'none']
 var TIMEZONE_RE = /^(UTC|[A-Za-z]+(\/[A-Za-z0-9_+\-]+){1,2})$/
@@ -15945,12 +15947,45 @@ function checkSkillLevelRules_(value) {
   }
 }
 
+// 稼働の目安の決め方(lib/ohsumi/workload-rules.ts の WORKLOAD_RULE_RANGES と同じ範囲)。
+// 書いていない項目は既定のまま。知らない項目・範囲の外・full_ratio が available_ratio 以下は断る
+var WORKLOAD_RULE_RANGES = {
+  available_ratio: { min: 0.05, max: 5, label: '「余力あり」の上限' },
+  full_ratio: { min: 0.1, max: 10, label: '「余力なし」の下限' },
+  window_days: { min: 14, max: 365, integer: true, label: '普段のペースを数える期間' },
+  fallback_hours: { min: 0.5, max: 40, label: '想定時間が空のタスクの時間' },
+  no_history_normal_max_hours: { min: 0, max: 200, label: '完了したタスクが無い人の「普通」の上限' },
+  low_workload_task_threshold: { min: 0, max: 10, integer: true, label: '低稼働を知らせるタスクの件数' },
+}
+var WORKLOAD_RULE_DEFAULTS = { available_ratio: 0.6, full_ratio: 1.2 }
+
+function checkWorkloadRules_(value) {
+  var obj = parseSettingJson_(value, '稼働の目安の決め方')
+  if (!isPlainObject_(obj)) throw userError_('稼働の目安の決め方の形が正しくありません。')
+  Object.keys(obj).forEach(function (k) {
+    if (k === 'count_hold_and_review') {
+      if (typeof obj[k] !== 'boolean') throw userError_('「保留・確認待ちを含める」の形が正しくありません。')
+      return
+    }
+    var r = WORKLOAD_RULE_RANGES[k]
+    if (!r) throw userError_('稼働の目安の決め方に、知らない項目があります。')
+    var v = obj[k]
+    if (typeof v !== 'number' || !isFinite(v) || (r.integer && Math.floor(v) !== v) || v < r.min || v > r.max) {
+      throw userError_(r.label + 'は ' + r.min + '〜' + r.max + (r.integer ? ' の整数' : '') + ' にしてください。')
+    }
+  })
+  var available = obj.available_ratio !== undefined ? obj.available_ratio : WORKLOAD_RULE_DEFAULTS.available_ratio
+  var full = obj.full_ratio !== undefined ? obj.full_ratio : WORKLOAD_RULE_DEFAULTS.full_ratio
+  if (!(full > available)) throw userError_('「余力なし」の下限は、「余力あり」の上限より大きくしてください。')
+}
+
 // updateSetting の値を、キーごとに確かめる(空の値は「設定を消す」なので通す)
 var SETTING_VALUE_CHECKS = {
   custom_form_defs: checkCustomFormDefs_,
   quiz_definitions: checkQuizDefinitions_,
   recurring_rules: checkRecurringRules_,
   skill_level_rules: checkSkillLevelRules_,
+  workload_rules: checkWorkloadRules_,
   member_field_visibility: checkMemberFieldVisibility_,
   org_storage_access: checkOrgStorageAccess_,
 }

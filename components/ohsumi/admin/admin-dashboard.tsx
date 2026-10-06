@@ -41,6 +41,7 @@ export function AdminDashboard() {
     triggerOverdueReminders,
     awardSkillPoints,
     assignTask,
+    workloadRules,
   } = useOhsumi()
   const { openTask } = useTaskDrawer()
   const toast = useToast()
@@ -72,7 +73,7 @@ export function AdminDashboard() {
   // MAT-011: 負荷分散の提案 — 稼働過多なメンバーの担当タスクを、スキルが
   // 一致する稼働余力のあるメンバーへ再配分する提案。生成AIは使わず、
   // suggestWorkloadRebalance(既存のワークロード判定+スキルマッチング)のみで構成
-  const rebalanceSuggestions = suggestWorkloadRebalance(members, tasks)
+  const rebalanceSuggestions = suggestWorkloadRebalance(members, tasks, workloadRules)
 
   // item 18: プロジェクト健全性の説明型ダッシュボード — per-project rollup
   // of the same signals above (期限超過/確認待ち/Blocked/負荷), so an admin

@@ -54,6 +54,7 @@ import type {
 import { parseSkillLevelRules, type SkillLevelRules } from './skill-levels'
 import { type TaskVisibility } from './types'
 import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
+import { parseWorkloadRules, type WorkloadRules } from './workload-rules'
 import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
 import { CLIENT_VERSION, normalizeCode } from './codes'
 import {
@@ -687,6 +688,8 @@ export interface RemoteSettings {
   skillLevelThresholds: SkillLevelThresholds
   // スキルのレベルの決め方(Settings の skill_level_rules。lib/ohsumi/skill-levels.ts)
   skillLevelRules: SkillLevelRules
+  // 稼働の目安の決め方(Settings の workload_rules。lib/ohsumi/workload-rules.ts)
+  workloadRules: WorkloadRules
   // 検定定義リスト — Settings キー "quiz_definitions"
   quizDefinitions: QuizDefinition[]
   // レーダーチャート軸定義 — Settings キー "radar_axes"
@@ -784,6 +787,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
       try { const r = byKey.get('skill_level_thresholds'); return r ? normalizeThresholdKeys(JSON.parse(r)) : {} } catch { return {} }
     })(),
     skillLevelRules: parseSkillLevelRules(byKey.get('skill_level_rules') ?? ''),
+    workloadRules: parseWorkloadRules(byKey.get('workload_rules')),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),

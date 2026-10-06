@@ -124,6 +124,7 @@ import {
 import { selectProjectHealthReports } from './project-health-report'
 import { isGoogleCalendarReadEnabled } from './features'
 import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, todayStr } from './utils'
+import { DEFAULT_WORKLOAD_RULES, isDefaultWorkloadRules, normalizeWorkloadRules, type WorkloadRules } from './workload-rules'
 import { doneTaskCountsOf, levelPointsFor, skillLevelOf, type SkillEvidence, type SkillLevelRules } from './skill-levels'
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
@@ -215,6 +216,8 @@ interface OhsumiContextValue extends OhsumiState {
   pendingTasks: Task[]
   // 完了 tasks old enough to be archived — see Archive tab
   archivedTasks: Task[]
+  // 稼働の目安(memberWorkloadCapacity)に使うタスク(表示中 + アーカイブ)。どの画面もこれで数える
+  workloadTasks: Task[]
   // whether the app is backed by the live spreadsheet (via GAS) or the
   // local mock data — surfaced so the UI can show sync state.
   remoteEnabled: boolean
@@ -473,6 +476,9 @@ interface OhsumiContextValue extends OhsumiState {
   // スキルのレベルの決め方(Settings の skill_level_rules。代表・全権管理者が設定の画面で変える)
   skillLevelRules: SkillLevelRules
   updateSkillLevelRules: (rules: SkillLevelRules) => void
+  // 稼働の目安の決め方(Settings の workload_rules)。書いていなければ既定
+  workloadRules: WorkloadRules
+  updateWorkloadRules: (rules: WorkloadRules) => void
   quizDefinitions: QuizDefinition[]
   radarAxes: RadarAxis[]
   awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
@@ -1067,6 +1073,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   })
   const [skillLevelThresholds, setSkillLevelThresholds] = useState<SkillLevelThresholds>({})
   const [skillLevelRules, setSkillLevelRules] = useState<SkillLevelRules>({})
+  const [workloadRules, setWorkloadRules] = useState<WorkloadRules>(DEFAULT_WORKLOAD_RULES)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
   const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
@@ -1279,6 +1286,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setProjectOrderState(s.projectOrder)
     if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
     if (s.skillLevelRules) setSkillLevelRules(s.skillLevelRules)
+    if (s.workloadRules) setWorkloadRules(s.workloadRules)
     if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
     if (s.radarAxes) setRadarAxes(s.radarAxes)
     if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
@@ -1988,6 +1996,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     (rules: SkillLevelRules) => {
       setSkillLevelRules(rules)
       if (isSettingsConfigured) runRemote(remoteApi.updateSetting('skill_level_rules', JSON.stringify(rules)))
+    },
+    [runRemote],
+  )
+  // 稼働の目安の決め方を変える(団体のルールを持つ人)。既定と同じなら設定を消す(空 = 既定)
+  const updateWorkloadRules = useCallback(
+    (rules: WorkloadRules) => {
+      const next = normalizeWorkloadRules(rules)
+      setWorkloadRules(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('workload_rules', isDefaultWorkloadRules(next) ? '' : JSON.stringify(next)))
     },
     [runRemote],
   )
@@ -5010,6 +5028,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     () => tasks.filter((t) => !t.pendingApproval && isArchived(t)),
     [tasks],
   )
+  const workloadTasks = useMemo(() => [...visibleTasks, ...archivedTasks], [visibleTasks, archivedTasks])
 
   const getProjectMembers = useCallback(
     (projectId: string) => {
@@ -5213,11 +5232,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     // する場合のみ — item 25の「25日間未アクセス」通知とは異なり、対象を
     // 直属の上長に限定する)
     {
-      const allTasksForWorkload = [...visibleTasks, ...archivedTasks]
       members
         .filter((m) => !m.inactive && m.reportsToId === currentUser.id)
         .forEach((m) => {
-          if (isLowWorkloadMember(m.id, allTasksForWorkload)) {
+          if (isLowWorkloadMember(m.id, workloadTasks, workloadRules)) {
             items.push({
               id: `low-workload-${m.id}`,
               kind: 'lowWorkload',
@@ -5232,8 +5250,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     // P16/NTF-015: 本人が「タスクが少ない」状態なら、本人自身にも直接通知する
     // (上長への通知とは別。両方に通知する方針)
     {
-      const allTasksForWorkload = [...visibleTasks, ...archivedTasks]
-      if (isLowWorkloadMember(currentUser.id, allTasksForWorkload)) {
+      if (isLowWorkloadMember(currentUser.id, workloadTasks, workloadRules)) {
         items.push({
           id: `low-workload-self-${currentUser.id}`,
           kind: 'lowWorkload',
@@ -5286,7 +5303,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       taskId: '',
     })
     return items
-  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, archivedTasks, seenMentionIds, members, expenseApplications, t])
+  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, workloadTasks, seenMentionIds, members, expenseApplications, workloadRules, t])
 
   // ---- 通知の履歴(lib/ohsumi/notification-history.ts) ----
   // 保存できない(GAS が古い・読み込みに失敗した)時は、この画面の中だけで持つ
@@ -5430,6 +5447,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     visibleTasks,
     pendingTasks,
     archivedTasks,
+    workloadTasks,
     members: membersWithFacts,
     projects: orderedProjects,
     inputs,
@@ -5597,6 +5615,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateSkillLevelThresholds,
     skillLevelRules,
     updateSkillLevelRules,
+    workloadRules,
+    updateWorkloadRules,
     quizDefinitions,
     radarAxes,
     awardSkillPoints,
