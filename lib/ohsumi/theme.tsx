@@ -15,7 +15,12 @@ import {
 export type Theme = 'light' | 'dark'
 
 interface ThemeValue {
+  // 今の表示
   theme: Theme
+  // 画面で選んだ表示(選んでいない = 端末に合わせる時は null)
+  choice: Theme | null
+  // 表示を選ぶ。null は「端末に合わせる」(保存した選択を消して、端末の設定に戻す)
+  setChoice: (choice: Theme | null) => void
   toggle: () => void
 }
 
@@ -82,8 +87,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [theme])
 
+  const choose = useCallback((next: Theme | null) => {
+    setChoice(next)
+    try {
+      if (next) window.localStorage.setItem(THEME_STORAGE_KEY, next)
+      else window.localStorage.removeItem(THEME_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   return (
-    <ThemeContext.Provider value={{ theme, toggle }}>
+    <ThemeContext.Provider value={{ theme, choice, setChoice: choose, toggle }}>
       {children}
     </ThemeContext.Provider>
   )
