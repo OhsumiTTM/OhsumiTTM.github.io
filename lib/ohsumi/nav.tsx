@@ -20,6 +20,8 @@ export type Screen =
   | {
       name: 'admin'
       section: AdminSection
+      // ホームの一覧を開いて見せる(まとめた通知から)
+      list?: 'stale' | 'staleReview'
     }
   | { name: 'feedback' }
   // item 6: 個人コメント・進捗報告横断一覧

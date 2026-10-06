@@ -99,6 +99,91 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
   }
 }
 
+// ---- コメントへの返信 ----------------------------------------------------------------
+//
+// updateComments で新しく足されたコメントのうち、
+//   ① 返信(replyToId のあるもの): 元のコメントを書いた人と、元のコメントでメンションされていた人に知らせる
+//   ② 返信でないコメント: 操作した人をメンションしていたコメントの書き手に、「○○さんがコメントしました」と知らせる
+//      (メンションの後、そのタスクに操作した人が書いた初めてのコメントの時だけ。返信を使わなかった返事を救う)
+// 返信した本人・このコメントでメンションした人(メンションの通知が届く)・休止中の人・タスクを見られない人には送らない。
+// メールは「メンション」と同じく急ぎ(種類 reply。頻度は本人の「メンション」の設定)
+function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
+  try {
+    var list = (Array.isArray(comments) ? comments : []).filter(function (c) { return c && c.id })
+    var fresh = list.filter(function (c) { return !commentIdsBefore[String(c.id)] && String(c.byId) === String(actorId) && c.text })
+    if (fresh.length === 0) return
+    var task = findRow_(SHEET_TASKS, taskId)
+    if (!task) return
+    var leadersOnly = normalizeCode_('visibility', task.visibility) === 'leaders'
+    var roles = getRoles_()
+    var members = snapshotMembers_().filter(function (m) {
+      if (isInactiveValue_(m.inactive)) return false
+      return !leadersOnly || isTopRoleRef_(roles, m.role) || isAdminRoleRef_(roles, m.role)
+    })
+    var memberIds = {}
+    members.forEach(function (m) { memberIds[m.id] = true })
+    var actor = members.filter(function (m) { return m.id === String(actorId) })[0] || findRow_(SHEET_MEMBERS, actorId) || {}
+    var actorName = actor.display_name || actor.name || ''
+    var byId = {}
+    list.forEach(function (c) { byId[String(c.id)] = c })
+    // 時刻の順(同じ時刻は並びの順)
+    var ordered = list.map(function (c, i) { return { c: c, i: i } }).sort(function (a, b) {
+      var x = String(a.c.at || ''), y = String(b.c.at || '')
+      return x < y ? -1 : x > y ? 1 : a.i - b.i
+    }).map(function (x) { return x.c })
+    var recipients = {} // memberId -> 'reply' | 'follow'
+    fresh.forEach(function (c) {
+      var mentionedNow = mentionedMemberIds_(String(c.text).slice(0, MENTION_NOTIFY_MAX_CHARS), members)
+      var add = function (mid, why) {
+        mid = String(mid || '')
+        if (!mid || mid === String(actorId) || !memberIds[mid] || mentionedNow.indexOf(mid) >= 0 || recipients[mid]) return
+        recipients[mid] = why
+      }
+      var parent = c.replyToId ? byId[String(c.replyToId)] : null
+      if (parent) {
+        add(parent.byId, 'reply')
+        mentionedMemberIds_(String(parent.text || '').slice(0, MENTION_NOTIFY_MAX_CHARS), members).forEach(function (mid) { add(mid, 'reply') })
+        return
+      }
+      // 操作した人をメンションしていたコメント(このコメントより前)の書き手。その後に操作した人がまだ書いていなければ知らせる
+      var idx = ordered.indexOf(c)
+      ordered.slice(0, idx).forEach(function (m, k) {
+        if (String(m.byId) === String(actorId)) return
+        if (mentionedMemberIds_(String(m.text || '').slice(0, MENTION_NOTIFY_MAX_CHARS), members).indexOf(String(actorId)) < 0) return
+        var answeredBefore = ordered.slice(k + 1, idx).some(function (x) { return String(x.byId) === String(actorId) })
+        if (!answeredBefore) add(m.byId, 'follow')
+      })
+    })
+    var ids = Object.keys(recipients)
+    if (ids.length === 0) return
+    if (!takeRateLimit_('mention', actorId, ids.length)) {
+      _notifyLimited = true
+      console.warn('返信の通知の上限(1人1時間に' + rateLimitOf_('mention') + '人)を超えたため、通知しませんでした')
+      return
+    }
+    var text = String(fresh[fresh.length - 1].text).slice(0, MENTION_NOTIFY_MAX_CHARS)
+    ids.forEach(function (mid) {
+      var follow = recipients[mid] === 'follow'
+      queueNotification_(mid, 'reply', {
+        ja: {
+          subject: follow ? '[Ohsumi] ' + actorName + 'さんがコメントしました' : '[Ohsumi] ' + actorName + 'さんが返信しました',
+          body: follow
+            ? 'タスク「' + task.title + '」に' + actorName + 'さんがコメントしました(あなたのメンションへの返事かもしれません)。\n\n' + text + '\n\nOhsumiで確認してください。'
+            : 'タスク「' + task.title + '」のコメントに' + actorName + 'さんが返信しました。\n\n' + text + '\n\nOhsumiで確認してください。',
+        },
+        en: {
+          subject: follow ? '[Ohsumi] ' + actorName + ' commented' : '[Ohsumi] ' + actorName + ' replied',
+          body: follow
+            ? actorName + ' commented on task "' + task.title + '" (this may be a reply to your mention).\n\n' + text + '\n\nPlease check Ohsumi for details.'
+            : actorName + ' replied to a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
+        },
+      })
+    })
+  } catch (err) {
+    console.error('返信の通知に失敗しました: ' + maskEmailsIn_(String(err)))
+  }
+}
+
 // 研修の記録(メンバーの training_history_json)から、ID の記録を探す
 function trainingRecordOf_(memberId, trainingId) {
   var member = findRow_(SHEET_MEMBERS, memberId)

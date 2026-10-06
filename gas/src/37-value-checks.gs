@@ -34,9 +34,21 @@ function checkText_(v, max, label, required) {
   return s
 }
 
+// ベルの通知(画面の中のお知らせ)の種類(lib/ohsumi/bell-kinds.ts の BELL_KINDS と同じ)。値は true / false
+var BELL_KINDS = ['approval', 'review', 'staleReview', 'staleProgress', 'deadline', 'mention', 'lowWorkload', 'inactive', 'expense', 'invite']
+
 function checkNotifySettings_(settings) {
   if (!isPlainObject_(settings)) throw userError_('通知の設定の形が正しくありません。')
   Object.keys(settings).forEach(function (k) {
+    if (k === 'bell') {
+      var bell = settings.bell
+      if (!isPlainObject_(bell)) throw userError_('ベルの通知の設定の形が正しくありません。')
+      Object.keys(bell).forEach(function (b) {
+        if (BELL_KINDS.indexOf(b) < 0) throw userError_('ベルの通知の種類が正しくありません。')
+        if (typeof bell[b] !== 'boolean') throw userError_('ベルの通知のオン・オフの形が正しくありません。')
+      })
+      return
+    }
     if (NOTIFY_KINDS.indexOf(k) < 0) throw userError_('通知の種類が正しくありません。')
     if (NOTIFY_FREQUENCIES.indexOf(settings[k]) < 0) throw userError_('通知の頻度が正しくありません。')
   })

@@ -241,10 +241,12 @@ function validateCommentsUpdate_(task, newComments, acting) {
   var newIds = {}
   var isAdmin = isActingFullAdmin_(acting)
 
+  newComments.forEach(function (c) { if (c && c.id) newIds[c.id] = true })
   newComments.forEach(function (c) {
     if (!c || !c.id) throw userError_('コメントの形式が不正です。')
-    newIds[c.id] = true
     var old = oldById[c.id]
+    // 新しいコメントの値を確かめる(本文・返信の元・メンションした人)。既存のコメントは、これまでの値のまま通す
+    if (!old) checkNewComment_(c, newIds)
     if (old) {
       if (!isAdmin) {
         var changed = JSON.stringify(old) !== JSON.stringify(c)
@@ -266,6 +268,22 @@ function validateCommentsUpdate_(task, newComments, acting) {
         throw userError_('他のメンバーが投稿したコメントは削除できません。')
       }
     })
+  }
+}
+
+// 新しいコメントの値: 本文は空でない文字(長さは、1つのセルの長さの確かめで断る。書いた文章を画面に返せるように)。
+// 返信の元(replyToId)は、同じタスクのほかのコメント。メンションした人(mentionedIds)は ID の一覧
+// (通知の宛先は GAS が本文から決めるので、ここでは形だけ)
+function checkNewComment_(c, idsInList) {
+  if (typeof c.id !== 'string' || c.id.length > 100) throw userError_('コメントの ID が正しくありません。')
+  if (typeof c.text !== 'string' || !c.text.trim()) throw userError_('コメントの本文を入れてください。')
+  if (c.at !== undefined && (typeof c.at !== 'string' || c.at.length > 40)) throw userError_('コメントの時刻の形が正しくありません。')
+  if (c.replyToId !== undefined && c.replyToId !== null && c.replyToId !== '') {
+    if (typeof c.replyToId !== 'string' || c.replyToId === c.id || !idsInList[c.replyToId]) throw userError_('返信の元のコメントが見つかりません。')
+  }
+  if (c.mentionedIds !== undefined && c.mentionedIds !== null) {
+    if (!Array.isArray(c.mentionedIds) || c.mentionedIds.length > 100) throw userError_('メンションの形が正しくありません。')
+    c.mentionedIds.forEach(function (id) { if (typeof id !== 'string' || id.length > 100) throw userError_('メンションの形が正しくありません。') })
   }
 }
 

@@ -591,6 +591,8 @@ function uniqueEmails_(list) {
 // Returns the notify frequency for a given member + kind.
 // Falls back to 'immediate' for kinds not configured yet.
 function getNotifyFrequency_(memberId, kind) {
+  // 返信は「メンション」の頻度に従う(画面の設定は「メンション・返信」で1つ)
+  if (kind === 'reply') kind = 'mention'
   var row = measureAction_('recipientsMs', function () { return snapshotRowOrSheet_(SHEET_MEMBERS, memberId) })
   if (!row) return 'immediate'
   var raw = row.notify_settings

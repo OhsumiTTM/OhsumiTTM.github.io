@@ -193,6 +193,18 @@ export function daysSince(d?: string): number | null {
   return Math.round((now - then) / (1000 * 60 * 60 * 24))
 }
 
+// 放置の知らせ(ベルの通知): 確認待ちのまま STALE_REVIEW_DAYS 日・確認待ち以外の未完了で STALE_PROGRESS_DAYS 日、更新が無い
+export const STALE_REVIEW_DAYS = 3
+export const STALE_PROGRESS_DAYS = 7
+export function isStaleReview(task: Pick<Task, 'status' | 'lastActivity'>): boolean {
+  const idle = daysSince(task.lastActivity)
+  return task.status === 'review' && idle !== null && idle >= STALE_REVIEW_DAYS
+}
+export function isStaleProgress(task: Pick<Task, 'status' | 'lastActivity'>): boolean {
+  const idle = daysSince(task.lastActivity)
+  return task.status !== 'done' && task.status !== 'review' && idle !== null && idle >= STALE_PROGRESS_DAYS
+}
+
 // 前提タスク — a task listing others in dependsOnIds can't be marked 完了
 // until all of them are. Returns the still-open prerequisites (empty = OK
 // to complete); a dangling id (deleted task) is treated as satisfied since

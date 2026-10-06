@@ -2388,7 +2388,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.06-3'
+var OHSUMI_GAS_VERSION = '2026.10.07-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4813,10 +4813,12 @@ function validateCommentsUpdate_(task, newComments, acting) {
   var newIds = {}
   var isAdmin = isActingFullAdmin_(acting)
 
+  newComments.forEach(function (c) { if (c && c.id) newIds[c.id] = true })
   newComments.forEach(function (c) {
     if (!c || !c.id) throw userError_('コメントの形式が不正です。')
-    newIds[c.id] = true
     var old = oldById[c.id]
+    // 新しいコメントの値を確かめる(本文・返信の元・メンションした人)。既存のコメントは、これまでの値のまま通す
+    if (!old) checkNewComment_(c, newIds)
     if (old) {
       if (!isAdmin) {
         var changed = JSON.stringify(old) !== JSON.stringify(c)
@@ -4838,6 +4840,22 @@ function validateCommentsUpdate_(task, newComments, acting) {
         throw userError_('他のメンバーが投稿したコメントは削除できません。')
       }
     })
+  }
+}
+
+// 新しいコメントの値: 本文は空でない文字(長さは、1つのセルの長さの確かめで断る。書いた文章を画面に返せるように)。
+// 返信の元(replyToId)は、同じタスクのほかのコメント。メンションした人(mentionedIds)は ID の一覧
+// (通知の宛先は GAS が本文から決めるので、ここでは形だけ)
+function checkNewComment_(c, idsInList) {
+  if (typeof c.id !== 'string' || c.id.length > 100) throw userError_('コメントの ID が正しくありません。')
+  if (typeof c.text !== 'string' || !c.text.trim()) throw userError_('コメントの本文を入れてください。')
+  if (c.at !== undefined && (typeof c.at !== 'string' || c.at.length > 40)) throw userError_('コメントの時刻の形が正しくありません。')
+  if (c.replyToId !== undefined && c.replyToId !== null && c.replyToId !== '') {
+    if (typeof c.replyToId !== 'string' || c.replyToId === c.id || !idsInList[c.replyToId]) throw userError_('返信の元のコメントが見つかりません。')
+  }
+  if (c.mentionedIds !== undefined && c.mentionedIds !== null) {
+    if (!Array.isArray(c.mentionedIds) || c.mentionedIds.length > 100) throw userError_('メンションの形が正しくありません。')
+    c.mentionedIds.forEach(function (id) { if (typeof id !== 'string' || id.length > 100) throw userError_('メンションの形が正しくありません。') })
   }
 }
 
@@ -5746,6 +5764,8 @@ function runWriteAction_(body, actingMember) {
       })
       // 新しいコメントのメンションに通知する(宛先・本文は、保存したコメントから GAS が決める)
       notifyNewMentions_(body.taskId, commentsBefore, body.comments || [], actingMember.id)
+      // 返信と、メンションした相手のコメントを知らせる(元のコメントを書いた人・メンションされていた人・メンションした人)
+      notifyNewReplies_(body.taskId, commentsBefore, body.comments || [], actingMember.id)
       break
     case 'updateEstimatedHours':
       result = updateTaskFields_(body.taskId, {
@@ -6970,6 +6990,8 @@ function uniqueEmails_(list) {
 // Returns the notify frequency for a given member + kind.
 // Falls back to 'immediate' for kinds not configured yet.
 function getNotifyFrequency_(memberId, kind) {
+  // 返信は「メンション」の頻度に従う(画面の設定は「メンション・返信」で1つ)
+  if (kind === 'reply') kind = 'mention'
   var row = measureAction_('recipientsMs', function () { return snapshotRowOrSheet_(SHEET_MEMBERS, memberId) })
   if (!row) return 'immediate'
   var raw = row.notify_settings
@@ -7476,7 +7498,8 @@ var DIGEST_BODY_CHARS = 160
 // まとめを送る時に、急ぎのメールのために残しておく数(今日の残りがこれ以下なら、まとめは明日に回す)
 var DIGEST_MAIL_RESERVE = 10
 // 急ぎの通知の種類(queueNotification_。それ以外は、メンバーの設定に関わらずまとめに入れる)
-var URGENT_NOTIFY_KINDS = { mention: true, review: true, new_task: true }
+// reply: コメントへの返信・メンションした相手のコメント(メンションと同じく急ぎ。頻度はメンションの設定を使う)
+var URGENT_NOTIFY_KINDS = { mention: true, reply: true, review: true, new_task: true }
 
 function digestKey_(email) {
   return DIGEST_PREFIX + sha256Base64Url_(String(email).trim().toLowerCase())
@@ -7682,6 +7705,91 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
     })
   } catch (err) {
     console.error('メンションの通知に失敗しました: ' + maskEmailsIn_(String(err)))
+  }
+}
+
+// ---- コメントへの返信 ----------------------------------------------------------------
+//
+// updateComments で新しく足されたコメントのうち、
+//   ① 返信(replyToId のあるもの): 元のコメントを書いた人と、元のコメントでメンションされていた人に知らせる
+//   ② 返信でないコメント: 操作した人をメンションしていたコメントの書き手に、「○○さんがコメントしました」と知らせる
+//      (メンションの後、そのタスクに操作した人が書いた初めてのコメントの時だけ。返信を使わなかった返事を救う)
+// 返信した本人・このコメントでメンションした人(メンションの通知が届く)・休止中の人・タスクを見られない人には送らない。
+// メールは「メンション」と同じく急ぎ(種類 reply。頻度は本人の「メンション」の設定)
+function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
+  try {
+    var list = (Array.isArray(comments) ? comments : []).filter(function (c) { return c && c.id })
+    var fresh = list.filter(function (c) { return !commentIdsBefore[String(c.id)] && String(c.byId) === String(actorId) && c.text })
+    if (fresh.length === 0) return
+    var task = findRow_(SHEET_TASKS, taskId)
+    if (!task) return
+    var leadersOnly = normalizeCode_('visibility', task.visibility) === 'leaders'
+    var roles = getRoles_()
+    var members = snapshotMembers_().filter(function (m) {
+      if (isInactiveValue_(m.inactive)) return false
+      return !leadersOnly || isTopRoleRef_(roles, m.role) || isAdminRoleRef_(roles, m.role)
+    })
+    var memberIds = {}
+    members.forEach(function (m) { memberIds[m.id] = true })
+    var actor = members.filter(function (m) { return m.id === String(actorId) })[0] || findRow_(SHEET_MEMBERS, actorId) || {}
+    var actorName = actor.display_name || actor.name || ''
+    var byId = {}
+    list.forEach(function (c) { byId[String(c.id)] = c })
+    // 時刻の順(同じ時刻は並びの順)
+    var ordered = list.map(function (c, i) { return { c: c, i: i } }).sort(function (a, b) {
+      var x = String(a.c.at || ''), y = String(b.c.at || '')
+      return x < y ? -1 : x > y ? 1 : a.i - b.i
+    }).map(function (x) { return x.c })
+    var recipients = {} // memberId -> 'reply' | 'follow'
+    fresh.forEach(function (c) {
+      var mentionedNow = mentionedMemberIds_(String(c.text).slice(0, MENTION_NOTIFY_MAX_CHARS), members)
+      var add = function (mid, why) {
+        mid = String(mid || '')
+        if (!mid || mid === String(actorId) || !memberIds[mid] || mentionedNow.indexOf(mid) >= 0 || recipients[mid]) return
+        recipients[mid] = why
+      }
+      var parent = c.replyToId ? byId[String(c.replyToId)] : null
+      if (parent) {
+        add(parent.byId, 'reply')
+        mentionedMemberIds_(String(parent.text || '').slice(0, MENTION_NOTIFY_MAX_CHARS), members).forEach(function (mid) { add(mid, 'reply') })
+        return
+      }
+      // 操作した人をメンションしていたコメント(このコメントより前)の書き手。その後に操作した人がまだ書いていなければ知らせる
+      var idx = ordered.indexOf(c)
+      ordered.slice(0, idx).forEach(function (m, k) {
+        if (String(m.byId) === String(actorId)) return
+        if (mentionedMemberIds_(String(m.text || '').slice(0, MENTION_NOTIFY_MAX_CHARS), members).indexOf(String(actorId)) < 0) return
+        var answeredBefore = ordered.slice(k + 1, idx).some(function (x) { return String(x.byId) === String(actorId) })
+        if (!answeredBefore) add(m.byId, 'follow')
+      })
+    })
+    var ids = Object.keys(recipients)
+    if (ids.length === 0) return
+    if (!takeRateLimit_('mention', actorId, ids.length)) {
+      _notifyLimited = true
+      console.warn('返信の通知の上限(1人1時間に' + rateLimitOf_('mention') + '人)を超えたため、通知しませんでした')
+      return
+    }
+    var text = String(fresh[fresh.length - 1].text).slice(0, MENTION_NOTIFY_MAX_CHARS)
+    ids.forEach(function (mid) {
+      var follow = recipients[mid] === 'follow'
+      queueNotification_(mid, 'reply', {
+        ja: {
+          subject: follow ? '[Ohsumi] ' + actorName + 'さんがコメントしました' : '[Ohsumi] ' + actorName + 'さんが返信しました',
+          body: follow
+            ? 'タスク「' + task.title + '」に' + actorName + 'さんがコメントしました(あなたのメンションへの返事かもしれません)。\n\n' + text + '\n\nOhsumiで確認してください。'
+            : 'タスク「' + task.title + '」のコメントに' + actorName + 'さんが返信しました。\n\n' + text + '\n\nOhsumiで確認してください。',
+        },
+        en: {
+          subject: follow ? '[Ohsumi] ' + actorName + ' commented' : '[Ohsumi] ' + actorName + ' replied',
+          body: follow
+            ? actorName + ' commented on task "' + task.title + '" (this may be a reply to your mention).\n\n' + text + '\n\nPlease check Ohsumi for details.'
+            : actorName + ' replied to a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
+        },
+      })
+    })
+  } catch (err) {
+    console.error('返信の通知に失敗しました: ' + maskEmailsIn_(String(err)))
   }
 }
 
@@ -15754,9 +15862,21 @@ function checkText_(v, max, label, required) {
   return s
 }
 
+// ベルの通知(画面の中のお知らせ)の種類(lib/ohsumi/bell-kinds.ts の BELL_KINDS と同じ)。値は true / false
+var BELL_KINDS = ['approval', 'review', 'staleReview', 'staleProgress', 'deadline', 'mention', 'lowWorkload', 'inactive', 'expense', 'invite']
+
 function checkNotifySettings_(settings) {
   if (!isPlainObject_(settings)) throw userError_('通知の設定の形が正しくありません。')
   Object.keys(settings).forEach(function (k) {
+    if (k === 'bell') {
+      var bell = settings.bell
+      if (!isPlainObject_(bell)) throw userError_('ベルの通知の設定の形が正しくありません。')
+      Object.keys(bell).forEach(function (b) {
+        if (BELL_KINDS.indexOf(b) < 0) throw userError_('ベルの通知の種類が正しくありません。')
+        if (typeof bell[b] !== 'boolean') throw userError_('ベルの通知のオン・オフの形が正しくありません。')
+      })
+      return
+    }
     if (NOTIFY_KINDS.indexOf(k) < 0) throw userError_('通知の種類が正しくありません。')
     if (NOTIFY_FREQUENCIES.indexOf(settings[k]) < 0) throw userError_('通知の頻度が正しくありません。')
   })

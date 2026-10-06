@@ -12,7 +12,8 @@ var DIGEST_BODY_CHARS = 160
 // まとめを送る時に、急ぎのメールのために残しておく数(今日の残りがこれ以下なら、まとめは明日に回す)
 var DIGEST_MAIL_RESERVE = 10
 // 急ぎの通知の種類(queueNotification_。それ以外は、メンバーの設定に関わらずまとめに入れる)
-var URGENT_NOTIFY_KINDS = { mention: true, review: true, new_task: true }
+// reply: コメントへの返信・メンションした相手のコメント(メンションと同じく急ぎ。頻度はメンションの設定を使う)
+var URGENT_NOTIFY_KINDS = { mention: true, reply: true, review: true, new_task: true }
 
 function digestKey_(email) {
   return DIGEST_PREFIX + sha256Base64Url_(String(email).trim().toLowerCase())

@@ -72,6 +72,7 @@ import type {
   ParsedTask,
   ProgressEntry,
   NotifyKind,
+  NotifySettings,
   NotifyFrequency,
   PermissionOverride,
 } from './types'
@@ -123,7 +124,9 @@ import {
 } from './remote'
 import { selectProjectHealthReports } from './project-health-report'
 import { isGoogleCalendarReadEnabled } from './features'
-import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, parseMentions, todayStr } from './utils'
+import { computeProjectAutoHealth, daysSince, deadlineLevel, incompletePrerequisites, isLowWorkloadMember, isStaleProgress, isStaleReview, parseMentions, STALE_PROGRESS_DAYS, STALE_REVIEW_DAYS, todayStr } from './utils'
+import { commentNotifications, inviteNotifications } from './comment-notifications'
+import { filterByBellSettings } from './bell-kinds'
 import { DEFAULT_WORKLOAD_RULES, isDefaultWorkloadRules, normalizeWorkloadRules, type WorkloadRules } from './workload-rules'
 import { doneTaskCountsOf, levelPointsFor, skillLevelOf, type SkillEvidence, type SkillLevelRules } from './skill-levels'
 import { useI18n } from './i18n'
@@ -456,7 +459,7 @@ interface OhsumiContextValue extends OhsumiState {
   addMember: (name: string, email: string, affiliation: string, role: string, sendInvite?: boolean) => Promise<import('./remote').MemberInviteResult | undefined>
   removeMember: (memberId: string) => void
   updateNotify: (memberId: string, notify: boolean) => void
-  updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => void
+  updateNotifySettings: (memberId: string, settings: NotifySettings) => void
   updateEmail: (memberId: string, email: string) => void
   updateMemberProjects: (memberId: string, projectIds: string[]) => void
   // true when currentUser holds the highest-ranked role level (unscoped
@@ -567,7 +570,8 @@ interface OhsumiContextValue extends OhsumiState {
   respondToForm: (id: string, memberId: string, responses: Record<string, FormAnswerValue>) => void
   addDeliverable: (id: string, label: string, url: string) => void
   removeDeliverable: (id: string, deliverableId: string) => void
-  addComment: (id: string, text: string) => void
+  // replyToId: 返信の時の元のコメント
+  addComment: (id: string, text: string, replyToId?: string) => void
   removeComment: (id: string, commentId: string) => void
   updateAvatar: (memberId: string, avatarColor: string, initials: string) => void
   uploadAvatarImage: (memberId: string, dataUrl: string, filename: string) => Promise<void>
@@ -3984,7 +3988,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const updateNotifySettings = useCallback(
-    (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) => {
+    (memberId: string, settings: NotifySettings) => {
       setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, notifySettings: settings } : m)))
       if (isRemoteConfigured) runRemote(remoteApi.updateNotifySettings(memberId, settings))
     },
@@ -4747,7 +4751,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // コメント機能 — a discussion thread on the task, separate from
   // progressHistory (a status-update log, not a conversation)
   const addComment = useCallback(
-    (id: string, text: string) => {
+    (id: string, text: string, replyToId?: string) => {
       const trimmed = text.trim()
       if (!trimmed) return
       // 自分自身への@メンションは通知しない
@@ -4758,6 +4762,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         byId: currentUserId ?? '',
         at: new Date().toISOString(),
         mentionedIds: mentionedIds.length > 0 ? mentionedIds : undefined,
+        ...(replyToId ? { replyToId } : {}),
       }
       setTasks((prev) =>
         prev.map((t) => {
@@ -4875,24 +4880,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     })
   }, [currentUserId, persistOnboarded])
 
-  const markMentionSeen = useCallback(
-    (commentId: string) => {
-      if (!currentUserId) return
-      setSeenMentionIds((prev) => {
-        const mine = prev[currentUserId] ?? []
-        if (mine.includes(commentId)) return prev
-        const next = { ...prev, [currentUserId]: [...mine, commentId] }
-        try {
-          window.localStorage.setItem(SEEN_MENTIONS_STORAGE_KEY, JSON.stringify(next))
-        } catch {
-          /* ignore */
-        }
-        return next
-      })
-    },
-    [currentUserId],
-  )
-
   const clearSkillCertifiedEvent = useCallback(() => setSkillCertifiedEvent(null), [])
 
   // 通知を既読にする(item 7 の「消す」の代わり)。履歴は GAS の本人だけの保存に残す
@@ -4901,6 +4888,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setNotifHistory((prev) => (prev ? { ...prev, history: markReadIn(prev.history, notificationId) } : prev))
     },
     [],
+  )
+  // メンションを既読にする。既読は通知の履歴(GAS の本人だけの保存)に残すので、ほかの端末でも既読になる
+  const markMentionSeen = useCallback(
+    (commentId: string) => markNotificationRead(`mention-${commentId}`),
+    [markNotificationRead],
   )
   const markAllNotificationsRead = useCallback(() => {
     setNotifHistory((prev) => (prev ? { ...prev, history: markAllReadIn(prev.history) } : prev))
@@ -5129,6 +5121,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         items.push({
           id: `approval-${task.id}`,
           kind: 'approval',
+          bell: 'approval',
           title: t('notification.approval.title', { name: task.name }),
           detail: t('notification.approval.detail'),
           taskId: task.id,
@@ -5140,36 +5133,66 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           items.push({
             id: `review-${task.id}`,
             kind: 'review',
+            bell: 'review',
             title: t('notification.review.title', { name: task.name }),
             detail: t('notification.review.detail'),
             taskId: task.id,
           })
         })
-      // item 10: SLA/放置アラート — 確認待ちが3日、進行中タスクの更新が
-      // 7日ないと通知。lastActivity は既存の「放置検知」用フィールド
-      // (types.ts) をそのまま流用
-      adminTasks.forEach((task) => {
-        const idle = daysSince(task.lastActivity)
-        if (idle === null) return
-        if (task.status === 'review' && idle >= 3) {
+      // item 10: SLA/放置アラート — 確認待ちが3日・進行中タスクの更新が7日ない。管理者には、見られる範囲の
+      // タスクを1件ずつではなく、1つにまとめて件数を出す(押すと ADMIN のホームの一覧。件数が増えたら未読に戻す)
+      const staleReviewCount = adminTasks.filter((task) => isStaleReview(task)).length
+      const staleProgressCount = adminTasks.filter((task) => isStaleProgress(task)).length
+      if (staleProgressCount > 0) {
+        items.push({
+          id: 'stale-summary-progress',
+          kind: 'stale',
+          bell: 'staleProgress',
+          count: staleProgressCount,
+          adminList: 'stale',
+          title: t('notification.staleSummary.progress', { days: STALE_PROGRESS_DAYS, count: staleProgressCount }),
+          detail: t('notification.staleSummary.detail'),
+          taskId: '',
+        })
+      }
+      if (staleReviewCount > 0) {
+        items.push({
+          id: 'stale-summary-review',
+          kind: 'stale',
+          bell: 'staleReview',
+          count: staleReviewCount,
+          adminList: 'staleReview',
+          title: t('notification.staleSummary.review', { days: STALE_REVIEW_DAYS, count: staleReviewCount }),
+          detail: t('notification.staleSummary.detail'),
+          taskId: '',
+        })
+      }
+    }
+    // 担当者本人には、自分のタスクの分だけ1件ずつ出す
+    visibleTasks
+      .filter((task) => task.assigneeIds.includes(currentUser.id))
+      .forEach((task) => {
+        const idle = daysSince(task.lastActivity) ?? 0
+        if (isStaleReview(task)) {
           items.push({
             id: `stale-review-${task.id}`,
             kind: 'stale',
+            bell: 'staleReview',
             title: t('notification.staleReview.title', { days: idle, name: task.name }),
             detail: t('notification.staleReview.detail'),
             taskId: task.id,
           })
-        } else if (task.status !== 'done' && task.status !== 'review' && idle >= 7) {
+        } else if (isStaleProgress(task)) {
           items.push({
             id: `stale-progress-${task.id}`,
             kind: 'stale',
+            bell: 'staleProgress',
             title: t('notification.staleProgress.title', { days: idle, name: task.name }),
             detail: t('notification.staleProgress.detail'),
             taskId: task.id,
           })
         }
       })
-    }
     visibleTasks
       .filter((task) => task.assigneeIds.includes(currentUser.id) && task.status !== 'done')
       .forEach((task) => {
@@ -5185,29 +5208,31 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           items.push({
             id: `deadline-${task.id}`,
             kind: 'deadline',
+            bell: 'deadline',
             title: task.name,
             detail: t(detailKey, { days: dl.days ?? 0 }),
             taskId: task.id,
           })
         }
       })
-    // コメントの@メンション — 自分がメンションされていて、まだ既読にしていない
-    // ものだけ表示（既読管理は端末ローカルの seenMentionIds/markMentionSeen）
-    const seenHere = seenMentionIds[currentUser.id] ?? []
-    visibleTasks.forEach((task) => {
-      task.comments?.forEach((c) => {
-        if (!c.mentionedIds?.includes(currentUser.id)) return
-        if (seenHere.includes(c.id)) return
-        items.push({
-          id: `mention-${c.id}`,
-          kind: 'mention',
-          title: t('notification.mention.title', { name: task.name }),
-          detail: c.text.length > 40 ? `${c.text.slice(0, 40)}…` : c.text,
-          taskId: task.id,
-          commentId: c.id,
-        })
-      })
-    })
+    // コメントのメンション・返信・メンションした相手のコメント(lib/ohsumi/comment-notifications.ts)。
+    // 既読は通知の履歴(本人だけの保存)に残るので、ほかの端末でも既読になる
+    const nameOf = (id: string) => {
+      const m = members.find((x) => x.id === id)
+      return m ? m.displayName || m.name : t('notification.someone')
+    }
+    items.push(...commentNotifications(visibleTasks, currentUser.id, nameOf, {
+      mention: (name) => t('notification.mention.title', { name }),
+      reply: (who, name) => t('notification.reply.title', { who, name }),
+      mentionFollow: (who, name) => t('notification.mentionFollow.title', { who, name }),
+      mentionFollowDetail: (text) => t('notification.mentionFollow.detail', { text }),
+    }))
+    // 日程調整・フォームに招待されていて、まだ答えていないもの
+    items.push(...inviteNotifications(visibleTasks, currentUser.id, {
+      schedule: (name) => t('notification.invite.schedule', { name }),
+      form: (name) => t('notification.invite.form', { name }),
+      detail: t('notification.invite.detail'),
+    }))
     // item 25: 25日間未アクセスのメンバーを管理者に通知
     if (isAdmin) {
       const now = Date.now()
@@ -5221,6 +5246,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             items.push({
               id: `inactive-${m.id}`,
               kind: 'stale',
+              bell: 'inactive',
               title: t('notification.inactive.title', { name: m.displayName || m.name, days }),
               detail: t('notification.inactive.detail'),
               taskId: '',
@@ -5240,6 +5266,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             items.push({
               id: `low-workload-${m.id}`,
               kind: 'lowWorkload',
+              bell: 'lowWorkload',
               title: t('notification.lowWorkload.title', { name: m.displayName || m.name }),
               detail: t('notification.lowWorkload.detail'),
               taskId: '',
@@ -5255,6 +5282,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         items.push({
           id: `low-workload-self-${currentUser.id}`,
           kind: 'lowWorkload',
+          bell: 'lowWorkload',
           title: t('notification.lowWorkloadSelf.title'),
           detail: t('notification.lowWorkloadSelf.detail'),
           taskId: '',
@@ -5275,6 +5303,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         items.push({
           id: `expense-approval-${app.id}`,
           kind: 'expense',
+          bell: 'expense',
           title: t('notification.expense.approval.title', { amount: app.amount }),
           detail: t('notification.expense.approval.detail'),
           taskId: '',
@@ -5288,6 +5317,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         items.push({
           id: `expense-${app.status}-${app.id}`,
           kind: 'expense',
+          bell: 'expense',
           title: t(app.status === 'returned' ? 'notification.expense.returned.title' : 'notification.expense.rejected.title'),
           detail: t(app.status === 'returned' ? 'notification.expense.returned.detail' : 'notification.expense.rejected.detail'),
           taskId: '',
@@ -5304,7 +5334,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       taskId: '',
     })
     return items
-  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, workloadTasks, seenMentionIds, members, expenseApplications, workloadRules, t])
+  }, [currentUser, adminPendingTasks, adminTasks, visibleTasks, workloadTasks, members, expenseApplications, workloadRules, t])
 
   // ---- 通知の履歴(lib/ohsumi/notification-history.ts) ----
   // 保存できない(GAS が古い・読み込みに失敗した)時は、この画面の中だけで持つ
@@ -5318,8 +5348,12 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false
     const start = (raw: string | null | undefined, canSave = true) => {
       if (cancelled) return
-      const legacy = dismissedNotificationIds[currentUserId] ?? []
-      pendingDismissedRef.current = raw ? null : legacy
+      // 以前の「消す」(履歴が無い時だけ)と、この端末だけで覚えていたメンションの既読を、履歴の既読に移す
+      const legacy = [
+        ...(raw ? [] : dismissedNotificationIds[currentUserId] ?? []),
+        ...(seenMentionIds[currentUserId] ?? []).map((id) => `mention-${id}`),
+      ]
+      pendingDismissedRef.current = legacy.length ? legacy : null
       const history = raw ? parseNotificationHistory(raw) : { ...EMPTY_HISTORY, items: [] }
       notifSavedRef.current = history
       notifSaveDisabledRef.current = !canSave
@@ -5341,7 +5375,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       start(raw)
     }
     return () => { cancelled = true }
-  }, [currentUserId, remoteStatus, notifHistory?.userId, dismissedNotificationIds])
+  }, [currentUserId, remoteStatus, notifHistory?.userId, dismissedNotificationIds, seenMentionIds])
 
   // 今の通知を履歴に入れる(データと裏での読み込みがそろってから。そろう前に入れると、まだ読んでいない通知を「対応済み」にしてしまう)
   const notifDataReady = isRemoteConfigured ? remoteStatus === 'ready' && recordsLoaded : hydrated
@@ -5355,12 +5389,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       return next === prev.history ? prev : { ...prev, history: next }
     })
     if (legacy && legacy.length) {
-      // 移した後は、以前の「消す」の記録を消す(この人の分だけ)
-      try {
-        const all = JSON.parse(window.localStorage.getItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY) || '{}') as Record<string, string[]>
-        delete all[currentUser.id]
-        window.localStorage.setItem(DISMISSED_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(all))
-      } catch { /* ignore */ }
+      // 移した後は、以前の「消す」とメンションの既読の記録を消す(この人の分だけ)
+      for (const key of [DISMISSED_NOTIFICATIONS_STORAGE_KEY, SEEN_MENTIONS_STORAGE_KEY]) {
+        try {
+          const all = JSON.parse(window.localStorage.getItem(key) || '{}') as Record<string, string[]>
+          delete all[currentUser.id]
+          window.localStorage.setItem(key, JSON.stringify(all))
+        } catch { /* ignore */ }
+      }
     }
   }, [notifDataReady, currentUser, notifHistory?.userId, allNotifications])
 
@@ -5385,15 +5421,19 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer)
   }, [notifHistory, readOnly])
 
+  // ベルの通知のオン・オフ(本人の設定 notify_settings.bell)。履歴には全部入れておき、出す時に外す
+  // (オフにした間に「対応済み」にして、オンに戻した時に読んだ通知がまた未読で出ないように)
+  const bellSettings = currentUser?.notifySettings?.bell
   const notifications = useMemo(() => {
     if (!currentUser) return []
-    if (notifHistory?.userId === currentUser.id) return unreadNotifications(notifHistory.history, allNotifications)
+    const shown = filterByBellSettings(allNotifications, bellSettings)
+    if (notifHistory?.userId === currentUser.id) return unreadNotifications(notifHistory.history, shown)
     const dismissedHere = dismissedNotificationIds[currentUser.id] ?? []
-    return allNotifications.filter((n) => !dismissedHere.includes(n.id))
-  }, [currentUser, notifHistory, allNotifications, dismissedNotificationIds])
+    return shown.filter((n) => !dismissedHere.includes(n.id))
+  }, [currentUser, notifHistory, allNotifications, dismissedNotificationIds, bellSettings])
   const notificationHistory = useMemo(
-    () => (currentUser && notifHistory?.userId === currentUser.id ? notifHistory.history.items : []),
-    [currentUser, notifHistory],
+    () => (currentUser && notifHistory?.userId === currentUser.id ? filterByBellSettings(notifHistory.history.items, bellSettings) : []),
+    [currentUser, notifHistory, bellSettings],
   )
 
   const projectTypes = useMemo(

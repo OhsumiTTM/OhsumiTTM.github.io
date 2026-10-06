@@ -54,10 +54,14 @@ export const STEPS = [
   { name: '公募', do: 'click', text: '公募' },
   { name: 'タスク詳細(担当者が多い)', do: 'openTask', view: 'リスト', text: '担当者が多いタスク' },
   { name: 'タスク詳細(長い名前・説明)', do: 'openTask', view: 'リスト', text: 'とても長いタスク名の例' },
+  // コメントへの返信: 「返信」で元のコメントの下に字下げして並べる
+  { name: 'タスク詳細(コメントへの返信)', do: 'commentReply', view: 'リスト', text: 'コメントがとても多いタスク' },
   { name: '個人ページ(タスク)', do: 'profile' },
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   { name: '個人ページ(設定)', do: 'click', text: '設定' },
+  // ベルの通知の種類ごとのオン・オフ。「メンション・返信」をオフにすると、見落としの注意を1行出す
+  { name: '個人ページ(設定・ベルの通知)', do: 'bellSettings' },
   // INPUT の「項目を入れて追加」: 空の枠(必須の理由・登録の止め方)・「＋ もう1件」の引き継ぎ・離れる時の確かめ・
   // 「やり直す」で文章が残ること。スマートフォンの幅では枠の項目が縦に1列に並ぶ
   { name: 'INPUT(項目を入れて追加)', do: 'inputForm' },
@@ -109,9 +113,11 @@ export const DARK_STEPS = [
   { name: '暗い表示: OUTPUT(一覧)', do: 'click', text: '一覧' },
   ...['ワークフロー', 'リスト', 'カレンダー', '難易度', '依存関係', 'ガント', '公募'].map((text) => ({ name: `暗い表示: ${text}`, do: 'click', text })),
   { name: '暗い表示: タスク詳細', do: 'openTask', view: 'リスト', text: '担当者が多いタスク' },
+  { name: '暗い表示: コメントへの返信', do: 'commentReply', view: 'リスト', text: 'コメントがとても多いタスク' },
   { name: '暗い表示: INPUT', do: 'click', text: 'INPUT' },
   { name: '暗い表示: INPUT(項目を入れて追加)', do: 'inputForm' },
   { name: '暗い表示: 個人ページ', do: 'profile' },
+  { name: '暗い表示: ベルの通知の設定', do: 'bellSettings' },
   { name: '暗い表示: アカウントのメニュー', do: 'accountMenu', height: 560 },
 ]
 export const DARK_ADMIN_STEPS = [
@@ -1369,6 +1375,39 @@ async function run({ build = true } = {}) {
           const before = r.preview
           await setRule('full_ratio', '3'); await setRule('available_ratio', '2'); await sleep(300); r = await read()
           if (r.saveDisabled || !/この設定だと 余力あり \d+人/.test(r.preview)) throw new Error('稼働の目安を正しく直しても、人数の見込みが出ないか保存できません: ' + r.preview + ' / ' + before)
+        }
+        if (step.do === 'commentReply') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+          await clickText(step.view); await sleep(800)
+          await clickText(step.text, 'td, span, div, button'); await sleep(1500)
+          const count = () => evaluate(`document.querySelectorAll('[data-comment-reply]').length`)
+          const before = await count()
+          await evaluate(`(() => { const b = document.querySelector('[data-comment-reply-button]'); b.scrollIntoView({ block: 'center' }); b.click(); return true })()`); await sleep(400)
+          if (!(await evaluate(`!!document.querySelector('[data-comment-reply-box] textarea')`))) throw new Error('「返信」を押しても、返信の欄が出ません')
+          await evaluate(`(() => {
+            const el = document.querySelector('[data-comment-reply-box] textarea')
+            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, '返信の例です。元のコメントの下に字下げして並びます。とても長い返信でも枠からはみ出さないことを確かめます。')
+            el.dispatchEvent(new Event('input', { bubbles: true }))
+            return true
+          })()`); await sleep(200)
+          await evaluate(`document.querySelector('[data-comment-send-reply]').click()`); await sleep(600)
+          const after = await count()
+          if (after !== before + 1) throw new Error('返信が、元のコメントの下に並びません: ' + before + ' → ' + after)
+          const indented = await evaluate(`(() => { const r = document.querySelector('[data-comment-replies]'); const root = r && r.previousElementSibling; return !!(r && root && r.getBoundingClientRect().left > root.getBoundingClientRect().left) })()`)
+          if (!indented) throw new Error('返信が字下げされていません')
+          await evaluate(`document.querySelector('[data-comment-reply]').scrollIntoView({ block: 'center' })`); await sleep(300)
+        }
+        if (step.do === 'bellSettings') {
+          await clickText('設定', '[role=tab], button'); await sleep(800)
+          await evaluate(`document.querySelector('[data-bell-settings]').scrollIntoView({ block: 'center' })`); await sleep(300)
+          const kinds = await evaluate(`[...document.querySelectorAll('[data-bell-settings] [data-bell-kind]')].map((e) => e.getAttribute('data-bell-kind')).join(',')`)
+          if (kinds !== 'approval,review,staleReview,staleProgress,deadline,mention,lowWorkload,inactive,expense,invite') throw new Error('ベルの通知の種類が足りません: ' + kinds)
+          // 「メンション・返信」をオフにすると、見落としの注意を出す(オフにはできる)
+          if (await evaluate(`document.querySelector('[data-bell-kind="mention"]').checked`)) {
+            await evaluate(`document.querySelector('[data-bell-kind="mention"]').click()`); await sleep(400)
+          }
+          const warn = await evaluate(`document.querySelector('[data-bell-mention-warning]')?.textContent ?? ''`)
+          if (!warn.includes('見落としの原因になります')) throw new Error('「メンション・返信」をオフにしても、注意が出ません: ' + warn)
         }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)

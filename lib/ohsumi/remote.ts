@@ -47,12 +47,14 @@ import type {
   TransferRecord,
   NotifyFrequency,
   NotifyKind,
+  NotifySettings,
   PermissionOverride,
   SkillPoints,
   SurveyQuestion,
 } from './types'
 import { parseSkillLevelRules, type SkillLevelRules } from './skill-levels'
 import { type TaskVisibility } from './types'
+import { parseBellSettings } from './bell-kinds'
 import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
 import { parseWorkloadRules, type WorkloadRules } from './workload-rules'
 import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
@@ -479,7 +481,7 @@ function mapMemberRow(
     // MemberEmailsシートへ移した(exchangeIdToken/getMyEmails/updateEmail経由で
     // のみ扱う。getInitialData もemail列は返さない)
     notify: /^(true|1|yes)$/i.test((r.notify_new_task || '').trim()),
-    notifySettings: parseJsonObject<Partial<Record<NotifyKind, NotifyFrequency>>>(r.notify_settings),
+    notifySettings: parseNotifySettings(r.notify_settings),
     displayName: r.display_name || undefined,
     unavailableDates: splitTags(r.unavailable_dates),
     reportsToId: r.reports_to_id || undefined,
@@ -622,6 +624,22 @@ function skillPointsOnly(obj: Record<string, unknown> | undefined): SkillPoints 
   if (!obj) return undefined
   const out: SkillPoints = {}
   for (const [k, v] of Object.entries(obj)) if (!k.startsWith('__') && typeof v === 'number') out[k] = v
+  return out
+}
+
+// 本人の通知の設定: メールの頻度(種類ごと)と、ベルの通知のオン・オフ(bell)
+const NOTIFY_FREQUENCY_VALUES: NotifyFrequency[] = ['immediate', '3h', '6h', '1d', 'none']
+const NOTIFY_KIND_VALUES: NotifyKind[] = ['new_task', 'review', 'mention', 'rejected', 'deadline']
+export function parseNotifySettings(raw: string | undefined): NotifySettings | undefined {
+  const obj = parseJsonObject<Record<string, unknown>>(raw)
+  if (!obj) return undefined
+  const out: NotifySettings = {}
+  for (const k of NOTIFY_KIND_VALUES) {
+    const v = obj[k]
+    if (typeof v === 'string' && (NOTIFY_FREQUENCY_VALUES as string[]).includes(v)) out[k] = v as NotifyFrequency
+  }
+  const bell = parseBellSettings(obj.bell)
+  if (Object.keys(bell).length) out.bell = bell
   return out
 }
 
@@ -1194,7 +1212,7 @@ export const remoteApi = {
   removeMember: (memberId: string) => postToGas('removeMember', { memberId }),
   updateNotify: (memberId: string, notify: boolean) =>
     postToGas('updateNotify', { memberId, notify }),
-  updateNotifySettings: (memberId: string, settings: Partial<Record<NotifyKind, NotifyFrequency>>) =>
+  updateNotifySettings: (memberId: string, settings: NotifySettings) =>
     postToGas('updateNotifySettings', { memberId, settings }),
   updateRole: (memberId: string, role: Role) => postToGas('updateRole', { memberId, role }),
   // 役職の一覧を保存する(並び順・種類・制限・セクション・必要スキル・名前)

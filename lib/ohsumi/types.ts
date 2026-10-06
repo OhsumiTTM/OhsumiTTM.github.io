@@ -128,7 +128,7 @@ export interface Member {
   // per-notification-kind email frequency settings (see NotifyFrequency /
   // NotifyKind below). Absent keys fall back to 'immediate' for admins,
   // 'immediate' for mention/rejected, 'none' for others.
-  notifySettings?: Partial<Record<NotifyKind, NotifyFrequency>>
+  notifySettings?: NotifySettings
   // shown instead of `name` throughout the UI when set (item: display name)
   displayName?: string
   // dates (YYYY-MM-DD) this member has marked themselves unavailable on
@@ -788,6 +788,8 @@ export interface TaskComment {
   // @表示名/@氏名 表記から自動抽出されたメンバーID（任意）— コメント投稿時に
   // メール通知される（gas/Code.gs の notifyMention）
   mentionedIds?: string[]
+  // 返信の時の、元のコメントの ID(返信の返信はしない。古いコメントは返信なし)
+  replyToId?: string
 }
 
 // Result of natural-language parsing, before approval
@@ -864,6 +866,8 @@ export type NotifyFrequency = 'immediate' | '3h' | '6h' | '1d' | 'none'
 // new_task / review are primarily admin-facing; mention / rejected / deadline
 // apply to all members.
 export type NotifyKind = 'new_task' | 'review' | 'mention' | 'rejected' | 'deadline'
+// 本人の通知の設定(Members の notify_settings)。メールの頻度は種類ごとのキー、ベルの通知のオン・オフは bell
+export type NotifySettings = Partial<Record<NotifyKind, NotifyFrequency>> & { bell?: import('./bell-kinds').BellSettings }
 
 // An in-app notification item — derived on the fly from current task/member
 // state (see store.tsx's `notifications`), not persisted.
@@ -875,7 +879,14 @@ export interface NotificationItem {
   // seenMentionIds/markMentionSeen参照）
   // 'lowWorkload' = P16: 直属の部下がタスク少なめ状態の上長への通知
   // 'expense' = EXP-007: 経費申請の承認待ち/却下・差し戻し通知
-  kind: 'approval' | 'review' | 'deadline' | 'stale' | 'mention' | 'info' | 'lowWorkload' | 'expense'
+  // 'reply' = コメントへの返信・メンションした相手のコメント / 'invite' = 日程調整・フォームの招待
+  kind: 'approval' | 'review' | 'deadline' | 'stale' | 'mention' | 'reply' | 'info' | 'lowWorkload' | 'expense' | 'invite'
+  // ベルの通知の種類(本人の設定でオフにできる。lib/ohsumi/bell-kinds.ts)。無い通知はいつも出す
+  bell?: import('./bell-kinds').BellKind
+  // まとめた通知の件数。増えたら既読を外して未読に戻す(notification-history.ts)
+  count?: number
+  // 開く先が ADMIN のホームの一覧の時の印(まとめた通知)
+  adminList?: 'stale' | 'staleReview'
   title: string
   detail: string
   taskId: string

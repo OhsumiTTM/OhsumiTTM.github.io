@@ -75,7 +75,7 @@ Google スプレッドシート（データの保存場所）
 | department_path | 組織階層パス（`>` 区切り、例: `事業本部A>事業部1>グループX`、任意）。Admin → 組織図で使われます。1人が複数部署に所属する場合はカンマ区切りで複数パスを入れます（例: `事業本部A>営業, 事業本部B>企画`） |
 | permission_overrides_json | 個別権限オーバーライド定義（JSON文字列、任意）。代表のみが設定できます |
 | skill_points_json | スキルごとの累計ポイント（JSON文字列、例: `{"デザイン":120}`）。自動で更新されます |
-| notify_settings | 通知頻度の個別設定（JSON文字列、任意）。個人ページの「アカウント設定」から設定できます |
+| notify_settings | 通知頻度の個別設定（JSON文字列、任意）。個人ページの「アカウント設定」から設定できます。メールの頻度は種類ごとのキー(`new_task`・`review`・`mention`・`rejected`・`deadline`。返信の通知は `mention` の頻度に従う)、ベルの通知のオン・オフは `bell`(`{"mention": false, ...}`。書いていない種類はオン。種類は `approval`・`review`・`staleReview`・`staleProgress`・`deadline`・`mention`・`lowWorkload`・`inactive`・`expense`・`invite`) |
 | inactive | `TRUE` なら休止中メンバー（一覧から非表示）。Admin → Members から設定できます。休止中のメンバーも、ログイン・操作はできます。担当の候補・おすすめ・招待・人数の集計などからは外れます。ログインを止めるのは退会(`withdrawn_at`)の時だけです |
 | absent_dates | 不在日リスト（カンマ区切り、`YYYY-MM-DD`）。個人ページから本人が編集できます |
 | last_login | 最終ログイン日時（ISO datetime）。ログイン時に自動更新されます |
