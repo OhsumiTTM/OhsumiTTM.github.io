@@ -5,7 +5,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { SectionLabel, CapabilityNote } from '@/components/ohsumi/primitives'
 import { Plus, Trash2, UserPlus2, Briefcase } from 'lucide-react'
 import type { Candidate } from '@/lib/ohsumi/types'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -43,14 +43,11 @@ function CandidateEditor({
   candidate: Candidate | null
   onClose: () => void
 }) {
-  const { isTopRef, addCandidate, updateCandidate, currentUser } = useOhsumi()
+  const { addCandidate, updateCandidate, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
-  const isDaihyo = isTopRef(currentUser?.role)
-  const hasRecruitingOverride = (currentUser?.permissionOverrides ?? []).some(
-    (ov) => ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve'),
-  )
-  const showDaihyoNote = !isDaihyo && !hasRecruitingOverride
+  // 採用(recruiting)ができる人だけが保存できる(GAS が役職と採用の例外から計算した一覧)
+  const canEdit = can('recruiting')
   const [name, setName] = useState(candidate?.name ?? '')
   const [email, setEmail] = useState(candidate?.email ?? '')
   const [phone, setPhone] = useState(candidate?.phone ?? '')
@@ -130,10 +127,10 @@ function CandidateEditor({
           </select>
         </label>
       )}
-      {showDaihyoNote && <AdminAccessNote level="daihyo" />}
+      <CapabilityNote cap="recruiting" />
       <div className="mt-2 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-        <Button onClick={save} disabled={!name.trim() || showDaihyoNote}>{t('admin.recruiting.save')}</Button>
+        {canEdit && <Button onClick={save} disabled={!name.trim()} data-gas-action={candidate ? 'updateCandidate' : 'addCandidate'}>{t('admin.recruiting.save')}</Button>}
       </div>
     </div>
   )
@@ -141,22 +138,15 @@ function CandidateEditor({
 
 export function AdminRecruiting() {
   const canAccess = useCanAccessRecruiting()
-  const { isTopRef, candidates, removeCandidate, convertCandidateToMember, currentUser } = useOhsumi()
+  const { candidates, removeCandidate, convertCandidateToMember, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editing, setEditing] = useState<Candidate | null>(null)
 
-  // 採用関連4アクション(add/update/remove/convert)はGAS側でdaihyoOnly、
-  // ただしpermission_overrides(targetType:'recruiting')を持つメンバーは
-  // checkPermissionOverride経由で許可される。そのため単純にrole!=='代表'
-  // では判定しきれない — 代表でもrecruitingの override 保持者でもない
-  // （＝isFullAdmin経由でこの画面に到達しただけの）場合にのみ警告する。
-  const isDaihyo = isTopRef(currentUser?.role)
-  const hasRecruitingOverride = (currentUser?.permissionOverrides ?? []).some(
-    (ov) => ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve'),
-  )
-  const showDaihyoNote = !isDaihyo && !hasRecruitingOverride
+  // 採用の4つの操作(add/update/remove/convert)は、できる操作 recruiting の人だけ
+  // (GAS が役職の設定と、人ごとの採用の例外から計算した一覧)。閲覧だけの人には操作の部品を出さない
+  const canEdit = can('recruiting')
 
   if (!canAccess) {
     return (
@@ -195,12 +185,14 @@ export function AdminRecruiting() {
       <div className="mb-4 flex items-center justify-between">
         <div>
           <p className="text-xs text-muted-foreground">{t('admin.recruiting.desc')}</p>
-          {showDaihyoNote && <AdminAccessNote level="daihyo" className="mt-1" />}
+          <CapabilityNote cap="recruiting" className="mt-1" />
         </div>
-        <Button onClick={openNew} disabled={showDaihyoNote}>
-          <Plus className="size-4" />
-          {t('admin.recruiting.addButton')}
-        </Button>
+        {canEdit && (
+          <Button onClick={openNew} data-gas-action="addCandidate">
+            <Plus className="size-4" />
+            {t('admin.recruiting.addButton')}
+          </Button>
+        )}
       </div>
 
       {candidates.length === 0 ? (
@@ -231,25 +223,27 @@ export function AdminRecruiting() {
                 </div>
               </button>
               <div className="flex shrink-0 items-center gap-1.5">
-                {c.status !== 'hired' && (
+                {canEdit && c.status !== 'hired' && (
                   <button
                     onClick={() => convert(c)}
-                    disabled={showDaihyoNote}
-                    title={showDaihyoNote ? t('admin.accessNote.daihyo') : t('admin.recruiting.convertButton')}
-                    className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                    data-gas-action="convertCandidateToMember"
+                    title={t('admin.recruiting.convertButton')}
+                    className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
                   >
                     <UserPlus2 className="size-4" />
                     {t('admin.recruiting.convertButton')}
                   </button>
                 )}
-                <button
-                  onClick={() => remove(c)}
-                  disabled={showDaihyoNote}
-                  title={showDaihyoNote ? t('admin.accessNote.daihyo') : undefined}
-                  className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Trash2 className="size-4" />
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => remove(c)}
+                    data-gas-action="removeCandidate"
+                    aria-label={t('common.delete')}
+                    className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                )}
               </div>
             </div>
           ))}

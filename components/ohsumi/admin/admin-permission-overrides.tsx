@@ -6,7 +6,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
-import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Avatar, TopOnlyNote } from '@/components/ohsumi/primitives'
 import { Trash2, Plus, ShieldCheck } from 'lucide-react'
 import type { Member, PermissionOverride } from '@/lib/ohsumi/types'
 import { useI18n, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -34,9 +34,8 @@ function OverrideEditor({ member, onClose }: OverrideEditorProps) {
   const deptLabel = useDepartmentLabel()
   const toast = useToast()
   const { t: tr } = useI18n()
-  // updatePermissionOverridesはGAS側で常にisDaihyo固定（人事機密のため）。
-  // このボタンはisFullAdmin配下（admin-members.tsx）に表示されるため、
-  // 代表以外の全権管理者にも見えてしまう
+  // 人ごとの権限の例外の編集(updatePermissionOverrides)は、代表(最上位の役職)だけ。どの設定でも渡さない
+  // (役職のできる操作では渡せない — gas/src/38-capabilities.gs の TOP_ONLY_ACTIONS)
   const isDaihyo = isTopRef(currentUser?.role)
 
   const [overrides, setOverrides] = useState<PermissionOverride[]>(
@@ -169,10 +168,10 @@ function OverrideEditor({ member, onClose }: OverrideEditorProps) {
         </div>
       </div>
 
-      <AdminAccessNote level="daihyo" className="mt-3" />
+      <TopOnlyNote className="mt-3" />
       <div className="mt-4 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose}>{tr('common.cancel')}</Button>
-        <Button onClick={save} disabled={!isDaihyo}>{tr('common.save')}</Button>
+        {isDaihyo && <Button onClick={save} data-gas-action="updatePermissionOverrides">{tr('common.save')}</Button>}
       </div>
     </>
   )

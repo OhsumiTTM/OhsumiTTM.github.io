@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
-import { AdminAccessNote } from '@/components/ohsumi/primitives'
+import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
 import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Plus, Pencil, Trash2, BookOpen, Video, FileText, Link2, Layers, ChevronUp, ChevronDown, X, Users } from 'lucide-react'
@@ -340,7 +340,10 @@ export function AdminLearningContent() {
     updateTrainingPrograms,
     skillOptions,
     quizDefinitions,
+    can,
   } = useOhsumi()
+  // 学習コンテンツ・コース・研修プログラムは団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ
+  const canEdit = can('org.rules')
   const toast = useToast()
   const { t } = useI18n()
   const [tab, setTab] = useState<'contents' | 'courses' | 'programs'>('contents')
@@ -419,15 +422,18 @@ export function AdminLearningContent() {
           <p className="text-xs text-muted-foreground">
             {t('admin.learningContent.subtitle')}
           </p>
-          <AdminAccessNote level="fullAdmin" className="mt-1" />
+          <CapabilityNote cap="org.rules" className="mt-1" />
         </div>
-        <Button
-          onClick={tab === 'contents' ? openNew : tab === 'courses' ? openNewCourse : openNewProgram}
-          size="sm"
-        >
-          <Plus className="mr-1.5 size-4" />
-          {tab === 'contents' ? t('admin.learningContent.create') : tab === 'courses' ? t('admin.learningCourse.create') : t('admin.trainingProgram.create')}
-        </Button>
+        {canEdit && (
+          <Button
+            onClick={tab === 'contents' ? openNew : tab === 'courses' ? openNewCourse : openNewProgram}
+            size="sm"
+            data-gas-action="updateSetting"
+          >
+            <Plus className="mr-1.5 size-4" />
+            {tab === 'contents' ? t('admin.learningContent.create') : tab === 'courses' ? t('admin.learningCourse.create') : t('admin.trainingProgram.create')}
+          </Button>
+        )}
       </div>
 
       <SegmentedControl className="mb-4">
@@ -461,20 +467,22 @@ export function AdminLearningContent() {
                     {quiz && ` / ${t('admin.learningContent.linkedQuizLabel', { title: quiz.title })}`}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => openEdit(content)}
-                    className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  >
-                    <Pencil className="size-3.5" />
-                  </button>
-                  <button
-                    onClick={() => remove(content.id)}
-                    className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="flex shrink-0 gap-1" data-gas-action="updateSetting">
+                    <button
+                      onClick={() => openEdit(content)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={() => remove(content.id)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -503,20 +511,22 @@ export function AdminLearningContent() {
                     {quiz && ` / ${t('admin.learningContent.linkedQuizLabel', { title: quiz.title })}`}
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => openEditCourse(course)}
-                    className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  >
-                    <Pencil className="size-3.5" />
-                  </button>
-                  <button
-                    onClick={() => removeCourse(course.id)}
-                    className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </div>
+                {canEdit && (
+                  <div className="flex shrink-0 gap-1" data-gas-action="updateSetting">
+                    <button
+                      onClick={() => openEditCourse(course)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={() => removeCourse(course.id)}
+                      className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -544,20 +554,22 @@ export function AdminLearningContent() {
                     : t('admin.trainingProgram.allMembers')}
                 </div>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <button
-                  onClick={() => openEditProgram(program)}
-                  className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-                <button
-                  onClick={() => removeProgram(program.id)}
-                  className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </div>
+              {canEdit && (
+                <div className="flex shrink-0 gap-1" data-gas-action="updateSetting">
+                  <button
+                    onClick={() => openEditProgram(program)}
+                    className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => removeProgram(program.id)}
+                    className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

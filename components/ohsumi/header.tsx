@@ -1,5 +1,6 @@
 'use client'
 
+import { useCanOpenOrgSettings } from '@/lib/ohsumi/use-capabilities'
 import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
@@ -68,6 +69,7 @@ export function Header() {
     (!!currentUser && surveyInvitedIds.includes(currentUser.id))
   const { screen, go, goBack, canGoBack } = useNav()
   const { theme, toggle } = useTheme()
+  const canOpenOrgSettings = useCanOpenOrgSettings()
   const { t } = useI18n()
   const { openTask } = useTaskDrawer()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -490,7 +492,7 @@ export function Header() {
                     {t('header.menu.survey')}
                   </MenuItem>
                 )}
-                {isFullAdmin && (
+                {canOpenOrgSettings && (
                   <MenuItem
                     onClick={() => {
                       setMenuOpen(false)

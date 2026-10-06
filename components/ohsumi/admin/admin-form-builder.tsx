@@ -7,7 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, CustomFormDef, CustomFormField, CustomFormFieldType } from '@/lib/ohsumi/types'
 import { Plus, Trash2, GripVertical } from 'lucide-react'
 import { Modal } from '@/components/ohsumi/modal'
-import { AdminAccessNote } from '@/components/ohsumi/primitives'
+import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 // 承認ステップエディタは admin-expenses.tsx と同じロジックで inline 定義
@@ -301,7 +301,10 @@ export function AdminFormBuilder() {
     members,
     roleLevels,
     getMember,
+    can,
   } = useOhsumi()
+  // 申請フォームの定義は団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ
+  const canEditForms = can('org.rules')
 
   const { t } = useI18n()
   const [tab, setTab] = useState<'submissions' | 'forms'>('submissions')
@@ -343,13 +346,16 @@ export function AdminFormBuilder() {
 
       {tab === 'forms' && (
         <div className="space-y-3">
-          <AdminAccessNote level="fullAdmin" />
-          <button
-            onClick={() => setEditingForm('new')}
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
-          >
-            <Plus className="size-4" /> {t('admin.formBuilder.createForm')}
-          </button>
+          <CapabilityNote cap="org.rules" />
+          {canEditForms && (
+            <button
+              onClick={() => setEditingForm('new')}
+              data-gas-action="updateSetting"
+              className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
+            >
+              <Plus className="size-4" /> {t('admin.formBuilder.createForm')}
+            </button>
+          )}
           {customFormDefs.length === 0 && (
             <div className="py-8 text-center text-sm text-muted-foreground">
               {t('admin.formBuilder.noForms')}
@@ -367,20 +373,22 @@ export function AdminFormBuilder() {
                     {t('admin.formBuilder.fieldsAndSteps', { fields: form.fields.length, steps: form.approvalSteps.length })}
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setEditingForm(form)}
-                    className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
-                  >
-                    {t('admin.expenses.edit')}
-                  </button>
-                  <button
-                    onClick={() => handleDeleteForm(form.id)}
-                    className="rounded-md border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-                  >
-                    {t('admin.expenses.delete')}
-                  </button>
-                </div>
+                {canEditForms && (
+                  <div className="flex gap-2" data-gas-action="updateSetting">
+                    <button
+                      onClick={() => setEditingForm(form)}
+                      className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                    >
+                      {t('admin.expenses.edit')}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteForm(form.id)}
+                      className="rounded-md border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                    >
+                      {t('admin.expenses.delete')}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -467,7 +475,7 @@ export function AdminFormBuilder() {
         </div>
       )}
 
-      {editingForm && (
+      {editingForm && canEditForms && (
         <FormEditor
           initial={editingForm === 'new' ? undefined : editingForm}
           onSave={handleSaveForm}

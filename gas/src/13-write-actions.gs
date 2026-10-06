@@ -454,7 +454,7 @@ function runWriteAction_(body, actingMember) {
       if (body.key === 'roles' || (hasRolesSetting_() && ROLE_SETTING_KEYS.indexOf(body.key) >= 0)) {
         throw userError_('役職の設定は、管理画面の役職の編集から変更してください。')
       }
-      if (body.key === 'departments') throw userError_('部門の設定は、管理画面の部門の編集から変更してください。')
+      if (body.key === 'departments') throw userError_('領域の設定は、ADMIN の「タスクの設定」の「領域」から変更してください。')
       checkSettingValue_(body.key, body.value)
       result = updateSetting_(body.key, sheetSettingValue_(body.key, body.value))
       if (ROLE_SETTING_KEYS.indexOf(body.key) >= 0) invalidateRoles_()

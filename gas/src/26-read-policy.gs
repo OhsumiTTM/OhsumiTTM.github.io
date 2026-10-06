@@ -427,7 +427,9 @@ function getInitialDataForMember_(memberId, knownVersion) {
   var snapshot = loadSnapshot_()
   var sheets = timed_('filterMs', function () { return buildViewerData_(snapshot.data, memberId) })
   if (!sheets) return { memberId: null }
-  return { memberId: memberId, version: snapshot.version, sheets: sheets }
+  // ログインした人のできる操作(役職の分と人ごとの例外の分。画面はこれだけを見て操作の部品を出す)
+  var capabilities = memberCapabilitiesFromSnapshot_(snapshot.data, memberId)
+  return { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
 }
 
 // Sheets API のエラー応答から、原因の分かる部分(status / reason / message)を取り出す

@@ -3,7 +3,7 @@
 import { findRole } from '@/lib/ohsumi/roles'
 import { useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
-import { SectionLabel, Avatar } from '@/components/ohsumi/primitives'
+import { SectionLabel, Avatar, CapabilityNote } from '@/components/ohsumi/primitives'
 import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ohsumi/modal'
@@ -1038,15 +1038,14 @@ function TrainingHistorySection({
   onDecide: CareerTabProps['notifyTrainingDecision']
   rid: () => string
 }) {
-  const { isTopRef, currentUser, trainingPrograms, roles } = useOhsumi()
+  const { isTopRef, currentUser, trainingPrograms, roles, can } = useOhsumi()
   // 承認するのは管理者。自分の研修は自分では承認できない(代表は除く。GAS の checkTrainingHistory_ と同じ)
   const canApprove = isAdmin && (member.id !== currentUser?.id || isTopRef(currentUser?.role))
   // 役職の名前(団体が付けた名前。研修の対象の層との部分一致に使う)
   const roleNameRaw = findRole(roles, member.role)?.name ?? member.role
-  const { t: trHint } = useI18n()
-  // notifyTrainingDecisionはGAS側で常にisDaihyo固定（研修承認の記録自体
-  // =updateTrainingHistoryはselfOrAdminで成功するが、通知メールだけ失敗する）
-  const notifyDecisionHint = !isTopRef(currentUser?.role) ? trHint('admin.accessNote.daihyo') : undefined
+  // 承認・却下の記録(updateTrainingHistory)は管理者ならできる。本人への知らせ(notifyTrainingDecision)は
+  // できる操作 members.training の人だけが送る(無い人には送らず、そのことを1行出す)
+  const canNotifyDecision = can('members.training')
   const items = member.trainingHistory ?? []
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
@@ -1086,7 +1085,7 @@ function TrainingHistorySection({
       member.id,
       items.map((x) => (x.id === t.id ? { ...x, status: approved ? 'approved' : 'rejected' } : x)),
     )
-    onDecide(member.id, t.id)
+    if (canNotifyDecision) onDecide(member.id, t.id)
   }
 
   // LRN-007: 承認済み・開催日が過去のレコードについて、管理者が実際の
@@ -1102,6 +1101,7 @@ function TrainingHistorySection({
   const { t: tr } = useI18n()
   return (
     <Section title={tr('career.training.title')} description={!isAdmin ? tr('career.training.desc') : undefined}>
+      {canApprove && items.some((x) => x.status === 'pending') && <CapabilityNote cap="members.training" className="mb-2" />}
       <EntryList emptyText={tr('career.noRecords')}>
         {items.map((t) => {
           const status = t.status ?? 'approved'
@@ -1132,21 +1132,16 @@ function TrainingHistorySection({
                 )}
                 {canApprove && status === 'pending' && (
                   <div className="flex items-center gap-1">
-                    {/* 承認/却下自体（updateTrainingHistory）はselfOrAdminで
-                        代表以外でも成功するが、その後のメール通知
-                        （notifyTrainingDecision）はGAS側で常にisDaihyo固定
-                        のため代表以外では通知だけ失敗する。ボタン自体は
-                        無効化しない（承認処理は正しく完了するため） */}
                     <button
                       onClick={() => decide(t, true)}
-                      title={notifyDecisionHint}
+                      data-gas-action={canNotifyDecision ? 'notifyTrainingDecision' : undefined}
                       className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100"
                     >
                       {tr('admin.expenses.approve')}
                     </button>
                     <button
                       onClick={() => decide(t, false)}
-                      title={notifyDecisionHint}
+                      data-gas-action={canNotifyDecision ? 'notifyTrainingDecision' : undefined}
                       className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
                     >
                       {tr('admin.expenses.reject')}

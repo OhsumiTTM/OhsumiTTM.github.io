@@ -19,7 +19,7 @@ describe('初期タスク', () => {
     const A = w.launchOrg('団体A', 'contact@a.example')
     const top = w.googleLogin(A.org, 'top@a.example', { setupCode: A.setupCode }).result
     const leaderTasks = tasksOf(A.org, top.memberId)
-    expect(leaderTasks.map((t) => t.title)).toEqual(['団体の情報を設定する', '役職と部門を決める', 'メンバーを追加して招待する', '最初のプロジェクトを作る',
+    expect(leaderTasks.map((t) => t.title)).toEqual(['団体の情報を設定する', '役職と部署を決める', 'メンバーを追加して招待する', '最初のプロジェクトを作る',
       '最初のタスクを作って担当を決める', '通知の受け取り方を決める', '安全の設定を確かめる', '引き継ぎの準備をする'])
     const projects = rowsOf(A.org, 'Projects').filter((p) => p.name === 'はじめに')
     expect(projects).toHaveLength(1)

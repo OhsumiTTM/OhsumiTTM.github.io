@@ -3,6 +3,7 @@
 // 管理画面(ADMIN)。タブはグループ(状況・仕事・人と組織・育成・申請と記録・設定)ごとに並べる(lib/ohsumi/admin-sections.ts)。
 // パソコンは左のメニューにグループの見出し(見られるタブが無いグループは見出しごと出さない)、スマートフォンは上のタブを同じ順番で並べる。
 // 各タブは、見出し(タブの名前)と1行の説明、まとまりごとの見出し、長い画面は上に目次(AdminBlocks)
+import { useCanOpenOrgSettings } from '@/lib/ohsumi/use-capabilities'
 import { useEffect, type ReactNode } from 'react'
 import { useNav } from '@/lib/ohsumi/nav'
 import { AdminDashboard } from './admin-dashboard'
@@ -36,7 +37,7 @@ import { PersonalDataBanner } from './personal-data-banner'
 import { OpsBanner } from './ops-banner'
 import { AnnouncementsBanner } from './announcements-banner'
 import { useOhsumi } from '@/lib/ohsumi/store'
-import { AdminAccessNote, OhsumiMark } from '../primitives'
+import { OhsumiMark } from '../primitives'
 import type { AdminSection } from '@/lib/ohsumi/types'
 import { ADMIN_GROUPS } from '@/lib/ohsumi/admin-sections'
 import { adminGroupTitleKey, adminSectionDescKey, adminSectionTitleKey } from '@/lib/ohsumi/admin-section-labels'
@@ -75,8 +76,7 @@ function Plain({ children }: { children: ReactNode }) {
 function SectionBody({ section }: { section: AdminSection }) {
   const { t } = useI18n()
   const { isFullAdmin } = useOhsumi()
-  // 団体全体の設定(updateSetting。全権管理者だけが保存できる)を含むタブの注記
-  const fullAdminNote = <AdminAccessNote level="fullAdmin" />
+  // 団体の設定(updateSetting)の編集の部品は、それぞれの部品が can('org.rules') で出し分け、押せない理由を1行出す
   switch (section) {
     case 'dashboard':
       return (
@@ -106,7 +106,7 @@ function SectionBody({ section }: { section: AdminSection }) {
         <AdminBlocks
           blocks={[
             { id: 'org-tree', title: t('admin.orgRoles.treeTitle'), content: <AdminOrgTree /> },
-            { id: 'org-roles', title: t('admin.tags.permissionLevels'), content: <><AdminAccessNote level="fullAdmin" className="mb-2" /><RolesEditor /></> },
+            { id: 'org-roles', title: t('admin.tags.permissionLevels'), content: <RolesEditor /> },
             { id: 'org-role-visibility', title: t('admin.tags.visibilityByLevel'), content: <RoleVisibilityEditor /> },
             { id: 'org-successors', title: t('admin.leadership.successor.title'), content: <SuccessorSuggestions /> },
           ]}
@@ -117,7 +117,7 @@ function SectionBody({ section }: { section: AdminSection }) {
         <AdminBlocks
           blocks={[
             { id: 'memberdb-list', title: t('admin.memberDb.title'), content: <AdminMemberDb /> },
-            { id: 'memberdb-columns', title: t('admin.tags.customColumns.title'), content: <><AdminAccessNote level="fullAdmin" className="mb-2" /><CustomMemberColumnsEditor /></> },
+            { id: 'memberdb-columns', title: t('admin.tags.customColumns.title'), content: <CustomMemberColumnsEditor /> },
           ]}
         />
       )
@@ -125,7 +125,6 @@ function SectionBody({ section }: { section: AdminSection }) {
     case 'skillRules':
       return (
         <AdminBlocks
-          note={fullAdminNote}
           blocks={[
             { id: 'skill-options', title: t('admin.skillRules.optionsTitle'), content: <SkillOptionsEditor /> },
             { id: 'skill-field-composition', title: t('admin.tags.fieldComposition'), content: <FieldCompositionEditor /> },
@@ -140,7 +139,6 @@ function SectionBody({ section }: { section: AdminSection }) {
     case 'oneOnOneSurvey':
       return (
         <AdminBlocks
-          note={fullAdminNote}
           blocks={[
             { id: 'one-on-one-questions', title: t('admin.tags.oneOnOne.title'), content: <OneOnOneQuestionsEditor /> },
             { id: 'survey-questions', title: t('admin.tags.surveyQuestions.title'), content: <SurveyQuestionsEditor /> },
@@ -159,7 +157,7 @@ function SectionBody({ section }: { section: AdminSection }) {
 export function AdminScreen({ section }: { section: AdminSection }) {
   const { go } = useNav()
   const { t } = useI18n()
-  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser, isTopRef, isAdminRef } = useOhsumi()
+  const { pendingTasks, visibleAdminSections, dataReady, isFullAdmin, currentUser, isTopRef, isAdminRef, can } = useOhsumi()
   // 採用（recruiting）はrolePermissions/visibleAdminSectionsのロール単位制御
   // とは独立に、permission_overrides(targetType:'recruiting')を個別に持つ
   // メンバーだけがアクセスできる（ロール自体には一切依存しない）
@@ -168,9 +166,10 @@ export function AdminScreen({ section }: { section: AdminSection }) {
     (currentUser?.permissionOverrides ?? []).some(
       (ov) => ov.targetType === 'recruiting' && (ov.access === 'edit' || ov.access === 'approve'),
     )
-  // 団体設定は、全権管理者だけ(右上のメニューの「団体設定」と同じ)
+  // 団体設定は、団体のルール・ロゴを変えられる人と代表だけ(右上のメニューの「団体設定」と同じ。useCanOpenOrgSettings)
+  const canOpenOrgSettings = useCanOpenOrgSettings()
   const canSee = (key: AdminSection) =>
-    key === 'recruiting' ? canAccessRecruiting : key === 'orgSettings' ? isFullAdmin && visibleAdminSections.includes(key) : visibleAdminSections.includes(key)
+    key === 'recruiting' ? canAccessRecruiting : key === 'orgSettings' ? canOpenOrgSettings : visibleAdminSections.includes(key)
   const groups = ADMIN_GROUPS.map((g) => ({ key: g.key, sections: g.sections.filter(canSee) })).filter((g) => g.sections.length > 0)
   const allowed = canSee(section)
 
@@ -251,6 +250,7 @@ export function AdminScreen({ section }: { section: AdminSection }) {
               type="button"
               onClick={() => go({ name: 'admin', section: key })}
               aria-current={key === section ? 'page' : undefined}
+              data-admin-tab={key}
               className={cn(
                 'flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors',
                 key === section ? 'bg-accent font-semibold text-accent-foreground' : 'text-muted-foreground',
@@ -264,11 +264,12 @@ export function AdminScreen({ section }: { section: AdminSection }) {
         </nav>
 
         {isAdminRef(currentUser?.role) && <AnnouncementsBanner />}
-        {isFullAdmin && <GasUpdateBanner />}
+        {/* GAS の版・メールの上限の確かめは団体のルール(org.rules)の操作(getGasUpdateStatus・getMailQuotaStatus) */}
+        {can('org.rules') && <GasUpdateBanner />}
         {isTopRef(currentUser?.role) && <OpsBanner />}
         {isTopRef(currentUser?.role) && <BackupBanner />}
         {isTopRef(currentUser?.role) && <PersonalDataBanner />}
-        {isFullAdmin && <MailQuotaBanner />}
+        {can('org.rules') && <MailQuotaBanner />}
         <div className="bg-background pb-10">
           <AdminPageHeader title={t(adminSectionTitleKey(section))} desc={t(adminSectionDescKey(section))} />
           <SectionBody section={section} />

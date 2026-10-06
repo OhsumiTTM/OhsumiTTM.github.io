@@ -5,7 +5,7 @@ import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
-import { Avatar, SectionLabel, Tag, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Avatar, SectionLabel, Tag, CapabilityNote } from '@/components/ohsumi/primitives'
 import { Modal } from '@/components/ohsumi/modal'
 import { TaskTrash } from './task-trash'
 import { AdminBlocks } from './admin-page'
@@ -70,7 +70,7 @@ function calcStaffingRatio(projectId: string, tasks: Task[], members: Member[]):
 // プロジェクトのタブ(part='projects': 一覧・追加・編集・アーカイブ)と、タスクの設定のタブ
 // (part='taskSettings': カテゴリ・領域・プロジェクトの種類・業務テンプレート・定期タスク・ゴミ箱)。状態を共有するので1つにしている
 export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
-  const { isTopRef,
+  const { can,
     adminProjects: projects,
     adminTasks: visibleTasks,
     tasks: allTasks,
@@ -101,12 +101,13 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
     setProjectArchived,
     setProjectOrder,
     isFullAdmin,
-    currentUser,
   } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
-  // removeProjectはGAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = isTopRef(currentUser?.role)
+  // プロジェクトの削除・団体の設定(種類・業務テンプレート・定期タスク・並び順)・ゴミ箱は、できる操作ごとに出す
+  const canRemoveProject = can('projects.remove')
+  const canRules = can('org.rules')
+  const canTrash = can('trash')
   const [removing, setRemoving] = useState<Project | null>(null)
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null)
   const [applyingTo, setApplyingTo] = useState<Project | null>(null)
@@ -458,10 +459,7 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
             count: removing ? visibleTasks.filter((task) => task.projectId === removing.id).length : 0,
           })}
         </p>
-        {/* removeProjectはGAS側で常にisDaihyo固定（isFullAdminとは無関係）。
-            このボタン自体はisFullAdmin配下に表示されるため、代表以外の
-            全権管理者には見えるが実行するとGASに拒否される — 事前に示す */}
-        <AdminAccessNote level="daihyo" className="mt-2" />
+        <CapabilityNote cap="projects.remove" className="mt-2" />
         {/* タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。完了したタスクの記録は
             団体の経験として残すべきなので、終わったプロジェクトはアーカイブにしてもらう */}
         {removing && (removeBlock.tasks > 0 || removeBlock.children > 0) && (
@@ -476,7 +474,7 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
           <Button
             variant="destructive"
             className="h-9"
-            disabled={!isDaihyo || removeBlock.tasks > 0 || removeBlock.children > 0}
+            disabled={!canRemoveProject || removeBlock.tasks > 0 || removeBlock.children > 0}
             onClick={() => {
               if (removing) {
                 removeProject(removing.id)
@@ -499,7 +497,7 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
           blocks={[
             { id: 'task-categories', title: t('admin.tags.categories'), desc: t('admin.taskSettings.categoriesDesc'), content: <TaskCategoriesEditor /> },
             { id: 'task-domains', title: t('admin.tags.departments.title'), content: <TaskDomainsEditor /> },
-            ...(isFullAdmin ? [
+            ...(canRules ? [
               { id: 'project-types', title: t('admin.projects.types.heading'), desc: t('admin.projects.types.desc'), content: (
                 <div>
 
@@ -626,8 +624,8 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
         </ul>
       </div>
               ) },
-              { id: 'task-trash', title: t('admin.trash.heading'), content: <TaskTrash /> },
             ] : []),
+            ...(canTrash ? [{ id: 'task-trash', title: t('admin.trash.heading'), content: <TaskTrash /> }] : []),
           ]}
         />
         {modals}
@@ -728,9 +726,9 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
               return (
                 <tr
                   key={p.id}
-                  draggable={isFullAdmin}
+                  draggable={isFullAdmin && canRules}
                   onDragStart={() => setDraggingProjectId(p.id)}
-                  onDragOver={(e) => isFullAdmin && e.preventDefault()}
+                  onDragOver={(e) => isFullAdmin && canRules && e.preventDefault()}
                   onDrop={() => {
                     if (draggingProjectId) reorderProjects(draggingProjectId, p.id)
                     setDraggingProjectId(null)
@@ -739,8 +737,8 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
                   className={cn(draggingProjectId === p.id && 'opacity-40')}
                 >
                   {isFullAdmin && (
-                    <td className="w-8 cursor-grab px-2 py-3 text-muted-foreground">
-                      <GripVertical className="size-3.5" />
+                    <td className="w-8 cursor-grab px-2 py-3 text-muted-foreground" data-gas-action={canRules ? 'updateSetting' : undefined}>
+                      {canRules && <GripVertical className="size-3.5" />}
                     </td>
                   )}
                   <td className="px-4 py-3 font-medium">
@@ -891,13 +889,16 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
                           <Archive className="size-3.5" />
                           {t('admin.projects.archiveButton')}
                         </button>
-                        <button
-                          onClick={() => setRemoving(p)}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-                        >
-                          <Trash2 className="size-3.5" />
-                          {t('common.delete')}
-                        </button>
+                        {canRemoveProject && (
+                          <button
+                            onClick={() => setRemoving(p)}
+                            data-gas-action="removeProject"
+                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                          >
+                            <Trash2 className="size-3.5" />
+                            {t('common.delete')}
+                          </button>
+                        )}
                       </div>
                     </td>
                   )}

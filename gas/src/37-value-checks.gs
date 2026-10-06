@@ -126,7 +126,7 @@ function checkApprovalSteps_(steps, label) {
     if (s.type !== 'member' && s.type !== 'role') throw userError_(label + 'の種類は member か role にしてください。')
     if (s.type === 'member') checkText_(s.memberId, 100, label + 'のメンバー', true)
     if (s.type === 'role') checkText_(s.role, 100, label + 'の役職', true)
-    checkText_(s.department, 200, label + 'の部門')
+    checkText_(s.department, 200, label + 'の部署')
     if (s.requiredCount !== undefined && s.requiredCount !== null && s.requiredCount !== 'all' && s.requiredCount !== 'any') {
       if (typeof s.requiredCount !== 'number' || Math.floor(s.requiredCount) !== s.requiredCount || s.requiredCount < 1 || s.requiredCount > 100) {
         throw userError_(label + 'の必要な人数が正しくありません。')

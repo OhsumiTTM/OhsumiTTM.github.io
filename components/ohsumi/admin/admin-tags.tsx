@@ -3,10 +3,11 @@
 import { useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
-import { Tag, SectionLabel, Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Tag, SectionLabel, Avatar, CapabilityNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
 import { ADMIN_SECTIONS, DEFAULT_NON_TOP_SECTIONS } from '@/lib/ohsumi/types'
-import { adminSectionTitleKey } from '@/lib/ohsumi/admin-section-labels'
+import { adminSectionTitleKey, capabilityLabelKey } from '@/lib/ohsumi/admin-section-labels'
+import { CAPABILITY_KEYS, FULL_ADMIN_DEFAULT_CAPABILITIES, type Capability } from '@/lib/ohsumi/capabilities'
 import { sameRole, TOP_ROLE_ID, DEFAULT_TOP_ROLE_NAME } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
@@ -16,7 +17,7 @@ import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { checkImageFile } from '@/lib/ohsumi/image-upload'
 import { isActiveMember } from '@/lib/ohsumi/utils'
 
-// ホーム(dashboard)は常に見られる(見られないタブを開いた時の戻り先)。団体設定は全権管理者だけなので、選ぶものに入れない
+// ホーム(dashboard)は常に見られる(見られないタブを開いた時の戻り先)。団体設定は、できる操作(団体のルール・ロゴ)で決まるので、選ぶものに入れない
 const TOGGLEABLE_SECTIONS = ADMIN_SECTIONS.filter((s) => s.key !== 'dashboard' && s.key !== 'orgSettings')
 
 // 以前の Tags の画面の中身。今は、それぞれ次のタブに入る(components/ohsumi/admin/admin-screen.tsx):
@@ -26,37 +27,109 @@ const TOGGLEABLE_SECTIONS = ADMIN_SECTIONS.filter((s) => s.key !== 'dashboard' &
 //   人材データベース: CustomMemberColumnsEditor
 //   1on1・アンケート: OneOnOneQuestionsEditor・SurveyQuestionsEditor・SurveyInviteEditor
 //   団体設定: NotifySettingsEditor
-// 見出しはタブの側(AdminBlock)で付ける。設定はすべて updateSetting(全権管理者)で保存する
+// 見出しはタブの側(AdminBlock)で付ける。設定はすべて団体のルール(org.rules — updateSetting など)で保存する。
+// org.rules が無い人には、編集の部品を出さずに中身だけを出す(押せない理由は CapabilityNote で1行)
 
 export function TaskCategoriesEditor() {
-  const { categoryOptions, addCategoryOption, removeCategoryOption } = useOhsumi()
-  return <TagGroup options={categoryOptions} onAdd={addCategoryOption} onRemove={removeCategoryOption} />
+  const { categoryOptions, addCategoryOption, removeCategoryOption, can } = useOhsumi()
+  const editable = can('org.rules')
+  return (
+    <>
+      <CapabilityNote cap="org.rules" className="mb-2" />
+      <TagGroup options={categoryOptions} onAdd={addCategoryOption} onRemove={removeCategoryOption} readOnly={!editable} />
+    </>
+  )
 }
 
 export function TaskDomainsEditor() {
+  const { can } = useOhsumi()
   const { t } = useI18n()
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <p className="text-xs text-muted-foreground">{t('admin.tags.departments.desc')}</p>
-      <DepartmentEditor />
+      <DepartmentEditor readOnly={!can('org.rules')} />
     </div>
   )
 }
 
 export function RolesEditor() {
-  const { addRoleLevel } = useOhsumi()
+  const { addRoleLevel, can, isFullAdmin, isTopRef, currentUser, capabilities } = useOhsumi()
   const { t } = useI18n()
+  const editable = can('org.rules')
+  const isTop = isTopRef(currentUser?.role)
+  // 新しい役職(GAS の guardRolesChangeByNonTop_ と同じ決まり): 最上位でない人は、制限なしの人だけが
+  // 制限なしの役職を作れ、できる操作は自分の持っている範囲だけ(既定が範囲を超える時は、範囲の中だけを書く)
+  const addRole = (name: string) => {
+    if (isTop) return addRoleLevel(name)
+    if (!isFullAdmin) return addRoleLevel(name, { restricted: true })
+    const defaults = [...FULL_ADMIN_DEFAULT_CAPABILITIES]
+    if (defaults.every((c) => capabilities.includes(c))) return addRoleLevel(name)
+    return addRoleLevel(name, { capabilities: defaults.filter((c) => capabilities.includes(c)) })
+  }
   return (
     <div>
       <p className="text-xs text-muted-foreground">{t('admin.tags.permissionLevelsDesc')}</p>
+      <CapabilityNote cap="org.rules" className="mt-2" />
       <RoleEditor />
-      <RoleLevelAdd onAdd={addRoleLevel} />
+      {editable && <RoleLevelAdd onAdd={addRole} />}
+      <RoleCapabilitiesEditor />
+    </div>
+  )
+}
+
+// 役職ごとの「できる操作」(lib/ohsumi/capabilities.ts)。変えられるのは最上位の役職の人だけ(GAS も同じ)。
+// ほかの人には、役職ごとのできる操作を出すだけ
+function RoleCapabilitiesEditor() {
+  const { roles, isTopRef, currentUser, roleCapabilitiesOf, setRoleCapabilities } = useOhsumi()
+  const { t } = useI18n()
+  const roleName = useRoleLabel()
+  const isTop = isTopRef(currentUser?.role)
+  const labelOf = (c: Capability) => t(capabilityLabelKey(c))
+  return (
+    <div className="mt-6 rounded-lg border border-border bg-card p-4" data-role-capabilities>
+      <SectionLabel>{t('admin.roles.capabilities.title')}</SectionLabel>
+      <p className="mt-1 text-xs text-muted-foreground">{t('admin.roles.capabilities.desc')}</p>
+      {!isTop && <p className="mt-1 text-xs text-warning">{t('admin.roles.capabilities.topOnly')}</p>}
+      <div className="mt-3 flex flex-col gap-3">
+        {roles.map((r) => {
+          const caps = roleCapabilitiesOf(r.id)
+          return (
+            <div key={r.id} className="rounded-md border border-border/60 px-3 py-2">
+              <div className="text-sm font-medium">{roleName(r.id)}</div>
+              {r.tier === 'top' ? (
+                <p className="mt-1 text-xs text-muted-foreground">{t('admin.roles.capabilities.label', { list: t('admin.roles.capabilities.all') })}</p>
+              ) : r.tier === 'base' ? (
+                <p className="mt-1 text-xs text-muted-foreground">{t('admin.roles.capabilities.label', { list: t('admin.roles.capabilities.none') })}・{t('admin.roles.capabilities.baseNone')}</p>
+              ) : isTop ? (
+                <div className="mt-1.5 grid gap-1 sm:grid-cols-2" data-gas-action="updateRoles">
+                  {CAPABILITY_KEYS.map((c) => (
+                    <label key={c} className="flex items-start gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={caps.includes(c)}
+                        onChange={(e) => setRoleCapabilities(r.id, e.target.checked ? [...caps, c] : caps.filter((x) => x !== c))}
+                      />
+                      <span>{labelOf(c)}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {t('admin.roles.capabilities.label', { list: caps.length ? caps.map(labelOf).join('・') : t('admin.roles.capabilities.none') })}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
 export function RoleVisibilityEditor() {
-  const { roleLevels, restrictedRoles, rolePermissions, setRolePermissions } = useOhsumi()
+  const { roleLevels, restrictedRoles, rolePermissions, setRolePermissions, can } = useOhsumi()
+  const editable = can('org.rules')
   const { t } = useI18n()
   const roleName = useRoleLabel()
   return (
@@ -72,6 +145,7 @@ export function RoleVisibilityEditor() {
             role={roleName(role)}
             sections={rolePermissions[role] ?? DEFAULT_NON_TOP_SECTIONS}
             onChange={(next) => setRolePermissions(role, next)}
+            readOnly={!editable}
           />
         ))}
       </div>
@@ -80,22 +154,27 @@ export function RoleVisibilityEditor() {
 }
 
 export function SkillOptionsEditor() {
-  const { skillOptions, addSkillOption, removeSkillOption, skillFieldOptions, addSkillFieldOption, removeSkillFieldOption } = useOhsumi()
+  const { skillOptions, addSkillOption, removeSkillOption, skillFieldOptions, addSkillFieldOption, removeSkillFieldOption, can } = useOhsumi()
   const { t } = useI18n()
+  const readOnly = !can('org.rules')
   return (
+    <>
+    <CapabilityNote cap="org.rules" className="mb-2" />
     <div className="grid gap-6 sm:grid-cols-2">
-      <TagGroup title={t('admin.tags.requiredSkills')} options={skillOptions} onAdd={addSkillOption} onRemove={removeSkillOption} />
+      <TagGroup title={t('admin.tags.requiredSkills')} options={skillOptions} onAdd={addSkillOption} onRemove={removeSkillOption} readOnly={readOnly} />
       <div>
-        <TagGroup title={t('admin.tags.requiredFields')} options={skillFieldOptions} onAdd={addSkillFieldOption} onRemove={removeSkillFieldOption} />
+        <TagGroup title={t('admin.tags.requiredFields')} options={skillFieldOptions} onAdd={addSkillFieldOption} onRemove={removeSkillFieldOption} readOnly={readOnly} />
         <p className="mt-2 text-xs text-muted-foreground">{t('admin.tags.requiredFieldsDesc')}</p>
       </div>
     </div>
+    </>
   )
 }
 
 export function FieldCompositionEditor() {
-  const { skillOptions, skillFieldOptions, skillFieldSkills, setSkillFieldSkills, skillFieldThreshold, setSkillFieldThreshold } = useOhsumi()
+  const { skillOptions, skillFieldOptions, skillFieldSkills, setSkillFieldSkills, skillFieldThreshold, setSkillFieldThreshold, can } = useOhsumi()
   const { t } = useI18n()
+  const readOnly = !can('org.rules')
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <p className="text-xs text-muted-foreground">{t('admin.tags.fieldCompositionDesc')}</p>
@@ -103,16 +182,21 @@ export function FieldCompositionEditor() {
         <label className="text-xs font-medium text-muted-foreground" htmlFor="skill-field-threshold">
           {t('admin.tags.thresholdLabel')}
         </label>
-        <input
-          id="skill-field-threshold"
-          type="number"
-          min={0}
-          max={100}
-          step={5}
-          value={Math.round(skillFieldThreshold * 100)}
-          onChange={(e) => setSkillFieldThreshold(Number(e.target.value) / 100)}
-          className="h-8 w-20 rounded-md border border-border bg-background px-2 text-sm outline-none focus:border-primary"
-        />
+        {readOnly ? (
+          <span id="skill-field-threshold" className="text-sm font-medium">{Math.round(skillFieldThreshold * 100)}</span>
+        ) : (
+          <input
+            id="skill-field-threshold"
+            type="number"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(skillFieldThreshold * 100)}
+            onChange={(e) => setSkillFieldThreshold(Number(e.target.value) / 100)}
+            data-gas-action="updateSetting"
+            className="h-8 w-20 rounded-md border border-border bg-background px-2 text-sm outline-none focus:border-primary"
+          />
+        )}
         <span className="text-xs text-muted-foreground">{t('admin.tags.thresholdUnitNote')}</span>
       </div>
       {skillFieldOptions.length === 0 ? (
@@ -126,6 +210,7 @@ export function FieldCompositionEditor() {
               skills={skillFieldSkills[field] ?? []}
               options={skillOptions}
               onChange={(next) => setSkillFieldSkills(field, next)}
+              readOnly={readOnly}
             />
           ))}
         </div>
@@ -135,7 +220,8 @@ export function FieldCompositionEditor() {
 }
 
 export function PositionRequirementsEditor() {
-  const { skillOptions, roleLevels, baseRoleId, jobRequirements, setJobRequirements } = useOhsumi()
+  const { skillOptions, roleLevels, baseRoleId, jobRequirements, setJobRequirements, can } = useOhsumi()
+  const readOnly = !can('org.rules')
   const { t } = useI18n()
   const roleName = useRoleLabel()
   // item 17: ポジション要件 — every role, including 一般, has a position
@@ -151,6 +237,7 @@ export function PositionRequirementsEditor() {
             skills={jobRequirements[role] ?? []}
             options={skillOptions}
             onChange={(next) => setJobRequirements(role, next)}
+            readOnly={readOnly}
           />
         ))}
       </div>
@@ -171,19 +258,31 @@ function RolePermissionRow({
   role,
   sections,
   onChange,
+  readOnly = false,
 }: {
   role: string
   sections: AdminSection[]
   onChange: (next: AdminSection[]) => void
+  readOnly?: boolean
 }) {
   const { t } = useI18n()
   const toggle = (key: AdminSection) => {
     onChange(sections.includes(key) ? sections.filter((s) => s !== key) : [...sections, key])
   }
+  if (readOnly) {
+    return (
+      <div>
+        <div className="text-sm font-medium">{role}</div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {TOGGLEABLE_SECTIONS.filter((s) => sections.includes(s.key)).map((s) => t(adminSectionTitleKey(s.key))).join('・') || '—'}
+        </p>
+      </div>
+    )
+  }
   return (
     <div>
       <div className="text-sm font-medium">{role}</div>
-      <div className="mt-1.5 flex flex-wrap gap-1.5">
+      <div className="mt-1.5 flex flex-wrap gap-1.5" data-gas-action="updateRoles">
         {TOGGLEABLE_SECTIONS.map((s) => {
           const checked = sections.includes(s.key)
           return (
@@ -211,15 +310,25 @@ function JobRequirementsRow({
   skills,
   options,
   onChange,
+  readOnly = false,
 }: {
   role: string
   skills: string[]
   options: string[]
   onChange: (next: string[]) => void
+  readOnly?: boolean
 }) {
   const { t } = useI18n()
   const toggle = (skill: string) => {
     onChange(skills.includes(skill) ? skills.filter((s) => s !== skill) : [...skills, skill])
+  }
+  if (readOnly) {
+    return (
+      <div>
+        <div className="text-sm font-medium">{role}</div>
+        <p className="mt-1 text-xs text-muted-foreground">{skills.join('・') || '—'}</p>
+      </div>
+    )
   }
   return (
     <div>
@@ -229,7 +338,7 @@ function JobRequirementsRow({
           {t('admin.tags.addSkillsFirst')}
         </p>
       ) : (
-        <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <div className="mt-1.5 flex flex-wrap gap-1.5" data-gas-action="updateSetting">
           {options.map((s) => {
             const checked = skills.includes(s)
             return (
@@ -268,6 +377,8 @@ function RoleEditor() {
     renameRole,
     setRoleTier,
     removeRoleLevel,
+    can,
+    isFullAdmin,
   } = useOhsumi()
   const { t } = useI18n()
   const roleName = useRoleLabel()
@@ -275,6 +386,9 @@ function RoleEditor() {
   const [moveTo, setMoveTo] = useState('')
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null)
   const isTop = isTopRef(currentUser?.role)
+  // 役職の一覧の編集は団体のルール(org.rules)。制限あり・なしを変えられるのは、制限なしの人と最上位の人だけ(GAS も同じ)
+  const editable = can('org.rules')
+  const canToggleRestricted = editable && (isTop || isFullAdmin)
   const countOf = (id: string) => members.filter((m) => sameRole(roles, m.role, id)).length
   // 削除できない役職: 一般・最初の最上位(移行前は代表)
   const fixed = (id: string) => {
@@ -289,8 +403,8 @@ function RoleEditor() {
         return (
           <div key={r.id} className="rounded-md border border-border/60 px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-2">
-              {r.tier !== 'base' && (
-                <div className="flex flex-col">
+              {editable && r.tier !== 'base' && (
+                <div className="flex flex-col" data-gas-action="updateRoles">
                   <button
                     onClick={() => reorderRoleLevel(r.id, 'up')}
                     disabled={i <= 1}
@@ -341,27 +455,37 @@ function RoleEditor() {
                 ) : (
                   r.tier === 'top' && <span className="text-[11px] text-muted-foreground">{t('admin.tags.roles.tierTop')}</span>
                 )}
-                {r.tier === 'admin' && (
+                {r.tier === 'admin' && (canToggleRestricted ? (
                   <button
                     onClick={() => toggleRestrictedRole(r.id)}
+                    data-gas-action="updateRoles"
                     className={`rounded px-2 py-0.5 text-xs whitespace-nowrap transition-colors ${
                       r.restricted ? 'bg-warning/15 text-warning hover:bg-warning/25' : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
                     {r.restricted ? t('admin.tags.restricted') : t('admin.tags.unrestricted')}
                   </button>
-                )}
-                {rolesFromSetting && (
+                ) : (
+                  <span
+                    className={`rounded px-2 py-0.5 text-xs whitespace-nowrap ${r.restricted ? 'bg-warning/15 text-warning' : 'text-muted-foreground'}`}
+                    title={editable ? t('admin.roles.restrictNeedsUnrestricted') : undefined}
+                  >
+                    {r.restricted ? t('admin.tags.restricted') : t('admin.tags.unrestricted')}
+                  </span>
+                ))}
+                {editable && rolesFromSetting && (
                   <button
                     onClick={() => setEditing({ id: r.id, name: r.name })}
+                    data-gas-action="updateRoles"
                     className="rounded px-2 py-0.5 text-xs whitespace-nowrap text-muted-foreground hover:text-foreground"
                   >
                     {t('admin.tags.roles.rename')}
                   </button>
                 )}
-                {!fixed(r.id) && (
+                {editable && !fixed(r.id) && (
                   <button
                     onClick={() => { setDeleting(r.id); setMoveTo('') }}
+                    data-gas-action="deleteRole"
                     aria-label={t('admin.tags.roles.delete')}
                     className="text-muted-foreground hover:text-destructive"
                   >
@@ -370,7 +494,7 @@ function RoleEditor() {
                 )}
               </span>
             </div>
-            {deleting === r.id && (
+            {editable && deleting === r.id && (
               <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-secondary/60 p-2 text-xs">
                 {count > 0 ? (
                   <>
@@ -413,7 +537,7 @@ function RoleEditor() {
 
 // 部門の一覧の編集(追加・並び順・名前の変更・削除・アーカイブの解除・タスクの移動)。
 // 使われている部門を削除するとアーカイブになる(新しいタスクでは選べない)。名前の変更は移行の後だけ
-function DepartmentEditor() {
+function DepartmentEditor({ readOnly = false }: { readOnly?: boolean }) {
   const {
     departments,
     afterMigration,
@@ -440,7 +564,7 @@ function DepartmentEditor() {
         return (
           <div key={d.id} className="rounded-md border border-border/60 px-2 py-1.5">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex flex-col">
+              {!readOnly && <div className="flex flex-col" data-gas-action="updateDepartments">
                 <button
                   onClick={() => reorderDepartment(d.id, 'up')}
                   disabled={i === 0}
@@ -457,7 +581,7 @@ function DepartmentEditor() {
                 >
                   <ChevronDown className="size-3.5" />
                 </button>
-              </div>
+              </div>}
               {editing?.id === d.id ? (
                 <input
                   autoFocus
@@ -476,7 +600,7 @@ function DepartmentEditor() {
               )}
               {d.archived && <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{t('admin.tags.departments.archived')}</span>}
               <span className="text-[11px] text-muted-foreground">{t('admin.tags.departments.taskCount', { count })}</span>
-              <span className="ml-auto flex flex-wrap items-center gap-1.5">
+              {!readOnly && <span className="ml-auto flex flex-wrap items-center gap-1.5" data-gas-action="updateDepartments">
                 {afterMigration && (
                   <button
                     onClick={() => setEditing({ id: d.id, name: d.name })}
@@ -510,9 +634,9 @@ function DepartmentEditor() {
                     <Trash2 className="size-3.5" />
                   </button>
                 )}
-              </span>
+              </span>}
             </div>
-            {moving === d.id && (
+            {!readOnly && moving === d.id && (
               <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-secondary/60 p-2 text-xs">
                 <span>{t('admin.tags.departments.moveTasksTo', { count })}</span>
                 <select
@@ -541,7 +665,7 @@ function DepartmentEditor() {
           </div>
         )
       })}
-      <RoleLevelAdd onAdd={addDepartment} />
+      {!readOnly && <RoleLevelAdd onAdd={addDepartment} />}
     </div>
   )
 }
@@ -581,11 +705,13 @@ function TagGroup({
   options,
   onAdd,
   onRemove,
+  readOnly = false,
 }: {
   title?: string
   options: string[]
   onAdd: (name: string) => void
   onRemove: (name: string) => void
+  readOnly?: boolean
 }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
@@ -604,12 +730,12 @@ function TagGroup({
           <span className="text-sm text-muted-foreground">{t('admin.tags.noOptions')}</span>
         )}
         {options.map((o) => (
-          <Tag key={o} onRemove={() => onRemove(o)}>
+          <Tag key={o} onRemove={readOnly ? undefined : () => onRemove(o)}>
             {o}
           </Tag>
         ))}
       </div>
-      <div className="mt-3 flex items-center gap-1.5">
+      {!readOnly && <div className="mt-3 flex items-center gap-1.5" data-gas-action="updateSetting">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -631,17 +757,18 @@ function TagGroup({
         >
           <Plus className="size-4" />
         </button>
-      </div>
+      </div>}
     </div>
   )
 }
 
 // item 20: 1on1ワークシート質問項目エディタ
 export function OneOnOneQuestionsEditor() {
-  const { oneOnOneQuestions, setOneOnOneQuestions } = useOhsumi()
+  const { oneOnOneQuestions, setOneOnOneQuestions, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
+  const editable = can('org.rules')
 
   const add = () => {
     const v = draft.trim()
@@ -664,17 +791,20 @@ export function OneOnOneQuestionsEditor() {
             className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/60 px-2 py-1 text-xs font-medium"
           >
             {q}
-            <button
-              onClick={() => remove(q)}
-              className="ml-0.5 opacity-60 hover:opacity-100"
-              aria-label={t('admin.tags.oneOnOne.deleteAriaLabel')}
-            >
-              ×
-            </button>
+            {editable && (
+              <button
+                onClick={() => remove(q)}
+                className="ml-0.5 opacity-60 hover:opacity-100"
+                aria-label={t('admin.tags.oneOnOne.deleteAriaLabel')}
+              >
+                ×
+              </button>
+            )}
           </span>
         ))}
       </div>
-      <div className="mt-2 flex items-center gap-2">
+      <CapabilityNote cap="org.rules" className="mt-2" />
+      {editable && <div className="mt-2 flex items-center gap-2" data-gas-action="updateSetting">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -689,7 +819,7 @@ export function OneOnOneQuestionsEditor() {
           <Plus className="size-3.5" />
           {t('admin.tags.oneOnOne.add')}
         </Button>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -700,10 +830,11 @@ export function OneOnOneQuestionsEditor() {
 // 「保存」する構造にする（キー入力ごとに通信が飛ぶのを避けるため）。
 // 空配列(未設定)ならsurvey-screen.tsxが既存の固定6問にフォールバックする。
 export function SurveyQuestionsEditor() {
-  const { surveyQuestions, updateSurveyQuestions } = useOhsumi()
+  const { surveyQuestions, updateSurveyQuestions, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draft, setDraft] = useState<SurveyQuestion[]>(surveyQuestions)
+  const editable = can('org.rules')
 
   const addQuestion = () => {
     setDraft([...draft, { id: crypto.randomUUID(), text: '', type: 'scale', scaleMinLabel: '', scaleMaxLabel: '' }])
@@ -725,8 +856,27 @@ export function SurveyQuestionsEditor() {
   }
   const handleReset = () => setDraft(surveyQuestions)
 
+  if (!editable) {
+    // 見るだけ: 設問の文言と型だけを出す
+    return (
+      <div className="rounded-lg border border-border bg-card p-4">
+        <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.surveyQuestions.desc')}</p>
+        <CapabilityNote cap="org.rules" className="mt-2" />
+        <ol className="mt-3 flex list-decimal flex-col gap-1 pl-5 text-sm">
+          {surveyQuestions.length === 0 && <li className="list-none text-muted-foreground">{t('admin.tags.surveyQuestions.emptyFallback')}</li>}
+          {surveyQuestions.map((q) => (
+            <li key={q.id}>
+              {q.text}
+              <span className="ml-1.5 text-xs text-muted-foreground">({t(q.type === 'scale' ? 'admin.tags.surveyQuestions.type.scale' : 'admin.tags.surveyQuestions.type.text')})</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    )
+  }
+
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-lg border border-border bg-card p-4" data-gas-action="updateSetting">
       <p className="mt-1 text-xs text-muted-foreground">{t('admin.tags.surveyQuestions.desc')}</p>
 
       <div className="mt-3 flex flex-col gap-2">
@@ -903,9 +1053,10 @@ export function NotifySettingsEditor() {
 // アンケートの回答対象者限定（item 3） — 選択したメンバーのみが
 // survey-screen.tsxの経験値アンケートに回答できる。空選択=全員回答可。
 export function SurveyInviteEditor() {
-  const { members, surveyInvitedIds, updateSurveyInvitedIds } = useOhsumi()
+  const { members, surveyInvitedIds, updateSurveyInvitedIds, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
+  const editable = can('org.rules')
 
   const toggle = (memberId: string) => {
     const next = surveyInvitedIds.includes(memberId)
@@ -925,7 +1076,13 @@ export function SurveyInviteEditor() {
           {t('admin.tags.surveyInvite.everyone')}
         </p>
       )}
-      <div className="mt-3 grid grid-cols-1 gap-1 sm:grid-cols-2">
+      <CapabilityNote cap="org.rules" className="mt-2" />
+      {!editable && surveyInvitedIds.length > 0 && (
+        <p className="mt-2 text-sm">
+          {members.filter((m) => surveyInvitedIds.includes(m.id)).map((m) => m.displayName || m.name).join('・')}
+        </p>
+      )}
+      {editable && <div className="mt-3 grid grid-cols-1 gap-1 sm:grid-cols-2" data-gas-action="updateSetting">
         {members.filter(isActiveMember).map((m) => {
           const checked = surveyInvitedIds.includes(m.id)
           return (
@@ -941,7 +1098,7 @@ export function SurveyInviteEditor() {
             </button>
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -951,9 +1108,10 @@ export function SurveyInviteEditor() {
 // 既存キーの削除は表示上外れるだけで、Members側のcustom_fields_jsonに
 // 残ったデータを一括削除する必要はない（仕様通り）。
 export function CustomMemberColumnsEditor() {
-  const { customMemberColumns, updateCustomMemberColumns } = useOhsumi()
+  const { customMemberColumns, updateCustomMemberColumns, can } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
+  const editable = can('org.rules')
   const [draftKey, setDraftKey] = useState('')
   const [draftLabel, setDraftLabel] = useState('')
 
@@ -990,18 +1148,22 @@ export function CustomMemberColumnsEditor() {
             >
               <span className="font-medium">{col.label}</span>
               <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{col.key}</span>
-              <button
-                onClick={() => remove(col.key)}
-                className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                aria-label={t('admin.tags.customColumns.removeAriaLabel')}
-              >
-                <Trash2 className="size-3.5" />
-              </button>
+              {editable && (
+                <button
+                  onClick={() => remove(col.key)}
+                  data-gas-action="updateSetting"
+                  className="ml-auto shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={t('admin.tags.customColumns.removeAriaLabel')}
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              )}
             </div>
           ))
         )}
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      <CapabilityNote cap="org.rules" className="mt-2" />
+      {editable && <div className="mt-3 flex flex-wrap items-center gap-1.5" data-gas-action="updateSetting">
         <input
           value={draftKey}
           onChange={(e) => setDraftKey(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))}
@@ -1022,7 +1184,7 @@ export function CustomMemberColumnsEditor() {
           <Plus className="size-3.5" />
           {t('common.add')}
         </Button>
-      </div>
+      </div>}
     </div>
   )
 }

@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '@/components/ohsumi/toast'
-import { Avatar, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Avatar, CapabilityNote } from '@/components/ohsumi/primitives'
 import { EditableTags } from '@/components/ohsumi/editable-tags'
 import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
@@ -13,7 +13,7 @@ import { Search, Bell, UserMinus, UserPlus, FolderKanban, Check, Upload, Pause, 
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { useSiteLinkStatus } from '@/lib/ohsumi/use-site-link-status'
 import { getActiveOrg, inviteLink } from '@/lib/ohsumi/org-directory'
-import { findRole, type RoleDef } from '@/lib/ohsumi/roles'
+import { findRole, roleAssignBlock, type RoleAssignBlock, type RoleDef } from '@/lib/ohsumi/roles'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import type { Member, Role } from '@/lib/ohsumi/types'
 import { tenureYears, formatDepartmentPath } from '@/lib/ohsumi/utils'
@@ -66,17 +66,30 @@ export function AdminMembers() {
     roles,
     baseRoleId,
     isAdminRef,
-    isTopRef,
     restrictedRoles,
     addMember,
     isFullAdmin,
     toggleMemberInactive,
     currentUser,
     revokeMemberSessions,
+    can,
   } = useOhsumi()
-  // updateRole/removeMember/addMember/updateReportsTo/updateMemberProjectsは
-  // GAS側で常にisDaihyo固定（isFullAdminとは無関係）
-  const isDaihyo = isTopRef(currentUser?.role)
+  // 「代表だけ」だった操作は、できる操作(capabilities.ts)ごとに出し分ける。GAS も同じ一覧で判定する
+  const canAdd = can('members.add')
+  const canChangeRole = can('members.role')
+  const canRemove = can('members.remove')
+  const canHr = can('members.hr')
+  const canRules = can('org.rules')
+  // 自分が付けられる役職か(最上位でない人は、最上位・自分より広い役職を付けられない。GAS の assertRoleAssignable_ と同じ)
+  const me = { id: currentUser?.id ?? '', role: currentUser?.role }
+  const assignableRoleIds = (target?: Member) =>
+    roles.filter((r) => roleAssignBlock(roles, me, r.id, target ? { id: target.id, role: target.role } : undefined) === null).map((r) => r.id)
+  const roleChangeBlock = (target: Member): RoleAssignBlock | null => roleAssignBlock(roles, me, undefined, { id: target.id, role: target.role })
+  const ROLE_BLOCK_KEY: Partial<Record<RoleAssignBlock, TranslationKey>> = {
+    self: 'admin.roles.assign.self',
+    targetTop: 'admin.roles.assign.targetTop',
+    targetStronger: 'admin.roles.assign.targetStronger',
+  }
   const roleName = useRoleLabel()
   // メンバーの役職の ID(移行の途中で役職名のまま残っていても、一覧の ID にそろえる)
   const roleIdOf = (ref: string) => findRole(roles, ref)?.id ?? ref
@@ -104,7 +117,8 @@ export function AdminMembers() {
   const [newRole, setNewRole] = useState<Role>(baseRoleId)
   // 招待メールを送る(初期値は送る。レジストリに確かめていない団体では選べない)
   const [sendInvite, setSendInvite] = useState(true)
-  const inviteMail = useSiteLinkStatus(isDaihyo)
+  const inviteMail = useSiteLinkStatus(canAdd)
+  const addableRoles = assignableRoleIds()
 
   const [csvPreview, setCsvPreview] = useState<{ name: string; email: string; affiliation: string; role: Role }[] | null>(null)
 
@@ -145,8 +159,9 @@ export function AdminMembers() {
 
   const handleBulkAdd = () => {
     if (!csvPreview) return
-    // メールアドレスの無い・形の違う行は追加しない(メールアドレスが無いとログインできないため)
-    const rows = csvPreview.filter((r) => isValidEmail(r.email))
+    // メールアドレスの無い・形の違う行は追加しない(メールアドレスが無いとログインできないため)。
+    // 付けられない役職の行も追加しない(GAS も断る)
+    const rows = csvPreview.filter((r) => isValidEmail(r.email) && addableRoles.includes(r.role))
     const skipped = csvPreview.length - rows.length
     setCsvPreview(null)
     if (skipped > 0) toast(t('admin.members.bulkSkippedNoEmail', { count: skipped }))
@@ -230,15 +245,12 @@ export function AdminMembers() {
       <p className="text-sm text-muted-foreground">
         {t('admin.members.subtitle')}
       </p>
-      {/* addMember/updateRole/removeMember/updateReportsTo/updateMemberProjects
-          はいずれもGAS側で常にisDaihyo固定。このページの各種操作UIは
-          isFullAdmin配下に表示されるため、代表以外の全権管理者にも見えて
-          しまう — 実行時エラーになる前にまとめて示す */}
-      <AdminAccessNote level="daihyo" className="mt-2" />
-
       <InviteLinkCard />
 
-      <div className="mt-6 rounded-lg border border-border bg-card p-4">
+      {/* メンバーの登録・招待(できる操作 members.add の人だけ) */}
+      {!canAdd && <CapabilityNote cap="members.add" className="mt-6" />}
+      {canAdd && (
+      <div className="mt-6 rounded-lg border border-border bg-card p-4" data-gas-action="addMember">
         <div className="text-sm font-medium">{t('admin.members.register.title')}</div>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {t('admin.members.register.hint')}
@@ -267,13 +279,13 @@ export function AdminMembers() {
             onChange={(e) => setNewRole(e.target.value)}
             className="h-9 cursor-pointer rounded-lg border border-border bg-background px-2 text-sm outline-none focus:border-primary"
           >
-            {ROLES.map((r) => (
+            {addableRoles.map((r) => (
               <option key={r} value={r}>
                 {roleName(r)}
               </option>
             ))}
           </select>
-          <Button className="h-9" disabled={!newName.trim() || !isValidEmail(newEmail) || !isDaihyo} onClick={handleAddMember}>
+          <Button className="h-9" disabled={!newName.trim() || !isValidEmail(newEmail) || !addableRoles.includes(newRole)} onClick={handleAddMember}>
             <UserPlus className="size-4" />
             {t('admin.members.register.submit')}
           </Button>
@@ -313,7 +325,9 @@ export function AdminMembers() {
           </label>
           <span className="text-xs text-muted-foreground">{t('admin.members.register.csvFormat')}</span>
         </div>
+        {addableRoles.length < ROLES.length && <p className="mt-2 text-xs text-muted-foreground">{t('admin.roles.assign.limited')}</p>}
       </div>
+      )}
 
       {csvPreview && (
         <Modal open={!!csvPreview} onClose={() => setCsvPreview(null)}>
@@ -337,7 +351,10 @@ export function AdminMembers() {
                         {isValidEmail(r.email) ? r.email : t('admin.members.csv.emailRequired')}
                       </td>
                       <td className="py-1 pr-3 text-muted-foreground">{r.affiliation || '—'}</td>
-                      <td className="py-1 text-muted-foreground">{roleName(r.role)}</td>
+                      <td className={addableRoles.includes(r.role) ? 'py-1 text-muted-foreground' : 'py-1 text-destructive'}>
+                        {roleName(r.role)}
+                        {!addableRoles.includes(r.role) && <span className="block">{t('admin.roles.assign.limited')}</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -345,7 +362,7 @@ export function AdminMembers() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setCsvPreview(null)}>{t('admin.members.csv.cancel')}</Button>
-              <Button onClick={handleBulkAdd} disabled={!isDaihyo}>
+              <Button onClick={handleBulkAdd} disabled={!canAdd}>
                 <UserPlus className="size-4" />
                 {t('admin.members.csv.submit', { count: csvPreview.length })}
               </Button>
@@ -454,32 +471,44 @@ export function AdminMembers() {
                       </div>
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      {isFullAdmin ? (
-                        <select
-                          value={roleIdOf(m.role)}
-                          disabled={!isDaihyo}
-                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
-                          onChange={(e) => updateRole(m.id, e.target.value as Role)}
-                          className="h-8 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {roleName(r)}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">{roleName(m.role)}</span>
-                      )}
+                      {(() => {
+                        // 役職の変更(members.role)。自分・最上位の人・自分より広い人の役職は変えられない(理由を1行出す)
+                        const block = canChangeRole ? roleChangeBlock(m) : null
+                        if (!canChangeRole || block) {
+                          const reason = block ? ROLE_BLOCK_KEY[block] : undefined
+                          return (
+                            <span className="text-xs text-muted-foreground">
+                              {roleName(m.role)}
+                              {reason && <span className="mt-0.5 block text-[11px]">{t(reason)}</span>}
+                            </span>
+                          )
+                        }
+                        const options = assignableRoleIds(m)
+                        const current = roleIdOf(m.role)
+                        return (
+                          <select
+                            value={current}
+                            data-gas-action="updateRole"
+                            data-member-id={m.id}
+                            onChange={(e) => updateRole(m.id, e.target.value as Role)}
+                            className="h-8 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary"
+                          >
+                            {(options.includes(current) ? options : [current, ...options]).map((r) => (
+                              <option key={r} value={r} disabled={r === current && !options.includes(r)}>
+                                {roleName(r)}
+                              </option>
+                            ))}
+                          </select>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      {isFullAdmin ? (
+                      {canHr ? (
                         <select
                           value={m.reportsToId ?? ''}
-                          disabled={!isDaihyo}
-                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
+                          data-gas-action="updateReportsTo"
                           onChange={(e) => updateReportsTo(m.id, e.target.value || null)}
-                          className="h-8 w-32 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                          className="h-8 w-32 cursor-pointer rounded-md border border-border bg-background px-1.5 text-xs outline-none focus:border-primary"
                         >
                           <option value="">{t('admin.members.reportsToDefault')}</option>
                           {members
@@ -501,15 +530,18 @@ export function AdminMembers() {
                     {isFullAdmin && (
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         {restrictedRoles.includes(roleIdOf(m.role)) ? (
-                          <button
-                            onClick={() => setAssigningProjects(m)}
-                            disabled={!isDaihyo}
-                            title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
-                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <FolderKanban className="size-3.5" />
-                            {t('admin.members.projectsCount', { count: (m.projectIds ?? []).length })}
-                          </button>
+                          canHr ? (
+                            <button
+                              onClick={() => setAssigningProjects(m)}
+                              data-gas-action="updateMemberProjects"
+                              className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:bg-secondary"
+                            >
+                              <FolderKanban className="size-3.5" />
+                              {t('admin.members.projectsCount', { count: (m.projectIds ?? []).length })}
+                            </button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{t('admin.members.projectsCount', { count: (m.projectIds ?? []).length })}</span>
+                          )
                         ) : (
                           <span className="text-xs text-muted-foreground">
                             {!isAdminRef(m.role) ? '—' : t('admin.members.projectsAll')}
@@ -532,7 +564,7 @@ export function AdminMembers() {
                         placeholder={t('admin.members.judgmentPlaceholder')}
                         variant="judgment"
                         options={skillOptions}
-                        onNewOption={addSkillOption}
+                        onNewOption={canRules ? addSkillOption : undefined}
                       />
                     </td>
                     <td className="px-4 py-3">
@@ -567,8 +599,9 @@ export function AdminMembers() {
                         </button>
                         {isFullAdmin && <PermissionOverridesButton member={m} />}
                         {/* 全端末でログアウトさせる(スマートフォンの紛失・退会時など) */}
-                        {isFullAdmin && isRemoteConfigured && m.id !== currentUser?.id && (
+                        {canRules && isRemoteConfigured && m.id !== currentUser?.id && (
                           <button
+                            data-gas-action="revokeMemberSessions"
                             onClick={async () => {
                               const name = m.displayName || m.name
                               if (!window.confirm(t('admin.members.revokeSessionsConfirm', { name }))) return
@@ -585,15 +618,16 @@ export function AdminMembers() {
                             {t('admin.members.revokeSessions')}
                           </button>
                         )}
-                        <button
-                          onClick={() => setRemoving(m)}
-                          disabled={!isDaihyo}
-                          title={!isDaihyo ? t('admin.accessNote.daihyo') : undefined}
-                          className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <UserMinus className="size-3.5" />
-                          {t('admin.members.remove')}
-                        </button>
+                        {canRemove && (
+                          <button
+                            onClick={() => setRemoving(m)}
+                            data-gas-action="removeMember"
+                            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                          >
+                            <UserMinus className="size-3.5" />
+                            {t('admin.members.remove')}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -626,7 +660,7 @@ export function AdminMembers() {
           <Button
             variant="destructive"
             className="h-9"
-            disabled={!isDaihyo}
+            disabled={!canRemove}
             onClick={() => {
               if (removing) {
                 removeMember(removing.id)

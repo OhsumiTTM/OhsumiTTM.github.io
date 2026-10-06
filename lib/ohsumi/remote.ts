@@ -5,6 +5,7 @@
 // READ_POLICY). See gas/README.md for the sheet schema and deployment steps.
 // All of this is optional — when NEXT_PUBLIC_REGISTRY_URL isn't set (e.g. local
 // dev), the app falls back to the local seed data exactly as before.
+import { normalizeCapabilities, type Capability } from './capabilities'
 import type {
   AdminSection,
   CareerHistoryEntry,
@@ -836,12 +837,15 @@ export interface InitialData {
   background?: BackgroundData
   // 裏での読み込みだけ失敗した(画面が getBackgroundData を送り直す)
   backgroundError?: string
+  // ログインした人のできる操作(GAS が役職と人ごとの例外から計算する)。unchanged の時は無い
+  capabilities?: Capability[]
 }
 
 interface InitialDataResponse {
   memberId: string | null
   version?: string
   unchanged?: boolean
+  capabilities?: string[]
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
   background?: BackgroundData
   backgroundError?: string
@@ -859,7 +863,11 @@ export async function fetchInitialData(knownVersion?: string): Promise<InitialDa
 }
 
 function toInitialData(res: InitialDataResponse): InitialData {
-  const extra = { background: res.background, backgroundError: res.backgroundError }
+  const extra = {
+    background: res.background,
+    backgroundError: res.backgroundError,
+    ...(Array.isArray(res.capabilities) ? { capabilities: normalizeCapabilities(res.capabilities) } : {}),
+  }
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }
   }

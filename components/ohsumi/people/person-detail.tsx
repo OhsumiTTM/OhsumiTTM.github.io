@@ -5,7 +5,7 @@ import { useRef, useState, useEffect } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '@/components/ohsumi/toast'
-import { Avatar, StatusBadge, DifficultyBadge, SectionLabel, AdminAccessNote } from '@/components/ohsumi/primitives'
+import { Avatar, StatusBadge, DifficultyBadge, SectionLabel, CapabilityNote } from '@/components/ohsumi/primitives'
 import { CalendarView } from '@/components/ohsumi/output/calendar-view'
 import { DependencyView } from '@/components/ohsumi/output/dependency-view'
 import { TaskDetailDrawer } from '@/components/ohsumi/output/task-detail-drawer'
@@ -134,6 +134,7 @@ export function PersonDetail({ id }: { id: string }) {
     updateTrainingHistory,
     notifyTrainingRequest,
     notifyTrainingDecision,
+    can,
     updateDevelopmentPlan,
     updateOneOnOnes,
     updateMemberDepartmentPaths,
@@ -512,13 +513,13 @@ export function PersonDetail({ id }: { id: string }) {
                   : t('person.tenure.unset')}
               </p>
             )}
-            {(isSelf || isAdmin) && !editingJoinedAt && (
+            {/* 所属開始日(updateJoinedAt)は、できる操作 members.hr の人だけ(本人による変更も含む) */}
+            {can('members.hr') && !editingJoinedAt && (
               <button
                 onClick={() => setEditingJoinedAt(true)}
+                data-gas-action="updateJoinedAt"
                 className="rounded-md p-0.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
                 aria-label={t('person.avatar.editJoinedAt')}
-                // updateJoinedAtはGAS側で常にisDaihyo固定（本人による編集も含む）
-                title={!isTopRef(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
               >
                 <Pencil className="size-3" />
               </button>
@@ -688,12 +689,12 @@ export function PersonDetail({ id }: { id: string }) {
               ) : (
                 <span className="text-sm text-muted-foreground">{t('common.notSet')}</span>
               )}
-              {isAdmin && (
+              {/* メンター(updateMentor)は、できる操作 members.hr の人だけ */}
+              {can('members.hr') && (
                 <select
                   value={member.mentorId ?? ''}
                   onChange={(e) => updateMentor(member.id, e.target.value || null)}
-                  // updateMentorはGAS側で常にisDaihyo固定
-                  title={!isTopRef(currentUser?.role) ? t('admin.accessNote.daihyo') : undefined}
+                  data-gas-action="updateMentor"
                   className="h-8 cursor-pointer rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
                 >
                   <option value="">{t('person.growth.mentor.unsetOption')}</option>
@@ -1016,7 +1017,8 @@ export function PersonDetail({ id }: { id: string }) {
           updateEducationInfo={updateEducationInfo}
           updateTrainingHistory={updateTrainingHistory}
           notifyTrainingRequest={notifyTrainingRequest}
-          notifyTrainingDecision={notifyTrainingDecision}
+          // 研修の承認の知らせは、できる操作 members.training の人だけが送る(career-tab.tsx でも確かめる)
+          notifyTrainingDecision={(memberId, trainingId) => { if (can('members.training')) notifyTrainingDecision(memberId, trainingId) }}
           updateDevelopmentPlan={updateDevelopmentPlan}
           updateOneOnOnes={updateOneOnOnes}
           currentUserId={currentUser?.id ?? null}
@@ -1192,7 +1194,7 @@ export function PersonDetail({ id }: { id: string }) {
             emptyText={t('person.overview.talent.empty')}
             placeholder={t('person.overview.will.placeholder')}
             options={skillOptions}
-            onNewOption={addSkillOption}
+            onNewOption={can('org.rules') ? addSkillOption : undefined}
           />
         </TalentCard>
 
@@ -1209,7 +1211,7 @@ export function PersonDetail({ id }: { id: string }) {
             placeholder={t('person.overview.judgment.placeholder')}
             variant="judgment"
             options={skillOptions}
-            onNewOption={addSkillOption}
+            onNewOption={can('org.rules') ? addSkillOption : undefined}
           />
         </TalentCard>
 
@@ -1321,8 +1323,8 @@ export function PersonDetail({ id }: { id: string }) {
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('person.account.emailDesc')}
             </p>
-            {/* updateEmailはGAS側で本人による変更も含めて常にisDaihyo固定 */}
-            <AdminAccessNote level="daihyo" className="mb-1" />
+            {/* メールアドレスの変更(updateEmail)は、本人による変更も含めて、できる操作 members.hr の人だけ */}
+            <CapabilityNote cap="members.hr" className="mb-1" />
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <Mail className="size-4 shrink-0 text-muted-foreground" />
               {emails.map((e) => (
@@ -1331,16 +1333,19 @@ export function PersonDetail({ id }: { id: string }) {
                   className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary/60 px-1.5 py-0.5 text-xs font-medium"
                 >
                   {e}
-                  <button
-                    onClick={() => removeEmail(e)}
-                    className="opacity-60 hover:opacity-100"
-                    aria-label={t('person.account.removeEmail', { email: e })}
-                  >
-                    <X className="size-3" />
-                  </button>
+                  {can('members.hr') && (
+                    <button
+                      onClick={() => removeEmail(e)}
+                      data-gas-action="updateEmail"
+                      className="opacity-60 hover:opacity-100"
+                      aria-label={t('person.account.removeEmail', { email: e })}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
                 </span>
               ))}
-              <input
+              {can('members.hr') && <input
                 value={newEmail}
                 onChange={(ev) => setNewEmail(ev.target.value)}
                 onKeyDown={(ev) => {
@@ -1355,8 +1360,9 @@ export function PersonDetail({ id }: { id: string }) {
                 }}
                 placeholder={t('person.account.emailPlaceholder')}
                 type="email"
+                data-gas-action="updateEmail"
                 className="h-7 w-48 rounded-md border border-dashed border-border-strong bg-background px-2 text-xs outline-none focus:border-primary"
-              />
+              />}
             </div>
             <NotifySettingsTable
               member={member}

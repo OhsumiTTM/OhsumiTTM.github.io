@@ -159,6 +159,9 @@ export const READ_SAFE_STORE_FUNCTIONS = new Set([
   'retryLoad',
   'isAdminRef',
   'isTopRef',
+  // できる操作の確かめ(画面を描く時に呼ぶ。何も変えない)
+  'can',
+  'roleCapabilitiesOf',
   'departmentOptions',
   'departmentNameOf',
   'refreshWebhookStatus',

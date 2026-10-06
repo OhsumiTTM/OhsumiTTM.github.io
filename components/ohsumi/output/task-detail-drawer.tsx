@@ -186,6 +186,7 @@ export function TaskDetailDrawer({
     categoryOptions,
     addSkillOption,
     addCategoryOption,
+    can,
     members,
     awardSkillPoints,
     isFullAdmin,
@@ -258,8 +259,9 @@ export function TaskDetailDrawer({
             hasSourceInput={!!sourceInput}
             skillOptions={skillOptions}
             categoryOptions={categoryOptions}
-            onAddSkillOption={addSkillOption}
-            onAddCategoryOption={addCategoryOption}
+            // 団体の選択肢に足すのは、団体のルール(org.rules)の人だけ。ほかの人はこのタスクにだけ付ける
+            onAddSkillOption={(v) => { if (can('org.rules')) addSkillOption(v) }}
+            onAddCategoryOption={(v) => { if (can('org.rules')) addCategoryOption(v) }}
             onClose={onClose}
             onStatus={(s) => updateTaskStatus(task.id, s)}
             onTake={() => setConfirmTake(true)}

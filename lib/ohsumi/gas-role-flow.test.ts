@@ -19,10 +19,10 @@ const ROLES = JSON.stringify([
 
 // 役職ごとのテスト用アカウント(メンバーID = 役職の説明)
 const ACCOUNTS = [
-  { id: 'm-top', role: 'top', label: '代表(top)' },
-  { id: 'm-admin', role: 'r-admin', label: '全権管理者(admin)' },
-  { id: 'm-lead', role: 'r-lead', label: '制限付きの管理者(admin・restricted)' },
-  { id: 'm-base', role: 'base', label: '一般(base)' },
+  { id: 'm-top', role: 'top', label: '代表(top)', capabilities: ['members.add', 'members.role', 'members.remove', 'members.hr', 'members.training', 'recruiting', 'projects.remove', 'trash', 'org.rules', 'org.logo'] },
+  { id: 'm-admin', role: 'r-admin', label: '全権管理者(admin)', capabilities: ['trash', 'org.rules'] },
+  { id: 'm-lead', role: 'r-lead', label: '制限付きの管理者(admin・restricted)', capabilities: [] },
+  { id: 'm-base', role: 'base', label: '一般(base)', capabilities: [] },
 ]
 
 function setup() {
@@ -110,6 +110,8 @@ describe.each(ACCOUNTS)('$label のアカウント', (account) => {
     const login = t.post({ action: 'exchangeIdToken', idToken: account.id, nonceSecret: 'x', withBackground: true })
     expect(login.ok, JSON.stringify(login)).toBe(true)
     expect(login.result.memberId).toBe(account.id)
+    // できる操作(既定の割り当て)。画面はこれだけを見て操作の部品を出す
+    expect(login.result.capabilities).toEqual(account.capabilities)
     expect(login.result.backgroundError).toBeUndefined()
     expect(login.result.background).toMatchObject({ expenses: [{ id: 'e1' }], formSubmissions: [], candidates: [], myEmail: account.id + '@example.com', errors: {} })
 
@@ -123,6 +125,7 @@ describe.each(ACCOUNTS)('$label のアカウント', (account) => {
     // 再読み込み(保存したセッションで入り直す)
     const reload = t.post({ action: 'getInitialData', sessionToken: account.id, withBackground: true })
     expect(reload.ok).toBe(true)
+    expect(reload.result.capabilities).toEqual(account.capabilities)
     expect(reload.result.sheets.Members.rows).toHaveLength(ACCOUNTS.length)
     expect(reload.result.background.errors).toEqual({})
 
@@ -175,7 +178,11 @@ describe('権限の一覧への登録漏れ', () => {
     const cases = new Set([...doPost.matchAll(/case '(\w+)':/g)].map((m) => m[1]))
     const aStart = CODE_GS.indexOf('function authorizeAction_(')
     const auth = CODE_GS.slice(aStart, CODE_GS.indexOf('\nfunction ', aStart + 10))
-    const listed = new Set([...auth.matchAll(/'(\w+)'/g)].map((m) => m[1]))
+    // できる操作(capability)のまとまりの操作は CAPABILITY_ACTIONS、最上位だけの操作は TOP_ONLY_ACTIONS に書く(authorizeAction_ はそれを引く)
+    const capStart = CODE_GS.indexOf('var CAPABILITY_ACTIONS = {')
+    const caps = CODE_GS.slice(capStart, CODE_GS.indexOf('\n}\n', capStart))
+    const topOnly = CODE_GS.match(/var TOP_ONLY_ACTIONS = \[[^\]]*\]/)![0]
+    const listed = new Set([...auth.matchAll(/'(\w+)'/g), ...caps.matchAll(/'(\w+)'/g), ...topOnly.matchAll(/'(\w+)'/g)].map((m) => m[1]))
     expect([...cases].filter((a) => !listed.has(a))).toEqual([])
     expect(cases.has('getBackgroundData')).toBe(true)
   })
