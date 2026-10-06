@@ -4,6 +4,8 @@
 // ログイン(許可リストの管理者だけ)・団体の一覧・停止の予定(提供停止・機能停止)の入力と取り消し・
 // 登録コードの発行と取り消し・操作の記録を表示する。
 // 判定はすべてレジストリの GAS が行い、この画面は表示と入力だけを受け持つ。
+import { copySiteGasCode, newestGasVersion } from '@/lib/ohsumi/gas-code-copy'
+import { ORG_TEMPLATE_COPY_URL } from '@/lib/ohsumi/org-template'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { OhsumiLogo } from '@/components/ohsumi/primitives'
@@ -291,6 +293,7 @@ export function RegistryAdmin() {
           initialInput={draft}
           onChanged={() => void load(session)}
           onAuthError={endSession}
+          latestGasVersion={newestGasVersion((overview.gasVersions ?? []).map((v) => v.version))}
         />
       ) : tab === 'diagnostics' ? (
         <DiagnosticsTab overview={overview} session={session} onAuthError={endSession} />
@@ -876,6 +879,64 @@ function PlanControl({ org, session, onChanged, onAuthError }: { org: OrgSummary
   )
 }
 
+// 新しい団体に渡すもの: GAS のコード(サイトの /gas/Code.gs。レジストリの最新の版と同じか確かめてからコピー)と、
+// 団体のスプレッドシートのテンプレートの「コピーを作成」のリンク
+function OrgHandoffPanel({ latestGasVersion }: { latestGasVersion: string | null }) {
+  const [codeState, setCodeState] = useState<{ kind: 'idle' | 'busy' } | { kind: 'done'; version: string } | { kind: 'error'; message: string }>({ kind: 'idle' })
+  const [linkCopied, setLinkCopied] = useState(false)
+  const copyCode = async () => {
+    if (!latestGasVersion) return
+    setCodeState({ kind: 'busy' })
+    const r = await copySiteGasCode(latestGasVersion)
+    if (r.ok) setCodeState({ kind: 'done', version: r.version })
+    else if (r.reason === 'mismatch') setCodeState({ kind: 'error', message: `サイトのコードの版(${r.version ?? '不明'})が、レジストリの最新の版(${latestGasVersion})と違うため、コピーしませんでした。サイトの更新が終わってから、もう一度押してください。` })
+    else if (r.reason === 'clipboard') setCodeState({ kind: 'error', message: 'クリップボードに入れられませんでした。ブラウザがコピーを許可しているか確かめてください。' })
+    else setCodeState({ kind: 'error', message: 'サイトからコードを読めませんでした。ページを読み込み直してから、もう一度押してください。' })
+  }
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(ORG_TEMPLATE_COPY_URL)
+      setLinkCopied(true)
+    } catch {
+      setLinkCopied(false)
+    }
+  }
+  return (
+    <section className="rounded-lg border border-border p-3" data-org-handoff>
+      <h2 className="mb-1 text-sm font-medium">新しい団体に渡すもの</h2>
+      <p className="mb-3 text-xs text-muted-foreground">登録コードと一緒に、テンプレートのコピーを作るリンクと、GAS のコードを渡します。</p>
+      <div className="space-y-3">
+        <div>
+          <p className="text-xs font-medium">GAS のコード</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void copyCode()} disabled={!latestGasVersion || codeState.kind === 'busy'} data-registry-copy-gas>
+              GAS のコードをコピー{latestGasVersion ? `(版 ${latestGasVersion})` : ''}
+            </Button>
+            {codeState.kind === 'done' && <span className="text-xs" data-registry-copy-gas-result>コピーしました(版 {codeState.version})</span>}
+            {codeState.kind === 'error' && <span role="alert" className="text-xs text-destructive" data-registry-copy-gas-result>{codeState.message}</span>}
+          </div>
+          {!latestGasVersion && <p className="mt-1 text-xs text-muted-foreground">レジストリの版の一覧を読めないため、コピーできません。</p>}
+        </div>
+        <div>
+          <p className="text-xs font-medium">テンプレートのコピーを作成</p>
+          <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground" data-registry-template-url>{ORG_TEMPLATE_COPY_URL}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <a
+              href={ORG_TEMPLATE_COPY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium hover:bg-secondary"
+            >
+              開く
+            </a>
+            <Button size="sm" variant="outline" onClick={() => void copyLink()}>{linkCopied ? 'コピーしました' : 'リンクをコピー'}</Button>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function CodesPanel({
   session,
   codes,
@@ -884,6 +945,7 @@ function CodesPanel({
   initialInput,
   onChanged,
   onAuthError,
+  latestGasVersion,
 }: {
   session: AdminSession
   codes: CodeSummary[]
@@ -892,6 +954,7 @@ function CodesPanel({
   initialInput: IssueInput | null
   onChanged: () => void
   onAuthError: (message?: string) => void
+  latestGasVersion: string | null
 }) {
   const [input, setInput] = useState<IssueInput>({ ...EMPTY_INPUT, ...(initialInput ?? {}) })
   const reissue = input.kind === 'reissue'
@@ -964,6 +1027,8 @@ function CodesPanel({
           </div>
         </section>
       )}
+
+      <OrgHandoffPanel latestGasVersion={latestGasVersion} />
 
       <section className="rounded-lg border border-border p-3">
         <h2 className="mb-2 text-sm font-medium">登録コードを発行する</h2>

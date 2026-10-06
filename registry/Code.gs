@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.06-2'
+var REGISTRY_VERSION = '2026.10.06-3'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2582,7 +2582,8 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
-  { version: '2026.10.06-2', security: false, required: true, note: '稼働の目安(余力あり・普通・余力なし)の決め方を団体ごとに設定できる(Settings の workload_rules。範囲と大小の関係を確かめ、おかしな値は保存しない)。設定はメンバー全員に渡す' },
+  { version: '2026.10.06-3', security: false, required: true, note: '稼働の目安(余力あり・普通・余力なし)の決め方を団体ごとに設定できる(Settings の workload_rules。範囲と大小の関係を確かめ、おかしな値は保存しない)。設定はメンバー全員に渡す' },
+  { version: '2026.10.06-2', security: false, required: true, note: '最上位の役職の人の画面に、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(更新の知らせ・団体設定から開ける)' },
   { version: '2026.10.06-1', security: true, required: true, note: '公開前の版: 役職ごとの「できる操作」(メンバーの登録・役職の変更・退会・人事の項目・研修の承認・採用・プロジェクトの削除・ゴミ箱・団体のルール・ロゴ)。権限の判定を1か所の定義にまとめ、画面にログインした人のできる操作を渡す。役職を付ける時の昇権の防止(最上位・自分より広い役職・自分と最上位の人の役職)。既定の役職では、できることは今までと同じ。GAS の知らせの「部門」を「領域」に' },
   { version: '2026.10.05-4', security: false, required: true, note: '公開前の版: 削除の制限・メンバーのメールの必須・定期タスクの月末と取りこぼし・退会の後始末・初期タスクを GAS で作る・カレンダーの予定をタスクの ID で扱う・幹部の取り込み・本人だけの保存と通知の履歴・タスクのゴミ箱・テンプレートの既定値と「初期設定」メニュー・要求分野の初期値・画面から届いた値の確かめ(承認・申請者・自分の実績・記録・回答・数・日付・存在と輪・評価した人・メール)・移行のためだけのコードを消す・更新の知らせから「コードをコピー」・人材データの項目ごとの閲覧範囲・スキルのレベルの承認・団体の保存・残りの値の確かめ・古いタスクを移す(TasksArchive)。更新したら setupOhsumi を実行する(列とシートを足す)' },
   { version: '2026.10.04-1', security: true, required: false, note: 'Discord・Slack に幹部限定・承認待ちのタスク名や Will の中身を流さない。スキルの点数の付与を GAS で確かめる(完了・担当者・必要スキル・1人1回・上限・自分には付けない)' },

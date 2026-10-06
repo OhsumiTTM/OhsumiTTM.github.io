@@ -70,6 +70,8 @@ class Page {
 
 let world: World
 let topTokenA = ''
+// true の間、団体の GAS の応答から「できる操作」と URL を消す(古い GAS の団体のふり)
+let oldGasMode = false
 let A: ReturnType<World['launchOrg']>
 let B: ReturnType<World['launchOrg']>
 let server: Server
@@ -121,7 +123,12 @@ async function openBrowser() {
       responseHeaders: [{ name: 'Content-Type', value: type }, { name: 'Access-Control-Allow-Origin', value: '*' }] })
     if (request.url.startsWith(BUILD_REGISTRY_URL)) { void fulfill('application/json', JSON.stringify(world.reg.post(request.postData ?? '{}'))); return }
     const org = orgByUrl(request.url)
-    if (org) { void fulfill('application/json', JSON.stringify(org.postRaw(JSON.parse(request.postData || '{}')))); return }
+    if (org) {
+      const out = org.postRaw(JSON.parse(request.postData || '{}'))
+      // 古い GAS のふり: 起動時のデータに「できる操作」と URL を入れない
+      if (oldGasMode && out?.result && typeof out.result === 'object') { delete out.result.capabilities; delete out.result.adminLinks }
+      void fulfill('application/json', JSON.stringify(out)); return
+    }
     // Google のログインのスクリプト: 画面が渡した設定(コールバック・nonce)を覚えるだけの偽物
     if (request.url.startsWith('https://accounts.google.com/gsi/client')) {
       void fulfill('text/javascript', 'window.google={accounts:{id:{initialize(c){window.__gsiConfig=c},renderButton(e){e.setAttribute("data-e2e-gsi","1")},prompt(){},disableAutoSelect(){},cancel(){}},oauth2:{initTokenClient(){return{requestAccessToken(){}}}}}}')
@@ -418,6 +425,78 @@ describe.skipIf(!available)('できる操作(capability): 5人の役職で ADMIN
       expect(selects.some((s) => s.memberId === memberIdOf('hr@a.example')), '自分の役職の選択').toBe(false)
       for (const s of selects) expect(s.options, '最上位の役職を選べない').not.toContain('top')
     }
+  })
+})
+
+// ---- 古い GAS(できる操作を送らない)の団体・最上位が2つある団体でも、最上位の人が何もできなくならない ----
+describe.skipIf(!available)('最上位の役職の人(古い GAS・最上位が2つ)', () => {
+  const openAdminAs = async (email: string) => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn(email)
+    await waitFor(loggedIn, email + ' がログインできません')
+    await waitFor(async () => (await text()).includes('ADMIN'), email + ' に ADMIN が出ません')
+    await page.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('ADMIN')).click(); true`)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-admin-tab]")'), 'ADMIN のタブが出ません')
+  }
+  const openTab = async (tab: string) => {
+    await page.evaluate(`document.querySelector('[data-admin-tab="${tab}"]').click(); true`)
+    await sleep(800)
+  }
+  const shown = (selector: string) => page.evaluate<boolean>(`!!document.querySelector(${JSON.stringify(selector)})`)
+
+  it('古い GAS の団体の代表: 画面と同じ計算で、すべての操作の部品が出る(GAS とスプレッドシートのボタンは出ない)', async () => {
+    oldGasMode = true
+    try {
+      await openAdminAs('top@a.example')
+      const tabs = await page.evaluate<string[]>(`[...document.querySelectorAll('[data-admin-tab]')].map((b) => b.getAttribute('data-admin-tab'))`)
+      expect(tabs).toContain('orgSettings')
+      await openTab('members')
+      await waitFor(() => shown('[data-gas-action="addMember"]'), '古い GAS の代表に、メンバーの登録が出ません')
+      expect(await shown('[data-gas-action="removeMember"]')).toBe(true)
+      await openTab('orgSettings')
+      await waitFor(() => shown('[data-gas-action="updateSetting"]'), '古い GAS の代表に、団体設定の編集が出ません')
+      expect(await shown('[data-org-admin-links]')).toBe(false)
+    } finally {
+      oldGasMode = false
+    }
+  })
+
+  it('最上位が2つある団体の、代表でない最上位: すべての操作ができ、GAS とスプレッドシートを開ける', async () => {
+    const gas = A.org.gas as unknown as Record<string, (...a: unknown[]) => unknown>
+    gas.invalidateRoles_()
+    const roles = JSON.parse(JSON.stringify(gas.getRoles_())) as { id: string; tier: string }[]
+    if (!roles.some((r) => r.id === 'r_chair_e2e')) {
+      roles.push({ id: 'r_chair_e2e', name: '会長', tier: 'top' } as never)
+      const saved = world.call(A.org, topTokenA, 'updateRoles', { roles })
+      expect(saved.ok, JSON.stringify(saved)).toBe(true)
+      const added = world.call(A.org, topTokenA, 'addMember', { name: '会長さん', email: 'chair@a.example', affiliation: '', role: 'r_chair_e2e', sendInvite: false })
+      expect(added.ok, JSON.stringify(added)).toBe(true)
+      A.org.cache.clear()
+    }
+    const login = world.googleLogin(A.org, 'chair@a.example')
+    expect(login.result.capabilities).toEqual([...CAPABILITY_KEYS])
+    expect(login.result.adminLinks?.scriptEditUrl).toMatch(/^https:\/\/script\.google\.com\/d\/[\w-]+\/edit$/)
+    // 代表だけの操作も、GAS で通る
+    const g = A.org.gas as unknown as Record<string, (...a: unknown[]) => unknown>
+    g.invalidateRoles_()
+    expect(() => g.authorizeAction_(g.getActingMemberById_(login.result.memberId), 'listBackups', {})).not.toThrow()
+
+    await openAdminAs('chair@a.example')
+    await openTab('members')
+    await waitFor(() => shown('[data-gas-action="addMember"]'), '代表でない最上位に、メンバーの登録が出ません')
+    await openTab('orgSettings')
+    await waitFor(() => shown('[data-org-admin-links]'), '最上位の人に、GAS とスプレッドシートのボタンが出ません')
+    const links = await page.evaluate<{ script: string; sheet: string; rel: string[] }>(`(() => {
+      const s = document.querySelector('[data-open-script]'), d = document.querySelector('[data-open-sheet]')
+      return { script: s.href, sheet: d.href, rel: [s.rel, d.rel] }
+    })()`)
+    expect(links.script).toMatch(/^https:\/\/script\.google\.com\/d\/[\w-]+\/edit$/)
+    expect(links.sheet).toMatch(/^https:\/\/docs\.google\.com\/spreadsheets\//)
+    for (const rel of links.rel) expect(rel).toBe('noopener noreferrer')
+    // 最上位でない人には URL を渡さない
+    expect(world.googleLogin(A.org, 'full@a.example').result.adminLinks).toBeUndefined()
   })
 })
 
