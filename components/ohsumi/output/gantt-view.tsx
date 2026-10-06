@@ -194,12 +194,13 @@ export function GanttView({
                       style={{ left: x, width: w }}
                       title={isCritical ? tr('gantt.criticalPath.tooltip') : undefined}
                       className={cn(
-                        'absolute flex h-7 items-center overflow-hidden rounded-md px-2 text-[11px] font-medium text-white transition-opacity hover:opacity-90',
+                        'absolute flex h-7 items-center overflow-hidden rounded-md px-2 text-[11px] font-medium transition-opacity hover:opacity-90',
+                        // 暗い表示では帯の色が明るいので、文字は暗い色にする
                         isDone
-                          ? 'bg-success'
+                          ? 'bg-success text-white dark:text-background'
                           : isOverdue
-                            ? 'bg-destructive'
-                            : 'bg-primary',
+                            ? 'bg-destructive text-destructive-foreground'
+                            : 'bg-primary text-primary-foreground',
                         isCritical && 'ring-2 ring-offset-1 ring-amber-500 dark:ring-amber-400',
                       )}
                     >

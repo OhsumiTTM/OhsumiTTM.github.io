@@ -6,7 +6,9 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { useTheme } from '@/lib/ohsumi/theme'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
-import { Avatar, OhsumiLogo, StoredImage } from './primitives'
+import { Avatar, OhsumiLogo } from './primitives'
+import { SegmentedButton, SegmentedControl } from './segmented'
+import { OrgSwitcher } from './org-switcher'
 import { cn } from '@/lib/utils'
 import {
   ArrowLeft,
@@ -178,48 +180,42 @@ export function Header() {
           <button
             type="button"
             onClick={() => handleMode('output')}
-            className="flex shrink-0 items-center gap-2"
+            className="flex shrink-0 items-center rounded-md p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={t('header.home.aria')}
+            title={t('header.home.aria')}
           >
             <OhsumiLogo size={22} text="sm" />
-            {(orgLogoUrl || orgName) && (
-              <>
-                <span className="hidden text-muted-foreground/40 sm:inline" aria-hidden>|</span>
-                {orgLogoUrl && (
-                  <StoredImage url={orgLogoUrl} alt={orgName || t('header.logoAlt')} className="size-[18px] rounded object-contain" />
-                )}
-                {orgName && (
-                  <span className="hidden text-[13px] text-muted-foreground sm:inline">{orgName}</span>
-                )}
-              </>
-            )}
           </button>
+          <OrgSwitcher orgName={orgName} orgLogoUrl={orgLogoUrl} />
         </div>
 
         {/* center: mode switch */}
-        <div className="flex min-w-0 items-center justify-center overflow-x-auto rounded-lg border border-border bg-secondary p-0.5 ohsumi-scroll">
-          <ModeButton
-            active={isInputActive}
-            onClick={() => handleMode('input')}
-            sub={t('header.mode.input')}
-          >
-            INPUT
-          </ModeButton>
-          <ModeButton
-            active={isOutputActive}
-            onClick={() => handleMode('output')}
-            sub={t('header.mode.output')}
-          >
-            OUTPUT
-          </ModeButton>
-          {isAdmin && (
+        <div className="flex min-w-0 items-center justify-center">
+          <SegmentedControl ariaLabel={t('header.mode.aria')}>
             <ModeButton
-              active={isAdminActive}
-              onClick={() => go({ name: 'admin', section: 'dashboard' })}
-              sub={t('header.mode.admin')}
+              active={isInputActive}
+              onClick={() => handleMode('input')}
+              sub={t('header.mode.input')}
             >
-              ADMIN
+              INPUT
             </ModeButton>
-          )}
+            <ModeButton
+              active={isOutputActive}
+              onClick={() => handleMode('output')}
+              sub={t('header.mode.output')}
+            >
+              OUTPUT
+            </ModeButton>
+            {isAdmin && (
+              <ModeButton
+                active={isAdminActive}
+                onClick={() => go({ name: 'admin', section: 'dashboard' })}
+                sub={t('header.mode.admin')}
+              >
+                ADMIN
+              </ModeButton>
+            )}
+          </SegmentedControl>
         </div>
 
         {/* right */}
@@ -576,26 +572,10 @@ function ModeButton({
   sub: string
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex shrink-0 flex-col items-center rounded-[7px] px-3 py-1 text-center transition-all sm:min-w-[204px] sm:px-4',
-        active
-          ? 'bg-card text-foreground shadow-[0_1px_2px_rgba(16,24,40,0.08)]'
-          : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      <span className="text-[13px] font-semibold tracking-wide">{children}</span>
-      <span
-        className={cn(
-          'hidden text-[10px] leading-none sm:block',
-          active ? 'text-primary' : 'text-muted-foreground/70',
-        )}
-      >
-        {sub}
-      </span>
-    </button>
+    <SegmentedButton active={active} onClick={onClick} className="flex-col gap-0 px-3 py-1 sm:min-w-[204px] sm:px-4">
+      <span className="text-[13px] tracking-wide">{children}</span>
+      <span className="hidden text-[10px] font-normal leading-none sm:block">{sub}</span>
+    </SegmentedButton>
   )
 }
 

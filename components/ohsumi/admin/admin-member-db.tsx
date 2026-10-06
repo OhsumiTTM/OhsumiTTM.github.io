@@ -585,7 +585,7 @@ export function AdminMemberDb() {
                           className={`block truncate ${col.editable ? 'cursor-text hover:bg-accent/40 rounded px-0.5' : ''}`}
                           title={col.tooltip ?? val}
                         >
-                          {val || <span className="text-muted-foreground/40">—</span>}
+                          {val || <span className="text-muted-foreground">—</span>}
                         </span>
                       )}
                     </td>

@@ -25,6 +25,7 @@ import type {
 import { ParsedTaskCard } from './parsed-task-card'
 import { ExcelColumnMapping } from './excel-column-mapping'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
+import { SegmentedButton, SegmentedControl } from '../segmented'
 import { Avatar, OhsumiMark, SectionLabel, StatusBadge } from '../primitives'
 import { useI18n, DEPARTMENT_KEY, DIFFICULTY_KEY, PRIORITY_KEY } from '@/lib/ohsumi/i18n'
 import type { TranslationKey } from '@/lib/ohsumi/i18n'
@@ -1212,31 +1213,16 @@ function FormQuickAdd({
         <div>
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-medium text-muted-foreground">{tr('input.formQuickAdd.questionsLabel')}</p>
-            <div className="flex overflow-hidden rounded-md border border-border text-xs">
-              <button
-                type="button"
-                onClick={() => setTab('edit')}
-                className={cn(
-                  'flex items-center gap-1 px-2 py-1',
-                  tab === 'edit' ? 'bg-primary-muted text-primary' : 'text-muted-foreground hover:bg-secondary',
-                )}
-              >
+            <SegmentedControl>
+              <SegmentedButton active={tab === 'edit'} onClick={() => setTab('edit')} className="gap-1 px-2 py-0.5 text-xs">
                 <Pencil className="size-3" />
                 {tr('input.formQuickAdd.editTab')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('preview')}
-                disabled={fields.length === 0}
-                className={cn(
-                  'flex items-center gap-1 border-l border-border px-2 py-1 disabled:opacity-40',
-                  tab === 'preview' ? 'bg-primary-muted text-primary' : 'text-muted-foreground hover:bg-secondary',
-                )}
-              >
+              </SegmentedButton>
+              <SegmentedButton active={tab === 'preview'} onClick={() => setTab('preview')} disabled={fields.length === 0} className="gap-1 px-2 py-0.5 text-xs">
                 <Eye className="size-3" />
                 {tr('input.formQuickAdd.previewTab')}
-              </button>
-            </div>
+              </SegmentedButton>
+            </SegmentedControl>
           </div>
 
           {tab === 'edit' && (

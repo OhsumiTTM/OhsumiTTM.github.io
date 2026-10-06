@@ -124,6 +124,10 @@ export const en = {
   'otherDevice.homeScreen': 'After opening it on your phone, choose "Add to Home Screen" in the browser menu to open it from an icon next time.',
   'otherDevice.close': 'Close',
   'header.menu.logout': 'Log out',
+  'header.mode.aria': 'Switch screen',
+  'header.home.aria': 'Back to OUTPUT',
+  'header.org.menuAria': 'Switch organization (current: {name})',
+  'header.org.current': 'Current',
   'header.logoAlt': 'Logo',
 
   // ---- login ---------------------------------------------------------
@@ -546,7 +550,7 @@ export const en = {
   'admin.projects.saveChangesButton': 'Save changes',
   'admin.projects.taskSets.addTaskButton': 'Add task',
   'admin.projects.recurring.heading': 'Recurring tasks',
-  'admin.projects.recurring.desc': 'Automatically generates weekly/monthly recurring work. There is no server-side scheduler,\n          so it’s generated once when someone opens Ohsumi on the due date.',
+  'admin.projects.recurring.desc': 'Automatically creates weekly/monthly recurring work. Each task is created once on its day, by the daily morning job (or when someone opens Ohsumi that day).',
   'admin.projects.recurring.empty': 'No recurring tasks yet.',
   'admin.trash.heading': 'Task trash',
   'admin.trash.desc': 'Deleted tasks stay here for {days} days. Restore them or delete them permanently now. Tasks older than {days} days are deleted permanently.',
