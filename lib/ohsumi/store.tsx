@@ -93,7 +93,7 @@ import {
   rolesToLegacySettings,
   sameRole,
   withMemberRoles,
-  memberCapabilities,
+  resolveMemberCapabilities,
   roleCapabilities,
   type RoleDef,
 } from './roles'
@@ -282,6 +282,8 @@ interface OhsumiContextValue extends OhsumiState {
   // 「代表だけ」「全権管理者だけ」だった操作の部品は、これだけを見て出す
   capabilities: Capability[]
   can: (capability: Capability) => boolean
+  // 団体のスプレッドシート・Apps Script の編集画面の URL(最上位の役職の人だけ。古い GAS では null)
+  adminLinks: import('./remote').OrgAdminLinks | null
   // 役職の判定(ID・名前のどちらでも)
   isAdminRef: (ref: string | null | undefined) => boolean
   isTopRef: (ref: string | null | undefined) => boolean
@@ -1295,6 +1297,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const dataVersionRef = useRef<string | undefined>(undefined)
   // GAS が渡した、ログインした人のできる操作(版が同じで中身を省いた応答では来ないので、前の一覧を使い続ける)
   const [serverCapabilities, setServerCapabilities] = useState<Capability[] | null>(null)
+  // 団体のスプレッドシート・Apps Script の URL(最上位の役職の人にだけ GAS が渡す。受け取ったら消さない)
+  const [adminLinks, setAdminLinks] = useState<import('./remote').OrgAdminLinks | null>(null)
   const applyInitialData = useCallback(
     (res: InitialData) => {
       if (res.data) {
@@ -1306,6 +1310,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       }
       if (res.settings) applySettings(res.settings)
       if (res.capabilities) setServerCapabilities(res.capabilities)
+      if (res.adminLinks) setAdminLinks(res.adminLinks)
       if (res.version) dataVersionRef.current = res.version
     },
     [applyLocalApprovalOverrides, applySettings],
@@ -2640,6 +2645,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setInputs(SEED_INPUTS)
       dataVersionRef.current = undefined
       setServerCapabilities(null)
+      setAdminLinks(null)
       setRemoteStatus('idle')
       setSettingsReady(false)
     }
@@ -5027,12 +5033,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
   const isFullAdmin = useMemo(() => isFullAdminMember(currentUser), [isFullAdminMember, currentUser])
 
-  // できる操作。GAS とつながっている時は、GAS が起動時のデータで渡した一覧だけを使う(まだ無ければ何もできない)。
-  // 画面だけで動く時(デモ)は、GAS と同じ計算(roles.ts の memberCapabilities)
+  // できる操作。GAS とつながっている時は、GAS が起動時のデータで渡した一覧を使う(一度受け取った一覧は、
+  // 中身を省いた応答・読み込み直しでも消さない。ログアウトの時だけ消す)。
+  // GAS が一覧を送らない時(古い GAS)と、画面だけで動く時(デモ)は、GAS と同じ計算(roles.ts の memberCapabilities)。
+  // 古い GAS でも GAS の側の判定は古い版のまま効くので、画面に出す部品が増えても、できることは変わらない
   const capabilities = useMemo<Capability[]>(() => {
     if (!currentUser) return []
-    if (isRemoteConfigured) return serverCapabilities ?? []
-    return memberCapabilities(roles, currentUser.role, currentUser.permissionOverrides)
+    return resolveMemberCapabilities({ remote: isRemoteConfigured, server: serverCapabilities, roles, role: currentUser.role, overrides: currentUser.permissionOverrides })
   }, [currentUser, roles, serverCapabilities])
   const can = useCallback((capability: Capability) => capabilities.includes(capability), [capabilities])
 
@@ -5577,6 +5584,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     isFullAdmin,
     capabilities,
     can,
+    adminLinks,
     roleCapabilitiesOf,
     setRoleCapabilities,
     adminProjects,

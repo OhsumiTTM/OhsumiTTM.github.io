@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { CAPABILITY_ACTIONS, CAPABILITY_KEYS, TOP_ONLY_ACTIONS, capabilityOfAction, normalizeCapabilities } from './capabilities'
-import { memberCapabilities, parseRolesSetting, roleAssignBlock, roleCapabilities, rolesFromLegacy, type RoleDef } from './roles'
+import { memberCapabilities, parseRolesSetting, resolveMemberCapabilities, roleAssignBlock, roleCapabilities, rolesFromLegacy, type RoleDef } from './roles'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v))
@@ -85,5 +85,29 @@ describe('GAS と同じ定義', () => {
         }
       }
     }
+  })
+})
+
+describe('画面で使うできる操作(GAS が一覧を送らない時)', () => {
+  const legacy = rolesFromLegacy({ role_levels: '班長,事業責任者,代表', restricted_roles: '班長' })
+  const twoTops: RoleDef[] = [...ROLES.slice(0, -1), { id: 'r_chair', name: '会長', tier: 'top' }, ROLES[ROLES.length - 1]]
+  it('古い GAS(一覧が無い): 画面と同じ計算をする。最上位はすべてできる', () => {
+    expect(resolveMemberCapabilities({ remote: true, server: null, roles: ROLES, role: 'top', overrides: [] })).toEqual([...CAPABILITY_KEYS])
+    expect(resolveMemberCapabilities({ remote: true, server: null, roles: legacy, role: '代表', overrides: [] })).toEqual([...CAPABILITY_KEYS])
+    expect(resolveMemberCapabilities({ remote: true, server: null, roles: ROLES, role: 'r_admin', overrides: [] })).toEqual(['trash', 'org.rules'])
+    expect(resolveMemberCapabilities({ remote: true, server: null, roles: ROLES, role: 'base', overrides: [] })).toEqual([])
+  })
+  it('最上位が2つある団体: 代表でない最上位もすべてできる(役職の名前・ID のどちらで書かれていても)', () => {
+    for (const ref of ['r_chair', '会長']) expect(resolveMemberCapabilities({ remote: true, server: null, roles: twoTops, role: ref, overrides: [] }), ref).toEqual([...CAPABILITY_KEYS])
+  })
+  it('GAS が送った一覧があれば、それを使う', () => {
+    expect(resolveMemberCapabilities({ remote: true, server: ['trash'], roles: ROLES, role: 'top', overrides: [] })).toEqual(['trash'])
+    expect(resolveMemberCapabilities({ remote: true, server: [], roles: ROLES, role: 'top', overrides: [] })).toEqual([])
+  })
+  it('store は、一覧の無い応答(unchanged・古い GAS)で受け取った一覧を消さない。消すのはログアウトの時だけ', () => {
+    const store = readFileSync(join(__dirname, 'store.tsx'), 'utf8')
+    const sets = [...store.matchAll(/setServerCapabilities\(([^)]*)\)/g)].map((m) => m[1])
+    expect(sets).toEqual(['res.capabilities', 'null'])
+    expect(store).toMatch(/if \(res\.capabilities\) setServerCapabilities\(res\.capabilities\)/)
   })
 })
