@@ -480,9 +480,8 @@ export function AdminAnalytics() {
   }, [members, memberScores, surveyComboAxis, allTasks, t])
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      <h1 className="text-xl font-semibold tracking-tight">Analytics</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
+    <div>
+      <p className="text-sm text-muted-foreground">
         {t('admin.analytics.subtitle')}
       </p>
 

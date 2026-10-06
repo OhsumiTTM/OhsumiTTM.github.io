@@ -326,9 +326,8 @@ export function AdminFormBuilder() {
   const otherSubs = customFormSubmissions.filter((s) => s.status !== 'pending')
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold">{t('admin.formBuilder.title')}</h2>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <div className="flex rounded-md border border-border bg-card">
           {(['submissions', 'forms'] as const).map((tabKey) => (
             <button

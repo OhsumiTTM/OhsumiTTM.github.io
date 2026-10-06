@@ -191,11 +191,10 @@ export function AdminRecruiting() {
   }
 
   return (
-    <div className="p-6">
+    <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <SectionLabel>{t('admin.recruiting.title')}</SectionLabel>
-          <p className="mt-1 text-xs text-muted-foreground">{t('admin.recruiting.desc')}</p>
+          <p className="text-xs text-muted-foreground">{t('admin.recruiting.desc')}</p>
           {showDaihyoNote && <AdminAccessNote level="daihyo" className="mt-1" />}
         </div>
         <Button onClick={openNew} disabled={showDaihyoNote}>

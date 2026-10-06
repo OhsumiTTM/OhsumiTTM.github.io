@@ -458,9 +458,8 @@ export function AdminOrgTree() {
 
   if (paths.length === 0) {
     return (
-      <div className="mx-auto max-w-4xl px-6 py-8">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">Org Tree</h1>
+      <div>
+        <div className="flex items-center justify-end gap-3">
           {isFullAdmin && (
             <Button variant="outline" size="sm" onClick={() => setEditingTree(true)}>
               <Pencil className="size-4" />
@@ -477,11 +476,10 @@ export function AdminOrgTree() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Org Tree</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {t('admin.orgTree.subtitle')}
           </p>
         </div>

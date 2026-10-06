@@ -34,10 +34,10 @@ export function validateDepartments(list: DepartmentDef[]): string[] {
   const ids: Record<string, boolean> = {}
   const names: Record<string, boolean> = {}
   for (const d of list) {
-    if (!d.id || !d.name) errors.push('部門の ID と名前は空にできません')
-    if (d.name === UNCATEGORIZED_NAME) errors.push('「未分類」は部門の名前に使えません')
-    if (ids[d.id]) errors.push('部門の ID が重複しています: ' + d.id)
-    if (names[d.name]) errors.push('部門の名前が重複しています: ' + d.name)
+    if (!d.id || !d.name) errors.push('領域の ID と名前は空にできません')
+    if (d.name === UNCATEGORIZED_NAME) errors.push('「未分類」は領域の名前に使えません')
+    if (ids[d.id]) errors.push('領域の ID が重複しています: ' + d.id)
+    if (names[d.name]) errors.push('領域の名前が重複しています: ' + d.name)
     ids[d.id] = true
     names[d.name] = true
   }

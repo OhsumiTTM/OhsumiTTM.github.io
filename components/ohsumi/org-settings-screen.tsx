@@ -5,6 +5,8 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
 import { useToast } from '@/components/ohsumi/toast'
 import { Tag, SectionLabel, AdminAccessNote, StoredImage } from '@/components/ohsumi/primitives'
+import { AdminToc } from '@/components/ohsumi/admin/admin-page'
+import { NotifySettingsEditor } from '@/components/ohsumi/admin/admin-tags'
 import { Button } from '@/components/ui/button'
 import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -24,15 +26,16 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-function Section({ children }: { children: React.ReactNode }) {
+function Section({ id, children }: { id?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
+    <div id={id} className="scroll-mt-20 rounded-xl border border-border bg-card p-5">
       {children}
     </div>
   )
 }
 
-export function OrgSettingsScreen() {
+// 団体設定。右上のメニューからも、管理画面の「団体設定」のタブ(embedded)からも開く。上に目次を出す
+export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const {
     orgName,
     setOrgName,
@@ -70,17 +73,40 @@ export function OrgSettingsScreen() {
   const remoteOk = remoteConfigured
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
-      <div className="mb-6 flex items-center gap-2.5">
-        <Building2 className="size-5 text-primary" />
-        <h1 className="text-xl font-semibold">{t('orgSettings.title')}</h1>
+    <div className={embedded ? 'mx-auto max-w-3xl px-6 py-6' : 'mx-auto max-w-2xl px-4 py-8'}>
+      {!embedded && (
+        <>
+          <div className="mb-6 flex items-center gap-2.5">
+            <Building2 className="size-5 text-primary" />
+            <h1 className="text-xl font-semibold">{t('orgSettings.title')}</h1>
+          </div>
+          <p className="mb-6 text-sm text-muted-foreground">
+            {t('orgSettings.subtitle')}
+          </p>
+        </>
+      )}
+
+      <div className="mb-5">
+        <AdminToc
+          items={[
+            { id: 'org-name-logo', label: t('orgSettings.nameLogo.label') },
+            { id: 'org-theme', label: t('orgSettings.themeColor.label') },
+            ...(isFullAdmin ? [{ id: 'org-email', label: t('orgSettings.email.label') }] : []),
+            { id: 'org-notify', label: t('admin.tags.notify.title') },
+            { id: 'org-webhooks', label: t('orgSettings.toc.webhooks') },
+            ...(isDaihyo && remoteOk ? [
+              { id: 'org-backup', label: t('orgSettings.toc.backup') },
+              { id: 'org-personal-data', label: t('orgSettings.toc.personalData') },
+              { id: 'org-usage', label: t('orgSettings.toc.usage') },
+              { id: 'org-metrics', label: t('orgSettings.toc.metrics') },
+              { id: 'org-diagnostics', label: t('orgSettings.toc.diagnostics') },
+            ] : []),
+          ]}
+        />
       </div>
-      <p className="mb-6 text-sm text-muted-foreground">
-        {t('orgSettings.subtitle')}
-      </p>
 
       <div className="flex flex-col gap-5">
-        <Section>
+        <Section id="org-name-logo">
           <SectionLabel>{t('orgSettings.nameLogo.label')}</SectionLabel>
           <p className="mt-1 text-xs text-muted-foreground">
             {t('orgSettings.nameLogo.desc')}
@@ -244,35 +270,42 @@ export function OrgSettingsScreen() {
           </Section>
         )}
 
+        {/* 通知の受け取り方(以前は Tags にあった説明) */}
+        <div id="org-notify" className="scroll-mt-20">
+          <SectionLabel>{t('admin.tags.notify.title')}</SectionLabel>
+          <div className="mt-2"><NotifySettingsEditor /></div>
+        </div>
+
+        <div id="org-webhooks" className="scroll-mt-20" />
         <WebhookSection kind="discord" remoteOk={remoteOk} placeholder="https://discord.com/api/webhooks/..." />
         <WebhookSection kind="slack" remoteOk={remoteOk} placeholder="https://hooks.slack.com/services/..." />
 
         {isDaihyo && remoteOk && (
-          <Section>
+          <Section id="org-backup">
             <BackupPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
-          <Section>
+          <Section id="org-personal-data">
             <PersonalDataPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
-          <Section>
+          <Section id="org-usage">
             <UsagePanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
-          <Section>
+          <Section id="org-metrics">
             <MetricsPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
-          <Section>
+          <Section id="org-diagnostics">
             <DiagnosticsPanel />
             <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>

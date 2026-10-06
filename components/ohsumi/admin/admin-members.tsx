@@ -226,9 +226,8 @@ export function AdminMembers() {
   }, [members, query, minTenureYears, managementOnly, desiredArea, experienceQuery, showInactive])
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <h1 className="text-xl font-semibold tracking-tight">Members</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
+    <div>
+      <p className="text-sm text-muted-foreground">
         {t('admin.members.subtitle')}
       </p>
       {/* addMember/updateRole/removeMember/updateReportsTo/updateMemberProjects

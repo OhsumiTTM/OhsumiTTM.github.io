@@ -245,7 +245,6 @@ export function AdminQuiz() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold">{t('admin.quiz.title')}</h2>
           <p className="text-xs text-muted-foreground">
             {t('admin.quiz.subtitle')}
           </p>

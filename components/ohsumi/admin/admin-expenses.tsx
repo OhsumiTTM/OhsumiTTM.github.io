@@ -464,9 +464,8 @@ export function AdminExpenses() {
   const otherApps = expenseApplications.filter((a) => a.status !== 'pending')
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">{t('admin.expenses.title')}</h2>
+    <div className="space-y-6">
+      <div className="flex items-center justify-end">
         <div className="flex rounded-md border border-border bg-card">
           {(['applications', 'categories'] as const).map((tabKey) => (
             <button

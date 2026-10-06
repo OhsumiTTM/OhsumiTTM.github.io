@@ -19,9 +19,8 @@ export function AdminAssignments() {
   const selected = tasks.find((t) => t.id === selectedId) ?? null
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <h1 className="text-xl font-semibold tracking-tight">Assignments</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
+    <div>
+      <p className="text-sm text-muted-foreground">
         {tr('admin.assignments.subtitle')}
       </p>
 

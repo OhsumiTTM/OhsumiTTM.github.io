@@ -11,7 +11,8 @@ import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
 import { AdminAccessNote, Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
-export function AdminRadarAxes() {
+// レーダーの軸(part='axes'。「スキルの決まり」のタブ)と、チームレーダーチャート(part='team'。「分析」のタブ)
+export function AdminRadarAxes({ part }: { part: 'axes' | 'team' }) {
   const { radarAxes, updateRadarAxes, skillOptions, members, currentUser, projects, getProjectMembers } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
@@ -85,8 +86,8 @@ export function AdminRadarAxes() {
 
   return (
     <div>
+      {part === 'axes' && (<>
       <div className="mb-4">
-        <h2 className="text-base font-semibold">{t('admin.radarAxes.title')}</h2>
         <p className="text-xs text-muted-foreground">
           {t('admin.radarAxes.subtitle')}
         </p>
@@ -188,12 +189,11 @@ export function AdminRadarAxes() {
         </div>
       </div>
 
+      </>)}
+
       {/* チームレーダーチャート（item 8） */}
-      <div className="mt-10">
-        <div className="mb-3 flex items-center gap-1.5">
-          <Users className="size-4 text-muted-foreground" />
-          <h2 className="text-base font-semibold">{t('admin.radarAxes.team.title')}</h2>
-        </div>
+      {part === 'team' && (
+      <div>
         <p className="mb-3 text-xs text-muted-foreground">{t('admin.radarAxes.team.desc')}</p>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -258,6 +258,7 @@ export function AdminRadarAxes() {
           </div>
         </div>
       </div>
+      )}
     </div>
   )
 }
