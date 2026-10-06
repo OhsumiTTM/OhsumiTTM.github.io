@@ -500,6 +500,73 @@ describe.skipIf(!available)('最上位の役職の人(古い GAS・最上位が2
   })
 })
 
+describe.skipIf(!available)('稼働の目安(workload_rules): 団体のルールを持つ人が変え、持たない人は見るだけ', () => {
+  // 制限ありの管理者(lead@a.example)は、できる操作の確かめで登録する。このまとまりだけ動かす時は、ここで登録する
+  beforeAll(() => {
+    if (available && !world.googleLogin(A.org, 'lead@a.example').result?.memberId) preparePersonas()
+  })
+  const openTaskSettings = async (email: string) => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn(email)
+    await waitFor(loggedIn, email + ' がログインできません')
+    await waitFor(async () => (await text()).includes('ADMIN'), email + ' に ADMIN が出ません')
+    await page.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('ADMIN')).click(); true`)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector(\'[data-admin-tab="taskSettings"]\')'), email + ' にタスクの設定のタブが出ません')
+    await page.evaluate(`document.querySelector('[data-admin-tab="taskSettings"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-workload-rules]")'), email + ' に稼働の目安が出ません')
+  }
+  const setRule = (key: string, value: string) => page.evaluate(`(() => {
+    const el = document.querySelector('[data-workload-rule="${key}"]')
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(value)})
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })()`)
+  const savedRules = () => {
+    A.org.cache.clear()
+    const row = A.org.sheets.Settings.rows.find((r) => r[0] === 'workload_rules')
+    return row && row[1] ? JSON.parse(String(row[1])) : null
+  }
+
+  it('代表: 入力を変えると人数の見込みが出て、保存すると GAS に残る。既定に戻すと設定を消す', async () => {
+    await openTaskSettings('top@a.example')
+    expect(await page.evaluate<string>(`document.querySelector('[data-workload-preview]').textContent`)).toMatch(/この設定だと 余力あり \d+人・普通 \d+人・余力なし \d+人/)
+    await setRule('window_days', '400')
+    await waitFor(() => page.evaluate<boolean>(`document.querySelector('[data-workload-save]').disabled && document.querySelector('[data-workload-rules]').textContent.includes('14〜365 の整数にしてください')`), '範囲の外の値で保存を止めません')
+    await setRule('window_days', '30')
+    await setRule('fallback_hours', '4')
+    await waitFor(() => page.evaluate<boolean>(`!document.querySelector('[data-workload-save]').disabled`), '正しい値で保存のボタンが押せません')
+    await page.evaluate(`document.querySelector('[data-workload-save]').click(); true`)
+    await waitFor(async () => savedRules()?.window_days === 30, 'GAS に稼働の目安が保存されません')
+    expect(savedRules()).toMatchObject({ window_days: 30, fallback_hours: 4, available_ratio: 0.6, full_ratio: 1.2, count_hold_and_review: true })
+  })
+
+  it('団体のルールを持たない管理者: 今の値を見るだけ(入力は止まり、保存・既定に戻すのボタンが無い)', async () => {
+    await openTaskSettings('lead@a.example')
+    const shown = await page.evaluate<{ window: string; disabled: boolean; save: boolean; reset: boolean; note: boolean; preview: string }>(`(() => {
+      const box = document.querySelector('[data-workload-rules]')
+      return { window: box.querySelector('[data-workload-rule="window_days"]').value,
+        disabled: [...box.querySelectorAll('input')].every((i) => i.disabled),
+        save: !!box.querySelector('[data-workload-save]'), reset: !!box.querySelector('[data-workload-reset]'),
+        note: !!box.querySelector('[data-capability-note="org.rules"]'), preview: box.querySelector('[data-workload-preview]').textContent }
+    })()`)
+    expect(shown).toMatchObject({ window: '30', disabled: true, save: false, reset: false, note: true })
+    expect(shown.preview).toMatch(/この設定だと 余力あり \d+人/)
+    // GAS も断る
+    expect(gasAllows('lead@a.example', 'updateSetting', { key: 'workload_rules', value: '{"window_days":60}' })).toBe(false)
+  })
+
+  it('代表: 既定に戻して保存すると、設定を消す(空 = 既定)', async () => {
+    await openTaskSettings('top@a.example')
+    expect(await page.evaluate<string>(`document.querySelector('[data-workload-rule="window_days"]').value`)).toBe('30')
+    await page.evaluate(`document.querySelector('[data-workload-reset]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`document.querySelector('[data-workload-rule="window_days"]').value === '90' && !document.querySelector('[data-workload-save]').disabled`), '既定に戻すで入力が既定になりません')
+    await page.evaluate(`document.querySelector('[data-workload-save]').click(); true`)
+    await waitFor(async () => savedRules() === null, '既定に戻した時に、設定が消えません')
+  })
+})
+
 describe.skipIf(!available)('INPUT の「項目を入れて追加」: 一般のメンバーが項目で書いたタスクは、詳細つきで承認待ちになる', () => {
   const setValue = (selector: string, value: string, index = 0) => page.evaluate(`(() => {
     const el = document.querySelectorAll(${JSON.stringify(selector)})[${index}]

@@ -125,6 +125,8 @@ var READ_POLICY = {
       restricted_roles: 'all',
       skill_level_thresholds: 'all',
       skill_level_rules: 'all',
+      // 稼働の目安の決め方(37-value-checks.gs の checkWorkloadRules_ で確かめてから保存する)
+      workload_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',

@@ -2,6 +2,7 @@ import type { Difficulty, Member, Project, ProjectHealthLevel, Qualification, Ra
 import { BUILTIN_LEVEL_POINTS, EMPTY_EVIDENCE, skillLevelOf } from './skill-levels'
 import { DIFFICULTY_LABEL } from './types'
 import { todayStrInTz, DEFAULT_TIMEZONE, loadCachedTimezone } from './timezone'
+import { DEFAULT_WORKLOAD_RULES, type WorkloadRules } from './workload-rules'
 
 // F5: 成果物リンク・経費の領収書URLなど、ユーザーが自由に入力したURLを
 // リンクとして描画する前に必ず通す。http/https以外(javascript:等)を拒否する。
@@ -449,10 +450,9 @@ export function suggestCategoriesForTitle(
   return scored.sort((a, b) => b.score - a.score).map((s) => s.cat)
 }
 
-// 手一杯なメンバーまでどんどん薦めると偏りが起きるため、現在の未完了タスク数
-// がこれ以上のメンバーはおすすめ候補から除外する（完全に選べなくなるわけでは
-// なく、「その他のメンバーから選ぶ」には引き続き表示される）。数字は仮
-const MAX_ACTIVE_TASKS_FOR_SUGGESTION = 5
+// 手一杯なメンバーまでどんどん薦めると偏りが起きるため、稼働の目安が「余力なし」
+// (memberWorkloadCapacity。団体の設定 workload_rules で決める)のメンバーはおすすめ候補から
+// 除外する（完全に選べなくなるわけではなく、「その他のメンバーから選ぶ」には引き続き表示される）
 
 // 担当・おすすめ・招待などの候補にしてよいメンバー(休止中・退会したメンバーは除く)
 export function isActiveMember(m: Pick<Member, 'inactive' | 'withdrawnAt'>): boolean {
@@ -463,17 +463,13 @@ export function rankCandidates(
   task: { skills: string[]; assigneeIds?: string[] },
   members: Member[],
   allTasks?: Task[],
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
+  now: Date = new Date(),
 ): { member: Member; matches: string[] }[] {
   return members
     .filter(isActiveMember)
     .filter((m) => !task.assigneeIds?.includes(m.id))
-    .filter((m) => {
-      if (!allTasks) return true
-      const active = allTasks.filter(
-        (t) => t.assigneeIds.includes(m.id) && t.status !== 'done',
-      ).length
-      return active < MAX_ACTIVE_TASKS_FOR_SUGGESTION
-    })
+    .filter((m) => !allTasks || memberWorkloadCapacity(m.id, allTasks, now, rules) !== 'full')
     .map((m) => ({ member: m, matches: matchSkills(task, m) }))
     .filter((c) => c.matches.length > 0)
     .sort((a, b) => b.matches.length - a.matches.length)
@@ -544,19 +540,19 @@ export function computeCriticalPath(tasks: Task[]): Set<string> {
   return path
 }
 
-// 暫定値、要調整: actualHours/estimatedHoursどちらも未設定なタスクの
-// デフォルト所要時間（完了タスクの実績集計・現アサイン量の見積もり両方で使う）
-const DEFAULT_TASK_HOURS_FALLBACK = 2
+// 稼働の目安の決め方(余力の境目・期間・想定時間が空のタスクの時間など)は、団体の設定 workload_rules
+// (lib/ohsumi/workload-rules.ts)。渡さなければ既定(今までの値)を使う
 
-// 直近windowDays日間に完了したタスクの実績時間（actualHours、なければ
-// estimatedHours、それも無ければデフォルト値）を合計し、週あたり平均に
+// 直近 window_days 日間に完了したタスクの実績時間（actualHours、なければ
+// estimatedHours、それも無ければ fallback_hours）を合計し、週あたり平均に
 // 換算する。完了タスクが1件もなければ0（呼び出し側でデータ不足として扱う）
 export function memberWeeklyThroughput(
   memberId: string,
   allTasks: Task[],
   now: Date = new Date(),
-  windowDays = 90,
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
 ): number {
+  const windowDays = rules.window_days
   const cutoff = new Date(now.getTime() - windowDays * 86400000)
   const completed = allTasks.filter((t) => {
     if (t.status !== 'done' || !t.assigneeIds.includes(memberId) || !t.completedDate) return false
@@ -565,7 +561,7 @@ export function memberWeeklyThroughput(
   })
   if (completed.length === 0) return 0
   const totalHours = completed.reduce(
-    (sum, t) => sum + (t.actualHours ?? t.estimatedHours ?? DEFAULT_TASK_HOURS_FALLBACK),
+    (sum, t) => sum + (t.actualHours ?? t.estimatedHours ?? rules.fallback_hours),
     0,
   )
   return totalHours / (windowDays / 7)
@@ -573,47 +569,69 @@ export function memberWeeklyThroughput(
 
 export type WorkloadCapacity = 'available' | 'normal' | 'full'
 
-// 暫定値、要調整: 「現在の未完了タスクの想定時間合計」÷「週あたり実績平均」
-// の比率で余力を3段階に分類する閾値
-const CAPACITY_AVAILABLE_RATIO = 0.6
-const CAPACITY_FULL_RATIO = 1.2
+// 今の負荷に数える、担当中の未完了タスク(count_hold_and_review が false なら保留・確認待ちを除く)
+export function memberActiveLoadTasks(
+  memberId: string,
+  allTasks: Task[],
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
+): Task[] {
+  return allTasks.filter(
+    (t) =>
+      t.assigneeIds.includes(memberId) &&
+      t.status !== 'done' &&
+      (rules.count_hold_and_review || (t.status !== 'hold' && t.status !== 'review')),
+  )
+}
 
-// 稼働余力の簡易指標（item 4）。過去の実績平均がまだ無いメンバー（新人等）は
-// 現在の未完了タスク数のみで暫定的に判定する。
+// 稼働余力の簡易指標（item 4）。「今の負荷(担当中の未完了タスクの想定時間の合計)」÷
+// 「普段のペース(週あたりの実績平均)」の比率で3段階に分ける。過去の実績がまだ無い
+// メンバー（新人等）は、今の負荷の時間だけで暫定的に判定する。
 export function memberWorkloadCapacity(
   memberId: string,
   allTasks: Task[],
   now: Date = new Date(),
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
 ): WorkloadCapacity {
-  const currentLoadHours = allTasks
-    .filter((t) => t.assigneeIds.includes(memberId) && t.status !== 'done')
-    .reduce((sum, t) => sum + (t.estimatedHours ?? DEFAULT_TASK_HOURS_FALLBACK), 0)
+  const currentLoadHours = memberActiveLoadTasks(memberId, allTasks, rules)
+    .reduce((sum, t) => sum + (t.estimatedHours ?? rules.fallback_hours), 0)
 
-  const weeklyAvg = memberWeeklyThroughput(memberId, allTasks, now)
+  const weeklyAvg = memberWeeklyThroughput(memberId, allTasks, now, rules)
   if (weeklyAvg === 0) {
-    // 実績データが無い場合は現在のタスク数（時間換算）だけで暫定判定
+    // 実績データが無い場合は今の負荷の時間だけで暫定判定
     if (currentLoadHours === 0) return 'available'
-    return currentLoadHours <= DEFAULT_TASK_HOURS_FALLBACK * 3 ? 'normal' : 'full'
+    return currentLoadHours <= rules.no_history_normal_max_hours ? 'normal' : 'full'
   }
 
   const ratio = currentLoadHours / weeklyAvg
-  if (ratio < CAPACITY_AVAILABLE_RATIO) return 'available'
-  if (ratio < CAPACITY_FULL_RATIO) return 'normal'
+  if (ratio < rules.available_ratio) return 'available'
+  if (ratio < rules.full_ratio) return 'normal'
   return 'full'
 }
 
-// 暫定値、要調整: 「タスクが少ない」と判定する未完了タスク数の閾値
-const LOW_WORKLOAD_TASK_THRESHOLD = 1
+// 稼働の目安ごとの人数(設定の画面の「この設定だと」に使う)
+export function countWorkloadCapacities(
+  members: Member[],
+  allTasks: Task[],
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
+  now: Date = new Date(),
+): Record<WorkloadCapacity, number> {
+  const out: Record<WorkloadCapacity, number> = { available: 0, normal: 0, full: 0 }
+  for (const m of members) out[memberWorkloadCapacity(m.id, allTasks, now, rules)] += 1
+  return out
+}
 
-// P16: 未完了タスク数が少なく、かつ稼働余力にも余裕がある場合のみ
-// 「タスクが少ない」と判定する（どちらか一方だけでは判定しない — 誤検知を
+// P16: 未完了タスク数が low_workload_task_threshold 以下で、かつ稼働余力にも余裕が
+// ある場合のみ「タスクが少ない」と判定する（どちらか一方だけでは判定しない — 誤検知を
 // 減らすため）
-export function isLowWorkloadMember(memberId: string, allTasks: Task[]): boolean {
-  const activeCount = allTasks.filter(
-    (t) => t.assigneeIds.includes(memberId) && t.status !== 'done',
-  ).length
-  if (activeCount > LOW_WORKLOAD_TASK_THRESHOLD) return false
-  return memberWorkloadCapacity(memberId, allTasks) === 'available'
+export function isLowWorkloadMember(
+  memberId: string,
+  allTasks: Task[],
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
+  now: Date = new Date(),
+): boolean {
+  const activeCount = memberActiveLoadTasks(memberId, allTasks, rules).length
+  if (activeCount > rules.low_workload_task_threshold) return false
+  return memberWorkloadCapacity(memberId, allTasks, now, rules) === 'available'
 }
 
 export interface WorkloadRebalanceSuggestion {
@@ -629,10 +647,15 @@ export interface WorkloadRebalanceSuggestion {
 // (memberWorkloadCapacity)+スキルマッチング(matchSkills)のみで構成する。
 // 1タスクにつき提案は1件(最初にスキルが一致したavailableメンバー) —
 // 複数担当者の一部入れ替えまでは考慮しない、1対1の単純な付け替え提案。
-export function suggestWorkloadRebalance(allMembers: Member[], tasks: Task[]): WorkloadRebalanceSuggestion[] {
+export function suggestWorkloadRebalance(
+  allMembers: Member[],
+  tasks: Task[],
+  rules: WorkloadRules = DEFAULT_WORKLOAD_RULES,
+  now: Date = new Date(),
+): WorkloadRebalanceSuggestion[] {
   // 休止中・退会したメンバーには振り直さない(元の担当としても出さない)
   const members = allMembers.filter(isActiveMember)
-  const capacityByMember = new Map(members.map((m) => [m.id, memberWorkloadCapacity(m.id, tasks)]))
+  const capacityByMember = new Map(members.map((m) => [m.id, memberWorkloadCapacity(m.id, tasks, now, rules)]))
   const overloaded = members.filter((m) => capacityByMember.get(m.id) === 'full')
   const available = members.filter((m) => capacityByMember.get(m.id) === 'available')
   if (overloaded.length === 0 || available.length === 0) return []

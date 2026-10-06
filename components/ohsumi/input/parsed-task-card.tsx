@@ -37,6 +37,7 @@ export function ParsedTaskCard({
     addCategoryOption,
     can,
     departmentOptions,
+    workloadRules,
   } = useOhsumi()
   const { t } = useI18n()
   const deptLabel = useDepartmentLabel()
@@ -51,7 +52,7 @@ export function ParsedTaskCard({
   // 休止中メンバーは新規タスクの担当候補に出さない(admin.membersの一時停止と
   // 同じ扱い — task-detail-drawer.tsx等、他の担当者選択箇所と揃える)
   const activeMembers = members.filter(isActiveMember)
-  const candidates = rankCandidates(task, activeMembers, tasks).slice(0, 3)
+  const candidates = rankCandidates(task, activeMembers, tasks, workloadRules).slice(0, 3)
 
   // TSK-034: おすすめカテゴリ — タイトルとカテゴリ名/頻出スキル名の文字列
   // 一致 + プロジェクト内使用頻度をsuggestCategoriesForTitleでスコアリング

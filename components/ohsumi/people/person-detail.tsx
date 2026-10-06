@@ -92,7 +92,6 @@ export function PersonDetail({ id }: { id: string }) {
   const { roles, isAdminRef, isTopRef,
     getMember,
     visibleTasks: tasks,
-    archivedTasks,
     members,
     projects,
     currentUser,
@@ -144,6 +143,8 @@ export function PersonDetail({ id }: { id: string }) {
     oneOnOneQuestions,
     notifications,
     revokeAllMySessions,
+    workloadRules,
+    workloadTasks,
   } = useOhsumi()
   const { go } = useNav()
   const toast = useToast()
@@ -300,11 +301,11 @@ export function PersonDetail({ id }: { id: string }) {
   const active = mine.filter((t) => t.status !== 'done').length
   // P16: 稼働に余裕があるメンバーに公募タスクをおすすめする。閲覧者が
   // 全権管理者、または本人の直属の上長のときだけ表示する
-  const allTasksForWorkload = [...tasks, ...archivedTasks]
+  const allTasksForWorkload = workloadTasks
   const canSeeLowWorkloadSuggestions =
     isFullAdmin || (!!currentUser && currentUser.id === member.reportsToId)
   const lowWorkloadRecommendedTasks =
-    canSeeLowWorkloadSuggestions && isLowWorkloadMember(member.id, allTasksForWorkload)
+    canSeeLowWorkloadSuggestions && isLowWorkloadMember(member.id, allTasksForWorkload, workloadRules)
       ? recommendedTasksForMember(member, allTasksForWorkload)
       : []
   const completed = mine.filter((t) => t.status === 'done')
