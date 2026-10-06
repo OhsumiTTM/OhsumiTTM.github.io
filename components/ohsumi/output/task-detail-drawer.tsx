@@ -36,6 +36,7 @@ import {
   type SkillLevelValue,
   type SkillPoints,
   type Task,
+  type TaskComment,
   type TaskHistoryEntry,
   type TaskImportance,
   type TaskRetrospective,
@@ -48,6 +49,8 @@ import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHE
 import { TranslatedText } from '@/components/ohsumi/translated-text'
 import { formatDateTimeInTz, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
+import { useFocusComment } from '@/lib/ohsumi/task-drawer'
+import { threadComments } from '@/lib/ohsumi/comment-notifications'
 import { WorkloadBadge, WORKLOAD_CAPACITY_RANK } from '@/components/ohsumi/workload-badge'
 import {
   Ban,
@@ -70,6 +73,7 @@ import {
   UserCheck,
   UserPlus,
   X,
+  Reply,
 } from 'lucide-react'
 
 const HISTORY_FIELD_KEY: Record<TaskHistoryEntry['field'], TranslationKey> = {
@@ -281,7 +285,7 @@ export function TaskDetailDrawer({
             onOpenAward={() => setAwardOpen(true)}
             onAddDeliverable={(label, url) => addDeliverable(task.id, label, url)}
             onRemoveDeliverable={(id) => removeDeliverable(task.id, id)}
-            onAddComment={(text) => addComment(task.id, text)}
+            onAddComment={(text, replyToId) => addComment(task.id, text, replyToId)}
             onRemoveComment={(commentId) => removeComment(task.id, commentId)}
             onProgress={(text) => {
               updateProgress(task.id, text)
@@ -1218,7 +1222,7 @@ function DrawerBody({
   onOpenAward: () => void
   onAddDeliverable: (label: string, url: string) => void
   onRemoveDeliverable: (id: string) => void
-  onAddComment: (text: string) => void
+  onAddComment: (text: string, replyToId?: string) => void
   onRemoveComment: (commentId: string) => void
   onProgress: (text: string) => void
   onUpdateProgressPercent: (percent: number) => void
@@ -1260,6 +1264,23 @@ function DrawerBody({
   const [deliverableLabel, setDeliverableLabel] = useState('')
   const [deliverableUrl, setDeliverableUrl] = useState('')
   const [commentDraft, setCommentDraft] = useState('')
+  // 返信: 返信する元のコメント(返信の欄は、そのコメントのまとまりの下に出す)
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyDraft, setReplyDraft] = useState('')
+  // 通知から開いた時に見せるコメント(その位置まで送って、しばらく目立たせる)
+  const { focusCommentId, clearFocusComment } = useFocusComment()
+  const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!focusCommentId || !task.comments?.some((c) => c.id === focusCommentId)) return
+    const id = focusCommentId
+    setHighlightCommentId(id)
+    // 見せた後は外す(この effect がもう一度動いても、下の時間の処理は止めない)
+    clearFocusComment()
+    window.setTimeout(() => {
+      document.querySelector(`[data-comment-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 150)
+    window.setTimeout(() => setHighlightCommentId((cur) => (cur === id ? null : cur)), 5000)
+  }, [focusCommentId, task.comments, clearFocusComment])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   // TSK-062+TSK-067統合: 確認者が承認時に残すコメント(任意)。レビュー
@@ -2109,31 +2130,96 @@ function DrawerBody({
             {t('taskDrawer.commentsHeader')}
           </div>
           {(task.comments?.length ?? 0) > 0 ? (
-            <ul className="mb-3 flex flex-col gap-2.5">
-              {task.comments!.map((c) => {
-                const author = members.find((m) => m.id === c.byId)
-                const canDelete = isAdmin || c.byId === currentUserId
-                return (
-                  <li key={c.id} className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
-                        {author && <Avatar member={author} size={18} />}
-                        <span className="text-xs font-medium">
-                          {author?.displayName || author?.name || t('taskDrawer.unknown')}
-                        </span>
-                        <span className="text-[11px] text-muted-foreground">{formatDateTime(c.at)}</span>
-                      </div>
-                      {canDelete && (
-                        <button
-                          onClick={() => onRemoveComment(c.id)}
-                          className="shrink-0 text-muted-foreground hover:text-destructive"
-                          aria-label={t('common.delete')}
-                        >
-                          <X className="size-3.5" />
-                        </button>
+            <ul className="mb-3 flex flex-col gap-2.5" data-comments>
+              {threadComments(task.comments!).map(({ comment: root, replies }) => {
+                const renderComment = (c: TaskComment, isReply: boolean) => {
+                  const author = members.find((m) => m.id === c.byId)
+                  const canDelete = isAdmin || c.byId === currentUserId
+                  return (
+                    <div
+                      key={c.id}
+                      data-comment-id={c.id}
+                      data-comment-reply={isReply ? '' : undefined}
+                      className={cn(
+                        'scroll-mt-20 rounded-lg border px-3 py-2 transition-colors',
+                        highlightCommentId === c.id ? 'border-primary bg-primary-muted' : 'border-border bg-secondary/40',
                       )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          {author && <Avatar member={author} size={18} />}
+                          <span className="text-xs font-medium">
+                            {author?.displayName || author?.name || t('taskDrawer.unknown')}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">{formatDateTime(c.at)}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setReplyTo(c.id); setReplyDraft('') }}
+                            className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                            data-comment-reply-button
+                          >
+                            <Reply className="size-3.5" />
+                            {t('taskDrawer.comment.reply')}
+                          </button>
+                          {canDelete && (
+                            <button
+                              onClick={() => onRemoveComment(c.id)}
+                              className="shrink-0 text-muted-foreground hover:text-destructive"
+                              aria-label={t('common.delete')}
+                            >
+                              <X className="size-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{c.text}</p>
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{c.text}</p>
+                  )
+                }
+                const thread = [root, ...replies]
+                const replying = replyTo && thread.some((c) => c.id === replyTo) ? thread.find((c) => c.id === replyTo)! : null
+                const replyingName = replying ? (() => { const m = members.find((x) => x.id === replying.byId); return m?.displayName || m?.name || t('taskDrawer.unknown') })() : ''
+                return (
+                  <li key={root.id}>
+                    {renderComment(root, false)}
+                    {(replies.length > 0 || replying) && (
+                      <div className="ml-4 mt-2 flex flex-col gap-2 border-l-2 border-border pl-3" data-comment-replies>
+                        {replies.map((c) => renderComment(c, true))}
+                        {replying && (
+                          <div className="flex flex-col gap-1.5" data-comment-reply-box>
+                            <span className="text-[11px] text-muted-foreground">{t('taskDrawer.comment.replyingTo', { name: replyingName })}</span>
+                            <textarea
+                              autoFocus
+                              value={replyDraft}
+                              onChange={(e) => setReplyDraft(e.target.value)}
+                              rows={2}
+                              placeholder={t('taskDrawer.comment.replyPlaceholder')}
+                              aria-label={t('taskDrawer.comment.replyingTo', { name: replyingName })}
+                              className="min-h-[52px] w-full resize-none rounded-lg border border-border bg-card px-2.5 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <Button variant="ghost" size="sm" onClick={() => { setReplyTo(null); setReplyDraft('') }}>
+                                {t('taskDrawer.comment.cancelReply')}
+                              </Button>
+                              <Button
+                                size="sm"
+                                disabled={!replyDraft.trim()}
+                                data-comment-send-reply
+                                onClick={() => {
+                                  onAddComment(replyDraft, replying.id)
+                                  setReplyTo(null)
+                                  setReplyDraft('')
+                                }}
+                              >
+                                {t('taskDrawer.comment.sendReply')}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </li>
                 )
               })}

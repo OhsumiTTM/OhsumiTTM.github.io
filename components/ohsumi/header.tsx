@@ -40,6 +40,8 @@ import {
   Repeat,
   Monitor,
   CircleHelp,
+  MessageSquareReply,
+  CalendarCheck,
 } from 'lucide-react'
 import { OtherDeviceModal, currentInviteLink } from './other-device'
 import { getCurrentOrgId, loadSavedOrgs, switchToOrg } from '@/lib/ohsumi/org-directory'
@@ -84,7 +86,7 @@ export function Header() {
   const notifRef = useRef<HTMLDivElement>(null)
 
   // 通知を開く: 既読にして、開く先(承認の一覧・メンバー・タスク)へ移る
-  const openNotification = (n: { id: string; kind: string; taskId: string; commentId?: string; memberId?: string }) => {
+  const openNotification = (n: { id: string; kind: string; taskId: string; commentId?: string; memberId?: string; adminList?: 'stale' | 'staleReview' }) => {
     setNotifOpen(false)
     markNotificationRead(n.id)
     if (n.kind === 'mention' && n.commentId) markMentionSeen(n.commentId)
@@ -92,11 +94,17 @@ export function Header() {
       go({ name: 'admin', section: 'approvals' })
       return
     }
+    // まとめた通知: ADMIN のホームの、その一覧へ
+    if (n.adminList) {
+      go({ name: 'admin', section: 'dashboard', list: n.adminList })
+      return
+    }
     if (n.memberId) {
       go({ name: 'person', id: n.memberId })
       return
     }
-    if (n.taskId) openTask(n.taskId)
+    // メンション・返信は、そのタスクのそのコメントの位置を開く
+    if (n.taskId) openTask(n.taskId, n.commentId ? { commentId: n.commentId } : undefined)
   }
 
   useEffect(() => {
@@ -319,6 +327,7 @@ export function Header() {
                     >
                       <button
                         onClick={() => openNotification(n)}
+                        data-notification={n.id}
                         className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-secondary"
                       >
                         <NotificationIcon kind={n.kind} />
@@ -663,6 +672,8 @@ function NotificationIcon({ kind }: { kind: string }) {
   if (kind === 'deadline') return <CalendarClock className="mt-0.5 size-4 shrink-0 text-warning" />
   if (kind === 'stale') return <Clock className="mt-0.5 size-4 shrink-0 text-warning" />
   if (kind === 'mention') return <AtSign className="mt-0.5 size-4 shrink-0 text-primary" />
+  if (kind === 'reply') return <MessageSquareReply className="mt-0.5 size-4 shrink-0 text-primary" />
+  if (kind === 'invite') return <CalendarCheck className="mt-0.5 size-4 shrink-0 text-primary" />
   if (kind === 'lowWorkload') return <TrendingDown className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
   return <ClipboardCheck className="mt-0.5 size-4 shrink-0 text-primary" />
 }

@@ -15,7 +15,8 @@ import { Modal } from '@/components/ohsumi/modal'
 import { Button } from '@/components/ui/button'
 import { formatDeadlineFull, formatTenure, memberSkillFieldProgress, isLowWorkloadMember, recommendedTasksForMember, recommendGrowthTasks, isActiveMember } from '@/lib/ohsumi/utils'
 import { exportTasksToExcel, exportTasksToCsv } from '@/lib/ohsumi/export-excel'
-import { DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type Member } from '@/lib/ohsumi/types'
+import { BELL_KINDS, bellEnabled, type BellKind, type BellSettings } from '@/lib/ohsumi/bell-kinds'
+import { DIFFICULTY_LABEL, type NotifyKind, type NotifyFrequency, type NotifySettings, type Member } from '@/lib/ohsumi/types'
 import { AVATAR_PALETTE, isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { useRoleLabel } from '@/lib/ohsumi/use-role-label'
 import { useI18n, SUPPORTED_LOCALES, DIFFICULTY_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -43,6 +44,7 @@ import {
   FileSpreadsheet,
   LogOut,
   TrendingDown,
+  TriangleAlert,
 } from 'lucide-react'
 import {
   isGoogleOAuthConfigured,
@@ -1369,6 +1371,10 @@ export function PersonDetail({ id }: { id: string }) {
               member={member}
               onUpdate={(settings) => updateNotifySettings(member.id, settings)}
             />
+            <BellSettingsList
+              member={member}
+              onUpdate={(settings) => updateNotifySettings(member.id, settings)}
+            />
           </div>
 
           {/* ログイン中の端末 — 全端末でログアウト(発行済みのログイン情報をすべて無効にする) */}
@@ -1643,7 +1649,7 @@ function NotifySettingsTable({
   onUpdate,
 }: {
   member: Member
-  onUpdate: (settings: Partial<Record<NotifyKind, NotifyFrequency>>) => void
+  onUpdate: (settings: NotifySettings) => void
 }) {
   const { t } = useI18n()
   const settings = member.notifySettings ?? {}
@@ -1693,6 +1699,67 @@ function NotifySettingsTable({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ベルの通知の種類ごとのオン・オフ(本人の設定 notify_settings.bell。既定はすべてオン)。メールの頻度とは別に効く
+const BELL_KIND_LABEL: Record<BellKind, TranslationKey> = {
+  approval: 'person.settings.bell.kind.approval',
+  review: 'person.settings.bell.kind.review',
+  staleReview: 'person.settings.bell.kind.staleReview',
+  staleProgress: 'person.settings.bell.kind.staleProgress',
+  deadline: 'person.settings.bell.kind.deadline',
+  mention: 'person.settings.bell.kind.mention',
+  lowWorkload: 'person.settings.bell.kind.lowWorkload',
+  inactive: 'person.settings.bell.kind.inactive',
+  expense: 'person.settings.bell.kind.expense',
+  invite: 'person.settings.bell.kind.invite',
+}
+
+function BellSettingsList({ member, onUpdate }: { member: Member; onUpdate: (settings: NotifySettings) => void }) {
+  const { t } = useI18n()
+  const settings = member.notifySettings ?? {}
+  const bell = settings.bell ?? {}
+  const set = (kind: BellKind, on: boolean) => {
+    const next: BellSettings = { ...bell }
+    // オン(既定)は書かない
+    if (on) delete next[kind]
+    else next[kind] = false
+    onUpdate({ ...settings, bell: next })
+  }
+  return (
+    <div className="mt-5" data-bell-settings>
+      <p className="text-xs font-semibold">{t('person.settings.bell.title')}</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">{t('person.settings.bell.desc')}</p>
+      <ul className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+        {BELL_KINDS.map((kind) => {
+          const on = bellEnabled(bell, kind)
+          return (
+            <li key={kind} className="min-w-0">
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={(e) => set(kind, e.target.checked)}
+                  data-bell-kind={kind}
+                  className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--primary)]"
+                />
+                <span className="min-w-0">
+                  {t(BELL_KIND_LABEL[kind])}
+                  {/* メンション・返信をオフにすると、頼まれたことを見落としやすい(オフにはできる) */}
+                  {kind === 'mention' && !on && (
+                    <span className="mt-0.5 flex items-center gap-1 text-warning" data-bell-mention-warning>
+                      <TriangleAlert className="size-3.5 shrink-0" />
+                      {t('person.settings.bell.mentionWarning')}
+                    </span>
+                  )}
+                </span>
+              </label>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }

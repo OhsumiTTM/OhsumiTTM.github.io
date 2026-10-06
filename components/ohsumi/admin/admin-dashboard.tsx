@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '@/components/ohsumi/toast'
 import { Avatar, ProjectTag } from '@/components/ohsumi/primitives'
-import { isOverdue, daysSince, formatDeadline, computeProjectAutoHealth, computeAvgSkillPoints, suggestWorkloadRebalance } from '@/lib/ohsumi/utils'
+import { isOverdue, daysSince, formatDeadline, computeProjectAutoHealth, computeAvgSkillPoints, suggestWorkloadRebalance, isStaleProgress, isStaleReview } from '@/lib/ohsumi/utils'
+import { useNav } from '@/lib/ohsumi/nav'
+import { cn } from '@/lib/utils'
 import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { STATUS_LABEL } from '@/lib/ohsumi/types'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -57,14 +59,12 @@ export function AdminDashboard() {
   const overdue = tasks.filter((t) => isOverdue(t, tz))
   const unassigned = tasks.filter((t) => t.assigneeIds.length === 0 && t.status !== 'done')
   const blocked = tasks.filter((t) => !!t.blocker && t.status !== 'done')
-  const stale = tasks.filter((t) => {
-    const d = daysSince(t.lastActivity)
-    return t.status !== 'done' && d !== null && d >= 5
-  })
-  const staleReview = waiting.filter((t) => {
-    const d = daysSince(t.lastActivity)
-    return d !== null && d >= 3
-  })
+  // 放置の一覧は、ベルの通知のまとめ(7日以上更新なし・確認待ちが3日以上)と同じ決め方にする(件数がそろうように)
+  const stale = tasks.filter((t) => isStaleProgress(t))
+  const staleReview = tasks.filter((t) => isStaleReview(t))
+  // ベルのまとめた通知から開いた時は、その一覧を開いて見せる
+  const { screen } = useNav()
+  const focusList = screen.name === 'admin' ? screen.list : undefined
   // SKL-014: 完了したがまだスキルポイントが付与されていないタスク
   const pendingPoints = tasks.filter(
     (t) => t.status === 'done' && (!t.awardedPoints || Object.keys(t.awardedPoints).length === 0),
@@ -262,6 +262,18 @@ export function AdminDashboard() {
             renderMeta={(t) => tr('admin.dashboard.meta.staleDays', { days: daysSince(t.lastActivity) ?? 0 })}
             onOpen={openTask}
             getProject={getProject}
+            listId="stale"
+            focused={focusList === 'stale'}
+          />
+          <AttentionGroup
+            title={tr('admin.dashboard.label.staleReview')}
+            icon={<Clock className="size-4 text-warning" />}
+            tasks={staleReview}
+            renderMeta={(t) => tr('admin.dashboard.meta.waitingReviewDays', { days: daysSince(t.lastActivity) ?? 0 })}
+            onOpen={openTask}
+            getProject={getProject}
+            listId="staleReview"
+            focused={focusList === 'staleReview'}
           />
           <AttentionGroup
             title={tr('admin.dashboard.label.blockedTasks')}
@@ -472,9 +484,14 @@ function AttentionGroup({
   onOpen,
   getProject,
   action,
+  listId,
+  focused,
 }: {
   title: string
   icon: React.ReactNode
+  listId?: string
+  // ベルのまとめた通知から開いた一覧: 全件を出し、その位置まで送って目立たせる
+  focused?: boolean
   tasks: import('@/lib/ohsumi/types').Task[]
   renderMeta: (t: import('@/lib/ohsumi/types').Task) => string
   onOpen: (id: string) => void
@@ -482,8 +499,17 @@ function AttentionGroup({
   action?: React.ReactNode
 }) {
   const { t: tr } = useI18n()
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [focused])
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div
+      ref={ref}
+      data-attention-list={listId}
+      data-focused={focused ? '' : undefined}
+      className={cn('scroll-mt-20 rounded-lg border bg-card', focused ? 'border-primary ring-2 ring-primary/30' : 'border-border')}
+    >
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         {icon}
         <span className="text-sm font-medium">{title}</span>
@@ -494,7 +520,7 @@ function AttentionGroup({
         <div className="px-4 py-6 text-center text-xs text-muted-foreground">{tr('admin.dashboard.noneFound')}</div>
       ) : (
         <ul className="divide-y divide-border">
-          {tasks.slice(0, 4).map((t) => (
+          {(focused ? tasks : tasks.slice(0, 4)).map((t) => (
             <li key={t.id}>
               <button
                 onClick={() => onOpen(t.id)}

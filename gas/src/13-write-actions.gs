@@ -271,6 +271,8 @@ function runWriteAction_(body, actingMember) {
       })
       // 新しいコメントのメンションに通知する(宛先・本文は、保存したコメントから GAS が決める)
       notifyNewMentions_(body.taskId, commentsBefore, body.comments || [], actingMember.id)
+      // 返信と、メンションした相手のコメントを知らせる(元のコメントを書いた人・メンションされていた人・メンションした人)
+      notifyNewReplies_(body.taskId, commentsBefore, body.comments || [], actingMember.id)
       break
     case 'updateEstimatedHours':
       result = updateTaskFields_(body.taskId, {

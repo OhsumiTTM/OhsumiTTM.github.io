@@ -9,6 +9,7 @@ import { createServer, type Server } from 'node:http'
 import { extname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createWorld, fakeIdToken, type Org, type World } from '../lib/ohsumi/e2e/world'
+import { diffList } from '../lib/ohsumi/list-diff'
 import { CAPABILITY_ACTIONS, CAPABILITY_KEYS, capabilityOfAction, TOP_ONLY_ACTIONS, type Capability } from '../lib/ohsumi/capabilities'
 
 const ROOT = join(__dirname, '..')
@@ -617,5 +618,117 @@ describe.skipIf(!available)('INPUT の「項目を入れて追加」: 一般の�
     expect(first.approval_status).toMatch(/pending|承認待ち/)
     expect(taskRow('項目で書いたE2Eのタスク2')!.project_id).toBe(project)
     await waitFor(() => page.evaluate<boolean>('!!document.querySelector(\'[data-input-kind="form"]\')'), '入力履歴に「項目で入力」が出ません')
+  })
+})
+
+describe.skipIf(!available)('コメントへの返信と、ベルの通知の設定', () => {
+  const openBell = async () => {
+    await page.evaluate(`document.querySelector('button[aria-label="通知"]').click(); true`)
+    await sleep(400)
+  }
+  const signInAs = async (email: string) => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn(email)
+    await waitFor(loggedIn, email + ' がログインできません')
+  }
+  const taskComments = (title: string) => {
+    A.org.cache.clear()
+    const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+    const row = rows.find((r) => r[head.indexOf('title')] === title)
+    return row ? (JSON.parse(row[head.indexOf('comments_json')] || '[]') as { id: string; byId: string; text: string; replyToId?: string }[]) : []
+  }
+  const TITLE = '返信のE2Eのタスク'
+  let topId = ''
+  let baseId = ''
+
+  it('メンションされた人がベルから開くと、そのコメントの位置が開き、「返信」で返すと元のコメントの書き手にメールが届く', async () => {
+    topId = memberIdOf('top@a.example')
+    baseId = memberIdOf('base@a.example')
+    const made = world.call(A.org, topTokenA, 'createTasks', { tasks: [{ tempId: 'tr', title: TITLE, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [baseId], creatorId: topId, pendingApproval: false }] })
+    expect(made.ok, made.error).toBe(true)
+    const taskId = String((made.result as { id: string }[])[0].id)
+    // 一覧の保存は、画面と同じく差分(listOps)で送る
+    const ask = world.call(A.org, topTokenA, 'updateComments', { taskId, listOps: diffList([], [{ id: 'c-ask', byId: topId, text: '@一般さん 確認をお願いします', at: new Date().toISOString(), mentionedIds: [baseId] }], 'id') })
+    expect(ask.ok, ask.error).toBe(true)
+    A.org.cache.clear()
+
+    await signInAs('base@a.example')
+    await openBell()
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-notification="mention-c-ask"]')`), 'メンションの通知が出ません')
+    await page.evaluate(`document.querySelector('[data-notification="mention-c-ask"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-comment-id="c-ask"]')?.className ?? '').includes('border-primary')`), 'メンションのコメントの位置が開きません')
+
+    const mailsBefore = A.org.mails.length
+    await page.evaluate(`(() => { const b = document.querySelector('[data-comment-id="c-ask"] [data-comment-reply-button]'); b.click(); return true })()`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-comment-reply-box] textarea')`), '返信の欄が出ません')
+    await page.evaluate(`(() => {
+      const el = document.querySelector('[data-comment-reply-box] textarea')
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, '確認しました。問題ありません')
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+    await page.evaluate(`document.querySelector('[data-comment-send-reply]').click(); true`)
+    await waitFor(async () => taskComments(TITLE).some((c) => c.replyToId === 'c-ask'), 'GAS に返信が残りません')
+    const reply = taskComments(TITLE).find((c) => c.replyToId === 'c-ask')!
+    expect(reply).toMatchObject({ byId: baseId, text: '確認しました。問題ありません' })
+    // 画面では元のコメントの下に字下げして並ぶ
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-comment-replies] [data-comment-id="${reply.id}"]')`), '返信が元のコメントの下に並びません')
+    // 元のコメントの書き手(代表)に、急ぎのメールで届く
+    const mail = A.org.mails.slice(mailsBefore).find((m) => m.to.includes('top@a.example'))
+    expect(mail?.subject).toContain('返信しました')
+    expect(mail?.body).toContain('確認しました。問題ありません')
+
+    // メンションの既読は本人の保存に残る(ほかの端末でも既読)
+    const baseToken = String(world.googleLogin(A.org, 'base@a.example').result.session.token)
+    await waitFor(async () => {
+      const res = world.call(A.org, baseToken, 'getMyStorage', { keys: ['notification-history'] })
+      const raw = String((res.result as { values?: Record<string, string> })?.values?.['notification-history'] ?? '')
+      return /"id":"mention-c-ask"[^}]*"readAt"/.test(raw)
+    }, 'メンションの既読が本人の保存に残りません')
+  })
+
+  it('返信された人のベルに「返信しました」が出て、押すとそのコメントの位置が開く', async () => {
+    const reply = taskComments(TITLE).find((c) => c.replyToId === 'c-ask')!
+    await signInAs('top@a.example')
+    await openBell()
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-notification="reply-${reply.id}"]')`), '返信の通知が出ません')
+    expect(await page.evaluate<string>(`document.querySelector('[data-notification="reply-${reply.id}"]').textContent`)).toContain('返信しました')
+    await page.evaluate(`document.querySelector('[data-notification="reply-${reply.id}"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-comment-id="${reply.id}"]')?.className ?? '').includes('border-primary')`), '返信のコメントの位置が開きません')
+  })
+
+  it('ベルの通知を種類ごとにオフにでき、本人の設定に残る(ほかの端末でも同じ)。オフにした種類はベルに出ない', async () => {
+    await signInAs('base@a.example')
+    await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
+    const profileItem = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === 'プロフィール')`
+    await waitFor(() => page.evaluate<boolean>(`!!${profileItem}`), 'アカウントのメニューが開きません')
+    await page.evaluate(`${profileItem}.click(); true`)
+    const settingsTab = `[...document.querySelectorAll('button, [role=tab]')].find((b) => b.textContent.trim() === '設定')`
+    await waitFor(() => page.evaluate<boolean>(`!!${settingsTab}`), '個人ページが開きません')
+    await page.evaluate(`${settingsTab}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-bell-kind="invite"]')`), 'ベルの通知の設定が出ません')
+    await page.evaluate(`document.querySelector('[data-bell-kind="mention"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-bell-mention-warning]')?.textContent ?? '').includes('見落としの原因になります')`), '見落としの注意が出ません')
+    const saved = () => {
+      A.org.cache.clear()
+      const [head, ...rows] = A.org.sheets.Members.rows.map((r) => r.map(String))
+      const row = rows.find((r) => r[head.indexOf('id')] === baseId)!
+      try { return JSON.parse(row[head.indexOf('notify_settings')] || '{}') } catch { return {} }
+    }
+    await waitFor(async () => saved().bell?.mention === false, 'ベルの通知の設定が本人の設定に残りません')
+    // ほかの人のコメントでメンションされても、ベルには出さない
+    const taskId = (() => {
+      const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+      return rows.find((r) => r[head.indexOf('title')] === TITLE)![head.indexOf('id')]
+    })()
+    const current = taskComments(TITLE)
+    const again = world.call(A.org, topTokenA, 'updateComments', { taskId, listOps: diffList(current, [...current, { id: 'c-ask2', byId: topId, text: '@一般さん もう一つ', at: new Date().toISOString(), mentionedIds: [baseId] }], 'id') })
+    expect(again.ok, again.error).toBe(true)
+    await signInAs('base@a.example')
+    await openBell()
+    await sleep(800)
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-notification="mention-c-ask2"]')`)).toBe(false)
   })
 })

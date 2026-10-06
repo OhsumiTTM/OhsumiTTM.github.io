@@ -5,6 +5,7 @@
 //   - 対応済み: 通知の元の状態が無くなった(承認した・期限が過ぎて完了した など)。履歴に残る
 //   - 90日を過ぎたもの・新しい順に200件を超えたものは消す
 import type { NotificationItem } from './types'
+import { isBellKind } from './bell-kinds'
 
 export const NOTIFICATION_HISTORY_KEY = 'notification-history'
 export const NOTIFICATION_HISTORY_DAYS = 90
@@ -21,6 +22,12 @@ export interface NotificationRecord {
   commentId?: string
   memberId?: string
   applicationId?: string
+  /** ベルの通知の種類(本人の設定でオフにした種類は、一覧に出さない) */
+  bell?: import('./bell-kinds').BellKind
+  /** まとめた通知の件数(増えたら未読に戻す) */
+  count?: number
+  /** 開く先が ADMIN のホームの一覧の時の印 */
+  adminList?: 'stale' | 'staleReview'
   /** 初めて出た時刻(ISO) */
   at: string
   readAt?: string
@@ -56,6 +63,9 @@ export function parseNotificationHistory(raw: unknown): NotificationHistory {
     for (const k of ['commentId', 'memberId', 'applicationId', 'readAt', 'resolvedAt'] as const) {
       if (typeof o[k] === 'string' && o[k]) rec[k] = (o[k] as string).slice(0, 100)
     }
+    if (typeof o.count === 'number' && Number.isFinite(o.count) && o.count >= 0) rec.count = Math.floor(o.count)
+    if (o.adminList === 'stale' || o.adminList === 'staleReview') rec.adminList = o.adminList
+    if (isBellKind(o.bell)) rec.bell = o.bell
     items.push(rec)
   }
   return { v: 1, items }
@@ -96,12 +106,22 @@ export function mergeNotifications(history: NotificationHistory, current: Notifi
       if (n.commentId) rec.commentId = n.commentId
       if (n.memberId) rec.memberId = n.memberId
       if (n.applicationId) rec.applicationId = n.applicationId
+      if (n.count != null) rec.count = n.count
+      if (n.adminList) rec.adminList = n.adminList
+      if (n.bell) rec.bell = n.bell
       items.push(rec)
       changed = true
       continue
     }
-    if (prev.resolvedAt || prev.title !== title || prev.detail !== detail) {
+    const grew = n.count != null && n.count > (prev.count ?? 0)
+    if (prev.resolvedAt || prev.title !== title || prev.detail !== detail || n.count !== prev.count || n.bell !== prev.bell) {
       const next: NotificationRecord = { ...prev, title, detail }
+      if (n.bell) next.bell = n.bell
+      else delete next.bell
+      if (n.count != null) next.count = n.count
+      else delete next.count
+      // まとめた通知の件数が増えた時は、未読に戻す(減った時は既読のまま)
+      if (grew && next.readAt) delete next.readAt
       if (prev.resolvedAt) {
         // 対応済みの後にまた出た通知は、新しい通知として未読にする
         delete next.resolvedAt
