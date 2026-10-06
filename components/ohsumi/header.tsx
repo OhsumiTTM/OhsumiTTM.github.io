@@ -41,6 +41,7 @@ import {
   Monitor,
   CircleHelp,
   MessageSquareReply,
+  Settings,
   CalendarCheck,
 } from 'lucide-react'
 import { OtherDeviceModal, currentInviteLink } from './other-device'
@@ -495,6 +496,10 @@ export function Header() {
                   <MenuItem onClick={() => openMenuItem(() => go({ name: 'person', id: currentUser.id }))}>
                     <User className="size-4" />
                     {t('header.menu.profile')}
+                  </MenuItem>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'personal-settings' }))}>
+                    <Settings className="size-4" />
+                    {t('personalSettings.title')}
                   </MenuItem>
                   <MenuItem onClick={() => openMenuItem(() => go({ name: 'dailyreport' }))}>
                     <BookOpen className="size-4" />

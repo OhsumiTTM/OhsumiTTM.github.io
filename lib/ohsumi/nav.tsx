@@ -16,6 +16,8 @@ export type Screen =
       department?: Department
     }
   | { name: 'person'; id: string }
+  // 個人設定(自分だけ。通知・メールアドレス・言語とタイムゾーン・ログイン中の端末・個人スプレッドシート連携)
+  | { name: 'personal-settings' }
   | { name: 'project'; id: string }
   | {
       name: 'admin'
