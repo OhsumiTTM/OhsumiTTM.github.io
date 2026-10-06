@@ -4,6 +4,7 @@
 // the app calls, not a parallel reimplementation — keep them in sync by
 // editing here, not by re-inlining the logic elsewhere.
 import { ADMIN_SECTIONS, STATUS_ORDER } from './types'
+import { migrateAdminSections } from './admin-sections'
 import { isAdminRoleRef, isFullAdminRoleRef, restrictedSections, type RoleDef } from './roles'
 import type { AdminSection, Role, TaskImportance, TaskStatus } from './types'
 
@@ -20,7 +21,8 @@ export function isFullAdminRole(roles: RoleDef[], role: Role | null | undefined)
 export function resolveVisibleAdminSections(roles: RoleDef[], role: Role | null | undefined): AdminSection[] {
   if (isFullAdminRoleRef(roles, role)) return ADMIN_SECTIONS.map((s) => s.key)
   if (!isAdminRoleRef(roles, role)) return []
-  const sections = restrictedSections(roles, role)
+  // 以前のタブのキーで保存されていても、今のタブに読み替える(lib/ohsumi/admin-sections.ts)
+  const sections = migrateAdminSections(restrictedSections(roles, role))
   // dashboard is the redirect target for a disallowed section, so it must
   // always stay reachable to avoid a redirect loop
   return sections.includes('dashboard') ? sections : ['dashboard', ...sections]

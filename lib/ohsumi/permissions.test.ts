@@ -61,7 +61,7 @@ describe('resolveVisibleAdminSections', () => {
   it('a full admin sees every admin section', () => {
     const sections = resolveVisibleAdminSections(ROLES, '代表')
     expect(sections).toEqual(
-      expect.arrayContaining(['dashboard', 'approvals', 'assignments', 'projects', 'members', 'analytics', 'tags']),
+      expect.arrayContaining(['dashboard', 'approvals', 'assignments', 'projects', 'taskSettings', 'members', 'analytics', 'orgRoles', 'skillRules', 'oneOnOneSurvey', 'orgSettings', 'expenses', 'forms']),
     )
   })
 
@@ -73,7 +73,7 @@ describe('resolveVisibleAdminSections', () => {
     const sections = resolveVisibleAdminSections(ROLES, '班長')
     expect(sections).toEqual(expect.arrayContaining(['dashboard', 'approvals', 'assignments', 'projects']))
     expect(sections).not.toContain('members')
-    expect(sections).not.toContain('tags')
+    expect(sections).not.toContain('orgRoles')
   })
 
   it('an explicit sections entry overrides the default for a restricted role', () => {
@@ -84,7 +84,8 @@ describe('resolveVisibleAdminSections', () => {
   })
 
   it('always includes dashboard even if the configured list omits it, to avoid a redirect loop', () => {
-    expect(resolveVisibleAdminSections(CODED, 'r_leader')).toEqual(['dashboard', 'projects'])
+    // 以前のキー projects は、分かれた先(タスクの設定)も見られる
+    expect(resolveVisibleAdminSections(CODED, 'r_leader')).toEqual(['dashboard', 'projects', 'taskSettings'])
   })
 })
 

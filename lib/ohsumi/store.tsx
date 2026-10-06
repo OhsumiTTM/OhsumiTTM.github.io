@@ -1,5 +1,6 @@
 'use client'
 
+import { migrateAdminSections, sectionsForSave } from './admin-sections'
 import { revertTaskChange } from './optimistic'
 import {
   createContext,
@@ -952,7 +953,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const roleLevels = useMemo(() => roles.filter((r) => r.tier !== 'base').map((r) => r.id), [roles])
   const restrictedRoles = useMemo(() => roles.filter((r) => r.tier === 'admin' && r.restricted).map((r) => r.id), [roles])
   const rolePermissions = useMemo(
-    () => Object.fromEntries(roles.filter((r) => r.sections).map((r) => [r.id, r.sections as AdminSection[]])),
+    // 以前のタブのキーで保存されていても、今のタブに読み替える(lib/ohsumi/admin-sections.ts)
+    () => Object.fromEntries(roles.filter((r) => r.sections).map((r) => [r.id, migrateAdminSections(r.sections as string[])])),
     [roles],
   )
   const jobRequirements = useMemo(
@@ -2789,7 +2791,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const setRolePermissions = useCallback(
-    (roleId: string, sections: AdminSection[]) => updateRoleDef(roleId, { sections }),
+    // 新しい形の印を付けて保存する(次に読む時に、以前のキーとして読み替えないように)
+    (roleId: string, sections: AdminSection[]) => updateRoleDef(roleId, { sections: sectionsForSave(sections) as AdminSection[] }),
     [updateRoleDef],
   )
 

@@ -17,57 +17,52 @@ export type Role = string
 
 // admin-screen sidebar sections — used by store.tsx's rolePermissions to
 // gate which sections each non-top admin role level can see (Admin → Tags)
+// 管理画面(ADMIN)のタブ。並びとグループは lib/ohsumi/admin-sections.ts。
+// expenses・forms は GAS が経費・フォームの閲覧の権限に使うので、名前を変えない
 export type AdminSection =
-  | 'dashboard'
-  | 'assignments'
+  // 状況
+  | 'dashboard' // ホーム(以前の Dashboard と幹部 View)
+  | 'analytics' // 分析(以前の Analytics とチームレーダー)
+  // 仕事
   | 'approvals'
+  | 'assignments'
   | 'projects'
+  | 'taskSettings' // タスクの設定(カテゴリ・領域・プロジェクトの種類・業務テンプレート・定期タスク・ゴミ箱)
+  // 人と組織
   | 'members'
-  | 'tags'
-  | 'analytics'
-  | 'org'
-  | 'quiz'
-  | 'learning'
-  | 'radar'
-  | 'expenses'
-  | 'forms'
+  | 'orgRoles' // 部署と役職
   | 'memberdb'
-  | 'leadership'
-  // REP-005: 日報・週報の管理者閲覧
-  | 'dailyReports'
   // 'recruiting' はrolePermissions/visibleAdminSectionsのロール単位制御とは
   // 独立に、Member.permissionOverrides(targetType:'recruiting')の個別付与
   // だけでアクセス可否を決める（admin-screen.tsxのcanAccessRecruiting参照）。
   // そのためADMIN_SECTIONS/DEFAULT_NON_TOP_SECTIONSには意図的に含めない。
   | 'recruiting'
+  // 育成
+  | 'skillRules' // スキルの決まり
+  | 'quiz'
+  | 'learning'
+  | 'oneOnOneSurvey' // 1on1・アンケート
+  // 申請と記録
+  | 'expenses'
+  | 'forms'
+  | 'dailyReports'
+  // 設定
+  | 'orgSettings' // 団体設定(全権管理者だけ)
 
-export const ADMIN_SECTIONS: { key: AdminSection; label: string }[] = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'leadership', label: '幹部 View' },
-  { key: 'approvals', label: 'Approvals' },
-  { key: 'assignments', label: 'Assignments' },
-  { key: 'projects', label: 'Projects' },
-  { key: 'members', label: 'Members' },
-  { key: 'analytics', label: 'Analytics' },
-  { key: 'tags', label: 'Tags' },
-  { key: 'org', label: 'Org Tree' },
-  { key: 'quiz', label: 'Quiz' },
-  { key: 'learning', label: 'Learning' },
-  { key: 'radar', label: 'Radar' },
-  { key: 'expenses', label: 'Expenses' },
-  { key: 'forms', label: 'Forms' },
-  { key: 'memberdb', label: '人材DB' },
-  { key: 'dailyReports', label: 'Daily Reports' },
-]
+// 役職ごとに見られるタブ(roles の sections)で選べるタブ(採用は別の決まりなので含めない)
+export const ADMIN_SECTIONS: { key: AdminSection }[] = ([
+  'dashboard', 'analytics', 'approvals', 'assignments', 'projects', 'taskSettings',
+  'members', 'orgRoles', 'memberdb', 'skillRules', 'quiz', 'learning', 'oneOnOneSurvey',
+  'expenses', 'forms', 'dailyReports', 'orgSettings',
+] as AdminSection[]).map((key) => ({ key }))
 
-// Members/Tags manage org-wide config (roles, notification routing, the
-// shared skill/category/role-level pools) — not "this project's" scope, so
-// a non-top admin role doesn't get them unless explicitly granted.
+// 見られるタブを決めていない制限付きの管理者の既定(団体全体の設定のタブは含めない)
 export const DEFAULT_NON_TOP_SECTIONS: AdminSection[] = [
   'dashboard',
   'approvals',
   'assignments',
   'projects',
+  'taskSettings',
   'memberdb',
 ]
 
