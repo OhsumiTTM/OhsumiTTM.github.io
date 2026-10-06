@@ -9,6 +9,7 @@ import { createServer, type Server } from 'node:http'
 import { extname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createWorld, fakeIdToken, type Org, type World } from '../lib/ohsumi/e2e/world'
+import { CAPABILITY_ACTIONS, CAPABILITY_KEYS, capabilityOfAction, TOP_ONLY_ACTIONS, type Capability } from '../lib/ohsumi/capabilities'
 
 const ROOT = join(__dirname, '..')
 // ビルドの設定(scripts/check-layout.mjs と同じ。GAS の接続先はレジストリの接続先の解決で決まる)
@@ -68,6 +69,7 @@ class Page {
 }
 
 let world: World
+let topTokenA = ''
 let A: ReturnType<World['launchOrg']>
 let B: ReturnType<World['launchOrg']>
 let server: Server
@@ -82,6 +84,7 @@ function prepareWorld() {
   A = world.launchOrg('団体A', 'contact@a.example')
   B = world.launchOrg('団体B', 'contact@b.example')
   const topA = world.googleLogin(A.org, 'top@a.example', { setupCode: A.setupCode }).result.session.token
+  topTokenA = topA
   world.call(A.org, topA, 'addMember', { name: '一般さん', email: 'base@a.example', affiliation: '', role: 'base', sendInvite: false })
   const topId = world.googleLogin(A.org, 'top@a.example').result.memberId
   world.call(A.org, topA, 'createTasks', { tasks: [{ tempId: 't1', title: '団体Aのタスク', projectId: '', department: '', category: '', skills: [], difficulty: 'normal', priority: 'medium', deadline: null, assigneeIds: [topId], creatorId: topId }] })
@@ -273,5 +276,147 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
     await navigate('/registry-admin/')
     await waitFor(async () => (await text()).includes('許可された管理者だけが使えます'), 'レジストリの管理画面のログインが出ません')
     expect(await text()).not.toContain('団体A')
+  })
+})
+
+// ---- できる操作(capability): 5人の役職で ADMIN の全タブを開き、出ている操作が GAS で通ること・
+// 出ていない操作は GAS でも断られることを確かめる(lib/ohsumi/capabilities.ts の対応表) ----
+
+type Persona = { email: string; label: string; caps: Capability[]; admin: boolean }
+const ALL_CAPS = [...CAPABILITY_KEYS]
+const PERSONAS: Persona[] = [
+  { email: 'top@a.example', label: '代表', caps: ALL_CAPS, admin: true },
+  { email: 'full@a.example', label: '全権管理者(制限なし・既定)', caps: ['trash', 'org.rules'], admin: true },
+  { email: 'lead@a.example', label: '制限ありの管理者', caps: [], admin: true },
+  { email: 'base@a.example', label: '一般', caps: [], admin: false },
+  { email: 'hr@a.example', label: 'members.role を渡した管理者', caps: ['members.role', 'trash', 'org.rules'], admin: true },
+]
+
+// 制限ありの役職・members.role を渡した役職を足し、それぞれの人を登録する(代表の操作で)
+function preparePersonas() {
+  const gas = A.org.gas as unknown as Record<string, (...a: unknown[]) => unknown>
+  gas.invalidateRoles_()
+  const roles = JSON.parse(JSON.stringify(gas.getRoles_())) as { id: string; tier: string }[]
+  const topIndex = roles.findIndex((r) => r.tier === 'top')
+  roles.splice(topIndex, 0,
+    { id: 'r_lead_e2e', name: '班長(制限あり)', tier: 'admin', restricted: true } as never,
+    { id: 'r_hr_e2e', name: '人事', tier: 'admin', restricted: false, capabilities: ['members.role', 'org.rules', 'trash'] } as never)
+  const saved = world.call(A.org, topTokenA, 'updateRoles', { roles })
+  if (!saved.ok) throw new Error('役職を保存できません: ' + saved.error)
+  const manager = roles.find((r) => r.tier === 'admin' && (r as { restricted?: boolean }).restricted === false && r.id !== 'r_hr_e2e')!.id
+  for (const [name, email, role] of [['全権さん', 'full@a.example', manager], ['班長さん', 'lead@a.example', 'r_lead_e2e'], ['人事さん', 'hr@a.example', 'r_hr_e2e']]) {
+    const added = world.call(A.org, topTokenA, 'addMember', { name, email, affiliation: '', role, sendInvite: false })
+    if (!added.ok) throw new Error('メンバーを登録できません: ' + added.error)
+  }
+  A.org.cache.clear()
+}
+
+const memberIdOf = (email: string) => String(world.googleLogin(A.org, email).result.memberId)
+
+// GAS の判定(authorizeAction_)だけを、その人として確かめる(操作は実行しない)
+function gasAllows(email: string, action: string, body: Record<string, unknown>): boolean {
+  const gas = A.org.gas as unknown as Record<string, (...a: unknown[]) => unknown>
+  gas.invalidateRoles_()
+  try {
+    gas.authorizeAction_(gas.getActingMemberById_(memberIdOf(email)), action, body)
+    return true
+  } catch {
+    return false
+  }
+}
+
+type Shown = { action: string; memberId: string | null; options: string[] }
+// 今のタブに出ている(見えていて押せる)data-gas-action の部品
+const shownActions = () => page.evaluate<Shown[]>(`(() => {
+  const out = []
+  for (const el of document.querySelectorAll('[data-gas-action]')) {
+    if (!el.getClientRects().length) continue
+    if (el.disabled || el.closest('fieldset[disabled]')) continue
+    const options = el.tagName === 'SELECT' ? [...el.options].filter((o) => !o.disabled).map((o) => o.value) : []
+    out.push({ action: el.getAttribute('data-gas-action'), memberId: el.getAttribute('data-member-id'), options })
+  }
+  return out
+})()`)
+
+describe.skipIf(!available)('できる操作(capability): 5人の役職で ADMIN の全タブ', () => {
+  const genericBody = (personaEmail: string) => {
+    const base = memberIdOf('base@a.example')
+    const other = personaEmail === 'base@a.example' ? memberIdOf('full@a.example') : base
+    return { memberId: other, projectId: 'p-e2e', taskId: 't-e2e', candidateId: 'c-e2e', name: 'E2E', email: 'e2e@example.com' }
+  }
+
+  it('GAS がログインした人に渡すできる操作が、役職の設定どおり', () => {
+    preparePersonas()
+    for (const p of PERSONAS) {
+      const login = world.googleLogin(A.org, p.email)
+      expect(login.ok, p.label + ': ' + JSON.stringify(login).slice(0, 200)).toBe(true)
+      expect(login.result.capabilities, p.label).toEqual(p.caps)
+    }
+  })
+
+  it.each(PERSONAS)('$label: 出ている操作はすべて GAS で通り、出ていない操作は GAS でも断られる', async (p) => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn(p.email)
+    await waitFor(loggedIn, p.label + ' がログインできません')
+    const seen: Shown[] = []
+    if (p.admin) {
+      await waitFor(async () => (await text()).includes('ADMIN'), p.label + ' に ADMIN が出ません')
+      await page.evaluate(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('ADMIN')).click(); true`)
+      await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-admin-tab]")'), p.label + ' の ADMIN のタブが出ません')
+      const tabs = await page.evaluate<string[]>(`[...document.querySelectorAll('[data-admin-tab]')].map((b) => b.getAttribute('data-admin-tab'))`)
+      expect(tabs.length, p.label).toBeGreaterThan(0)
+      // 団体設定のタブは、団体のルール・ロゴを変えられる人と代表だけ
+      expect(tabs.includes('orgSettings'), p.label + ' の団体設定のタブ').toBe(p.caps.includes('org.rules') || p.caps.includes('org.logo'))
+      for (const tab of tabs) {
+        await page.evaluate(`document.querySelector('[data-admin-tab="${tab}"]').click(); true`)
+        await sleep(700)
+        seen.push(...(await shownActions()))
+      }
+    } else {
+      expect(await text()).not.toContain('ADMIN')
+    }
+    const body = genericBody(p.email)
+    // 出ている操作: そのまとまりを持っていて、GAS で通る
+    for (const s of seen) {
+      const cap = capabilityOfAction(s.action)
+      if (cap) expect(p.caps, `${p.label}: ${s.action} が出ている`).toContain(cap)
+      else expect((TOP_ONLY_ACTIONS as readonly string[]).includes(s.action) && p.caps.length === ALL_CAPS.length, `${p.label}: ${s.action}`).toBe(true)
+      if (s.action === 'updateRole') {
+        expect(s.memberId, 'updateRole の部品にはメンバーの ID').toBeTruthy()
+        for (const role of s.options) expect(gasAllows(p.email, 'updateRole', { memberId: s.memberId, role }), `${p.label}: ${s.memberId} を ${role} に`).toBe(true)
+      } else {
+        expect(gasAllows(p.email, s.action, body), `${p.label}: ${s.action}`).toBe(true)
+      }
+    }
+    // 出ていない操作: 持っていないまとまりの操作は、部品が無く、GAS でも断られる
+    for (const cap of CAPABILITY_KEYS.filter((c) => !p.caps.includes(c))) {
+      for (const action of CAPABILITY_ACTIONS[cap]) {
+        expect(seen.some((s) => s.action === action), `${p.label}: ${action} の部品が出ている`).toBe(false)
+        expect(gasAllows(p.email, action, body), `${p.label}: ${action} が GAS で通ってしまう`).toBe(false)
+      }
+    }
+    // 渡せない操作(代表だけ)は、代表でなければ GAS で断られる
+    if (p.caps.length !== ALL_CAPS.length) {
+      for (const action of [...TOP_ONLY_ACTIONS, 'listBackups', 'restoreBackup', 'purgePersonalDataNow', 'getUsageStatus', 'getMetricsStatus', 'getDiagnostics']) {
+        expect(gasAllows(p.email, action, body), `${p.label}: ${action}`).toBe(false)
+      }
+    }
+    // 空振りでないこと: できる人には、その操作の部品が実際に出ている
+    const shownSet = new Set(seen.map((x) => x.action))
+    if (p.caps.includes('org.rules')) expect(shownSet.has('updateSetting'), p.label + ': 団体の設定の部品').toBe(true)
+    if (p.caps.includes('members.add')) expect(shownSet.has('addMember'), p.label + ': メンバーの登録').toBe(true)
+    if (p.caps.includes('members.remove')) expect(shownSet.has('removeMember'), p.label + ': 退会').toBe(true)
+    if (p.caps.includes('members.hr')) expect(shownSet.has('updateReportsTo'), p.label + ': 報告先').toBe(true)
+    if (p.caps.includes('trash')) expect(shownSet.has('updateRoles') || shownSet.has('updateSetting'), p.label).toBe(true)
+    // members.role を渡した管理者: 役職の選択が出ていて、選べる役職だけが並ぶ(最上位・自分・代表の行は選べない)
+    if (p.email === 'hr@a.example') {
+      const selects = seen.filter((s) => s.action === 'updateRole')
+      expect(selects.length).toBeGreaterThan(0)
+      expect(selects.some((s) => s.memberId === memberIdOf('top@a.example')), '代表の役職の選択').toBe(false)
+      expect(selects.some((s) => s.memberId === memberIdOf('hr@a.example')), '自分の役職の選択').toBe(false)
+      for (const s of selects) expect(s.options, '最上位の役職を選べない').not.toContain('top')
+    }
   })
 })

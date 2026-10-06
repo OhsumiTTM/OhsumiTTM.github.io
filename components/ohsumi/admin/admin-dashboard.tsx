@@ -37,6 +37,7 @@ export function AdminDashboard() {
     getProject,
     currentUser,
     updateProjectHealth,
+    can,
     triggerOverdueReminders,
     awardSkillPoints,
     assignTask,
@@ -428,9 +429,11 @@ export function AdminDashboard() {
                           {h.health === 'good' ? tr('admin.dashboard.health.good') : h.health === 'watch' ? tr('admin.dashboard.health.watch') : tr('admin.dashboard.health.attention')}
                           {h.isOverridden && ` (${tr('admin.dashboard.health.overriddenSuffix')})`}
                         </span>
-                        {isFullAdmin && (
+                        {/* 状況の上書き(updateProjectHealth)は団体のルール(org.rules) */}
+                        {isFullAdmin && can('org.rules') && (
                           <select
                             value={h.project.healthOverride ?? ''}
+                            data-gas-action="updateProjectHealth"
                             onChange={(e) => {
                               const v = e.target.value
                               updateProjectHealth(h.project.id, v ? (v as 'good' | 'watch' | 'attention') : null)

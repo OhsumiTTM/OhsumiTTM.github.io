@@ -1,7 +1,7 @@
 // 役職の一覧と判定。
 //
 // 役職は Settings の roles(JSON)に、上下関係の順(一般 → … → 最上位)で持つ。
-//   { id, name, tier: 'top' | 'admin' | 'base', restricted?, sections?, requiredSkills? }
+//   { id, name, tier: 'top' | 'admin' | 'base', restricted?, sections?, requiredSkills?, capabilities? }
 // - tier: top = 最上位(代表専用の操作ができる)、admin = 管理者、base = 一般(1つだけ)
 // - restricted: 制限付きの管理者(sections の管理画面だけ見える)。false なら全権管理者
 //
@@ -12,6 +12,8 @@
 //
 // gas/Code.gs にも同じ関数がある(一致することを lib/ohsumi/roles.test.ts で確かめる)。
 import { DEFAULT_NON_TOP_SECTIONS, type AdminSection } from './types'
+import { CAPABILITY_KEYS, FULL_ADMIN_DEFAULT_CAPABILITIES, normalizeCapabilities, type Capability } from './capabilities'
+import type { PermissionOverride } from './types'
 
 export type RoleTier = 'top' | 'admin' | 'base'
 
@@ -25,6 +27,8 @@ export interface RoleDef {
   sections?: AdminSection[]
   // この役職に求めるスキル(人材DB の「職務要件」)
   requiredSkills?: string[]
+  // できる操作(capabilities.ts。管理者の役職だけ)。未設定なら既定(制限なし: org.rules・trash、制限あり: なし)
+  capabilities?: Capability[]
 }
 
 export const TOP_ROLE_ID = 'top'
@@ -120,6 +124,8 @@ export function parseRolesSetting(value: string | undefined): RoleDef[] | null {
     if (sections) role.sections = sections as AdminSection[]
     const skills = stringArray(o.requiredSkills)
     if (skills) role.requiredSkills = skills
+    const caps = stringArray(o.capabilities)
+    if (caps && tier === 'admin') role.capabilities = normalizeCapabilities(caps)
     roles.push(role)
   }
   return validateRoles(roles).length === 0 ? roles : null
@@ -225,4 +231,61 @@ export function withMemberRoles(roles: RoleDef[], memberRoles: string[]): RoleDe
     extra.push({ id: v, name: v, tier: 'admin', restricted: false })
   }
   return extra.length ? [...roles, ...extra] : roles
+}
+
+// ---- できる操作(capabilities.ts)。gas/src/38-capabilities.gs と同じ ----------------------
+
+// 役職のできる操作(人ごとの例外は含まない)。最上位はすべて、一般はなし。
+// 管理者で書いていなければ既定(制限なし: org.rules・trash、制限あり: なし)。一覧に無い役職は制限なしの管理者
+export function roleCapabilities(roles: RoleDef[], ref: string | null | undefined): Capability[] {
+  const tier = roleTier(roles, ref)
+  if (tier === 'top') return [...CAPABILITY_KEYS]
+  if (tier === 'base') return []
+  const role = findRole(roles, ref)
+  if (role && Array.isArray(role.capabilities)) return normalizeCapabilities(role.capabilities)
+  return role?.restricted ? [] : normalizeCapabilities(FULL_ADMIN_DEFAULT_CAPABILITIES)
+}
+
+// 役職に書いたできる操作が既定と同じか(同じなら書かずに既定のままにする)
+export function defaultRoleCapabilities(role: Pick<RoleDef, 'tier' | 'restricted'>): Capability[] {
+  return roleCapabilities([{ id: '_', name: '_', tier: role.tier, restricted: role.restricted }], '_')
+}
+
+// ログインした人のできる操作。役職の分と、人ごとの採用の例外(編集以上)の分
+export function memberCapabilities(
+  roles: RoleDef[],
+  roleRef: string | null | undefined,
+  overrides: readonly PermissionOverride[] | undefined,
+): Capability[] {
+  const caps = roleCapabilities(roles, roleRef)
+  const recruiting = (overrides ?? []).some((o) => o?.targetType === 'recruiting' && (o.access === 'edit' || o.access === 'approve'))
+  return recruiting && !caps.includes('recruiting') ? normalizeCapabilities([...caps, 'recruiting']) : caps
+}
+
+export type RoleAssignBlock = 'self' | 'targetTop' | 'targetStronger' | 'unknownRole' | 'topRole' | 'strongerRole'
+
+// 最上位でない人が役職を付ける時の決まり(GAS の assertRoleAssignable_ と同じ)。付けられなければその理由。
+// targetRole は役職を変える相手の今の役職(登録の時は undefined)
+export function roleAssignBlock(
+  roles: RoleDef[],
+  acting: { id: string; role: string | null | undefined },
+  roleRef: string | null | undefined,
+  target?: { id: string; role: string | null | undefined },
+): RoleAssignBlock | null {
+  if (isTopRoleRef(roles, acting.role)) return null
+  const actorCaps = roleCapabilities(roles, acting.role)
+  const actorFull = isFullAdminRoleRef(roles, acting.role)
+  const containsAll = (need: Capability[]) => need.every((c) => actorCaps.includes(c))
+  if (target) {
+    if (target.id === acting.id) return 'self'
+    if (isTopRoleRef(roles, target.role)) return 'targetTop'
+    if (!containsAll(roleCapabilities(roles, target.role)) || (!actorFull && isFullAdminRoleRef(roles, target.role))) return 'targetStronger'
+  }
+  const ref = String(roleRef ?? '').trim()
+  if (!ref) return null
+  const role = findRole(roles, ref)
+  if (!role) return 'unknownRole'
+  if (role.tier === 'top') return 'topRole'
+  if (!containsAll(roleCapabilities(roles, role.id)) || (!actorFull && isFullAdminRoleRef(roles, role.id))) return 'strongerRole'
+  return null
 }

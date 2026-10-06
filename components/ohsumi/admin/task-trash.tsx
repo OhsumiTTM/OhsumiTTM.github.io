@@ -1,6 +1,6 @@
 'use client'
 
-// タスクのゴミ箱(代表・全権管理者だけ)。削除したタスクは30日間ここに残り、元に戻す・すぐに完全に消すことができる
+// タスクのゴミ箱(できる操作 trash の人だけ)。削除したタスクは30日間ここに残り、元に戻す・すぐに完全に消すことができる
 // (GAS の removeTask・restoreTask・purgeTask。30日たったものは GAS の毎日の処理が消す)
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -19,11 +19,12 @@ function daysLeft(deletedAt: string | undefined, now: number): number {
 }
 
 export function TaskTrash() {
-  const { trashedTasks, restoreTask, purgeTask, getProject, getMember, isFullAdmin } = useOhsumi()
+  const { trashedTasks, restoreTask, purgeTask, getProject, getMember, can } = useOhsumi()
   const { t } = useI18n()
   const toast = useToast()
   const [purging, setPurging] = useState<Task | null>(null)
-  if (!isFullAdmin) return null
+  // ゴミ箱(元に戻す・完全に消す)は、できる操作 trash の人だけ(既定は代表・制限なしの管理者)
+  if (!can('trash')) return null
   const now = Date.now()
   const sorted = [...trashedTasks].sort((a, b) => String(b.deletedAt ?? '').localeCompare(String(a.deletedAt ?? '')))
 
@@ -47,6 +48,7 @@ export function TaskTrash() {
               <Button
                 size="sm"
                 variant="outline"
+                data-gas-action="restoreTask"
                 onClick={() => {
                   restoreTask(task.id)
                   toast(t('admin.trash.restored', { name: task.name }))
@@ -54,7 +56,7 @@ export function TaskTrash() {
               >
                 {t('admin.trash.restore')}
               </Button>
-              <Button size="sm" variant="outline" className="text-destructive" onClick={() => setPurging(task)}>
+              <Button size="sm" variant="outline" className="text-destructive" onClick={() => setPurging(task)} data-gas-action="purgeTask">
                 {t('admin.trash.purge')}
               </Button>
             </div>

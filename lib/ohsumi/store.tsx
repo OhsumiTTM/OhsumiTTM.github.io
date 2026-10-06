@@ -93,8 +93,11 @@ import {
   rolesToLegacySettings,
   sameRole,
   withMemberRoles,
+  memberCapabilities,
+  roleCapabilities,
   type RoleDef,
 } from './roles'
+import { normalizeCapabilities, type Capability } from './capabilities'
 import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
@@ -259,7 +262,8 @@ interface OhsumiContextValue extends OhsumiState {
   baseRoleId: string
   // 一般より上の役職の ID(上下関係の順)
   roleLevels: string[]
-  addRoleLevel: (name: string) => void
+  // 役職を足す(既定は制限なしの管理者)。最上位でない人は、制限・できる操作を自分の範囲にして足す(admin-tags.tsx)
+  addRoleLevel: (name: string, opts?: { restricted?: boolean; capabilities?: Capability[] }) => void
   // 役職を削除する。使っているメンバーは moveToRoleId の役職に移す
   removeRoleLevel: (roleId: string, moveToRoleId?: string) => void
   reorderRoleLevel: (roleId: string, direction: 'up' | 'down') => void
@@ -271,6 +275,13 @@ interface OhsumiContextValue extends OhsumiState {
   // 制限付きの管理者が見られる管理画面のセクション(役職の ID → セクション)
   rolePermissions: Record<string, AdminSection[]>
   setRolePermissions: (roleId: string, sections: AdminSection[]) => void
+  // 役職のできる操作(capabilities.ts。書いていなければ既定)。変えられるのは最上位の役職の人だけ
+  roleCapabilitiesOf: (roleId: string) => Capability[]
+  setRoleCapabilities: (roleId: string, capabilities: Capability[]) => void
+  // ログインした人のできる操作。GAS が起動時のデータで渡した一覧(画面だけで動く時は同じ計算)。
+  // 「代表だけ」「全権管理者だけ」だった操作の部品は、これだけを見て出す
+  capabilities: Capability[]
+  can: (capability: Capability) => boolean
   // 役職の判定(ID・名前のどちらでも)
   isAdminRef: (ref: string | null | undefined) => boolean
   isTopRef: (ref: string | null | undefined) => boolean
@@ -1282,6 +1293,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   // 最後に読み込んだデータの版(getInitialData の knownVersion に使う)
   const dataVersionRef = useRef<string | undefined>(undefined)
+  // GAS が渡した、ログインした人のできる操作(版が同じで中身を省いた応答では来ないので、前の一覧を使い続ける)
+  const [serverCapabilities, setServerCapabilities] = useState<Capability[] | null>(null)
   const applyInitialData = useCallback(
     (res: InitialData) => {
       if (res.data) {
@@ -1292,6 +1305,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         setTrashedTasks(all.filter((t) => t.deletedAt))
       }
       if (res.settings) applySettings(res.settings)
+      if (res.capabilities) setServerCapabilities(res.capabilities)
       if (res.version) dataVersionRef.current = res.version
     },
     [applyLocalApprovalOverrides, applySettings],
@@ -2625,6 +2639,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setCustomFormSubmissions([])
       setInputs(SEED_INPUTS)
       dataVersionRef.current = undefined
+      setServerCapabilities(null)
       setRemoteStatus('idle')
       setSettingsReady(false)
     }
@@ -2732,11 +2747,12 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const addRoleLevel = useCallback(
-    (name: string) => {
+    (name: string, opts?: { restricted?: boolean; capabilities?: Capability[] }) => {
       const v = name.trim()
       if (!v || roles.some((r) => r.name === v || r.id === v)) return
       // 移行前は役職名が ID を兼ねる
-      const role: RoleDef = { id: rolesFromSetting ? newRoleId() : v, name: v, tier: 'admin', restricted: false }
+      const role: RoleDef = { id: rolesFromSetting ? newRoleId() : v, name: v, tier: 'admin', restricted: opts?.restricted ?? false }
+      if (opts?.capabilities) role.capabilities = normalizeCapabilities(opts.capabilities)
       saveRoles([...roles, role])
     },
     [roles, rolesFromSetting, saveRoles],
@@ -2794,6 +2810,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     // 新しい形の印を付けて保存する(次に読む時に、以前のキーとして読み替えないように)
     (roleId: string, sections: AdminSection[]) => updateRoleDef(roleId, { sections: sectionsForSave(sections) as AdminSection[] }),
     [updateRoleDef],
+  )
+  const roleCapabilitiesOf = useCallback((roleId: string) => roleCapabilities(roles, roleId), [roles])
+  const setRoleCapabilities = useCallback(
+    // 管理者の役職だけ(最上位はいつもすべて、一般には渡さない)。GAS は最上位の役職の人の保存だけ受け付ける
+    (roleId: string, capabilities: Capability[]) => {
+      const role = roles.find((r) => r.id === roleId)
+      if (!role || role.tier !== 'admin') return
+      updateRoleDef(roleId, { capabilities: normalizeCapabilities(capabilities) })
+    },
+    [roles, updateRoleDef],
   )
 
   // ---- 部門 ----
@@ -5001,6 +5027,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
   const isFullAdmin = useMemo(() => isFullAdminMember(currentUser), [isFullAdminMember, currentUser])
 
+  // できる操作。GAS とつながっている時は、GAS が起動時のデータで渡した一覧だけを使う(まだ無ければ何もできない)。
+  // 画面だけで動く時(デモ)は、GAS と同じ計算(roles.ts の memberCapabilities)
+  const capabilities = useMemo<Capability[]>(() => {
+    if (!currentUser) return []
+    if (isRemoteConfigured) return serverCapabilities ?? []
+    return memberCapabilities(roles, currentUser.role, currentUser.permissionOverrides)
+  }, [currentUser, roles, serverCapabilities])
+  const can = useCallback((capability: Capability) => capabilities.includes(capability), [capabilities])
+
   // which admin-screen sections the current role can see — falls back to
   // DEFAULT_NON_TOP_SECTIONS when no explicit choice was configured
   const visibleAdminSections = useMemo<AdminSection[]>(
@@ -5540,6 +5575,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateEmail,
     updateMemberProjects,
     isFullAdmin,
+    capabilities,
+    can,
+    roleCapabilitiesOf,
+    setRoleCapabilities,
     adminProjects,
     adminTasks,
     adminPendingTasks,

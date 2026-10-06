@@ -33,6 +33,7 @@ export function ParsedTaskCard({
     categoryOptions,
     addSkillOption,
     addCategoryOption,
+    can,
   } = useOhsumi()
   const { t } = useI18n()
   const [skillDraft, setSkillDraft] = useState('')
@@ -87,7 +88,8 @@ export function ParsedTaskCard({
   const addSkill = () => {
     const v = skillDraft.trim()
     if (v) {
-      addSkillOption(v)
+      // 団体のスキルの選択肢に足すのは、団体のルール(org.rules)の人だけ。ほかの人はこのタスクにだけ付ける
+      if (can('org.rules')) addSkillOption(v)
       if (!task.skills.includes(v)) set('skills', [...task.skills, v])
     }
     setSkillDraft('')
@@ -105,7 +107,7 @@ export function ParsedTaskCard({
   const commitNewCategory = () => {
     const v = categoryDraft.trim()
     if (v) {
-      addCategoryOption(v)
+      if (can('org.rules')) addCategoryOption(v)
       set('category', v)
     }
     setCategoryDraft('')

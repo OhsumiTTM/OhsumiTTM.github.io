@@ -5,6 +5,7 @@
 //   - スキルごと: そのスキルだけの決まり(使わなければ団体の既定)
 // 条件: 関連する資格の件数(外部評価だけを数えることもできる)・検定の合格・完了したタスクの数
 // 保存されたレベルは下げない(決め方を変えても、上がった人はそのまま)
+import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -70,7 +71,9 @@ export function ruleFromRows(rows: Row[]): { rule?: SkillRule; error?: string } 
 
 export function SkillLevelRulesEditor() {
   const { t } = useI18n()
-  const { skillOptions, skillLevelRules, updateSkillLevelRules } = useOhsumi()
+  const { skillOptions, skillLevelRules, updateSkillLevelRules, can } = useOhsumi()
+  // レベルの決め方は団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ
+  const canEdit = can('org.rules')
   const [target, setTarget] = useState(DEFAULT_TARGET)
   const [rows, setRows] = useState<Row[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -162,7 +165,8 @@ export function SkillLevelRulesEditor() {
         ))}
       </div>
       {error && <p className="mt-2 text-xs break-words text-destructive">{error}</p>}
-      <div className="mt-3 flex flex-wrap gap-2">
+      <CapabilityNote cap="org.rules" className="mt-3" />
+      {canEdit && <div className="mt-3 flex flex-wrap gap-2" data-gas-action="updateSetting">
         {editing ? (
           <>
             <Button size="sm" onClick={save}>{t('common.save')}</Button>
@@ -174,7 +178,7 @@ export function SkillLevelRulesEditor() {
         {!editing && own && (
           <Button size="sm" variant="ghost" onClick={reset}>{t(isDefault ? 'admin.skillRules.resetDefault' : 'admin.skillRules.resetSkill')}</Button>
         )}
-      </div>
+      </div>}
     </div>
   )
 }

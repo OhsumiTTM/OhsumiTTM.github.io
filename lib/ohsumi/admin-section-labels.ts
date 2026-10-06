@@ -1,4 +1,5 @@
 // 管理画面のタブ・グループの名前と説明の翻訳キー(lib/ohsumi/i18n の admin.section.* / admin.group.*)
+import type { Capability } from './capabilities'
 import type { AdminGroupKey } from './admin-sections'
 import type { TranslationKey } from './i18n'
 import type { AdminSection } from './types'
@@ -13,4 +14,9 @@ export function adminSectionDescKey(section: AdminSection): TranslationKey {
 
 export function adminGroupTitleKey(group: AdminGroupKey): TranslationKey {
   return `admin.group.${group}` as TranslationKey
+}
+
+// できる操作(capabilities.ts)の名前
+export function capabilityLabelKey(cap: Capability): TranslationKey {
+  return `capability.${cap}` as TranslationKey
 }

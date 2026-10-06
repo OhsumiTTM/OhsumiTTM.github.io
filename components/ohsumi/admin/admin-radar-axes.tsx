@@ -8,12 +8,14 @@ import { Plus, Trash2, Radar, Users } from 'lucide-react'
 import type { RadarAxis } from '@/lib/ohsumi/types'
 import { computeTeamRadarValues, isActiveMember } from '@/lib/ohsumi/utils'
 import { SkillRadarChart } from '@/components/ohsumi/skill-radar-chart'
-import { AdminAccessNote, Avatar } from '@/components/ohsumi/primitives'
+import { CapabilityNote, Avatar } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
 
 // レーダーの軸(part='axes'。「スキルの決まり」のタブ)と、チームレーダーチャート(part='team'。「分析」のタブ)
 export function AdminRadarAxes({ part }: { part: 'axes' | 'team' }) {
-  const { radarAxes, updateRadarAxes, skillOptions, members, currentUser, projects, getProjectMembers } = useOhsumi()
+  const { radarAxes, updateRadarAxes, skillOptions, members, currentUser, projects, getProjectMembers, can } = useOhsumi()
+  // レーダーの軸は団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ
+  const canEdit = can('org.rules')
   const toast = useToast()
   const { t } = useI18n()
   const [axes, setAxes] = useState<RadarAxis[]>(radarAxes)
@@ -91,7 +93,7 @@ export function AdminRadarAxes({ part }: { part: 'axes' | 'team' }) {
         <p className="text-xs text-muted-foreground">
           {t('admin.radarAxes.subtitle')}
         </p>
-        <AdminAccessNote level="fullAdmin" className="mt-1" />
+        <CapabilityNote cap="org.rules" className="mt-1" />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -111,19 +113,23 @@ export function AdminRadarAxes({ part }: { part: 'axes' | 'team' }) {
                     {ax.label && (
                       <span className="text-xs text-muted-foreground">{t('admin.radarAxes.displayNameLabel', { label: ax.label })}</span>
                     )}
-                    <button
-                      onClick={() => removeAxis(i)}
-                      className="shrink-0 text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        onClick={() => removeAxis(i)}
+                        aria-label={t('common.delete')}
+                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
           </div>
 
-          <div className="rounded-lg border border-border bg-card p-3">
+          {canEdit && (<>
+          <div className="rounded-lg border border-border bg-card p-3" data-gas-action="updateSetting">
             <p className="mb-2 text-xs font-medium text-muted-foreground">{t('admin.radarAxes.addAxis')}</p>
             <div className="flex flex-wrap gap-2">
               <select
@@ -164,6 +170,7 @@ export function AdminRadarAxes({ part }: { part: 'axes' | 'team' }) {
               {t('common.save')}
             </Button>
           </div>
+          </>)}
         </div>
 
         {/* Preview */}

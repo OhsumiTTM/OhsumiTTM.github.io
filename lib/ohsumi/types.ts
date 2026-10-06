@@ -47,7 +47,7 @@ export type AdminSection =
   | 'forms'
   | 'dailyReports'
   // 設定
-  | 'orgSettings' // 団体設定(全権管理者だけ)
+  | 'orgSettings' // 団体設定(団体のルール・ロゴを変えられる人と代表だけ。use-capabilities.ts)
 
 // 役職ごとに見られるタブ(roles の sections)で選べるタブ(採用は別の決まりなので含めない)
 export const ADMIN_SECTIONS: { key: AdminSection }[] = ([

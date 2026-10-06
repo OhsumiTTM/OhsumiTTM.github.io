@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { isRemoteConfigured as remoteConfigured } from '@/lib/ohsumi/remote'
 import { useToast } from '@/components/ohsumi/toast'
-import { Tag, SectionLabel, AdminAccessNote, StoredImage } from '@/components/ohsumi/primitives'
+import { Tag, SectionLabel, CapabilityNote, StoredImage } from '@/components/ohsumi/primitives'
 import { AdminToc } from '@/components/ohsumi/admin/admin-page'
 import { NotifySettingsEditor } from '@/components/ohsumi/admin/admin-tags'
 import { Button } from '@/components/ui/button'
@@ -48,13 +48,16 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
     orgNotificationEmails,
     addOrgNotificationEmail,
     removeOrgNotificationEmail,
-    isFullAdmin,
     refreshWebhookStatus,
     isTopRef,
     currentUser,
+    can,
   } = useOhsumi()
-  // バックアップから戻すのは代表だけ(gas/Code.gs の authorizeAction_)
+  // バックアップ・個人情報の削除・利用の状況・集計値・診断情報は代表だけ(どの設定でも渡さない)
   const isDaihyo = isTopRef(currentUser?.role)
+  // 団体名・ロゴの URL・テーマの色・通知先・Webhook は団体のルール(org.rules)、ロゴのアップロードは org.logo
+  const canRules = can('org.rules')
+  const canLogo = can('org.logo')
   const toast = useToast()
   const { t } = useI18n()
 
@@ -64,8 +67,8 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
   const [orgEmailDraft, setOrgEmailDraft] = useState('')
   // Discord / Slack の連携状態を取得する(URL そのものは GAS から返らない)
   useEffect(() => {
-    void refreshWebhookStatus()
-  }, [refreshWebhookStatus])
+    if (canRules) void refreshWebhookStatus()
+  }, [refreshWebhookStatus, canRules])
 
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const logoFileRef = useRef<HTMLInputElement>(null)
@@ -91,9 +94,9 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
           items={[
             { id: 'org-name-logo', label: t('orgSettings.nameLogo.label') },
             { id: 'org-theme', label: t('orgSettings.themeColor.label') },
-            ...(isFullAdmin ? [{ id: 'org-email', label: t('orgSettings.email.label') }] : []),
+            ...(canRules ? [{ id: 'org-email', label: t('orgSettings.email.label') }] : []),
             { id: 'org-notify', label: t('admin.tags.notify.title') },
-            { id: 'org-webhooks', label: t('orgSettings.toc.webhooks') },
+            ...(canRules ? [{ id: 'org-webhooks', label: t('orgSettings.toc.webhooks') }] : []),
             ...(isDaihyo && remoteOk ? [
               { id: 'org-backup', label: t('orgSettings.toc.backup') },
               { id: 'org-personal-data', label: t('orgSettings.toc.personalData') },
@@ -114,7 +117,9 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
 
           <div className="mt-4">
             <label className="block text-xs font-medium text-muted-foreground">{t('orgSettings.nameLogo.nameLabel')}</label>
-            <div className="mt-1.5 flex gap-2">
+            <CapabilityNote cap="org.rules" className="mt-1.5" />
+            {!canRules && <p className="mt-1.5 text-sm font-medium">{orgName || '—'}</p>}
+            {canRules && <div className="mt-1.5 flex gap-2" data-gas-action="updateSetting">
               <input
                 value={orgNameDraft}
                 onChange={(e) => setOrgNameDraft(e.target.value)}
@@ -128,9 +133,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
               <Button size="sm" onClick={() => { setOrgName(orgNameDraft.trim()); toast(t('orgSettings.nameLogo.savedToast')) }}>
                 {t('orgSettings.nameLogo.save')}
               </Button>
-            </div>
-            {/* setOrgNameはupdateSetting経由・isActingFullAdmin基準 */}
-            <AdminAccessNote level="fullAdmin" className="mt-1.5" />
+            </div>}
           </div>
 
           <div className="mt-4">
@@ -162,20 +165,23 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
               {orgLogoUrl && (
                 <StoredImage url={orgLogoUrl} alt={t('orgSettings.nameLogo.altText')} className="h-10 w-10 rounded-md border border-border object-contain" />
               )}
-              <input
-                value={orgLogoUrl}
-                onChange={(e) => setOrgLogoUrl(e.target.value)}
-                placeholder={t('orgSettings.nameLogo.urlPlaceholder')}
-                className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-primary"
-              />
-              {driveEnabled && (
-                <Button size="sm" variant="outline" disabled={uploadingLogo} onClick={() => logoFileRef.current?.click()} className="gap-1.5">
+              {canRules && (
+                <input
+                  value={orgLogoUrl}
+                  onChange={(e) => setOrgLogoUrl(e.target.value)}
+                  data-gas-action="updateSetting"
+                  placeholder={t('orgSettings.nameLogo.urlPlaceholder')}
+                  className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-xs outline-none focus:border-primary"
+                />
+              )}
+              {driveEnabled && canLogo && (
+                <Button size="sm" variant="outline" disabled={uploadingLogo} onClick={() => logoFileRef.current?.click()} className="gap-1.5" data-gas-action="uploadOrgLogo">
                   {uploadingLogo ? <Loader2 className="size-3.5 animate-spin" /> : <ImageUp className="size-3.5" />}
                   {t('orgSettings.nameLogo.upload')}
                 </Button>
               )}
-              {orgLogoUrl && (
-                <button type="button" onClick={() => setOrgLogoUrl('')} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive">
+              {orgLogoUrl && canRules && (
+                <button type="button" onClick={() => setOrgLogoUrl('')} data-gas-action="updateSetting" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive">
                   <X className="size-3.5" />{t('orgSettings.nameLogo.remove')}
                 </button>
               )}
@@ -183,14 +189,12 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
             <p className="mt-1 text-xs text-muted-foreground">
               {t('orgSettings.nameLogo.hint')}
             </p>
-            {/* uploadOrgLogoはGAS側で常にisDaihyo固定（このページ自体は
-                header.tsxでisFullAdmin配下にのみ表示されるため、代表以外の
-                全権管理者にもボタンが見えてしまう） */}
-            {driveEnabled && <AdminAccessNote level="daihyo" className="mt-1.5" />}
+            {/* ロゴのアップロードは、できる操作 org.logo の人だけ(既定は代表だけ) */}
+            {driveEnabled && <CapabilityNote cap="org.logo" className="mt-1.5" />}
           </div>
         </Section>
 
-        <Section>
+        <Section id="org-theme">
           <div className="flex items-center gap-1.5">
             <Palette className="size-4 text-muted-foreground" />
             <SectionLabel>{t('orgSettings.themeColor.label')}</SectionLabel>
@@ -198,7 +202,13 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
           <p className="mt-1 text-xs text-muted-foreground">
             {t('orgSettings.themeColor.desc')}
           </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          {!canRules && (
+            <p className="mt-3 flex items-center gap-2 text-sm">
+              <span className="inline-block size-5 rounded border border-border" style={{ backgroundColor: themeColor || '#2948e8' }} />
+              {themeColor || '—'}
+            </p>
+          )}
+          {canRules && <div className="mt-3 flex flex-wrap items-center gap-2" data-gas-action="updateSetting">
             <input
               type="color"
               value={themeColorValid ? themeColorDraft : '#2948e8'}
@@ -227,16 +237,15 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
                 <X className="size-3.5" />{t('orgSettings.themeColor.reset')}
               </button>
             )}
-          </div>
-          {themeColorDraft.trim() !== '' && !themeColorValid && (
+          </div>}
+          {canRules && themeColorDraft.trim() !== '' && !themeColorValid && (
             <p className="mt-1.5 text-xs text-destructive">{t('orgSettings.themeColor.invalidHint')}</p>
           )}
-          {/* setThemeColorはupdateSetting経由・isActingFullAdmin基準 */}
-          <AdminAccessNote level="fullAdmin" className="mt-1.5" />
+          <CapabilityNote cap="org.rules" className="mt-1.5" />
         </Section>
 
-        {isFullAdmin && (
-          <Section>
+        {canRules && (
+          <Section id="org-email">
             <div className="flex items-center gap-1.5">
               <Mail className="size-4 text-muted-foreground" />
               <SectionLabel>{t('orgSettings.email.label')}</SectionLabel>
@@ -255,7 +264,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
                 <p className="text-sm text-muted-foreground">{t('orgSettings.email.empty')}</p>
               )}
             </div>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex items-center gap-2" data-gas-action="updateSetting">
               <input
                 value={orgEmailDraft}
                 onChange={(e) => setOrgEmailDraft(e.target.value)}
@@ -276,38 +285,37 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
           <div className="mt-2"><NotifySettingsEditor /></div>
         </div>
 
-        <div id="org-webhooks" className="scroll-mt-20" />
-        <WebhookSection kind="discord" remoteOk={remoteOk} placeholder="https://discord.com/api/webhooks/..." />
-        <WebhookSection kind="slack" remoteOk={remoteOk} placeholder="https://hooks.slack.com/services/..." />
+        {canRules && (
+          <>
+            <div id="org-webhooks" className="scroll-mt-20" />
+            <WebhookSection kind="discord" remoteOk={remoteOk} placeholder="https://discord.com/api/webhooks/..." />
+            <WebhookSection kind="slack" remoteOk={remoteOk} placeholder="https://hooks.slack.com/services/..." />
+          </>
+        )}
 
         {isDaihyo && remoteOk && (
           <Section id="org-backup">
             <BackupPanel />
-            <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
           <Section id="org-personal-data">
             <PersonalDataPanel />
-            <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
           <Section id="org-usage">
             <UsagePanel />
-            <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
           <Section id="org-metrics">
             <MetricsPanel />
-            <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
         {isDaihyo && remoteOk && (
           <Section id="org-diagnostics">
             <DiagnosticsPanel />
-            <AdminAccessNote level="daihyo" className="mt-1.5" />
           </Section>
         )}
       </div>
@@ -431,8 +439,6 @@ function WebhookSection({
           </Button>
         </div>
       )}
-      {/* Webhook の設定・状態の取得は updateSetting 相当・isActingFullAdmin 基準 */}
-      <AdminAccessNote level="fullAdmin" className="mt-1.5" />
     </Section>
   )
 }

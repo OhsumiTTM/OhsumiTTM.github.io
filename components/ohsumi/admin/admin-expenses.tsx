@@ -7,7 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import type { ApprovalStep, ExpenseApplication, ExpenseCategory } from '@/lib/ohsumi/types'
 import { Plus, Trash2, CheckCircle, XCircle, ChevronDown, ChevronUp, Undo2 } from 'lucide-react'
 import { Modal } from '@/components/ohsumi/modal'
-import { AdminAccessNote } from '@/components/ohsumi/primitives'
+import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { useToast } from '@/components/ohsumi/toast'
 import { openStoredFile } from '@/lib/ohsumi/files'
 import { useI18n } from '@/lib/ohsumi/i18n'
@@ -433,6 +433,7 @@ export function AdminExpenses() {
     expenseCategories,
     expenseApplications,
     updateExpenseCategories,
+    can,
     approveExpenseStep,
     rejectExpense,
     returnExpense,
@@ -440,6 +441,7 @@ export function AdminExpenses() {
     roleLevels,
     getMember,
   } = useOhsumi()
+  const canEditCategories = can('org.rules')
 
   const { t } = useI18n()
   const [tab, setTab] = useState<'categories' | 'applications'>('applications')
@@ -525,13 +527,17 @@ export function AdminExpenses() {
 
       {tab === 'categories' && (
         <div className="space-y-3">
-          <AdminAccessNote level="fullAdmin" />
-          <button
-            onClick={() => setEditingCategory('new')}
-            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
-          >
-            <Plus className="size-4" /> {t('admin.expenses.addCategory')}
-          </button>
+          {/* 経費のカテゴリは団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ */}
+          <CapabilityNote cap="org.rules" />
+          {canEditCategories && (
+            <button
+              onClick={() => setEditingCategory('new')}
+              data-gas-action="updateSetting"
+              className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm hover:bg-accent"
+            >
+              <Plus className="size-4" /> {t('admin.expenses.addCategory')}
+            </button>
+          )}
           {expenseCategories.length === 0 && (
             <div className="py-8 text-center text-sm text-muted-foreground">
               {t('admin.expenses.noCategories')}
@@ -545,26 +551,28 @@ export function AdminExpenses() {
                   {t('admin.expenses.approvalStepsCount', { count: cat.approvalSteps.length })}
                 </div>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setEditingCategory(cat)}
-                  className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
-                >
-                  {t('admin.expenses.edit')}
-                </button>
-                <button
-                  onClick={() => handleDeleteCategory(cat.id)}
-                  className="rounded-md border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-                >
-                  {t('admin.expenses.delete')}
-                </button>
-              </div>
+              {canEditCategories && (
+                <div className="flex gap-2" data-gas-action="updateSetting">
+                  <button
+                    onClick={() => setEditingCategory(cat)}
+                    className="rounded-md border border-border px-2 py-1 text-xs hover:bg-accent"
+                  >
+                    {t('admin.expenses.edit')}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteCategory(cat.id)}
+                    className="rounded-md border border-border px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    {t('admin.expenses.delete')}
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
 
-      {editingCategory && (
+      {editingCategory && canEditCategories && (
         <CategoryEditor
           initial={editingCategory === 'new' ? undefined : editingCategory}
           onSave={handleSaveCategory}

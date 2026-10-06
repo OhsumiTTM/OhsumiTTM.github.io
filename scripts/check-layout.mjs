@@ -264,6 +264,17 @@ async function launchChrome(chromePath) {
 
 // ---- サンプルのデータ(一般のメンバーが受け取る分) ----
 export function viewerData(memberId = MEMBER) {
+  const { ctx, snapshot } = sampleSnapshot()
+  return ctx.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), memberId)
+}
+
+// その人のできる操作(GAS が起動時のデータで画面に渡す一覧。gas/src/38-capabilities.gs)
+export function viewerCapabilities(memberId = MEMBER) {
+  const { ctx, snapshot } = sampleSnapshot()
+  return JSON.parse(JSON.stringify(ctx.memberCapabilitiesFromSnapshot_(snapshot, memberId)))
+}
+
+function sampleSnapshot() {
   const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
   const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } })
   vm.runInContext(code, ctx)
@@ -280,7 +291,7 @@ export function viewerData(memberId = MEMBER) {
     Tasks: table('Tasks', data.sheets.Tasks),
     Settings: { headers: ['key', 'value'], rows: Object.entries(settings).map(([k, v]) => [k, v]) },
   }
-  return ctx.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), memberId)
+  return { ctx, snapshot }
 }
 
 // ---- out/ の配信 ----
@@ -456,6 +467,7 @@ async function run({ build = true } = {}) {
   // 開いているメンバーと、そのメンバーが受け取るデータ(2回目は代表に切り替える)
   let member = MEMBER
   let view = viewerData(MEMBER)
+  let caps = viewerCapabilities(MEMBER)
   const server = await serve(join(ROOT, 'out'))
   const base = `http://127.0.0.1:${server.address().port}`
   const { chrome, targets } = await launchChrome(chromePath)
@@ -500,7 +512,7 @@ async function run({ build = true } = {}) {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view }
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
         case 'getMyEmails': return { email: 'member@example.com' }
         case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
@@ -671,6 +683,7 @@ async function run({ build = true } = {}) {
     member = pass.member
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: pass.dark ? 'dark' : 'light' }] })
     view = viewerData(pass.member)
+    caps = viewerCapabilities(pass.member)
     for (const step of pass.steps) {
       try {
         if (step.do === 'login') {

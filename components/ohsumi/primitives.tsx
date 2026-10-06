@@ -15,6 +15,8 @@ import {
 import type { Member, Department, Task } from '@/lib/ohsumi/types'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, departmentLabel } from '@/lib/ohsumi/i18n'
 import { useOhsumi } from '@/lib/ohsumi/store'
+import type { Capability } from '@/lib/ohsumi/capabilities'
+import { capabilityLabelKey } from '@/lib/ohsumi/admin-section-labels'
 import { useFileUrl } from '@/lib/ohsumi/files'
 
 export function Avatar({
@@ -242,23 +244,29 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
-// 権限モデル整理（gas/Code.gsのauthorizeAction）に合わせたUI注記。
-// 「画面は見えるが実行するとGAS側で拒否される」ケースを事前に示す。
-// - fullAdmin: updateSetting系(スキル/カテゴリ/役職レベル/団体名・ロゴURL
-//   テキスト入力/テーマカラー/Webhook URL等)。isActingFullAdmin基準なので
-//   restricted_rolesの設定次第でロールが変わる — 必ずisFullAdminを使う
-//   （role==='代表'固定にしないこと。事業責任者等もtrueになりうる）。
-// - daihyo: 常にisDaihyo固定のアクション（メンバー削除・ロール変更・
-//   権限例外編集・採用管理など）。isFullAdminとは無関係に代表のみ。
-export function AdminAccessNote({ level, className }: { level: 'fullAdmin' | 'daihyo'; className?: string }) {
-  const { isTopRef, isFullAdmin, currentUser } = useOhsumi()
+// できる操作(lib/ohsumi/capabilities.ts)が無い人に、押せない理由を1行で出す。
+// 操作の部品そのものは、各画面が can(まとまり) で出し分ける(出さない・押せないようにする)
+export function CapabilityNote({ cap, className }: { cap: Capability; className?: string }) {
+  const { can } = useOhsumi()
   const { t } = useI18n()
-  const blocked = level === 'fullAdmin' ? !isFullAdmin : !isTopRef(currentUser?.role)
-  if (!blocked) return null
+  if (can(cap)) return null
+  return (
+    <p className={cn('flex items-start gap-1.5 text-xs text-warning', className)} data-capability-note={cap}>
+      <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+      {t('admin.capabilityNote', { name: t(capabilityLabelKey(cap)) })}
+    </p>
+  )
+}
+
+// 代表(最上位の役職)だけの操作(どの設定でも渡さない: バックアップ・個人情報の削除・権限の例外の編集など)
+export function TopOnlyNote({ className }: { className?: string }) {
+  const { isTopRef, currentUser } = useOhsumi()
+  const { t } = useI18n()
+  if (isTopRef(currentUser?.role)) return null
   return (
     <p className={cn('flex items-start gap-1.5 text-xs text-warning', className)}>
       <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-      {level === 'fullAdmin' ? t('admin.accessNote.fullAdmin') : t('admin.accessNote.daihyo')}
+      {t('admin.accessNote.top')}
     </p>
   )
 }

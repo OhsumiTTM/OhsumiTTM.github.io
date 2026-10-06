@@ -171,7 +171,7 @@ function downloadCsv(filename: string, rows: string[][]) {
 // ---------- main component ----------
 
 export function AdminMemberDb() {
-  const { isAdminRef, isTopRef,
+  const { isAdminRef,
     members,
     skillOptions,
     visibleTasks,
@@ -184,6 +184,7 @@ export function AdminMemberDb() {
     adminProjects,
     customMemberColumns,
     updateCustomField,
+    can,
   } = useOhsumi()
   const roleName = useRoleLabel()
   const { t } = useI18n()
@@ -191,21 +192,22 @@ export function AdminMemberDb() {
   // true for any admin role (代表・班長 etc.), false for 一般
   const isAnyAdmin = !!(currentUser?.role) && isAdminRef(currentUser.role)
 
-  // updateJoinedAtはGAS側で常にisDaihyo固定。このテーブルはisAnyAdmin
-  // （代表以外の管理者ロールも含む）に編集可能な列として見えるため、
-  // セルクリックで編集を試みると代表以外は保存時にエラーになる
-  const isDaihyo = isTopRef(currentUser?.role)
+  // 所属開始日(updateJoinedAt)は、できる操作 members.hr の人だけが変えられる。無い人には編集できない列として出す
+  const canEditJoinedAt = can('members.hr')
 
   // Columns the current viewer is allowed to see/export — fixed cols +
   // dynamically-defined custom cols (Admin > Tags「カスタム項目」)
   const allCols = useMemo(() => {
     const cols = [...buildBaseCols(t, roleName), ...buildCustomCols(customMemberColumns), ...buildSkillCols(skillOptions)]
-    if (!isDaihyo) {
+    if (!canEditJoinedAt) {
       const joinedAtCol = cols.find((c) => c.key === 'joinedAt')
-      if (joinedAtCol) joinedAtCol.tooltip = t('admin.accessNote.daihyo')
+      if (joinedAtCol) {
+        joinedAtCol.editable = false
+        joinedAtCol.tooltip = t('admin.capabilityNote', { name: t('capability.members.hr') })
+      }
     }
     return cols
-  }, [t, customMemberColumns, skillOptions, isDaihyo])
+  }, [t, customMemberColumns, skillOptions, canEditJoinedAt])
   const allowedCols = useMemo(() => filterColsForViewer(allCols, isAnyAdmin), [allCols, isAnyAdmin])
 
   // Members scoped to this viewer's access:
@@ -279,7 +281,7 @@ export function AdminMemberDb() {
     if (colKey.startsWith(CUSTOM_COL_PREFIX)) {
       updateCustomField(memberId, colKey.slice(CUSTOM_COL_PREFIX.length), val)
     } else if (colKey === 'joinedAt') {
-      updateJoinedAt(memberId, val || null)
+      if (canEditJoinedAt) updateJoinedAt(memberId, val || null)
     } else if (colKey === 'careerAspiration' || colKey === 'desiredFutureRole') {
       updateCareerGoals(memberId, {
         careerAspiration: colKey === 'careerAspiration' ? val : (member.careerAspiration ?? ''),
@@ -300,7 +302,7 @@ export function AdminMemberDb() {
       }
     }
     setEditCell(null)
-  }, [members, updateCareerGoals, updateJoinedAt, updateCustomField, updateSkillLevels, bulkUpdateSkills])
+  }, [members, updateCareerGoals, updateJoinedAt, updateCustomField, updateSkillLevels, bulkUpdateSkills, canEditJoinedAt])
 
   // ---- member CSV export (uses viewer-scoped cols and members) ----
   const exportMemberCsv = () => {

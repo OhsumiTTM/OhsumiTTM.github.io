@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '@/components/ohsumi/toast'
 import { Modal } from '@/components/ohsumi/modal'
-import { AdminAccessNote } from '@/components/ohsumi/primitives'
+import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { Button } from '@/components/ui/button'
 import { Plus, Pencil, Trash2, GraduationCap } from 'lucide-react'
 import type { QuizDefinition, QuizQuestion, SkillLevelValue } from '@/lib/ohsumi/types'
@@ -214,7 +214,9 @@ function QuizEditor({ initial, skillOptions, onSave, onCancel }: QuizEditorProps
 }
 
 export function AdminQuiz() {
-  const { quizDefinitions, updateQuizDefinitions, skillOptions } = useOhsumi()
+  const { quizDefinitions, updateQuizDefinitions, skillOptions, can } = useOhsumi()
+  // 検定の定義は団体の設定(updateSetting)。団体のルール(org.rules)が無い人は見るだけ
+  const canEdit = can('org.rules')
   const toast = useToast()
   const { t } = useI18n()
   const [editorTarget, setEditorTarget] = useState<Partial<QuizDefinition> | null>(null)
@@ -248,11 +250,13 @@ export function AdminQuiz() {
           <p className="text-xs text-muted-foreground">
             {t('admin.quiz.subtitle')}
           </p>
-          <AdminAccessNote level="fullAdmin" className="mt-1" />
+          <CapabilityNote cap="org.rules" className="mt-1" />
         </div>
-        <Button onClick={openNew} size="sm">
-          <Plus className="mr-1.5 size-4" /> {t('admin.quiz.create')}
-        </Button>
+        {canEdit && (
+          <Button onClick={openNew} size="sm" data-gas-action="updateSetting">
+            <Plus className="mr-1.5 size-4" /> {t('admin.quiz.create')}
+          </Button>
+        )}
       </div>
 
       {quizDefinitions.length === 0 ? (
@@ -274,20 +278,22 @@ export function AdminQuiz() {
                   {quiz.targetSkill} → {t(LEVEL_KEY[quiz.targetLevel])} / {t('admin.quiz.meta', { passRate: quiz.passRate, count: quiz.questions.length })}
                 </div>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <button
-                  onClick={() => openEdit(quiz)}
-                  className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-                <button
-                  onClick={() => remove(quiz.id)}
-                  className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </div>
+              {canEdit && (
+                <div className="flex shrink-0 gap-1" data-gas-action="updateSetting">
+                  <button
+                    onClick={() => openEdit(quiz)}
+                    className="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => remove(quiz.id)}
+                    className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -297,7 +303,7 @@ export function AdminQuiz() {
         <div className="mb-4">
           <h3 className="font-semibold">{editorTarget?.id ? t('admin.quiz.editTitle') : t('admin.quiz.create')}</h3>
         </div>
-        {editorTarget && (
+        {editorTarget && canEdit && (
           <QuizEditor
             initial={editorTarget}
             skillOptions={skillOptions}

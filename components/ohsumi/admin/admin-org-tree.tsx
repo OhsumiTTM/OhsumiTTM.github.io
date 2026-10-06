@@ -399,7 +399,9 @@ function TreeNodeRow({
 }
 
 export function AdminOrgTree() {
-  const { members, departmentTreeConfig, updateDepartmentTreeConfig, updateMemberDepartmentPaths, isFullAdmin } = useOhsumi()
+  const { members, departmentTreeConfig, updateDepartmentTreeConfig, updateMemberDepartmentPaths, isFullAdmin, can } = useOhsumi()
+  // 部署のツリーの形(department_tree_config)は団体の設定(updateSetting)。団体のルール(org.rules)の人だけ
+  const canEditTree = can('org.rules')
   const { go } = useNav()
   const { t } = useI18n()
   const toast = useToast()
@@ -444,7 +446,7 @@ export function AdminOrgTree() {
     [members, selected],
   )
 
-  const editorModal = isFullAdmin && (
+  const editorModal = canEditTree && (
     <DepartmentTreeEditorModal
       open={editingTree}
       onClose={() => setEditingTree(false)}
@@ -460,8 +462,8 @@ export function AdminOrgTree() {
     return (
       <div>
         <div className="flex items-center justify-end gap-3">
-          {isFullAdmin && (
-            <Button variant="outline" size="sm" onClick={() => setEditingTree(true)}>
+          {canEditTree && (
+            <Button variant="outline" size="sm" onClick={() => setEditingTree(true)} data-gas-action="updateSetting">
               <Pencil className="size-4" />
               {t('admin.orgTree.editButton')}
             </Button>
@@ -483,8 +485,8 @@ export function AdminOrgTree() {
             {t('admin.orgTree.subtitle')}
           </p>
         </div>
-        {isFullAdmin && (
-          <Button variant="outline" size="sm" onClick={() => setEditingTree(true)}>
+        {canEditTree && (
+          <Button variant="outline" size="sm" onClick={() => setEditingTree(true)} data-gas-action="updateSetting">
             <Pencil className="size-4" />
             {t('admin.orgTree.editButton')}
           </Button>
