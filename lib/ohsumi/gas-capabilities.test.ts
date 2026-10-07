@@ -139,7 +139,9 @@ describe.each(['codes', 'legacy'] as const)('既定のままの役職(%s)では�
           const before = outcome(() => gas.authorizeActionBefore_(actor, action, JSON.parse(JSON.stringify(body))))
           const after = outcome(() => gas.authorizeAction_(actor, action, JSON.parse(JSON.stringify(body))))
           compared++
-          if (before !== after) diffs.push(`${actor.id}(${actor.role}) ${action} ${JSON.stringify(body)}: ${before} → ${after}`)
+          // 意図して変えたもの: 担当者が「完了」を選べる(確認待ちに変わる。gas-done-review.test.ts)
+          const intended = action === 'updateTaskStatus' && (body as { status?: string }).status === 'done' && before === 'deny' && after === 'allow' && actor.id === 'm-base'
+          if (before !== after && !intended) diffs.push(`${actor.id}(${actor.role}) ${action} ${JSON.stringify(body)}: ${before} → ${after}`)
         }
       }
     }

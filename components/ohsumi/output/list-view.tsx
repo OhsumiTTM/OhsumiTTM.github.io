@@ -13,7 +13,8 @@ import { Avatar, DifficultyBadge, ProjectTag, DepartmentTag } from '@/components
 import { TranslatedText } from '@/components/ohsumi/translated-text'
 import type { TaskStatus } from '@/lib/ohsumi/types'
 import { Button } from '@/components/ui/button'
-import { allowedStatusOptions } from '@/lib/ohsumi/permissions'
+import { allowedStatusOptions, reviewTargets } from '@/lib/ohsumi/permissions'
+import { useToast } from '../toast'
 import { useI18n, STATUS_KEY, DEPARTMENT_KEY, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
 import { cn } from '@/lib/utils'
@@ -70,7 +71,8 @@ export function ListView({
   tasks: Task[]
   onOpenTask: (id: string) => void
 }) {
-  const { departmentOptions, projects, members, updateTaskStatus, currentUser, isFullAdmin } = useOhsumi()
+  const { departmentOptions, projects, members, updateTaskStatus, currentUser, isFullAdmin, roles } = useOhsumi()
+  const toast = useToast()
   const deptLabel = useDepartmentLabel()
   const { go } = useNav()
   const { t: tr } = useI18n()
@@ -268,7 +270,8 @@ export function ListView({
               // ドロワー側の専用ボタンで行う運用（item: 確認者権限判定の是正）
               const canChange = isFullAdmin || isAssignee
               const hasReviewers = taskReviewerIds.length > 0
-              const statusOptions = allowedStatusOptions(isFullAdmin, isReviewer, hasReviewers)
+              const isReviewTarget = currentUser ? reviewTargets(t, members, roles).ids.includes(currentUser.id) : false
+              const statusOptions = allowedStatusOptions(isFullAdmin, isReviewer, hasReviewers, isAssignee, isReviewTarget)
               return (
                 <tr
                   key={t.id}
@@ -333,7 +336,10 @@ export function ListView({
                       {canChange ? (
                         <select
                           value={t.status}
-                          onChange={(e) => updateTaskStatus(t.id, e.target.value as TaskStatus)}
+                          onChange={(e) => {
+                            const s = e.target.value as TaskStatus
+                            if (updateTaskStatus(t.id, s) === 'review' && s === 'done') toast(tr('taskDrawer.doneBecameReviewToast'))
+                          }}
                           className="cursor-pointer rounded-md border border-transparent bg-transparent py-0.5 text-xs outline-none hover:border-border focus:border-border-strong"
                         >
                           {statusOptions.map((s) => (

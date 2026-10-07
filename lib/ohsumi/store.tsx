@@ -99,7 +99,7 @@ import {
   type RoleDef,
 } from './roles'
 import { normalizeCapabilities, type Capability } from './capabilities'
-import { isFullAdminRole, resolveVisibleAdminSections } from './permissions'
+import { doneTransition, isFullAdminRole, resolveVisibleAdminSections } from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
   colorForId,
@@ -409,7 +409,8 @@ interface OhsumiContextValue extends OhsumiState {
   setMode: (m: Mode) => void
   // Register approved parsed tasks as a single natural-language input.
   addTasksFromInput: (text: string, parsed: ParsedTask[], kind?: 'text' | 'form') => void
-  updateTaskStatus: (id: string, status: TaskStatus) => void
+  // 実際に入った状態を返す(担当者が「完了」を選ぶと確認待ち。doneTransition)。変えられなかった時は null
+  updateTaskStatus: (id: string, status: TaskStatus) => TaskStatus | null
   updatePriority: (id: string, priority: Priority) => void
   updateDifficulty: (id: string, difficulty: Difficulty) => void
   updateTaskDetails: (
@@ -3515,13 +3516,21 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   )
 
   const updateTaskStatus = useCallback(
-    (id: string, status: TaskStatus) => {
+    (id: string, requested: TaskStatus): TaskStatus | null => {
       // 前提タスクが完了していない限り、このタスクは完了にできない — UI側
       // (task-detail-drawer/kanban-board) でも事前に防いでいるが、ここでも
       // 最終防衛としてブロックする
-      if (status === 'done') {
+      let status = requested
+      if (requested === 'done') {
         const task = tasks.find((t) => t.id === id)
-        if (task && incompletePrerequisites(task, tasks).length > 0) return
+        if (task && incompletePrerequisites(task, tasks).length > 0) return null
+        // 担当者(確認する人でない人)が「完了」を選んだら確認待ちにする。GAS も同じ決まりで変える(doneStatusFor_)
+        if (task) {
+          const me = members.find((m) => m.id === currentUserId)
+          const next = doneTransition(task, currentUserId, isFullAdminRole(roles, me?.role), members, roles)
+          if (!next) return null
+          status = next
+        }
       }
       const today = todayStr()
       const updated = tasks.map((t) =>
@@ -3561,9 +3570,12 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       // entering 確認待ち is the assignee's "I'm done, please confirm" signal
       // — the admin gets emailed (gas/Code.gs) and already sees it surface
       // in the Admin dashboard's 確認待ち panel automatically.
+      // 確認待ちに変わった時は 'review' を送る(確認タスクの作成と一緒に送るため。12-batch.gs)。
+      // 'done' が届いても、GAS が同じ決まりで確認待ちに変えて、確認する人に知らせる
       if (isRemoteConfigured) runRemote(remoteApi.updateTaskStatus(id, status))
+      return status
     },
-    [tasks, maybeCertifySkill, registerSkillsFromTask, appendHistory, runRemote, createReviewConfirmTask],
+    [tasks, members, roles, currentUserId, maybeCertifySkill, registerSkillsFromTask, appendHistory, runRemote, createReviewConfirmTask],
   )
 
   const assignTask = useCallback(
