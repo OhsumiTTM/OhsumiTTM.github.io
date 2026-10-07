@@ -17,14 +17,22 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateTaskStatus':
       // body.status は入口でコードにそろえている(normalizeRequestCodes_)
-      result = updateTaskFields_(body.taskId, {
-        status: sheetCode_('status', body.status),
-        last_activity: todayStr_(),
-        completed_date: body.status === 'done' ? todayStr_() : '',
-      })
-      // the assignee's "I'm done" signal — email the admins so they know
-      // to go confirm it (they already see it in their 確認待ち panel)
-      if (body.status === 'review') notifyReview_(body.taskId)
+      ;(function () {
+        var nextStatus = body.status
+        // 担当者(確認する人でない人)が「完了」を選んだ時は、確認待ちにする(doneStatusFor_。10-authorize.gs)
+        if (nextStatus === 'done') {
+          var statusTask = findRow_(SHEET_TASKS, String(body.taskId || ''))
+          if (statusTask && doneStatusFor_(statusTask, actingMember) === 'review') nextStatus = 'review'
+        }
+        result = updateTaskFields_(body.taskId, {
+          status: sheetCode_('status', nextStatus),
+          last_activity: todayStr_(),
+          completed_date: nextStatus === 'done' ? todayStr_() : '',
+        })
+        if (nextStatus !== body.status && result && typeof result === 'object') result.status = nextStatus
+        // 確認待ちは、確認する人(reviewTargets_)に知らせる
+        if (nextStatus === 'review') notifyReview_(body.taskId)
+      })()
       break
     case 'assignTask':
       result = updateTaskFields_(body.taskId, {

@@ -7,6 +7,7 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useToast } from '../toast'
 import { KanbanCard, KANBAN_CARD_FIELDS, type KanbanCardField } from './kanban-card'
 import { incompletePrerequisites } from '@/lib/ohsumi/utils'
+import { doneTransition } from '@/lib/ohsumi/permissions'
 import { cn } from '@/lib/utils'
 import { useI18n, STATUS_KEY } from '@/lib/ohsumi/i18n'
 
@@ -19,7 +20,7 @@ export function KanbanBoard({
   onOpenTask: (id: string) => void
   fields?: Set<KanbanCardField>
 }) {
-  const { isAdminRef, updateTaskStatus, currentUser, visibleTasks } = useOhsumi()
+  const { updateTaskStatus, currentUser, visibleTasks, members, roles, isFullAdmin } = useOhsumi()
   const toast = useToast()
   const { t } = useI18n()
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -28,15 +29,15 @@ export function KanbanBoard({
   const handleDrop = (status: TaskStatus) => {
     if (draggingId) {
       const draggingTask = visibleTasks.find((t) => t.id === draggingId)
-      // only an admin can move a card straight to 完了 — see task-detail-drawer
-      if (status === 'done' && !(currentUser && isAdminRef(currentUser.role))) {
+      // 「完了」へ動かせるのは担当者・確認する人・全権管理者。担当者が動かすと確認待ちになる(doneTransition)
+      if (status === 'done' && draggingTask && !doneTransition(draggingTask, currentUser?.id, isFullAdmin, members, roles)) {
         toast(t('kanban.board.doneAdminOnlyToast'))
       } else if (status === 'done' && draggingTask) {
         const blockers = incompletePrerequisites(draggingTask, visibleTasks)
         if (blockers.length > 0) {
           toast(t('kanban.board.blockedByDepsToast', { names: blockers.map((b) => b.name).join(t('kanban.listSeparator')) }))
-        } else {
-          updateTaskStatus(draggingId, status)
+        } else if (updateTaskStatus(draggingId, status) === 'review') {
+          toast(t('taskDrawer.doneBecameReviewToast'))
         }
       } else {
         updateTaskStatus(draggingId, status)

@@ -44,7 +44,7 @@ import {
   type TaskVisibility,
 } from '@/lib/ohsumi/types'
 import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, todayStr, isActiveMember } from '@/lib/ohsumi/utils'
-import { allowedStatusOptions, canChangeTaskStatus } from '@/lib/ohsumi/permissions'
+import { allowedStatusOptions, canChangeTaskStatus, reviewTargets } from '@/lib/ohsumi/permissions'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
 import { formatDateTimeInTz, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
@@ -1197,7 +1197,7 @@ function DrawerBody({
   onAddSkillOption: (skill: string) => void
   onAddCategoryOption: (category: string) => void
   onClose: () => void
-  onStatus: (s: TaskStatus) => void
+  onStatus: (s: TaskStatus) => TaskStatus | null
   onTake: () => void
   onOpenAssign: () => void
   onOpenInput: () => void
@@ -1235,7 +1235,7 @@ function DrawerBody({
   onRespondForm: (responses: Record<string, FormAnswerValue>) => void
 }) {
   const { t } = useI18n()
-  const { departmentOptions, departmentNameOf } = useOhsumi()
+  const { departmentOptions, departmentNameOf, roles } = useOhsumi()
   const deptLabel = useDepartmentLabel()
   const { openTask } = useTaskDrawer()
   const toast = useToast()
@@ -1297,7 +1297,11 @@ function DrawerBody({
   const reviewerIds = task.reviewerIds ?? (task.reviewerId ? [task.reviewerId] : [])
   const isReviewer = !!currentUserId && reviewerIds.includes(currentUserId)
   const hasReviewers = reviewerIds.length > 0
-  const statusOptions = allowedStatusOptions(isFullAdmin, isReviewer, hasReviewers)
+  // 確認待ちが届く人(確認者 → 担当者の報告先 → 全権管理者)。担当者が「完了」を選ぶと、ここに確認待ちが届く
+  const targets = reviewTargets(task, members, roles)
+  const isReviewTarget = !!currentUserId && targets.ids.includes(currentUserId)
+  const doneBecomesReview = isAssignee && !isFullAdmin && !isReviewTarget && targets.ids.length > 0
+  const statusOptions = allowedStatusOptions(isFullAdmin, isReviewer, hasReviewers, isAssignee, isReviewTarget)
   // 複数確認者の承認進捗（item: 確認フロー）— requiredApprovalsが'all'なら
   // 確認者全員、数値ならその数値が必要承認数
   const reviewApprovals = task.reviewApprovals ?? []
@@ -1392,7 +1396,8 @@ function DrawerBody({
                   onChange={(e) => {
                     const s = e.target.value as TaskStatus
                     if (s === 'done' && incompleteDeps.length > 0) return
-                    onStatus(s)
+                    const applied = onStatus(s)
+                    if (s === 'done' && applied === 'review') toast(t('taskDrawer.doneBecameReviewToast'))
                   }}
                   className="cursor-pointer rounded-md border border-transparent bg-transparent text-base font-semibold outline-none hover:border-border focus:border-primary"
                 >
@@ -1419,8 +1424,19 @@ function DrawerBody({
                 {t('taskDrawer.reviewerOnlyDoneNotice')}
               </p>
             )}
-            {canChangeStatus && !isAdmin && (
-              <p className="mt-1 text-[11px] text-muted-foreground">{t('taskDrawer.pendingReviewNotice')}</p>
+            {canChangeStatus && doneBecomesReview && (
+              <p className="mt-1 text-[11px] text-muted-foreground">{t('taskDrawer.doneBecomesReviewNotice')}</p>
+            )}
+            {targets.ids.length > 0 && (
+              <p className="mt-1 text-[11px] text-muted-foreground" data-review-targets={targets.kind}>
+                {t('taskDrawer.reviewTargets', {
+                  names: targets.ids.map((id) => {
+                    const m = members.find((x) => x.id === id)
+                    return m ? m.displayName || m.name : id
+                  }).join('、'),
+                  kind: t(`taskDrawer.reviewTargets.${targets.kind}`),
+                })}
+              </p>
             )}
           </div>
 

@@ -731,3 +731,46 @@ describe.skipIf(!available)('コメントへの返信と、ベルの通知の設
     expect(await page.evaluate<boolean>(`!!document.querySelector('[data-notification="mention-c-ask2"]')`)).toBe(false)
   })
 })
+
+describe.skipIf(!available)('担当者が「完了」を選ぶと、確認待ちになる', () => {
+  const TITLE = '完了から確認待ちのE2Eのタスク'
+  const taskRow = (title: string) => {
+    A.org.cache.clear()
+    const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+    const row = rows.find((r) => r[head.indexOf('title')] === title)
+    return row ? Object.fromEntries(head.map((h, i) => [h, row[i]])) : null
+  }
+
+  it('タスクの詳細で「完了」を選ぶと、GAS で確認待ちになり、確認する人にメールが届く。誰に届くかが詳細に出る', async () => {
+    const topId = memberIdOf('top@a.example')
+    const baseId = memberIdOf('base@a.example')
+    const made = world.call(A.org, topTokenA, 'createTasks', { tasks: [{ tempId: 'td', title: TITLE, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [baseId], creatorId: topId, pendingApproval: false }] })
+    expect(made.ok, made.error).toBe(true)
+    A.org.cache.clear()
+
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('base@a.example')
+    await waitFor(loggedIn, 'base@a.example がログインできません')
+    // 詳細は OUTPUT(自分のタスク)のカードから開く(前のテストでメンションのベルをオフにしているため)
+    await page.evaluate(`[...document.querySelectorAll('button, a')].find((b) => b.textContent.trim() === 'OUTPUT')?.click(); true`)
+    const card = `[...document.querySelectorAll('*')].find((e) => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(TITLE)})`
+    await waitFor(() => page.evaluate<boolean>(`!!${card}`), '一覧にタスクが出ません')
+    await page.evaluate(`${card}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-review-targets]')`), '確認待ちが届く人が詳細に出ません')
+    expect(await page.evaluate<string>(`document.querySelector('[data-review-targets]').textContent`)).toContain('確認待ちが届く人')
+    expect(await page.evaluate<string>('document.body.innerText')).toContain('確認者の承認で完了になります')
+
+    const mailsBefore = A.org.mails.length
+    await page.evaluate(`(() => {
+      const sel = [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'done') && [...s.options].some((o) => o.value === 'review'))
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, 'done')
+      sel.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    await waitFor(async () => /review|確認待ち/.test(taskRow(TITLE)?.status ?? ''), 'GAS で確認待ちになりません')
+    await waitFor(async () => A.org.mails.slice(mailsBefore).some((m) => m.subject.includes('確認をお願いします')), '確認する人にメールが届きません')
+    expect(A.org.mails.slice(mailsBefore).some((m) => m.to.includes('base@a.example') && m.subject.includes('確認をお願いします'))).toBe(false)
+  })
+})
