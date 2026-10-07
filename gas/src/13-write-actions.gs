@@ -79,14 +79,14 @@ function runWriteAction_(body, actingMember) {
       try {
         var willMember = findRow_(SHEET_MEMBERS, body.memberId)
         var willName = willMember ? (willMember.display_name || willMember.name || '不明') : '不明'
-        var willTags = (body.will || []).join('、') || '（タグなし）'
-        var willSubject = '[Ohsumi] Will タグが更新されました'
-        var willBody = willName + 'さんのWillタグが更新されました。\n\n' +
-          '【設定されたWillタグ】\n' + willTags + '\n\n' +
-          'Ohsumiの人材画面で確認してください。'
+        var willTags = (body.will || []).join('、') || '（なし）'
+        var willSubject = '[Ohsumi] やりたいことが更新されました'
+        var willBody = willName + 'さんのやりたいことが更新されました。\n\n' +
+          '【登録されたやりたいこと】\n' + willTags + '\n\n' +
+          'Ohsumiで、そのメンバーの個人ページを確認してください。'
         notifyAdmins_(willSubject, willBody)
         // チャンネルには Will の中身を流さない(団体の外の人が入っていることもあるため)
-        notifyChat_('💡 ' + willName + 'さんがWillを更新しました。Ohsumiで確認してください。')
+        notifyChat_('💡 ' + willName + 'さんがやりたいことを更新しました。Ohsumiで確認してください。')
       } catch (err) {
         console.error('updateWillの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
       }

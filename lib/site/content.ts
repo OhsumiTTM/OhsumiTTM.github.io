@@ -11,14 +11,14 @@ import {
 } from 'lucide-react'
 
 /**
- * Provision status. Defaults are deliberately conservative: nothing is marked
- * "available" until the official offering is confirmed. Update here only.
+ * Provision status. Mark a feature or capability "available" only when it can be used today.
+ * Update here only.
  */
 export type ProvisionStatus = 'available' | 'developing' | 'concept'
 
 export const STATUS_META: Record<ProvisionStatus, { label: string; description: string }> = {
   available: { label: '提供中', description: '現在ご利用いただける機能です。' },
-  developing: { label: '開発中', description: '現在開発中の機能です。使用は変更される可能性があります。' },
+  developing: { label: '開発中', description: '現在開発中の機能です。仕様は変更される可能性があります。' },
   concept: { label: '構想', description: '今後の提供を検討している機能です。仕様は変更される可能性があります。' },
 }
 
@@ -67,14 +67,14 @@ export const SCREENS: Record<ScreenKey, Screen> = {
     label: 'Task Detail',
     src: '/home/screens/task-detail.png',
     title: 'タスク詳細',
-    caption: '目的・完了条件・成果物・必要スキル・コメントを1つのタスクにまとめます。引継ぎ時も、仕事の背景がそのまま残ります。',
+    caption: '説明・成果物・必要スキル・コメント・振り返りを1つのタスクにまとめます。引継ぎ時も、仕事の背景がそのまま残ります。',
   },
   project: {
     key: 'project',
     label: 'Project',
     src: '/home/screens/projects-p1.png',
     title: 'プロジェクト',
-    caption: 'プロジェクトごとの進捗、メンバー、マイルストーン、リスクを確認できます。複数のプロジェクトを同じ形式で比較できます。',
+    caption: 'プロジェクトごとの進捗、メンバー、健全性を確認できます。複数のプロジェクトを同じ形式で比較できます。',
   },
   calendar: {
     key: 'calendar',
@@ -95,7 +95,7 @@ export const SCREENS: Record<ScreenKey, Screen> = {
     label: 'Profile',
     src: '/home/screens/people-m1.png',
     title: '個人プロフィール',
-    caption: '担当してきた仕事、身につけたスキル、本人のWILLを一人ずつ確認できます。',
+    caption: '担当してきた仕事、身につけたスキル、本人のやりたいことを一人ずつ確認できます。',
   },
   skills: {
     key: 'skills',
@@ -166,17 +166,17 @@ export const FEATURES: Feature[] = [
     jpName: 'タスク管理',
     icon: ListChecks,
     summary: '仕事、担当、期限、進捗、成果物をまとめて管理。',
-    status: 'developing',
+    status: 'available',
     problem: '仕事の目的や完了条件が担当者の頭の中にしかなく、進捗や成果物の場所が人によってばらばらになっている。',
     capabilities: [
       { text: '担当者・期限・優先度・進捗の管理' },
-      { text: '目的・完了条件・成果物をタスクに記録' },
+      { text: '説明・成果物・振り返りをタスクに記録' },
       { text: '必要スキルと難易度の設定' },
       { text: 'リスト・ボード・カレンダーなど複数の表示' },
-      { text: '議事録やメモからタスク案を作成', status: 'concept' },
+      { text: '文章(議事録やメモ)からタスク案を作成' },
     ],
     screens: ['tasks', 'task-detail'],
-    example: '定例会議のあと、決まった作業をタスクとして登録。担当と期限、完了条件を書いておくことで、確認時に認識のずれが起きにくくなります。',
+    example: '定例会議のあと、決まった作業をタスクとして登録。担当と期限、やることの説明を書いておくことで、確認時に認識のずれが起きにくくなります。',
     connections: ['workflow', 'review', 'people'],
   },
   {
@@ -185,11 +185,11 @@ export const FEATURES: Feature[] = [
     jpName: 'プロジェクト管理',
     icon: FolderKanban,
     summary: '複数プロジェクトの進行状況を横断して把握。',
-    status: 'developing',
+    status: 'available',
     problem: 'プロジェクトごとに管理方法が違い、組織全体でどこが遅れているのかを比べられない。',
     capabilities: [
       { text: 'プロジェクトごとの進捗・メンバー・期間の管理' },
-      { text: 'マイルストーンとリスクの記録' },
+      { text: 'プロジェクトの健全性(期限超過・確認待ち・ブロック)の確認' },
       { text: '複数プロジェクトを同じ形式で一覧' },
       { text: 'プロジェクトに紐づくタスクの集約' },
     ],
@@ -203,7 +203,7 @@ export const FEATURES: Feature[] = [
     jpName: 'ワークフロー・依存関係',
     icon: GitBranch,
     summary: '前提タスクや依存関係を可視化。',
-    status: 'developing',
+    status: 'available',
     problem: 'ある仕事が止まると、どの仕事に影響が出るのかが分からず、遅れに気づくのが後になる。',
     capabilities: [
       { text: '前提タスク・後続タスクの設定' },
@@ -220,13 +220,13 @@ export const FEATURES: Feature[] = [
     jpName: 'レビュー・承認',
     icon: CheckCircle2,
     summary: 'レビュー・確認待ち・承認を仕事の流れに組み込む。',
-    status: 'developing',
+    status: 'available',
     problem: '確認依頼がチャットやメールに埋もれ、どの仕事が誰の確認待ちで止まっているのか分からない。',
     capabilities: [
       { text: 'タスクごとのレビュー依頼と承認' },
       { text: '自分が確認すべき仕事の一覧' },
       { text: '差し戻し理由とコメントの記録' },
-      { text: '承認の履歴をタスクに保存' },
+      { text: '承認・差し戻しの記録をタスクの変更履歴に保存' },
     ],
     screens: ['approvals', 'task-detail'],
     example: '外部に出す資料を、担当者が作成したあとリーダーがレビュー。承認された版と差し戻しの理由がタスクに残ります。',
@@ -238,13 +238,13 @@ export const FEATURES: Feature[] = [
     jpName: '人材情報',
     icon: Users,
     summary: '実績やスキルを仕事とつなげて蓄積。',
-    status: 'developing',
+    status: 'available',
     problem: '誰がどんな経験を持っているかが記録されておらず、仕事を任せる相手をいつも同じ人に頼ってしまう。',
     capabilities: [
       { text: 'メンバーごとの担当・実績・スキルの確認' },
       { text: '完了した仕事から経験を蓄積' },
       { text: '現在の負荷の確認' },
-      { text: '仕事に必要なスキルから担当候補を表示', status: 'concept' },
+      { text: '仕事に必要なスキルから担当候補を表示' },
     ],
     screens: ['people', 'member-profile', 'skills'],
     example: '新しい仕事の担当を決めるとき、似た仕事の経験がある人と、いま余裕がある人を並べて比較する。最終的な判断はリーダーが行います。',
@@ -256,15 +256,15 @@ export const FEATURES: Feature[] = [
     jpName: '人材育成',
     icon: GraduationCap,
     summary: '実務経験を人材育成につなげる。',
-    status: 'developing',
+    status: 'available',
     problem: '育成が研修や面談の中だけで完結し、日々の仕事と成長目標がつながっていない。',
     capabilities: [
-      { text: 'スキル・経験・WILLの記録' },
+      { text: 'スキル・経験・やりたいことの記録' },
       { text: '成長目標につながる仕事の確認' },
       { text: '仕事を通じたスキルの変化の確認' },
     ],
     screens: ['development', 'member-profile'],
-    example: '「対外発信の経験を積みたい」というWILLを持つメンバーに、レビュー付きで広報系の仕事を任せる。実務そのものを育成機会にできます。',
+    example: '「対外発信の経験を積みたい」というやりたいことを持つメンバーに、レビュー付きで広報系の仕事を任せる。実務そのものを育成機会にできます。',
     connections: ['people', 'task'],
   },
   {
@@ -273,7 +273,7 @@ export const FEATURES: Feature[] = [
     jpName: '分析',
     icon: BarChart3,
     summary: '進捗・負荷・スキル・組織状況を分析。',
-    status: 'developing',
+    status: 'available',
     problem: '組織の状況を把握するために、毎回スプレッドシートで集計し直している。',
     capabilities: [
       { text: '進捗と期限の状況の集計' },
@@ -290,7 +290,7 @@ export const FEATURES: Feature[] = [
     jpName: '管理・権限',
     icon: ShieldCheck,
     summary: '役職や組織構造に合わせた権限管理。',
-    status: 'developing',
+    status: 'available',
     problem: 'すべての情報が全員に見えてしまう、または必要な人に必要な情報が届かない。',
     capabilities: [
       { text: '組織・チーム・役職の設定' },
@@ -361,9 +361,9 @@ export const USE_CASES: UseCase[] = [
   {
     slug: 'development',
     role: '育成担当',
-    summary: 'スキル・経験・WILLを仕事と接続。',
-    points: ['スキル', '経験', 'WILL', '成長タスク'],
-    scenario: 'メンバーのWILLと、これまでの経験を確認したうえで、成長につながる仕事を一緒に選べます。',
+    summary: 'スキル・経験・やりたいことを仕事と接続。',
+    points: ['スキル', '経験', 'やりたいこと', '成長タスク'],
+    scenario: 'メンバーのやりたいことと、これまでの経験を確認したうえで、成長につながる仕事を一緒に選べます。',
     cta: { label: '人材育成機能を見る', href: '/features#development' },
     screen: 'development',
   },
@@ -381,9 +381,10 @@ export const USE_CASES: UseCase[] = [
 export const ONBOARDING_STEPS = [
   { title: '問い合わせ', body: '利用目的、組織規模、現在の管理方法を確認します。' },
   { title: 'ヒアリング', body: '課題、組織構造、権限、プロジェクト、必要な機能を整理します。' },
+  { title: 'ご契約', body: '利用契約書・申込書を取り交わし、プランを確定します。' },
   {
-    title: '初期設定',
-    body: '組織に合わせて基本情報を設定します。',
+    title: '立ち上げ',
+    body: 'テンプレートのコピー・初期設定・登録を行います(15〜20分)。その後、組織に合わせて基本情報を設定します。',
     items: ['組織', 'メンバー', '役職', 'プロジェクト', 'スキル', '権限'],
   },
   { title: '利用開始', body: '対象のチームやプロジェクトから利用を始めます。' },
@@ -393,7 +394,9 @@ export const ONBOARDING_STEPS = [
 export type FaqItem = { q: string; a: string }
 export type FaqCategory = { id: string; label: string; items: FaqItem[] }
 
-const PENDING = '現在、正式な提供内容を準備中です。詳細はお問い合わせください。'
+/** 料金・契約条件(FAQ と導入のページで同じ文を使う) */
+export const PRICING =
+  '現在は、Cosmo Baseプラン・Ohsumiプラン(どちらも無償。プランに応じてアンケートと、個人を特定しない集計値のご提供をお願いしています)でご利用いただけます。有償プランは、一般社団法人の設立後に受付を始めます。'
 
 export const FAQ: FaqCategory[] = [
   {
@@ -412,7 +415,7 @@ export const FAQ: FaqCategory[] = [
     items: [
       { q: 'Googleアカウントは必要ですか？', a: '必要です。メンバーは、登録したメールアドレスの Google アカウントでログインします。会社・大学などのアドレスは、Google アカウントになっていればそのまま使えます。また、Ohsumi のデータと仕組みを置くための、団体の運用用の Google アカウントを1つご用意いただきます。' },
       { q: 'スマートフォンから利用できますか？', a: 'はい。アプリのインストールは不要で、スマートフォンのブラウザから使えます。ホーム画面に追加すると、次からすぐ開けます。管理画面の一部や Excel での取り込み・書き出しなど、画面が狭いと使いにくい機能もあるため、管理の作業はパソコンでの利用をおすすめします。' },
-      { q: 'Google Drive等と併用できますか？', a: 'はい。Ohsumi のデータは団体の Google スプレッドシートに保存され、成果物には Google ドライブなどのリンクをそのまま付けられます。期限のあるタスクは団体の Google カレンダーに予定として入り、通知は Discord・Slack・メールで受け取れます。' },
+      { q: 'Google Drive等と併用できますか？', a: 'はい。Ohsumi のデータは団体の Google スプレッドシートに保存され、成果物には Google ドライブなどのリンクをそのまま付けられます。期限のあるタスクは、担当者の Google カレンダーに予定の招待が届き、自分のカレンダーに追加するボタンもあります。通知は Discord・Slack・メールで受け取れます。' },
       { q: 'デモを見ることはできますか？', a: 'はい。お問い合わせフォームから「デモ希望」としてご連絡ください。サンプルのデータを入れた環境で、組織に合わせて実際の画面をご案内します。' },
     ],
   },
@@ -420,10 +423,10 @@ export const FAQ: FaqCategory[] = [
     id: 'onboarding',
     label: '導入について',
     items: [
-      { q: '初期設定は必要ですか？', a: 'はい。FSIF がお渡しするテンプレートをコピーし、メニューから初期設定を実行して、Ohsumi に登録します。所要時間は20〜30分ほどです。最初の代表が入ると、団体の情報・役職・メンバーの招待など、最初にやることがタスクとして用意されるので、順に進めていただけます。手順書もお渡しし、FSIF がご案内します。' },
-      { q: '導入までどれくらいかかりますか？', a: 'ご契約の後、立ち上げは30分ほど、メンバーの招待は当日から行えます。最初は1つのプロジェクトから始め、1か月ほどで使い方を定着させる進め方をおすすめしています。' },
+      { q: '初期設定は必要ですか？', a: 'はい。FSIF がお渡しするテンプレートをコピーし、メニューから初期設定を実行して、Ohsumi に登録します。所要時間は15〜20分(最初の代表の設定は30分ほど)です。最初の代表が入ると、団体の情報・役職・メンバーの招待など、最初にやることがタスクとして用意されるので、順に進めていただけます。手順書もお渡しし、FSIF がご案内します。' },
+      { q: '導入までどれくらいかかりますか？', a: 'ご契約の後、立ち上げは15〜20分ほど、メンバーの招待は当日から行えます。最初は1つのプロジェクトから始め、1か月ほどで使い方を定着させる進め方をおすすめしています。' },
       { q: 'カスタマイズできますか？', a: '役職・部署・領域・スキル・カテゴリ・スキルのレベルの決め方・申請フォーム・団体のロゴやテーマの色・通知の受け取り方などは、団体ごとに設定できます。仕組みそのものはすべての団体で共通のため、団体ごとの個別の改造はお受けしていません。改善のご要望は、画面の「改善を要望する」からお寄せください。' },
-      { q: '料金はいくらですか？', a: '料金・契約条件は現在準備中です。お問い合わせいただいた内容をもとに個別にご案内します。' },
+      { q: '料金はいくらですか？', a: PRICING },
     ],
   },
   {

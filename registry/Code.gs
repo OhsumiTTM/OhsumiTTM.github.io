@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-1'
+var REGISTRY_VERSION = '2026.10.07-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2582,6 +2582,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.07-2', security: false, required: true, note: '利用者に見える文言を今の機能に合わせる(「はじめに」のタスクの「やりたいこと」「個人設定」、やりたいことの更新のメール、メールアドレスの登録の案内)' },
   { version: '2026.10.07-1', security: false, required: true, note: 'コメントへの返信(返信の元を保存し、元のコメントを書いた人・そこでメンションされていた人に急ぎのメールで知らせる)。メンションした相手が初めて書いたコメントを、メンションした人に知らせる。新しいコメントの値の確かめ(本文・返信の元・メンションの形)。本人の通知の設定にベルの通知の種類ごとのオン・オフ(bell)を保存できる' },
   { version: '2026.10.06-3', security: false, required: true, note: '稼働の目安(余力あり・普通・余力なし)の決め方を団体ごとに設定できる(Settings の workload_rules。範囲と大小の関係を確かめ、おかしな値は保存しない)。設定はメンバー全員に渡す' },
   { version: '2026.10.06-2', security: false, required: true, note: '最上位の役職の人の画面に、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(更新の知らせ・団体設定から開ける)' },
