@@ -518,28 +518,15 @@ function notifyNewTasks_(tasks) {
 
 // Emails the task's designated reviewer(s) (reviewer_ids/reviewer_id) when an
 // assignee marks a task 確認待ち (their "I'm done, please confirm" signal).
-// Falls back to reportsToEmails_(assigneeIds) when no reviewer is set, same as
-// before this fix.
+// 宛先は reviewTargets_(確認者 → 担当者の報告先 → 全権管理者)。
 function notifyReview_(taskId) {
   try {
     // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
     var grid = _sheetGrids[SHEET_TASKS]
     var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
-    var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
-      .split(',')
-      .map(function (s) { return s.trim() })
-      .filter(Boolean)
-    var preferredEmails
-    if (reviewerIds.length > 0) {
-      preferredEmails = memberEmailsByIds_(reviewerIds)
-    } else {
-      var assigneeIds = String(task.assignee_id || '')
-        .split(',')
-        .map(function (s) { return s.trim() })
-        .filter(Boolean)
-      preferredEmails = reportsToEmails_(assigneeIds)
-    }
+    // 確認する人(確認者 → 担当者の報告先 → 全権管理者。reviewTargets_)に送る
+    var preferredEmails = memberEmailsByIds_(reviewTargets_(task).ids)
     notifyAdmins_(
       {
         ja: {

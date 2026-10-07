@@ -109,11 +109,11 @@ describe('4. タスクの作成・承認・完了', () => {
     expect(taskOf(A.org, taskId).approval_status).toMatch(/approved|承認済み/)
   })
 
-  it('担当者は確認待ちにでき、完了は代表(確認する人)がする', () => {
-    expect(w.call(A.org, tok.baseA, 'updateTaskStatus', { taskId, status: 'review' }).ok).toBe(true)
-    expect(taskOf(A.org, taskId).status).toMatch(/review|確認待ち/)
+  it('担当者が「完了」を選ぶと確認待ちになり、完了は代表(確認する人)がする', () => {
     const self = w.call(A.org, tok.baseA, 'updateTaskStatus', { taskId, status: 'done' })
-    expect(self.ok).toBe(false)
+    expect(self.ok, JSON.stringify(self)).toBe(true)
+    expect(self.result.status).toBe('review')
+    expect(taskOf(A.org, taskId).status).toMatch(/review|確認待ち/)
     expect(w.call(A.org, tok.topA, 'updateTaskStatus', { taskId, status: 'done' }).ok).toBe(true)
     expect(taskOf(A.org, taskId).status).toMatch(/done|完了/)
   })

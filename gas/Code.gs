@@ -4382,21 +4382,16 @@ function authorizeAction_(acting, action, body) {
     'searchArchivedTasks',     // 移したタスクの検索。見てよいタスクだけを返す(canViewTaskRow_ で絞り込む)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
-    // updateTaskStatus: 全権管理者は制限なし。「完了」は確認者のみ可。それ以外は担当者のみ可。
+    // updateTaskStatus: 全権管理者は制限なし。それ以外は担当者・確認者だけ。
+    // 「完了」: 確認する人(確認者 → 報告先 → 全権管理者。reviewTargets_)はそのまま完了にできる。
+    // 担当者は確認待ちに変わる(doneStatusFor_。13-write-actions.gs)
     if (action === 'updateTaskStatus') {
       if (!isActingFullAdmin_(acting)) {
         var taskId = String(body.taskId || '')
         var task = authFindRow_(SHEET_TASKS, taskId)
         if (body.status === 'done') {
-          // 「完了」への変更は確認者（reviewer_id / reviewer_ids）のみ許可
-          var reviewerAllowed = false
-          if (task) {
-            var reviewerIdsRaw = String(task.reviewer_ids || task.reviewer_id || '').trim()
-            var reviewerIdList = reviewerIdsRaw.split(',').map(function(s) { return s.trim() }).filter(Boolean)
-            if (reviewerIdList.indexOf(acting.id) >= 0) reviewerAllowed = true
-          }
-          if (!reviewerAllowed) {
-            throw userError_('担当者は「完了」に変更できません。確認者または管理者に依頼してください。')
+          if (!task || doneStatusFor_(task, acting) === null) {
+            throw userError_('「完了」にできるのは、このタスクの担当者・確認者・管理者だけです。')
           }
         } else {
           // 「完了」以外のステータス変更は担当者のみ許可
@@ -4505,6 +4500,46 @@ function authorizeAction_(acting, action, body) {
   }
 }
 
+// 確認待ちが届く人(確認する人)。タスクの確認者 → いなければ担当者の報告先 → それもいなければ全権管理者(代表を含む)。
+// 退会した人は除く。担当者自身は報告先・全権管理者の候補から除く(全員が担当者なら除かない)。
+// 画面の lib/ohsumi/permissions.ts の reviewTargets と同じ決まり
+function reviewTargets_(task) {
+  var split = function (v) { return String(v || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) }
+  var reviewerIds = split(task.reviewer_ids || task.reviewer_id)
+  if (reviewerIds.length > 0) return { kind: 'reviewers', ids: reviewerIds }
+  var assigneeIds = split(task.assignee_id)
+  var members = snapshotTableOrSheet_(SHEET_MEMBERS)
+  var col = function (name) { return members.headers.indexOf(name) }
+  var idCol = col('id'), reportsCol = col('reports_to_id'), roleCol = col('role'), withdrawnCol = col('withdrawn_at')
+  var active = {}
+  members.rows.forEach(function (r) {
+    if (withdrawnCol >= 0 && String(r[withdrawnCol] || '').trim()) return
+    active[String(r[idCol])] = r
+  })
+  var managers = []
+  assigneeIds.forEach(function (aid) {
+    var row = active[aid]
+    var managerId = row && reportsCol >= 0 ? String(row[reportsCol] || '').trim() : ''
+    if (managerId && active[managerId] && assigneeIds.indexOf(managerId) < 0 && managers.indexOf(managerId) < 0) managers.push(managerId)
+  })
+  if (managers.length > 0) return { kind: 'reportsTo', ids: managers }
+  var roles = getRoles_()
+  var admins = Object.keys(active).filter(function (id) { return roleCol >= 0 && isFullAdminRoleRef_(roles, active[id][roleCol]) })
+  var others = admins.filter(function (id) { return assigneeIds.indexOf(id) < 0 })
+  return { kind: 'fullAdmins', ids: others.length > 0 ? others : admins }
+}
+
+// 「完了」を選んだ時に、実際に入る状態。全権管理者・確認する人(reviewTargets_)は 'done'。
+// 担当者(確認する人でない人)は 'review'(確認する人の承認で完了になる)。それ以外の人は null(完了にできない)。
+// 画面の lib/ohsumi/permissions.ts の doneTransition と同じ決まり
+function doneStatusFor_(task, acting) {
+  var split = function (v) { return String(v || '').split(',').map(function (s) { return s.trim() }).filter(Boolean) }
+  if (isActingFullAdmin_(acting)) return 'done'
+  var targets = reviewTargets_(task)
+  if (targets.ids.indexOf(String(acting.id)) >= 0) return 'done'
+  if (split(task.assignee_id).indexOf(String(acting.id)) >= 0) return targets.ids.length > 0 ? 'review' : 'done'
+  return null
+}
 // ---- タスクを書き換える操作の決まり ---------------------------------------------
 // タスクを書き換える操作は、次のどれかでなければならない(lib/ohsumi/gas-notify-guard.test.ts で、全部の操作を
 // 一般のメンバーとして実際に送って確かめる。新しく足した操作も自動で確かめる):
@@ -5445,14 +5480,22 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateTaskStatus':
       // body.status は入口でコードにそろえている(normalizeRequestCodes_)
-      result = updateTaskFields_(body.taskId, {
-        status: sheetCode_('status', body.status),
-        last_activity: todayStr_(),
-        completed_date: body.status === 'done' ? todayStr_() : '',
-      })
-      // the assignee's "I'm done" signal — email the admins so they know
-      // to go confirm it (they already see it in their 確認待ち panel)
-      if (body.status === 'review') notifyReview_(body.taskId)
+      ;(function () {
+        var nextStatus = body.status
+        // 担当者(確認する人でない人)が「完了」を選んだ時は、確認待ちにする(doneStatusFor_。10-authorize.gs)
+        if (nextStatus === 'done') {
+          var statusTask = findRow_(SHEET_TASKS, String(body.taskId || ''))
+          if (statusTask && doneStatusFor_(statusTask, actingMember) === 'review') nextStatus = 'review'
+        }
+        result = updateTaskFields_(body.taskId, {
+          status: sheetCode_('status', nextStatus),
+          last_activity: todayStr_(),
+          completed_date: nextStatus === 'done' ? todayStr_() : '',
+        })
+        if (nextStatus !== body.status && result && typeof result === 'object') result.status = nextStatus
+        // 確認待ちは、確認する人(reviewTargets_)に知らせる
+        if (nextStatus === 'review') notifyReview_(body.taskId)
+      })()
       break
     case 'assignTask':
       result = updateTaskFields_(body.taskId, {
@@ -6852,28 +6895,15 @@ function notifyNewTasks_(tasks) {
 
 // Emails the task's designated reviewer(s) (reviewer_ids/reviewer_id) when an
 // assignee marks a task 確認待ち (their "I'm done, please confirm" signal).
-// Falls back to reportsToEmails_(assigneeIds) when no reviewer is set, same as
-// before this fix.
+// 宛先は reviewTargets_(確認者 → 担当者の報告先 → 全権管理者)。
 function notifyReview_(taskId) {
   try {
     // (スナップショットは書き込みの前の内容なので使わない。表に無ければシートを読む)
     var grid = _sheetGrids[SHEET_TASKS]
     var task = grid && grid.rowOf[String(taskId)] ? requestRow_(SHEET_TASKS, taskId) : findRow_(SHEET_TASKS, taskId)
     if (!task) return
-    var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
-      .split(',')
-      .map(function (s) { return s.trim() })
-      .filter(Boolean)
-    var preferredEmails
-    if (reviewerIds.length > 0) {
-      preferredEmails = memberEmailsByIds_(reviewerIds)
-    } else {
-      var assigneeIds = String(task.assignee_id || '')
-        .split(',')
-        .map(function (s) { return s.trim() })
-        .filter(Boolean)
-      preferredEmails = reportsToEmails_(assigneeIds)
-    }
+    // 確認する人(確認者 → 担当者の報告先 → 全権管理者。reviewTargets_)に送る
+    var preferredEmails = memberEmailsByIds_(reviewTargets_(task).ids)
     notifyAdmins_(
       {
         ja: {
