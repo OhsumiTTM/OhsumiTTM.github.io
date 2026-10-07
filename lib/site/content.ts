@@ -36,6 +36,8 @@ export type ScreenKey =
   | 'skills'
   | 'archive'
   | 'approvals'
+  | 'requests'
+  | 'notifications'
   | 'analytics'
   | 'development'
   | 'admin'
@@ -119,6 +121,20 @@ export const SCREENS: Record<ScreenKey, Screen> = {
     src: '/home/screens/approvals.png',
     title: '承認',
     caption: 'メンバーが登録したタスクを、承認してからワークスペースに出します。承認しない時は、理由が登録した人にメールで届きます。',
+  },
+  requests: {
+    key: 'requests',
+    label: 'Requests',
+    src: '/home/screens/requests.png',
+    title: '経費申請',
+    caption: 'カテゴリ・金額・領収書を入れて申請。カテゴリごとに決めた段階の順に承認されます。',
+  },
+  notifications: {
+    key: 'notifications',
+    label: 'Notifications',
+    src: '/home/screens/notifications.png',
+    title: '通知の設定',
+    caption: 'ベルに出す通知を種類ごとに選び、メールは種類ごとに頻度を選べます。',
   },
   analytics: {
     key: 'analytics',
@@ -251,8 +267,7 @@ export const FEATURES: Feature[] = [
       { text: '申請フォーム: 備品の購入・施設の利用など、団体が作ったフォームで申請と承認' },
       { text: '日程調整・フォームのタスク: 候補に○△×で答え、全員が答えると自動で完了' },
     ],
-    // 画面写真はまだ無い(用意できたら ScreenKey を足してここに入れる)
-    screens: [],
+    screens: ['requests'],
     example: 'イベントの備品を立て替えたメンバーが、領収書の写真を付けて経費申請。会計担当、代表の順に承認され、進み具合は申請履歴で確かめられます。',
     connections: ['review', 'admin'],
   },
@@ -271,8 +286,7 @@ export const FEATURES: Feature[] = [
       { text: 'コメントへの返信は、元のコメントを書いた人とメンションされていた人に届く' },
       { text: '団体の Discord・Slack に通知を流せる(幹部限定・承認待ちのタスクの中身は流さない)' },
     ],
-    // 画面写真はまだ無い(用意できたら ScreenKey を足してここに入れる)
-    screens: [],
+    screens: ['notifications'],
     example: '確認待ちのタスクが出ると、確認者にすぐメールとベルで届く。チームの連絡は Slack にまとめ、個人のメールは1日1回のまとめにする、といった使い分けができます。',
     connections: ['task', 'review'],
   },
