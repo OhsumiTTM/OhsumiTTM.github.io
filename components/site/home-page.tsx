@@ -109,7 +109,7 @@ export function HomePage() {
                   組織の情報をつなぐ。
                 </>
               }
-              description="タスク・担当・期限だけでなく、要求スキル・成果物・レビュー・実績・人材情報までを、1つの仕事に接続します。"
+              description="タスク・担当・期限だけでなく、要求スキル・成果物・登録の承認と完了の確認・実績・人材情報までを、1つの仕事に接続します。"
             />
             <TextLink href="/overview">Ohsumiとは</TextLink>
           </div>

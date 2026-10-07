@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   alternates: { canonical: '/overview' },
 }
 
-const CONNECTED = ['要求スキル', '成果物', '進捗', 'レビュー', '承認', '実績', '経験', '人材情報', 'プロジェクト情報', '組織情報']
+const CONNECTED = ['要求スキル', '成果物', '進捗', '登録の承認', '完了の確認', '実績', '経験', '人材情報', 'プロジェクト情報', '組織情報']
 
 const COMPARISON = [
   { aspect: '中心', general: 'タスク・期限・担当', ohsumi: '仕事を中心に、人・プロジェクト・組織・知識をつなぐ' },
