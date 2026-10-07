@@ -1,7 +1,7 @@
 // スマホの幅(375px)で主な画面を開き、横にはみ出す箇所が無いことを確かめる(CI で実行する)。
 //
 //   1. テスト用の設定(GAS の URL など)でビルドする(--no-build で省略)
-//   2. gas/Code.gs のサンプルのデータ(buildSampleData_)を、GAS の読み取りの絞り込み
+//   2. gas/Code.gs に gas/SampleData.gs を足して、サンプルのデータ(buildSampleData_)を、GAS の読み取りの絞り込み
 //      (buildViewerData)に通して、そのメンバーが受け取るデータを作る。
 //      一般のメンバー(OUTPUT・タスク詳細・個人ページ)と、代表(管理画面のすべてのセクション)の2回開く
 //   3. out/ を配信し、ヘッドレスの Chrome で開く。GAS・Google への通信は偽の応答を返す
@@ -23,8 +23,11 @@ const GAS_URL = 'https://script.google.com/macros/s/LAYOUT_CHECK/exec'
 const ORG = 'org_LAYOUTLAYOUTLAYOUT01'
 // 招待リンクで開く、レジストリに無い団体
 const MISSING_ORG = 'org_MISSINGMISSINGMISS01'
-const MEMBER = 'sample-m-05' // 一般のメンバー(サンプルのデータの base の枠)
-export const ADMIN_MEMBER = 'sample-m-01' // 代表(サンプルのデータの top の枠)
+// 画面写真(LAYOUT_SHOTS)は、見本データ(buildShowcaseData_。学生団体らしい自然なデータ)で撮る。
+// 崩れの確かめ(ふだんの実行・CI)は、極端な例を含むサンプルのデータのまま。LAYOUT_DATA=sample / showcase で選び直せる
+const SHOWCASE = process.env.LAYOUT_DATA ? process.env.LAYOUT_DATA === 'showcase' : !!process.env.LAYOUT_SHOTS
+const MEMBER = SHOWCASE ? 'demo-m-05' : 'sample-m-05' // 一般のメンバー(base の枠)
+export const ADMIN_MEMBER = SHOWCASE ? 'demo-m-01' : 'sample-m-01' // 代表(top の枠)
 
 // ほかの端末で開く の手順で押すボタン・確かめる文(ja.ts にあることを lib/ohsumi/check-layout.test.ts で確かめる)
 export const OTHER_DEVICE_LABELS = ['ほかの端末で開く', '共有', '自分のメールに送る']
@@ -305,12 +308,13 @@ export function viewerCapabilities(memberId = MEMBER) {
 }
 
 function sampleSnapshot() {
-  const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
+  // サンプル・見本のデータは、Code.gs に足す別のファイル(gas/SampleData.gs)にある
+  const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8') + '\n' + readFileSync(join(ROOT, 'gas', 'SampleData.gs'), 'utf8')
   const ctx = vm.createContext({ console: { log() {}, warn() {}, error() {} } })
   vm.runInContext(code, ctx)
   const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)
-  const data = ctx.buildSampleData_(today, {})
-  const settings = ctx.mergeSampleSettings_({}, data.settings).values
+  const data = SHOWCASE ? ctx.buildShowcaseData_(today) : ctx.buildSampleData_(today, {})
+  const settings = ctx.mergeSampleSettings_({}, data.settings, SHOWCASE ? ctx.SHOWCASE_ID_PREFIX : ctx.SAMPLE_ID_PREFIX).values
   const table = (name, rows) => {
     const headers = ctx.SHEET_HEADERS[name]
     return { headers, rows: rows.map((r) => headers.map((h) => (r[h] == null ? '' : String(r[h])))) }

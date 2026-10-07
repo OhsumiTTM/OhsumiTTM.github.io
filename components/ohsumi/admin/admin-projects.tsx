@@ -776,7 +776,7 @@ export function AdminProjects({ part }: { part: 'projects' | 'taskSettings' }) {
                     ) : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-3">
-                    {p.type ? <Tag>{p.type}</Tag> : <span className="text-muted-foreground">—</span>}
+                    {p.type ? <Tag className="whitespace-nowrap">{p.type}</Tag> : <span className="text-muted-foreground">—</span>}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     <div className="flex items-center gap-1.5">

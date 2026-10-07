@@ -640,3 +640,5 @@ function findTaskCalendarEvent_(cal, taskId, task, dates, titles) {
   return found
 }
 
+// Ohsumi が作るカレンダーの予定の名前の先頭
+var CALENDAR_PREFIX_OHSUMI = '[Ohsumi] '

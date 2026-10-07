@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-4'
+var REGISTRY_VERSION = '2026.10.07-6'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2582,6 +2582,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.07-4', security: false, required: true, note: 'サンプル・見本のデータを作るコードを Code.gs から外し、別のファイル(SampleData.gs。サンプル・デモの団体だけが足す)に分ける。カレンダーの予定の名前の先頭の定義を Code.gs の中に移す' },
   { version: '2026.10.07-2', security: false, required: true, note: '利用者に見える文言を今の機能に合わせる(「はじめに」のタスクの「やりたいこと」「個人設定」、やりたいことの更新のメール、メールアドレスの登録の案内)' },
   { version: '2026.10.07-1', security: true, required: true, note: '公開前の基準の版(これより古い版は一覧から外した。古い版には、役職ごとの「できる操作」・昇権の防止・通知とタスクの書き換えの守りなどの安全の修正が入っていないことがあるので、更新が要る)。コメントへの返信(返信の元を保存し、元のコメントを書いた人・そこでメンションされていた人に急ぎのメールで知らせる)。メンションした相手が初めて書いたコメントを、メンションした人に知らせる。新しいコメントの値の確かめ(本文・返信の元・メンションの形)。本人の通知の設定にベルの通知の種類ごとのオン・オフ(bell)を保存できる' },
 ]

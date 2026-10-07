@@ -713,24 +713,3 @@ function assertTestEnvironment_() {
   }
 }
 
-// 同じ結果を再現できるよう、乱数は種を固定した簡易な生成器を使う
-function makePerfRandom_(seed) {
-  var state = seed >>> 0
-  var next = function () {
-    state = (state * 1664525 + 1013904223) >>> 0
-    return state / 4294967296
-  }
-  return {
-    next: next,
-    int: function (min, max) { return min + Math.floor(next() * (max - min + 1)) },
-    pick: function (list) { return list[Math.floor(next() * list.length)] },
-    chance: function (p) { return next() < p },
-    sample: function (list, n) {
-      var copy = list.slice()
-      var out = []
-      while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(next() * copy.length), 1)[0])
-      return out
-    },
-  }
-}
-
