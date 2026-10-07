@@ -264,7 +264,7 @@ function debugNotifyTest() {
   )
 
   if (Object.keys(emailMap).length === 0) {
-    console.warn('MemberEmailsシートにメールが1件も登録されていません。個人ページの「アカウント設定」でメンバー各自が登録する必要があります。')
+    console.warn('MemberEmailsシートにメールが1件も登録されていません。「個人設定」(右上のメニュー)のメールアドレスで、メンバー各自が登録する必要があります。')
   } else if (idCol !== -1) {
     var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), headers.length).getValues()
     rows.forEach(function (r, i) {

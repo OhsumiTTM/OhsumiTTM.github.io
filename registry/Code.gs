@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-1'
+var REGISTRY_VERSION = '2026.10.07-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2582,33 +2582,8 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
-  { version: '2026.10.07-1', security: false, required: true, note: 'コメントへの返信(返信の元を保存し、元のコメントを書いた人・そこでメンションされていた人に急ぎのメールで知らせる)。メンションした相手が初めて書いたコメントを、メンションした人に知らせる。新しいコメントの値の確かめ(本文・返信の元・メンションの形)。本人の通知の設定にベルの通知の種類ごとのオン・オフ(bell)を保存できる' },
-  { version: '2026.10.06-3', security: false, required: true, note: '稼働の目安(余力あり・普通・余力なし)の決め方を団体ごとに設定できる(Settings の workload_rules。範囲と大小の関係を確かめ、おかしな値は保存しない)。設定はメンバー全員に渡す' },
-  { version: '2026.10.06-2', security: false, required: true, note: '最上位の役職の人の画面に、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(更新の知らせ・団体設定から開ける)' },
-  { version: '2026.10.06-1', security: true, required: true, note: '公開前の版: 役職ごとの「できる操作」(メンバーの登録・役職の変更・退会・人事の項目・研修の承認・採用・プロジェクトの削除・ゴミ箱・団体のルール・ロゴ)。権限の判定を1か所の定義にまとめ、画面にログインした人のできる操作を渡す。役職を付ける時の昇権の防止(最上位・自分より広い役職・自分と最上位の人の役職)。既定の役職では、できることは今までと同じ。GAS の知らせの「部門」を「領域」に' },
-  { version: '2026.10.05-4', security: false, required: true, note: '公開前の版: 削除の制限・メンバーのメールの必須・定期タスクの月末と取りこぼし・退会の後始末・初期タスクを GAS で作る・カレンダーの予定をタスクの ID で扱う・幹部の取り込み・本人だけの保存と通知の履歴・タスクのゴミ箱・テンプレートの既定値と「初期設定」メニュー・要求分野の初期値・画面から届いた値の確かめ(承認・申請者・自分の実績・記録・回答・数・日付・存在と輪・評価した人・メール)・移行のためだけのコードを消す・更新の知らせから「コードをコピー」・人材データの項目ごとの閲覧範囲・スキルのレベルの承認・団体の保存・残りの値の確かめ・古いタスクを移す(TasksArchive)。更新したら setupOhsumi を実行する(列とシートを足す)' },
-  { version: '2026.10.04-1', security: true, required: false, note: 'Discord・Slack に幹部限定・承認待ちのタスク名や Will の中身を流さない。スキルの点数の付与を GAS で確かめる(完了・担当者・必要スキル・1人1回・上限・自分には付けない)' },
-  { version: '2026.10.03-4', security: false, required: false, note: '休止中のメンバーもログイン・操作できる(担当の候補などからは外れる)。ログインを止めるのは退会の時だけ' },
-  { version: '2026.10.03-3', security: false, required: false, note: '代表が管理画面から「今すぐバックアップを作る」(前に手で作ってから10分は作れない)' },
-  { version: '2026.10.03-2', security: false, required: false, note: 'setupOhsumi で毎日の処理のトリガー(dailyMaintenance)も作る(無いとバックアップなどが動かない)。評価・1on1 などを本人・代表・上長・メンター・プロジェクトの責任者だけに見せる' },
-  { version: '2026.10.02-4', security: false, required: false, note: 'スキルのレベルの決め方(点数の一覧・資格・検定・完了したタスクの条件)を団体ごとに設定する(PR Z)' },
-  { version: '2026.10.02-3', security: false, required: false, note: '定量データの指標を足す(定義の版 2。コメント・日報・1on1・申請など)(PR Y)' },
-  { version: '2026.10.02-2', security: false, required: false, note: '回数の上限・しきい値をレジストリから配り、安全な範囲に収めて使う(PR X)' },
-  { version: '2026.10.02-1', security: false, required: false, note: 'レジストリから機能を止めるスイッチ(止めた機能の書き込みを断る。ログイン・読み取りは止めない)(PR W)' },
-  { version: '2026.10.01-13', security: false, required: false, note: '代表の管理画面から診断情報を FSIF に送り、受付番号を出す(PR Q)' },
-  { version: '2026.10.01-12', security: false, required: false, note: 'FSIF からのお知らせを代表・管理者の管理画面に出す(PR P)' },
-  { version: '2026.10.01-11', security: false, required: false, note: 'FSIF からのアンケートを代表の管理画面に出す(PR O)' },
-  { version: '2026.10.01-10', security: false, required: false, note: '個人を特定しない集計値を週1回レジストリに送る(PR N)' },
-  { version: '2026.10.01-9', security: false, required: false, note: 'マニフェストに使う許可(oauthScopes)を書き、許可が足りない時の知らせ(PR M)' },
-  { version: '2026.10.01-8', security: false, required: false, note: '退会者の削除でカレンダーのゲスト・プロフィール画像も消す、実行ログのメールアドレスを伏せる(PR L)' },
-  { version: '2026.10.01-7', security: false, required: false, note: '利用の集計とエラーの記録(PR K)' },
-  { version: '2026.10.01-6', security: false, required: false, note: '書き込みの競合チェック(行の版と、記録の一覧の差分。PR J)' },
-  { version: '2026.10.01-5', security: false, required: false, note: '1つのセルの記録の長さの上限の確認と、読み取り性能の計測の判定(PR I)' },
-  { version: '2026.10.01-4', security: false, required: false, note: '毎日・毎時の処理の見張りと、共有の確認(PR H)' },
-  { version: '2026.10.01-3', security: false, required: false, note: '退会したメンバー・採用しなかった候補者の個人情報の削除(PR G)' },
-  { version: '2026.10.01-2', security: false, required: false, note: '毎日のバックアップと、バックアップから戻す(PR F)' },
-  { version: '2026.10.01-1', security: true, required: true,
-    note: '通知・タスクの書き換えを GAS が守る修正(PR A)を含む最初の版。メールの上限(PR D)・版の確認(PR E)も含む' },
+  { version: '2026.10.07-2', security: false, required: true, note: '利用者に見える文言を今の機能に合わせる(「はじめに」のタスクの「やりたいこと」「個人設定」、やりたいことの更新のメール、メールアドレスの登録の案内)' },
+  { version: '2026.10.07-1', security: true, required: true, note: '公開前の基準の版(これより古い版は一覧から外した。古い版には、役職ごとの「できる操作」・昇権の防止・通知とタスクの書き換えの守りなどの安全の修正が入っていないことがあるので、更新が要る)。コメントへの返信(返信の元を保存し、元のコメントを書いた人・そこでメンションされていた人に急ぎのメールで知らせる)。メンションした相手が初めて書いたコメントを、メンションした人に知らせる。新しいコメントの値の確かめ(本文・返信の元・メンションの形)。本人の通知の設定にベルの通知の種類ごとのオン・オフ(bell)を保存できる' },
 ]
 var GAS_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}-\d+$/
 var GAS_CHECK_STALE_HOURS = 24

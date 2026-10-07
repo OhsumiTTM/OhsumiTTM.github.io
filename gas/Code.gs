@@ -511,7 +511,7 @@ function debugNotifyTest() {
   )
 
   if (Object.keys(emailMap).length === 0) {
-    console.warn('MemberEmailsシートにメールが1件も登録されていません。個人ページの「アカウント設定」でメンバー各自が登録する必要があります。')
+    console.warn('MemberEmailsシートにメールが1件も登録されていません。「個人設定」(右上のメニュー)のメールアドレスで、メンバー各自が登録する必要があります。')
   } else if (idCol !== -1) {
     var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), headers.length).getValues()
     rows.forEach(function (r, i) {
@@ -2388,7 +2388,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.07-1'
+var OHSUMI_GAS_VERSION = '2026.10.07-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -5572,14 +5572,14 @@ function runWriteAction_(body, actingMember) {
       try {
         var willMember = findRow_(SHEET_MEMBERS, body.memberId)
         var willName = willMember ? (willMember.display_name || willMember.name || '不明') : '不明'
-        var willTags = (body.will || []).join('、') || '（タグなし）'
-        var willSubject = '[Ohsumi] Will タグが更新されました'
-        var willBody = willName + 'さんのWillタグが更新されました。\n\n' +
-          '【設定されたWillタグ】\n' + willTags + '\n\n' +
-          'Ohsumiの人材画面で確認してください。'
+        var willTags = (body.will || []).join('、') || '（なし）'
+        var willSubject = '[Ohsumi] やりたいことが更新されました'
+        var willBody = willName + 'さんのやりたいことが更新されました。\n\n' +
+          '【登録されたやりたいこと】\n' + willTags + '\n\n' +
+          'Ohsumiで、そのメンバーの個人ページを確認してください。'
         notifyAdmins_(willSubject, willBody)
         // チャンネルには Will の中身を流さない(団体の外の人が入っていることもあるため)
-        notifyChat_('💡 ' + willName + 'さんがWillを更新しました。Ohsumiで確認してください。')
+        notifyChat_('💡 ' + willName + 'さんがやりたいことを更新しました。Ohsumiで確認してください。')
       } catch (err) {
         console.error('updateWillの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
       }
@@ -8499,7 +8499,7 @@ var INITIAL_TASKS_PROJECT_NAME = 'はじめに'
 var INITIAL_TASKS_MAX = 20
 var INITIAL_MEMBER_TASKS = [
   { name: 'Ohsumiの使い方を確認する', description: 'INPUT の画面で「今日やること」を入れて、承認を受けてみましょう。' },
-  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、Will とスキルを登録しましょう。' },
+  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、やりたいことと、スキルを登録しましょう。' },
   { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」で、団体のタスク全体を見てみましょう。' },
 ]
 var INITIAL_LEADER_TASKS = [
@@ -8508,7 +8508,7 @@ var INITIAL_LEADER_TASKS = [
   { name: 'メンバーを追加して招待する', description: 'ADMIN →「メンバー」の「メンバーを登録」で、名前とメールアドレスを入れ、「招待メールを送る」を選びます。' },
   { name: '最初のプロジェクトを作る', description: 'ADMIN →「プロジェクト」で、プロジェクトを1つ作ります(このタスクの「はじめに」とは別に作ります)。' },
   { name: '最初のタスクを作って担当を決める', description: 'INPUT の画面でタスクを入れ、担当者と期限を決めます。' },
-  { name: '通知の受け取り方を決める', description: 'ADMIN →「団体設定」で Discord・Slack の通知先を、各自のプロフィールの「通知の設定」でメールのまとめを決めます。' },
+  { name: '通知の受け取り方を決める', description: 'ADMIN →「団体設定」で Discord・Slack の通知先を、各自の「個人設定」(右上のメニュー)の通知でメールのまとめを決めます。' },
   { name: '安全の設定を確かめる', description: 'スプレッドシートを誰とも共有していないか、管理画面の上部の知らせ・団体の設定の「バックアップ」、団体のアカウントの2段階認証を確かめます。' },
   { name: '引き継ぎの準備をする', description: '団体の Google アカウントを誰が持ち、代替わりの時に誰に渡すかを決めて、メモに残します。' },
 ]

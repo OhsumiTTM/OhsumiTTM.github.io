@@ -248,7 +248,7 @@ var INITIAL_TASKS_PROJECT_NAME = 'はじめに'
 var INITIAL_TASKS_MAX = 20
 var INITIAL_MEMBER_TASKS = [
   { name: 'Ohsumiの使い方を確認する', description: 'INPUT の画面で「今日やること」を入れて、承認を受けてみましょう。' },
-  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、Will とスキルを登録しましょう。' },
+  { name: 'プロフィールを設定する', description: '右上のアカウントのメニュー →「プロフィール」で、やりたいことと、スキルを登録しましょう。' },
   { name: 'チームメンバーのタスクを確認する', description: 'OUTPUT →「一覧」で、団体のタスク全体を見てみましょう。' },
 ]
 var INITIAL_LEADER_TASKS = [
@@ -257,7 +257,7 @@ var INITIAL_LEADER_TASKS = [
   { name: 'メンバーを追加して招待する', description: 'ADMIN →「メンバー」の「メンバーを登録」で、名前とメールアドレスを入れ、「招待メールを送る」を選びます。' },
   { name: '最初のプロジェクトを作る', description: 'ADMIN →「プロジェクト」で、プロジェクトを1つ作ります(このタスクの「はじめに」とは別に作ります)。' },
   { name: '最初のタスクを作って担当を決める', description: 'INPUT の画面でタスクを入れ、担当者と期限を決めます。' },
-  { name: '通知の受け取り方を決める', description: 'ADMIN →「団体設定」で Discord・Slack の通知先を、各自のプロフィールの「通知の設定」でメールのまとめを決めます。' },
+  { name: '通知の受け取り方を決める', description: 'ADMIN →「団体設定」で Discord・Slack の通知先を、各自の「個人設定」(右上のメニュー)の通知でメールのまとめを決めます。' },
   { name: '安全の設定を確かめる', description: 'スプレッドシートを誰とも共有していないか、管理画面の上部の知らせ・団体の設定の「バックアップ」、団体のアカウントの2段階認証を確かめます。' },
   { name: '引き継ぎの準備をする', description: '団体の Google アカウントを誰が持ち、代替わりの時に誰に渡すかを決めて、メモに残します。' },
 ]
