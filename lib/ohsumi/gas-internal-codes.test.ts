@@ -7,6 +7,8 @@ import vm from 'node:vm'
 import { describe, expect, it } from 'vitest'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
+// サンプルのデータ(buildSampleData_ など)は、Code.gs に足す別のファイル
+const SAMPLE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'SampleData.gs'), 'utf8')
 
 type Fn = (...args: unknown[]) => unknown
 type Gas = Record<string, Fn> & { resetRequestProps: () => void }
@@ -21,7 +23,7 @@ function loadGas(props: Record<string, string> = {}): Gas {
       createTextOutput: (text: string) => ({ text, setMimeType() { return this } }),
     },
   })
-  vm.runInContext(CODE_GS, ctx)
+  vm.runInContext(CODE_GS + '\n' + SAMPLE_GS, ctx)
   // 役職の設定はシートから読まず、既定(今までの設定が空)にする
   ;(ctx as unknown as { readRoleSettings_: () => object }).readRoleSettings_ = () => ({})
   return ctx as unknown as Gas
@@ -235,7 +237,7 @@ function loadGasWithProps(initial: Record<string, string> = {}) {
       setProperty: (k: string, v: string) => { props[k] = v },
     }) },
   })
-  vm.runInContext(CODE_GS, ctx)
+  vm.runInContext(CODE_GS + '\n' + SAMPLE_GS, ctx)
   return { gas: ctx as unknown as Gas, props }
 }
 

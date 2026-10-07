@@ -104,7 +104,7 @@ export function StatusDot({ status }: { status: TaskStatus }) {
 }
 
 const difficultyStyles: Record<Difficulty, string> = {
-  anyone: 'bg-primary/10 text-primary border-primary/20',
+  anyone: 'bg-primary/10 text-primary border-primary/20 dark:bg-primary/5',
   beginner: 'bg-success-muted text-success border-success-border',
   some_exp: 'bg-warning-muted text-warning border-warning-border',
   experienced: 'bg-danger-muted text-danger border-danger-border',

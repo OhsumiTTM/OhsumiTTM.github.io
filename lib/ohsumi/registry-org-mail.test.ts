@@ -61,6 +61,10 @@ describe('団体の GAS がメールを送る(対応した版)', () => {
     expect(tasks[0]).toMatchObject({ key: `sv.${surveyId}.0`, to: ['a@example.org'] })
     expect(tasks[0].subject).toContain('アンケートへのご回答のお願い')
     expect(tasks[0].body).toContain(FORM)
+    // 団体自身のアカウントから届くので、件名と本文の最初に、FSIF からのお知らせであることを書く
+    expect(tasks[0].subject.startsWith('[Ohsumi(FSIF)からのお知らせ] ')).toBe(true)
+    expect(tasks[0].body.startsWith('Ohsumi(FSIF)からのお知らせです。')).toBe(true)
+    expect(tasks[0].body).toContain('担当者と代表')
     // 送ったことを伝えると記録し、次からは渡さない。毎日の処理でもレジストリからは送らない
     expect(t.checkIn({ mailDone: [tasks[0].key, 'sv.unknown.0', 'bad key'] }).mailTasks).toEqual([])
     expect(JSON.parse(String(t.sheetRow('Surveys', 'survey_id', surveyId).get('reminders_json')))).toEqual([expect.objectContaining({ day: 0, via: 'org' })])

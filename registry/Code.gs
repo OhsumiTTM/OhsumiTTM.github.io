@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-9'
+var REGISTRY_VERSION = '2026.10.07-10'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1262,7 +1262,7 @@ function contactEmails_() {
 // レジストリが代わりに送るのは、この仕組みに対応していない古い版の団体と、最後の checkIn から24時間を超えた団体(団体の GAS が
 // 止まっている)だけ(毎日の処理で)。
 // 団体の GAS が mailTasks に対応した版(これより前の版には、今までどおりレジストリから送る)
-var ORG_MAIL_DELIVERY_SINCE = '2026.10.07-5'
+var ORG_MAIL_DELIVERY_SINCE = '2026.10.07-6'
 var ORG_MAIL_STALE_MS = 24 * 3600 * 1000
 var ORG_MAIL_TASKS_MAX = 10
 var ORG_MAIL_DONE_MAX = 30
@@ -1286,6 +1286,17 @@ function dueRestrictionNotice_(values, nowMs) {
   return done ? null : { surveyId: surveyId, suspendAtMs: at }
 }
 
+// 団体の GAS が送るメールの件名・本文。団体自身の Google アカウントから届くので、差出人に戸惑わないよう、
+// 件名と本文の最初に「Ohsumi(FSIF)からのお知らせ」と書く。担当者と代表の両方に届くことも書く
+var ORG_MAIL_SUBJECT_PREFIX = '[Ohsumi(FSIF)からのお知らせ] '
+function orgDeliveredText_(text) {
+  return {
+    subject: ORG_MAIL_SUBJECT_PREFIX + String(text.subject).replace(/^\[Ohsumi\] /, ''),
+    body: 'Ohsumi(FSIF)からのお知らせです。このメールは、FSIF の依頼で、団体の Ohsumi の仕組み(団体の Google アカウント)から自動で送っています' +
+      '(団体の担当者と代表の方にお送りしています)。\n\n' + text.body,
+  }
+}
+
 // 団体に送ってもらうメール(checkIn の返事)。surveys は Surveys の行(この団体の分)
 function orgMailTasks_(orgValues, surveys, contacts, nowMs) {
   var orgId = String(orgValues.org_id || '')
@@ -1299,19 +1310,19 @@ function orgMailTasks_(orgValues, surveys, contacts, nowMs) {
     if (row) {
       var rs = surveyState_(row.values, nowMs)
       var rt = surveyText_(orgName, row.values, Math.max(rs.day, SURVEY_DUE_DAYS + 1), restrict.suspendAtMs)
-      tasks.push({ key: 'sr.' + restrict.surveyId + '.' + restrict.suspendAtMs, to: to, subject: rt.subject, body: rt.body })
+      tasks.push({ key: 'sr.' + restrict.surveyId + '.' + restrict.suspendAtMs, to: to, subject: orgDeliveredText_(rt).subject, body: orgDeliveredText_(rt).body })
     }
   }
   var days = dueSuspensionNotice_(orgValues, nowMs)
   if (days !== null) {
     var nt = suspensionNoticeText_(orgName, c, days)
-    tasks.push({ key: 'sn.' + days + (c.kind === 'restrict' ? 'r' : 's') + '.' + timeOf_(c.suspendAt), to: to, subject: nt.subject, body: nt.body })
+    tasks.push({ key: 'sn.' + days + (c.kind === 'restrict' ? 'r' : 's') + '.' + timeOf_(c.suspendAt), to: to, subject: orgDeliveredText_(nt).subject, body: orgDeliveredText_(nt).body })
   }
   surveys.forEach(function (r) {
     var day = dueSurveyReminder_(r.values, nowMs)
     if (day === null) return
     var st = surveyText_(orgName, r.values, day, surveyRestrictionOf_(orgValues, r.values.survey_id, nowMs))
-    tasks.push({ key: 'sv.' + String(r.values.survey_id) + '.' + day, to: to, subject: st.subject, body: st.body })
+    tasks.push({ key: 'sv.' + String(r.values.survey_id) + '.' + day, to: to, subject: orgDeliveredText_(st).subject, body: orgDeliveredText_(st).body })
   })
   return tasks.slice(0, ORG_MAIL_TASKS_MAX)
 }
@@ -2723,7 +2734,8 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
-  { version: '2026.10.07-5', security: false, required: true, note: 'レジストリからのメール(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告)を、checkIn の返事(mailTasks)をもとに団体の Gmail で担当者と代表に送り、送ったものを次の checkIn で伝える(レジストリのメールの上限に数えない)' },
+  { version: '2026.10.07-6', security: false, required: true, note: 'レジストリからのメール(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告)を、checkIn の返事(mailTasks)をもとに団体の Gmail で担当者と代表に送り、送ったものを次の checkIn で伝える(レジストリのメールの上限に数えない)' },
+  { version: '2026.10.07-5', security: false, required: true, note: 'サンプル・見本のデータを作るコードを Code.gs から外し、別のファイル(SampleData.gs。サンプル・デモの団体だけが足す)に分ける。カレンダーの予定の名前の先頭の定義を Code.gs の中に移す' },
   { version: '2026.10.07-3', security: false, required: true, note: '担当者が「完了」を選ぶと確認待ちにする(確認する人がいれば)。確認待ちが届く人は、確認者 → 担当者の報告先 → 全権管理者(代表を含む)。確認する人(報告先・全権管理者を含む)は完了にできる' },
   { version: '2026.10.07-2', security: false, required: true, note: '利用者に見える文言を今の機能に合わせる(「はじめに」のタスクの「やりたいこと」「個人設定」、やりたいことの更新のメール、メールアドレスの登録の案内)' },
   { version: '2026.10.07-1', security: true, required: true, note: '公開前の基準の版(これより古い版は一覧から外した。古い版には、役職ごとの「できる操作」・昇権の防止・通知とタスクの書き換えの守りなどの安全の修正が入っていないことがあるので、更新が要る)。コメントへの返信(返信の元を保存し、元のコメントを書いた人・そこでメンションされていた人に急ぎのメールで知らせる)。メンションした相手が初めて書いたコメントを、メンションした人に知らせる。新しいコメントの値の確かめ(本文・返信の元・メンションの形)。本人の通知の設定にベルの通知の種類ごとのオン・オフ(bell)を保存できる' },

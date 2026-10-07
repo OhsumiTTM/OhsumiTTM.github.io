@@ -10,7 +10,7 @@
 //   - id はすべて 'sample-' で始まり、deleteSampleData() でまとめて消せる
 //   - Settings は既存の設定を上書きせずに追加し、deleteSampleData() で元に戻す
 //
-// 使い方(Apps Script エディタで実行):
+// 使い方(Apps Script エディタで実行。SampleData.gs を足した団体だけ):
 //   1. スクリプトプロパティ TEST_ENVIRONMENT を true にする
 //   2. (任意)スクリプトプロパティ TEST_ACCOUNTS に、テスト用の Google アカウントを枠ごとに書く
 //        例: top=a@gmail.com, admin=b@gmail.com, restricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com
@@ -68,6 +68,27 @@ function sampleAt_(today, offset, hhmm) {
   var day = Number(t[0]) < 9 ? sampleDay_(today, offset - 1) : sampleDay_(today, offset)
   var hh = utcHour < 10 ? '0' + utcHour : String(utcHour)
   return day + 'T' + hh + ':' + t[1] + ':00.000Z'
+}
+
+// 同じ結果を再現できるよう、乱数は種を固定した簡易な生成器を使う
+function sampleRandom_(seed) {
+  var state = seed >>> 0
+  var next = function () {
+    state = (state * 1664525 + 1013904223) >>> 0
+    return state / 4294967296
+  }
+  return {
+    next: next,
+    int: function (min, max) { return min + Math.floor(next() * (max - min + 1)) },
+    pick: function (list) { return list[Math.floor(next() * list.length)] },
+    chance: function (p) { return next() < p },
+    sample: function (list, n) {
+      var copy = list.slice()
+      var out = []
+      while (out.length < n && copy.length > 0) out.push(copy.splice(Math.floor(next() * copy.length), 1)[0])
+      return out
+    },
+  }
 }
 
 function samplePad_(n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s }
@@ -390,7 +411,7 @@ function buildSampleTasks_(today) {
   }
 
   // -- 普通のタスク(推薦・集計・一覧の件数のため。スキルは担当者の Will・Judgment と合わせる) --
-  var rng = makePerfRandom_(20261001)
+  var rng = sampleRandom_(20261001)
   // テスト用のアカウントの枠のメンバー(1・2・3・5)にも、自分のタスクの画面で確かめられるよう割り当てる
   var regularMembers = [5, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 1, 2, 3, 5]
   var skillOf = { 1: '企画,リサーチ', 2: 'デザイン,UI/UX', 3: 'イベント運営,メール', 5: 'デザイン,Canva', 9: '広報,SNS', 11: '実装,要件定義', 12: 'リサーチ,データ分析', 13: 'イベント運営,メール', 14: 'SNS,広報',
@@ -619,15 +640,16 @@ function buildSampleData_(today, files) {
 
 // 'top=a@gmail.com, admin=b@gmail.com' を { top: 'a@gmail.com', ... } にする。
 // 知らない枠の名前・メールアドレスの形でないもの・同じアドレスの重複はエラー
-function parseSampleTestAccounts_(raw) {
+function parseSampleTestAccounts_(raw, slots) {
+  slots = slots || SAMPLE_ACCOUNT_SLOTS
   var out = {}
   var seen = {}
   String(raw || '').split(/[,\n]/).map(function (s) { return s.trim() }).filter(Boolean).forEach(function (pair) {
     var i = pair.indexOf('=')
     var slot = (i < 0 ? pair : pair.slice(0, i)).trim()
     var email = (i < 0 ? '' : pair.slice(i + 1)).trim().toLowerCase()
-    if (!Object.prototype.hasOwnProperty.call(SAMPLE_ACCOUNT_SLOTS, slot)) {
-      throw userError_('TEST_ACCOUNTS に知らない枠の名前があります: ' + slot + '(使える枠: ' + Object.keys(SAMPLE_ACCOUNT_SLOTS).join(', ') + ')')
+    if (!Object.prototype.hasOwnProperty.call(slots, slot)) {
+      throw userError_('TEST_ACCOUNTS に知らない枠の名前があります: ' + slot + '(使える枠: ' + Object.keys(slots).join(', ') + ')')
     }
     if (!/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(email)) throw userError_('TEST_ACCOUNTS の ' + slot + ' のメールアドレスが正しくありません: ' + email)
     if (out[slot]) throw userError_('TEST_ACCOUNTS で同じ枠が2回指定されています: ' + slot)
@@ -639,12 +661,13 @@ function parseSampleTestAccounts_(raw) {
 }
 
 // サンプル以外のメンバーに登録されているアドレスが無いか確かめる(rows は MemberEmails の [id, email])
-function assertSampleAccountsUnregistered_(accounts, rows) {
+function assertSampleAccountsUnregistered_(accounts, rows, prefix) {
+  prefix = prefix || SAMPLE_ID_PREFIX
   var wanted = {}
   Object.keys(accounts).forEach(function (slot) { wanted[accounts[slot]] = slot })
   rows.forEach(function (r) {
     var id = String(r[0] || '')
-    if (id.indexOf(SAMPLE_ID_PREFIX) === 0) return
+    if (id.indexOf(prefix) === 0) return
     String(r[1] || '').split(',').map(function (e) { return e.trim().toLowerCase() }).forEach(function (e) {
       if (wanted[e]) {
         throw userError_('TEST_ACCOUNTS の ' + wanted[e] + ' のアドレス(' + e + ')は、サンプル以外のメンバー(id: ' + id +
@@ -678,7 +701,8 @@ function sampleSettingsWithRoles_(settings) {
   return out
 }
 
-function mergeSampleSettings_(current, additions) {
+function mergeSampleSettings_(current, additions, prefix) {
+  prefix = prefix || SAMPLE_ID_PREFIX
   var values = {}
   var state = { lists: {}, items: {}, values: {}, maps: {}, scalars: {} }
   Object.keys(additions.lists).forEach(function (key) {
@@ -693,7 +717,7 @@ function mergeSampleSettings_(current, additions) {
   })
   Object.keys(additions.items).forEach(function (key) {
     var raw = String(current[key] || '')
-    var base = sampleParseJson_(raw, []).filter(function (x) { return !(x && String(x.id || '').indexOf(SAMPLE_ID_PREFIX) === 0) })
+    var base = sampleParseJson_(raw, []).filter(function (x) { return !(x && String(x.id || '').indexOf(prefix) === 0) })
     values[key] = JSON.stringify(base.concat(additions.items[key]))
     state.items[key] = { wasEmpty: !raw, ids: additions.items[key].map(function (x) { return x.id }) }
   })
@@ -766,7 +790,7 @@ var SAMPLE_FILE_IDS_KEY = 'SAMPLE_FILE_IDS'
 // サンプルのメンバーが作った行(テスト用のアカウントで操作して増えた行)を見分ける列
 var SAMPLE_OWNER_COLUMNS = { Tasks: 'creator_id', Expenses: 'applicant_id', FormSubmissions: 'submitter_id', DailyReports: 'member_id' }
 
-function isSampleId_(v) { return String(v || '').indexOf(SAMPLE_ID_PREFIX) === 0 }
+function isSampleId_(v, prefix) { return String(v || '').indexOf(prefix || SAMPLE_ID_PREFIX) === 0 }
 
 // 行を見出しに合わせて末尾に一括で書き込む(書式なしテキストにして、日付の自動変換を避ける)
 // サンプルのタスクの行の選択肢の値を、今のシートの形式にする
@@ -881,35 +905,38 @@ function sampleSettingKeys_(settings) {
   return keys
 }
 
-// サンプルを消す(ロックを取った中で呼ぶ)。返り値は削除した件数
-function deleteSampleDataUnlocked_() {
+// サンプル(または見本)を消す(ロックを取った中で呼ぶ)。kind は sampleKind_()・showcaseKind_()(省略するとサンプル)。
+// 消すのは id(または作った人の id)が kind.prefix で始まる行だけ。返り値は削除した件数
+function deleteSampleDataUnlocked_(kind) {
+  kind = kind || sampleKind_()
+  var prefix = kind.prefix
   var props = PropertiesService.getScriptProperties()
   var counts = {}
   Object.keys(SHEET_HEADERS).forEach(function (name) {
     if (name === 'Settings') return
     var owner = SAMPLE_OWNER_COLUMNS[name]
-    counts[name] = deleteSampleRows_(name, function (o) { return isSampleId_(o.id) || (owner && isSampleId_(o[owner])) })
+    counts[name] = deleteSampleRows_(name, function (o) { return isSampleId_(o.id, prefix) || (owner && isSampleId_(o[owner], prefix)) })
   })
-  // Settings: サンプルの分だけを取り除き、値が1つの設定は元の値に戻す
-  var state = sampleParseJson_(props.getProperty(SAMPLE_SETTINGS_STATE_KEY), null)
+  // Settings: 足した分だけを取り除き、値が1つの設定は元の値に戻す
+  var state = sampleParseJson_(props.getProperty(kind.stateKey), null)
   if (state) {
     var keys = sampleSettingKeys_(state)
     var restored = restoreSampleSettings_(readSettingsValues_(keys), state)
     Object.keys(restored).forEach(function (k) { updateSetting_(k, restored[k]) })
-    props.deleteProperty(SAMPLE_SETTINGS_STATE_KEY)
+    props.deleteProperty(kind.stateKey)
   }
-  // 画面で並べ替えた時などに残る、サンプルの id の参照を外す
+  // 画面で並べ替えた時などに残る、id の参照を外す
   ;['project_order', 'survey_invited_ids'].forEach(function (k) {
     var list = splitCsvList_(getSettingValue_(k))
-    var rest = list.filter(function (v) { return !isSampleId_(v) })
+    var rest = list.filter(function (v) { return !isSampleId_(v, prefix) })
     if (rest.length !== list.length) updateSetting_(k, rest.join(','))
   })
-  // サンプルのメンバーの通知の待ち行列・ログインの世代番号
+  // メンバーの通知の待ち行列・ログインの世代番号
   var all = props.getProperties()
   Object.keys(all).forEach(function (k) {
-    if (k.indexOf('notif_queue_' + SAMPLE_ID_PREFIX) === 0 || k.indexOf(SESSION_GEN_PREFIX + SAMPLE_ID_PREFIX) === 0) props.deleteProperty(k)
+    if (k.indexOf('notif_queue_' + prefix) === 0 || k.indexOf(SESSION_GEN_PREFIX + prefix) === 0) props.deleteProperty(k)
   })
-  counts.files = trashSampleFiles_()
+  if (kind.files) counts.files = trashSampleFiles_()
   resetRequestProps_()
   return counts
 }
@@ -924,5 +951,4 @@ function withSampleLock_(fn) {
     lock.releaseLock()
   }
 }
-var CALENDAR_PREFIX_OHSUMI = '[Ohsumi] '
 

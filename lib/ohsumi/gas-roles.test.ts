@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest'
 import { defaultRoles, type RoleDef } from './roles'
 
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
+// サンプルのデータ(buildSampleData_ など)は、Code.gs に足す別のファイル
+const SAMPLE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'SampleData.gs'), 'utf8')
 
 class FakeSheet {
   constructor(public rows: unknown[][]) {}
@@ -30,7 +32,7 @@ function setup(members: [string, string, string?][], settings: Record<string, st
     PropertiesService: { getScriptProperties: () => ({ getProperties: () => ({ ...props }), getProperty: (k: string) => props[k] ?? null }) },
     SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: (n: string) => sheets[n] ?? null }) },
   })
-  vm.runInContext(CODE_GS, ctx)
+  vm.runInContext(CODE_GS + '\n' + SAMPLE_GS, ctx)
   const gas = ctx as unknown as Record<string, (...args: unknown[]) => unknown>
   // 書き込みはメモリ上のシートに反映する
   const writes: Record<string, string> = {}

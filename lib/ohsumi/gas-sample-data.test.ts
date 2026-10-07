@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
 import { mapRemoteData, parseSettings } from './remote'
 
 const ROOT = join(__dirname, '..', '..')
-const CODE_GS = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
+// サンプルのデータは、Code.gs に足す別のファイル(gas/SampleData.gs)にある
+const CODE_GS = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8') + '\n' + readFileSync(join(ROOT, 'gas', 'SampleData.gs'), 'utf8')
 const TODAY = '2026-09-28'
 
 type Row = Record<string, string>
@@ -424,5 +425,128 @@ describe('サンプルのデータの作成と削除', () => {
     expect(t.settings().skill_options).toBe('デザイン,経理')
     expect(t.settings().recurring_rules).toBe('')
     expect(t.store.SAMPLE_SETTINGS_STATE).toBeUndefined()
+  })
+})
+
+describe('見本データ(seedShowcaseData。デモの団体・画面写真用)', () => {
+  const show = base.gas.buildShowcaseData_(TODAY) as SampleData
+  const realRows = () => ({
+    Members: [['id', 'name', 'role'], ['1', '本物の代表', '代表']],
+    Tasks: [['id', 'title', 'creator_id'], ['100', '本物のタスク', '1'], ['sample-t-001', 'サンプルのタスク', 'sample-m-01']],
+    MemberEmails: [['id', 'email'], ['1', 'real@gmail.com']],
+    Settings: [['key', 'value'], ['org_name', '本物の団体']],
+  })
+
+  it('規模: メンバー10〜12人・プロジェクト4〜5件・タスク40〜60件。id はすべて demo- で始まる', () => {
+    expect(show.sheets.Members.length).toBeGreaterThanOrEqual(10)
+    expect(show.sheets.Members.length).toBeLessThanOrEqual(12)
+    expect(show.sheets.Projects.length).toBeGreaterThanOrEqual(4)
+    expect(show.sheets.Projects.length).toBeLessThanOrEqual(5)
+    expect(show.sheets.Tasks.length).toBeGreaterThanOrEqual(40)
+    expect(show.sheets.Tasks.length).toBeLessThanOrEqual(60)
+    for (const rows of Object.values(show.sheets)) for (const r of rows) expect(r.id.startsWith('demo-'), r.id).toBe(true)
+    for (const item of Object.values(show.settings.items).flat()) expect(item.id.startsWith('demo-')).toBe(true)
+  })
+
+  it('テスト用と分かる文字・連番・長すぎる名前を使わない', () => {
+    const names = [...show.sheets.Members.map((m) => m.name + m.display_name + m.department_path), ...show.sheets.Projects.map((p) => p.name),
+      ...show.sheets.Tasks.map((t) => t.title)]
+    for (const n of names) {
+      expect(n, n).not.toMatch(/サンプル|テスト|sample|test|とても長い|\(\d+\)|[0-9]{3,}件/i)
+      expect(n.length, n).toBeLessThanOrEqual(40)
+    }
+  })
+
+  it('どの画面にも何か出るよう、状態がばらけている(期限超過・確認待ち・承認待ち・公募・ブロック・保留・完了)', () => {
+    const tasks = show.sheets.Tasks
+    const open = tasks.filter((t) => t.status !== '完了')
+    expect(open.filter((t) => t.due_date && t.due_date < TODAY).length).toBeGreaterThanOrEqual(2)
+    expect(tasks.filter((t) => t.status === '確認待ち').length).toBeGreaterThanOrEqual(2)
+    expect(tasks.filter((t) => t.approval_status === '承認待ち').length).toBeGreaterThanOrEqual(2)
+    expect(tasks.filter((t) => !t.assignee_id && t.assign_type === 'open_bid').length).toBeGreaterThanOrEqual(2)
+    expect(tasks.some((t) => t.blocker_note)).toBe(true)
+    expect(tasks.some((t) => t.status === '保留')).toBe(true)
+    expect(tasks.filter((t) => t.status === '完了').length).toBeGreaterThanOrEqual(8)
+    expect(tasks.some((t) => t.depends_on_ids)).toBe(true)
+  })
+
+  it('参照する人・プロジェクト・前提タスクは、すべて見本の中にある', () => {
+    const ids = new Set(show.sheets.Members.map((m) => m.id))
+    const projects = new Set(show.sheets.Projects.map((p) => p.id))
+    const tasks = new Set(show.sheets.Tasks.map((t) => t.id))
+    const split = (v: string) => String(v || '').split(',').filter(Boolean)
+    for (const t of show.sheets.Tasks) {
+      expect(projects.has(t.project_id)).toBe(true)
+      for (const id of [...split(t.assignee_id), ...split(t.reviewer_ids), ...split(t.open_bid_applicant_ids), ...split(t.creator_id)]) expect(ids.has(id), id).toBe(true)
+      for (const d of split(t.depends_on_ids)) expect(tasks.has(d)).toBe(true)
+    }
+    for (const m of show.sheets.Members) if (m.reports_to_id) expect(ids.has(m.reports_to_id)).toBe(true)
+    for (const slot of Object.values(base.gas.SHOWCASE_ACCOUNT_SLOTS as unknown as Record<string, string>)) expect(ids.has(slot)).toBe(true)
+  })
+
+  it('GAS の読み取りの絞り込みを通せる(画面写真の LAYOUT_SHOTS で使う)。一般のメンバーには幹部限定のタスクを渡さない', () => {
+    const g = base.gas as unknown as Record<string, (...a: unknown[]) => unknown> & { SHEET_HEADERS: Record<string, string[]>; SHOWCASE_ID_PREFIX: string }
+    const settings = (g.mergeSampleSettings_({}, show.settings, g.SHOWCASE_ID_PREFIX) as { values: Record<string, string> }).values
+    const table = (name: string, rows: Row[]) => ({ headers: g.SHEET_HEADERS[name], rows: rows.map((r) => g.SHEET_HEADERS[name].map((h) => r[h] ?? '')) })
+    const snapshot = { Members: table('Members', show.sheets.Members), Projects: table('Projects', show.sheets.Projects), Tasks: table('Tasks', show.sheets.Tasks),
+      Settings: { headers: ['key', 'value'], rows: Object.entries(settings) } }
+    const view = g.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), 'demo-m-05') as Record<string, { headers: string[]; rows: string[][] }>
+    const vis = view.Tasks.headers.indexOf('visibility')
+    expect(view.Tasks.rows.length).toBeGreaterThan(20)
+    expect(view.Tasks.rows.some((r) => r[vis] === '幹部')).toBe(false)
+    const top = g.buildViewerData_(JSON.parse(JSON.stringify(snapshot)), 'demo-m-01') as Record<string, { headers: string[]; rows: string[][] }>
+    expect(top.Tasks.rows.some((r) => r[vis] === '幹部')).toBe(true)
+  })
+
+  it('テスト環境かデモの団体(DEMO_ORG)だけで動く', () => {
+    const t = setup({}, realRows())
+    expect(() => t.gas.seedShowcaseData()).toThrow(/テスト環境かデモの団体ではない/)
+    expect(() => t.gas.deleteShowcaseData()).toThrow(/テスト環境かデモの団体ではない/)
+    // 崩れ確認用のデータは、デモの団体でも入れられない(テスト環境だけ)
+    expect(() => setup({ DEMO_ORG: 'true' }, realRows()).gas.seedSampleData()).toThrow(/テスト環境ではない/)
+  })
+
+  it('デモの団体で入れて、何度実行しても重複せず、消すのは demo- の行だけ(本物とサンプルは残す)', () => {
+    const t = setup({ DEMO_ORG: 'true', DEMO_ACCOUNTS: 'top=demo-top@gmail.com' }, realRows())
+    t.gas.seedShowcaseData()
+    const tasks = t.records('Tasks').length
+    expect(t.records('Members').filter((m) => m.id.startsWith('demo-'))).toHaveLength(show.sheets.Members.length)
+    expect(t.records('MemberEmails')).toContainEqual({ id: 'demo-m-01', email: 'demo-top@gmail.com' })
+    expect(t.files).toHaveLength(0)
+    t.gas.seedShowcaseData()
+    expect(t.records('Tasks')).toHaveLength(tasks)
+    t.gas.deleteShowcaseData()
+    expect(t.records('Tasks').map((r) => r.id)).toEqual(['100', 'sample-t-001'])
+    expect(t.records('Members').map((r) => r.id)).toEqual(['1'])
+    expect(t.records('MemberEmails')).toEqual([{ id: '1', email: 'real@gmail.com' }])
+    expect(t.settings().org_name).toBe('本物の団体')
+  })
+
+  it('Code.gs と組の版でなければ、どの関数も最初に止まる(SampleData.gs も貼り替えるよう知らせる)', () => {
+    const t = setup({ TEST_ENVIRONMENT: 'true' }, realRows())
+    ;(t.gas as unknown as { OHSUMI_GAS_VERSION: string }).OHSUMI_GAS_VERSION = '2000.01.01-1'
+    for (const fn of ['seedSampleData', 'deleteSampleData', 'seedShowcaseData', 'deleteShowcaseData']) {
+      expect(() => t.gas[fn](), fn).toThrow(/SampleData\.gs も貼り替えてください/)
+    }
+    expect(t.records('Tasks')).toHaveLength(2)
+  })
+})
+
+describe('団体に配る Code.gs には、サンプル・見本のデータを作るコードを入れない', () => {
+  const code = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8')
+  const sample = readFileSync(join(ROOT, 'gas', 'SampleData.gs'), 'utf8')
+
+  it('Code.gs に、サンプルの関数・データの生成が無い', () => {
+    for (const name of ['seedSampleData', 'deleteSampleData', 'seedShowcaseData', 'deleteShowcaseData', 'buildSampleData_', 'buildShowcaseData_',
+      'deleteSampleDataUnlocked_', 'sampleSettingKeys_', 'SAMPLE_ACCOUNT_SLOTS', 'SAMPLE_ID_PREFIX', 'SHOWCASE_ID_PREFIX']) {
+      expect(code.includes(name), name).toBe(false)
+    }
+    expect(code).not.toMatch(/['"](sample|demo)-/)
+  })
+
+  it('SampleData.gs は、組になる Code.gs の版を持つ(pnpm gas:build が書く)', () => {
+    const codeVersion = code.match(/^var OHSUMI_GAS_VERSION = '([^']+)'$/m)![1]
+    expect(sample).toContain(`var SAMPLE_DATA_FOR_GAS_VERSION = '${codeVersion}'`)
+    expect(sample).toMatch(/^var OHSUMI_SAMPLE_DATA_VERSION = '\d{4}\.\d{2}\.\d{2}-\d+'$/m)
   })
 })

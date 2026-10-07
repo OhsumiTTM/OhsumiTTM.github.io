@@ -6,12 +6,14 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { GAS_SRC_DIR, buildGasCode, gasSourceFiles } from './gas-build.mjs'
+import { GAS_SAMPLE_DIR, GAS_SRC_DIR, buildGasCode, buildSampleCode, gasSampleFiles, gasSourceFiles } from './gas-build.mjs'
 
 const ROOT = join(import.meta.dirname, '..')
 export const GAS_VERSION_FILES = [
   // 団体の GAS は gas/src から作る(scripts/gas-build.mjs)。版の行は gas/src のどれかのファイルにあり、そこを書き換えて作り直す
   { path: 'gas/Code.gs', name: 'OHSUMI_GAS_VERSION', src: GAS_SRC_DIR },
+  // サンプル・見本のデータ(gas/sample から作る)。組になる Code.gs の版も中に書くので、Code.gs の版が上がると、こちらも上がる
+  { path: 'gas/SampleData.gs', name: 'OHSUMI_SAMPLE_DATA_VERSION', src: GAS_SAMPLE_DIR },
   { path: 'registry/Code.gs', name: 'REGISTRY_VERSION' },
   { path: 'registry/monitor/Monitor.gs', name: 'MONITOR_VERSION' },
 ]
@@ -38,10 +40,15 @@ export function nextVersion(previous, now = new Date()) {
   return `${day}-${m && m[1] === day ? Number(m[2]) + 1 : 1}`
 }
 
-// 版の行がある gas/src のファイル
-function versionSourceFile(name) {
-  const file = gasSourceFiles().map((f) => join(ROOT, GAS_SRC_DIR, f)).find((f) => readVersion(readFileSync(f, 'utf8'), name) !== null)
-  if (!file) throw new Error(`gas/src に「var ${name} = '…'」の行がありません`)
+const BUILDERS = {
+  [GAS_SRC_DIR]: { files: gasSourceFiles, build: buildGasCode },
+  [GAS_SAMPLE_DIR]: { files: gasSampleFiles, build: buildSampleCode },
+}
+
+// 版の行がある、元のファイル(gas/src・gas/sample)
+function versionSourceFile(dir, name) {
+  const file = BUILDERS[dir].files().map((f) => join(ROOT, dir, f)).find((f) => readVersion(readFileSync(f, 'utf8'), name) !== null)
+  if (!file) throw new Error(`${dir} に「var ${name} = '…'」の行がありません`)
   return file
 }
 
@@ -53,7 +60,7 @@ function main() {
   for (const f of GAS_VERSION_FILES) {
     const file = join(ROOT, f.path)
     // gas/src から作るファイルは、先に作り直す(gas/src を直したのに作り直していない時も、正しい中身で比べる)
-    if (f.src) writeFileSync(file, buildGasCode())
+    if (f.src) writeFileSync(file, BUILDERS[f.src].build())
     let text = readFileSync(file, 'utf8')
     const current = readVersion(text, f.name)
     if (current === null) throw new Error(`${f.path} に「var ${f.name} = '…'」の行がありません`)
@@ -67,9 +74,9 @@ function main() {
       version = nextVersion(known?.version ?? current)
       text = text.replace(lineOf(f.name), `var ${f.name} = '${version}'`)
       if (f.src) {
-        const srcFile = versionSourceFile(f.name)
+        const srcFile = versionSourceFile(f.src, f.name)
         writeFileSync(srcFile, readFileSync(srcFile, 'utf8').replace(lineOf(f.name), `var ${f.name} = '${version}'`))
-        text = buildGasCode()
+        text = BUILDERS[f.src].build()
       }
       writeFileSync(file, text)
     }
