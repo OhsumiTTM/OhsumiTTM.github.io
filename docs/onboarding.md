@@ -123,4 +123,14 @@ Apps Script の左の歯車「プロジェクトの設定」→ 一番下の「�
 ### 更新(Code.gs を変えた時)
 
 - テンプレートの Apps Script の `Code.gs`(と `appsscript.json`)も、同じ内容に貼り替えて保存します
+- テンプレートには `SampleData.gs` を足しません(団体に配るのは `Code.gs` だけです)
+
+### サンプル・デモの団体(SampleData.gs)
+
+- サンプル(テスト環境)とデモの団体だけ、`Code.gs` に加えて `gas/SampleData.gs` を Apps Script に足します(「ファイル」の ＋ →「スクリプト」で `SampleData` という名前のファイルを作って貼る)。
+  サイトの `/gas/` には置いていないので、リポジトリの `gas/SampleData.gs` から貼ります
+- デモの団体は、スクリプトプロパティ `DEMO_ORG` を `true` にしてから `seedShowcaseData` を実行します(見本データ。消す時は `deleteShowcaseData`)。
+  サンプルの団体は `TEST_ENVIRONMENT` を `true` にして、`seedSampleData`(崩れ確認用)・`seedShowcaseData` のどちらも使えます
+- **更新の時は、`Code.gs` と `SampleData.gs` を両方貼り替えます。** 版が組になっていないと、`SampleData.gs` の関数は実行の最初に止まります
+- 詳しくは gas/README.md の「11.5.」
 - 既に立ち上げた団体には影響しません(各団体のコピーは、それぞれ別に更新します)
