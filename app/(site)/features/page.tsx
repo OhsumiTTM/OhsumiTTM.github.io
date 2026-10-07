@@ -10,7 +10,7 @@ import { FEATURES, SCREENS, STATUS_META, getFeature, type ProvisionStatus } from
 export const metadata: Metadata = {
   title: '機能',
   description:
-    'Ohsumiの機能一覧。タスク管理・プロジェクト管理・ワークフロー・レビューと承認・人材情報・人材育成・分析・権限管理を、解決する課題と実際の画面とともに紹介します。',
+    'Ohsumiの機能一覧。タスク管理・プロジェクト管理・ワークフロー・レビューと承認・日報と申請・通知・人材情報・人材育成・分析・権限管理を、解決する課題と実際の画面とともに紹介します。',
   alternates: { canonical: '/features' },
 }
 
@@ -82,7 +82,7 @@ export default function FeaturesPage() {
                 </h2>
               </div>
 
-              <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:gap-14">
+              <div className={cn('grid gap-10 lg:gap-14', f.screens.length > 0 && 'lg:grid-cols-[1fr_1.4fr]')}>
                 <div className="flex flex-col gap-8">
                   <div className="flex flex-col gap-3 rounded-xl bg-navy p-6 text-navy-foreground">
                     <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-navy-foreground/70">解決する課題</h3>
@@ -130,11 +130,13 @@ export default function FeaturesPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-10">
-                  {f.screens.map((key, i) => (
-                    <ScreenFigure key={key} screen={SCREENS[key]} priority={idx === 0 && i === 0} />
-                  ))}
-                </div>
+                {f.screens.length > 0 && (
+                  <div className="flex flex-col gap-10">
+                    {f.screens.map((key, i) => (
+                      <ScreenFigure key={key} screen={SCREENS[key]} priority={idx === 0 && i === 0} />
+                    ))}
+                  </div>
+                )}
               </div>
             </Container>
           </section>
