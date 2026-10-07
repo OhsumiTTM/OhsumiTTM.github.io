@@ -11,6 +11,7 @@ import { CapabilityNote } from '@/components/ohsumi/primitives'
 import { AdminBlock, AdminToc } from '@/components/ohsumi/admin/admin-page'
 import { Button } from '@/components/ui/button'
 import { BELL_KINDS, bellEnabled, type BellKind, type BellSettings } from '@/lib/ohsumi/bell-kinds'
+import { notifyFrequencyOf, toggleNotifyFrequency } from '@/lib/ohsumi/notify-frequency'
 import type { Member, NotifyFrequency, NotifyKind, NotifySettings } from '@/lib/ohsumi/types'
 import { isRemoteConfigured } from '@/lib/ohsumi/remote'
 import { useI18n, SUPPORTED_LOCALES, type TranslationKey } from '@/lib/ohsumi/i18n'
@@ -426,10 +427,7 @@ function NotifySettingsTable({
   const { t } = useI18n()
   const settings = member.notifySettings ?? {}
 
-  const toggle = (kind: NotifyKind, freq: NotifyFrequency) => {
-    const current = settings[kind] ?? 'none'
-    onUpdate({ ...settings, [kind]: current === freq ? 'none' : freq })
-  }
+  const toggle = (kind: NotifyKind, freq: NotifyFrequency) => onUpdate(toggleNotifyFrequency(settings, kind, freq))
 
   return (
     <div className="mt-4 overflow-x-auto">
@@ -446,7 +444,7 @@ function NotifySettingsTable({
         </thead>
         <tbody>
           {NOTIFY_KINDS.map(({ kind, labelKey }) => {
-            const current = settings[kind] ?? 'none'
+            const current = notifyFrequencyOf(settings, kind)
             return (
               <tr key={kind} className="border-t border-border/50">
                 <td className="py-1.5 pr-3 text-left font-medium">{t(labelKey)}</td>

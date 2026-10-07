@@ -131,7 +131,7 @@ export function HomePage() {
           />
           <TextLink href={CTA.features.href}>{CTA.features.label}</TextLink>
         </div>
-        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {FEATURES.map((f, i) => (
             <FeatureCard key={f.slug} feature={f} index={i} />
           ))}
@@ -169,7 +169,7 @@ export function HomePage() {
           />
           <TextLink href="/use-cases">利用シーンを見る</TextLink>
         </div>
-        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {USE_CASES.slice(0, 4).map((u) => (
             <UseCaseCard key={u.slug} useCase={u} />
           ))}

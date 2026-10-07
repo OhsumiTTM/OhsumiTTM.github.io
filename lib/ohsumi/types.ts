@@ -126,8 +126,8 @@ export interface Member {
   // registered and needs approval — see store.tsx's notifyRecipients
   notify?: boolean
   // per-notification-kind email frequency settings (see NotifyFrequency /
-  // NotifyKind below). Absent keys fall back to 'immediate' for admins,
-  // 'immediate' for mention/rejected, 'none' for others.
+  // NotifyKind below). Absent keys mean 'immediate' (GAS getNotifyFrequency_,
+  // notify-frequency.ts).
   notifySettings?: NotifySettings
   // shown instead of `name` throughout the UI when set (item: display name)
   displayName?: string
