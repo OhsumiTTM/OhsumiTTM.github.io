@@ -57,12 +57,12 @@ describe('GAS の版', () => {
     expect(list).toContain(`version: '${version}'`)
   })
 
-  it('最初の「安全の修正」の版は、PR A(通知・タスクの書き換えを GAS が守る)を含む版', () => {
+  it('最初の「安全の修正」の版は、公開前の基準の版(PR A の通知・タスクの書き換えの守りも含む)', () => {
     const registry = read('registry/Code.gs')
     const list = registry.slice(registry.indexOf('var KNOWN_GAS_VERSIONS = ['), registry.indexOf('\n]\n', registry.indexOf('var KNOWN_GAS_VERSIONS = [')))
     // 一覧は新しい順。一番古い「安全の修正」の版
     const security = [...list.matchAll(/\{ version: '([^']+)', security: true, required: true/g)].map((m) => m[1])
-    expect(security.at(-1)).toBe('2026.10.01-1')
+    expect(security.at(-1)).toBe('2026.10.07-1')
     // PR A の守り(通知の回数の上限・タスクの書き換えの確かめ)は、この版の団体の GAS に入っている
     const code = read('gas/Code.gs')
     expect(code).toContain('function allowRequestNotification_(')
