@@ -335,25 +335,28 @@ describe('機能停止(restrict)', () => {
 })
 
 describe('停止の予定の予告', () => {
-  it('14日前・7日前・1日前に、代表にだけメールで知らせる(同じ予告は1回)。画面には理由を渡さない', () => {
+  it('14日前・7日前・1日前に知らせる(同じ予告は1回)。画面には理由を渡さない', () => {
     const p = pair()
     const at = Date.now() + 13.5 * DAY
     p.setOrg({ suspend_at: iso(at), suspend_kind: 'restrict', suspend_reason: 'アンケートの未回答' })
     check(p)
+    // レジストリに頼まれたメール(mailTasks)として、担当者(この団体では未登録)と代表に送る
     expect(p.o.mails).toHaveLength(1)
     expect(p.o.mails[0].to).toBe('top@example.com')
-    expect(p.o.mails[0].subject).toContain('テスト団体: 2026/10/01 12:00 から読み取り専用になります(あと14日)')
+    expect(p.o.mails[0].subject).toContain('読み取り専用になります(あと14日)')
     expect(p.o.mails[0].body).toContain('アンケートの未回答')
     check(p)
     expect(p.o.mails).toHaveLength(1)
-    // 7日前・1日前
+    // 送ったことは次の checkIn でレジストリに伝わり、レジストリの記録に残る(レジストリからは送らない)
+    expect(JSON.parse(String(p.orgValue('suspend_notices_json')))).toEqual([expect.objectContaining({ days: 14, via: 'org' })])
+    // 古いレジストリ(mailTasks を返さない)の時は、団体の GAS が自分の文面で代表に送る(7日前・1日前)
+    p.o.mails.length = 0
     const send = (now: number) => p.g.sendContractNotices_(state(p), now)
     expect(send(at - 6.5 * DAY)).toBe(7)
     expect(send(at - 6 * DAY)).toBeNull()
     expect(send(at - 0.5 * DAY)).toBe(1)
-    expect(p.o.mails.map((m) => m.subject)).toEqual([
-      expect.stringContaining('あと14日'), expect.stringContaining('あと7日'), expect.stringContaining('あと1日'),
-    ])
+    expect(p.o.mails.map((m) => m.subject)).toEqual([expect.stringContaining('あと7日'), expect.stringContaining('あと1日')])
+    expect(p.o.mails[0].subject).toContain('テスト団体: ')
     // 画面に渡す状態には、理由を入れない
     const res = p.o.post({ action: 'getInitialData' })
     expect(res.contract).toEqual({ phase: 'scheduled', kind: 'restrict', suspendAt: iso(at) })
@@ -365,7 +368,8 @@ describe('停止の予定の予告', () => {
     p.setOrg({ suspend_at: iso(at), suspend_kind: 'suspend' })
     check(p)
     expect(p.o.mails.map((m) => m.subject)).toEqual([expect.stringContaining('提供を停止します(あと14日)')])
-    p.setOrg({ suspend_kind: 'restrict' })
+    // 予定を入れ直すと、レジストリは予告の記録を消す(管理画面の操作と同じ)
+    p.setOrg({ suspend_kind: 'restrict', suspend_notices_json: '[]' })
     check(p)
     expect(p.o.mails).toHaveLength(2)
     p.setOrg({ suspend_at: '' })
@@ -466,5 +470,37 @@ describe('機能停止中は、読み取りの一覧に無い操作をすべて�
     const before = p.o.fetches()
     p.o.post({ action: 'getInitialData', sessionToken: 'session-m1' })
     expect(p.o.fetches()).toBe(before)
+  })
+})
+
+describe('レジストリに頼まれたメール(mailTasks)', () => {
+  const task = (key: string, to: string[] = ['contact@example.org']) => ({ key, to, subject: '[Ohsumi] ' + key, body: '本文 ' + key })
+
+  it('担当者と代表に送り、送った key を覚えて次の checkIn で伝える。同じ key は二重に送らない', () => {
+    const p = pair()
+    const st = { mailTasks: [task('sv.sv_abc.0'), task('sn.14s.1792518616896', [])] }
+    expect(p.g.sendRegistryMailTasks_(st)).toEqual(['sv.sv_abc.0', 'sn.14s.1792518616896'])
+    expect(p.o.mails.map((m) => m.to)).toEqual(['contact@example.org,top@example.com', 'top@example.com'])
+    expect(p.g.sendRegistryMailTasks_(st)).toEqual([])
+    expect(p.o.mails).toHaveLength(2)
+    check(p)
+    expect(p.o.sent.filter((s) => s.action === 'checkIn').at(-1)!.mailDone).toEqual(['sv.sv_abc.0', 'sn.14s.1792518616896'])
+  })
+
+  it('送れなかった時(メールの上限など)は、残りも送ったことにせず、次の確認で送り直す', () => {
+    const p = pair()
+    p.o.c.sendMail_ = () => false
+    const st = { mailTasks: [task('sv.sv_abc.0'), task('sv.sv_abc.7')] }
+    expect(p.g.sendRegistryMailTasks_(st)).toEqual([])
+    p.o.c.sendMail_ = (m: { to: string; subject: string; body: string }) => { p.o.mails.push(m); return true }
+    expect(p.g.sendRegistryMailTasks_(st)).toEqual(['sv.sv_abc.0', 'sv.sv_abc.7'])
+  })
+
+  it('形の違う task は捨てる。レジストリが mailTasks を返さない時は null(古いレジストリ)', () => {
+    const p = pair()
+    expect(p.g.parseRegistryMailTasks_(undefined)).toBeNull()
+    expect(p.g.parseRegistryMailTasks_([task('bad'), { key: 'sv.x.1' }, task('sv.ok.1', ['x@y.z', 'not-mail'])])).toEqual([
+      { key: 'sv.ok.1', to: ['x@y.z'], subject: '[Ohsumi] sv.ok.1', body: '本文 sv.ok.1' },
+    ])
   })
 })

@@ -486,7 +486,8 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 | `REGISTRY_PENDING` | 登録の途中で応答が失われた時に、同じ登録として送り直すための乱数(registerNonce。レジストリはこれが合う時だけ、24時間まで同じ共有鍵を返す)と、登録コードの SHA-256(登録できたら消える。**ほかに写さない**) |
 | `INITIAL_SETUP_HASH` / `INITIAL_SETUP_EXPIRES` / `INITIAL_SETUP_FAILS` | 最初の代表の初期設定コードの SHA-256・有効期限(72時間)・間違えた回数(使うと消える) |
 | `CONTRACT_STATE` | レジストリで最後に確かめた停止の状態(4.2.1。`checkContractStatus` が書く。手で変えない) |
-| `CONTRACT_NOTICES_SENT` | 代表に送った停止の予告(予定の日時と種類ごとに、14・7・1日前のどれを送ったか) |
+| `CONTRACT_NOTICES_SENT` | 代表に送った停止の予告(レジストリが `mailTasks` を返さない古いレジストリの時だけ使う)(予定の日時と種類ごとに、14・7・1日前のどれを送ったか) |
+| `REGISTRY_MAIL_TASKS_SENT` | レジストリに頼まれて送ったメール(アンケート・停止の予告など)の key の一覧(直近100件。次の checkIn の `mailDone` でレジストリに伝え、二重に送らない) |
 
 `LEGACY_ACCESS_TOKEN_AUTH` が残っている場合は、今は使っていないので削除して構いません。
 
@@ -518,6 +519,11 @@ FSIF がレジストリの管理画面で停止の予定を入れると、この
   - リクエストの時にも確かめ直します。停止中はどの操作でも1分に1回まで、停止の予定がある時は書き込みの前に1分に1回まで、
     予定が無い時は書き込みの前に10分に1回まで(`registry/README.md` の「1.9」)。
   - レジストリに確かめられない時は、最後に確かめた状態のまま使い続けます(最後に届いた停止の予定の日時は守ります)。
+- **レジストリに頼まれたメール:** checkIn の返事の `mailTasks`(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告)を、
+  担当者(レジストリの Contacts)と代表に1通で送ります。この団体の Gmail で送るので、レジストリのメールの上限に数えません(`registry/README.md` の「1.14」)。
+  ほかのメール(更新の知らせ・緊急のお知らせ)より先に送り、まとめのメールのように `digestMailReserve` の分で止まりません。
+  送った key はスクリプトプロパティ `REGISTRY_MAIL_TASKS_SENT` に残し、次の checkIn の `mailDone` で伝えます。上限で送れなかった時は、次の確認で送り直します。
+  `mailTasks` を返すレジストリの時は、停止の予告はこれで代表にも届くので、この GAS だけの予告(`CONTRACT_NOTICES_SENT`)は送りません。
 - **① 提供停止中:** ログインの設定(`getLoginConfig`)以外のすべての操作を断ります(`orgSuspended`)。画面はログイン画面に戻り、
   「この団体は、Ohsumi の利用を停止しています」を出します。通知(`sendBatchNotifications`)・毎朝の処理(`dailyMaintenance`)も止めます。
 - **② 機能停止中:** 読み取りの一覧(`READ_ONLY_ACTIONS`。ログイン・読み取り(`getInitialData`・`getExpenses`・`getFiles` など))に

@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-8'
+var REGISTRY_VERSION = '2026.10.07-10'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1252,14 +1252,151 @@ function contactEmails_() {
   return contacts
 }
 
+// ---- 団体あてのメールを、団体の GAS に送ってもらう ----
+//
+// アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告(14・7・1日前)は、団体の GAS が自分の団体の Gmail で
+// 担当者(Contacts)と代表に送る(緊急のお知らせと同じ形。レジストリのメールの1日の上限に数えない)。
+//   - checkIn の返事の mailTasks: 送るメール({ key, to(担当者), subject, body })。団体の GAS は代表を宛先に足して送る
+//   - 団体の GAS は、送ったメールの key を次の checkIn の mailDone で伝える。レジストリは、送ったことを記録する(二重に送らない)
+//   - key: 'sv.<アンケートID>.<日目>' / 'sn.<日数><s(提供停止)|r(機能停止)>.<停止の時刻(ms)>' / 'sr.<アンケートID>.<停止の時刻(ms)>'
+// レジストリが代わりに送るのは、この仕組みに対応していない古い版の団体と、最後の checkIn から24時間を超えた団体(団体の GAS が
+// 止まっている)だけ(毎日の処理で)。
+// 団体の GAS が mailTasks に対応した版(これより前の版には、今までどおりレジストリから送る)
+var ORG_MAIL_DELIVERY_SINCE = '2026.10.07-6'
+var ORG_MAIL_STALE_MS = 24 * 3600 * 1000
+var ORG_MAIL_TASKS_MAX = 10
+var ORG_MAIL_DONE_MAX = 30
+var ORG_MAIL_KEY_PATTERN = /^(sv|sn|sr)\.[A-Za-z0-9_]{1,40}\.\d{1,14}$/
+
+// 団体の GAS がメールを送る団体か(対応した版で、24時間以内に checkIn に来ている)
+function orgDeliversMail_(values, nowMs) {
+  if (compareGasVersions_(String(values.gas_version || ''), ORG_MAIL_DELIVERY_SINCE) < 0) return false
+  var last = timeOf_(values.last_check_at)
+  return last > 0 && nowMs - last <= ORG_MAIL_STALE_MS
+}
+
+// 28日目の機能停止の知らせを、まだ送っていなければ { surveyId, suspendAtMs }。無ければ null
+function dueRestrictionNotice_(values, nowMs) {
+  var surveyId = String(values.suspend_survey_id || '')
+  if (!surveyId) return null
+  var c = contractState_(values, nowMs)
+  if (c.phase !== 'scheduled' || c.kind !== 'restrict') return null
+  var at = timeOf_(c.suspendAt)
+  var done = suspensionNoticesSent_(values).some(function (n) { return n && n.notice === 'restrict' && Number(n.suspendAtMs) === at })
+  return done ? null : { surveyId: surveyId, suspendAtMs: at }
+}
+
+// 団体の GAS が送るメールの件名・本文。団体自身の Google アカウントから届くので、差出人に戸惑わないよう、
+// 件名と本文の最初に「Ohsumi(FSIF)からのお知らせ」と書く。担当者と代表の両方に届くことも書く
+var ORG_MAIL_SUBJECT_PREFIX = '[Ohsumi(FSIF)からのお知らせ] '
+function orgDeliveredText_(text) {
+  return {
+    subject: ORG_MAIL_SUBJECT_PREFIX + String(text.subject).replace(/^\[Ohsumi\] /, ''),
+    body: 'Ohsumi(FSIF)からのお知らせです。このメールは、FSIF の依頼で、団体の Ohsumi の仕組み(団体の Google アカウント)から自動で送っています' +
+      '(団体の担当者と代表の方にお送りしています)。\n\n' + text.body,
+  }
+}
+
+// 団体に送ってもらうメール(checkIn の返事)。surveys は Surveys の行(この団体の分)
+function orgMailTasks_(orgValues, surveys, contacts, nowMs) {
+  var orgId = String(orgValues.org_id || '')
+  var orgName = String(orgValues.display_name || orgId)
+  var to = contacts || []
+  var tasks = []
+  var c = contractState_(orgValues, nowMs)
+  var restrict = dueRestrictionNotice_(orgValues, nowMs)
+  if (restrict) {
+    var row = surveys.filter(function (r) { return String(r.values.survey_id) === restrict.surveyId })[0]
+    if (row) {
+      var rs = surveyState_(row.values, nowMs)
+      var rt = surveyText_(orgName, row.values, Math.max(rs.day, SURVEY_DUE_DAYS + 1), restrict.suspendAtMs)
+      tasks.push({ key: 'sr.' + restrict.surveyId + '.' + restrict.suspendAtMs, to: to, subject: orgDeliveredText_(rt).subject, body: orgDeliveredText_(rt).body })
+    }
+  }
+  var days = dueSuspensionNotice_(orgValues, nowMs)
+  if (days !== null) {
+    var nt = suspensionNoticeText_(orgName, c, days)
+    tasks.push({ key: 'sn.' + days + (c.kind === 'restrict' ? 'r' : 's') + '.' + timeOf_(c.suspendAt), to: to, subject: orgDeliveredText_(nt).subject, body: orgDeliveredText_(nt).body })
+  }
+  surveys.forEach(function (r) {
+    var day = dueSurveyReminder_(r.values, nowMs)
+    if (day === null) return
+    var st = surveyText_(orgName, r.values, day, surveyRestrictionOf_(orgValues, r.values.survey_id, nowMs))
+    tasks.push({ key: 'sv.' + String(r.values.survey_id) + '.' + day, to: to, subject: orgDeliveredText_(st).subject, body: orgDeliveredText_(st).body })
+  })
+  return tasks.slice(0, ORG_MAIL_TASKS_MAX)
+}
+
+// 団体の GAS が送ったメール(checkIn の mailDone)を記録する。記録した key の数を返す
+function recordOrgMailDone_(orgRow, surveys, keys, nowMs) {
+  var list = (Array.isArray(keys) ? keys : []).map(String).filter(function (k) { return ORG_MAIL_KEY_PATTERN.test(k) }).slice(0, ORG_MAIL_DONE_MAX)
+  if (!list.length) return 0
+  var at = new Date(nowMs).toISOString()
+  var notices = suspensionNoticesSent_(orgRow.values)
+  var noticesChanged = false
+  var recorded = 0
+  list.forEach(function (key) {
+    var p = key.split('.')
+    if (p[0] === 'sv') {
+      var row = surveys.filter(function (r) { return String(r.values.survey_id) === p[1] })[0]
+      if (!row) return
+      var sent = surveyRemindersSent_(row.values)
+      if (sent.some(function (x) { return Number(x.day) === Number(p[2]) })) return
+      sent.push({ day: Number(p[2]), at: at, via: 'org' })
+      row.values.reminders_json = JSON.stringify(sent)
+      setRowFields_('Surveys', row.row, { reminders_json: row.values.reminders_json })
+      recorded++
+    } else if (p[0] === 'sn') {
+      var c = contractState_(orgRow.values, nowMs)
+      var m = p[1].match(/^(\d+)([sr])$/)
+      if (!m || timeOf_(c.suspendAt) !== Number(p[2]) || (c.kind === 'restrict' ? 'r' : 's') !== m[2]) return
+      if (notices.some(function (n) { return n && Number(n.days) === Number(m[1]) })) return
+      notices.push({ days: Number(m[1]), at: at, via: 'org' })
+      noticesChanged = true
+      recorded++
+    } else if (p[0] === 'sr') {
+      if (String(orgRow.values.suspend_survey_id || '') !== p[1]) return
+      if (notices.some(function (n) { return n && n.notice === 'restrict' && Number(n.suspendAtMs) === Number(p[2]) })) return
+      notices.push({ notice: 'restrict', suspendAtMs: Number(p[2]), at: at, via: 'org' })
+      noticesChanged = true
+      recorded++
+    }
+  })
+  if (noticesChanged) {
+    orgRow.values.suspend_notices_json = JSON.stringify(notices)
+    setRowFields_('Orgs', orgRow.row, { suspend_notices_json: orgRow.values.suspend_notices_json })
+  }
+  if (recorded) appendAudit_({ actor: 'org', action: 'orgMailDone', target: String(orgRow.values.org_id), after: { keys: list } })
+  return recorded
+}
+
 // 毎日の処理(dailyRegistryBackup)から呼ぶ: 予告の時期になった団体の担当者(Contacts)にメールを送り、送ったことを記録する
 function sendSuspensionNotices_(nowMs) {
   var contacts = contactEmails_()
   var sent = []
+  var surveys = null
   readRows_('Orgs').forEach(function (row) {
     var orgId = String(row.values.org_id || '')
+    // 団体の GAS が送る団体には、レジストリからは送らない(checkIn の mailTasks)
+    if (!orgId || orgDeliversMail_(row.values, nowMs)) return
+    // 28日目の機能停止の知らせ(団体の GAS が止まっていて、まだ届いていないもの)
+    var restrict = dueRestrictionNotice_(row.values, nowMs)
+    if (restrict) {
+      surveys = surveys || readRows_('Surveys')
+      var srow = surveys.filter(function (r) { return String(r.values.survey_id) === restrict.surveyId })[0]
+      if (srow) {
+        var rs = surveyState_(srow.values, nowMs)
+        var rt = surveyText_(String(row.values.display_name || orgId), srow.values, Math.max(rs.day, SURVEY_DUE_DAYS + 1), restrict.suspendAtMs)
+        var rto = contacts[orgId] || []
+        var rm = registryMail_({ to: rto, subject: rt.subject, body: rt.body }, 'notice', orgId, nowMs)
+        var rlist = suspensionNoticesSent_(row.values).concat([{ notice: 'restrict', suspendAtMs: restrict.suspendAtMs, at: new Date(nowMs).toISOString(), to: rto.length, queued: rm.queued }])
+        row.values.suspend_notices_json = JSON.stringify(rlist)
+        setRowFields_('Orgs', row.row, { suspend_notices_json: row.values.suspend_notices_json })
+        appendAudit_({ actor: 'registry', action: 'sendRestrictionNotice', target: orgId, after: { surveyId: restrict.surveyId, recipients: rto.length } })
+      }
+    }
     var days = dueSuspensionNotice_(row.values, nowMs)
-    if (!orgId || days === null) return
+    if (days === null) return
     var c = contractState_(row.values, nowMs)
     var text = suspensionNoticeText_(String(row.values.display_name || orgId), c, days)
     var to = contacts[orgId] || []
@@ -1484,6 +1621,13 @@ function checkIn_(body, nowMs) {
     if (jobs) Object.keys(jobs).forEach(function (k) { fields[k] = jobs[k] })
     setRowFields_('Orgs', row.row, fields)
   }
+  // 団体の GAS が送った、レジストリからのメール(二重に送らないように記録する)と、次に送ってもらうメール
+  var mailTasks
+  if (compareGasVersions_(gasVersion, ORG_MAIL_DELIVERY_SINCE) >= 0) {
+    var orgSurveys = readRows_('Surveys').filter(function (r) { return String(r.values.org_id) === orgId })
+    if (Array.isArray(body.mailDone) && body.mailDone.length) recordOrgMailDone_(row, orgSurveys, body.mailDone, nowMs)
+    mailTasks = isDemoOrg_(row.values) ? [] : orgMailTasks_(row.values, orgSurveys, contactEmails_()[orgId] || [], nowMs)
+  }
   var c = contractState_(row.values, nowMs)
   // GAS の版: 更新が要るか(今届いた版で判定する)
   var vs = gasVersionStatus_(merged_(row.values, { gas_version: gasVersion, last_check_at: new Date(nowMs).toISOString() }), gasVersionList_(), nowMs)
@@ -1498,7 +1642,9 @@ function checkIn_(body, nowMs) {
     // 止めている機能(機能のスイッチ。全団体の分と、この団体の分)
     disabledFeatures: disabledFeaturesFor_(row.values),
     // 上限・しきい値(全団体の値に、この団体の値を重ねたもの。団体の GAS は範囲に収めて使う)
-    tunables: tunablesFor_(row.values) } }
+    tunables: tunablesFor_(row.values),
+    // 団体の GAS に送ってもらうメール(対応した版だけ。古い版には返さない)
+    mailTasks: mailTasks } }
 }
 
 // ---- 定量データ(団体の GAS が週1回送る集計値) ----
@@ -1785,7 +1931,8 @@ function sendSurveyMails_(nowMs) {
   readRows_('Surveys').forEach(function (row) {
     var orgValues = orgs[String(row.values.org_id || '')]
     var day = dueSurveyReminder_(row.values, nowMs)
-    if (!orgValues || day === null) return
+    // 団体の GAS が送る団体には、レジストリからは送らない(checkIn の mailTasks)
+    if (!orgValues || day === null || orgDeliversMail_(orgValues, nowMs)) return
     try {
       var to = sendSurveyMail_(row, orgValues, day, contacts, nowMs)
       appendAudit_({ actor: 'registry', action: day === 0 ? 'sendSurveyMail' : 'sendSurveyReminder', target: String(row.values.org_id), after: { surveyId: String(row.values.survey_id), day: day, recipients: to } })
@@ -1860,8 +2007,8 @@ function sendSurvey_(body, nowMs) {
         created_by: session.sub, created_at: new Date(nowMs).toISOString(), note: reason }
       appendRowByHeaders_('Surveys', values)
       var mailed = 0
-      if (sendDate === today) {
-        // 送付日が今日なら、その場で送る(送れなかった時は、毎日の処理で送り直す)
+      if (sendDate === today && !orgDeliversMail_(r.values, nowMs)) {
+        // 送付日が今日なら、その場で送る(送れなかった時は、毎日の処理で送り直す)。団体の GAS が送る団体は、次の checkIn で送る
         try {
           mailed = sendSurveyMail_({ row: readRows_('Surveys').length + 1, values: values }, r.values, 0, contacts, nowMs)
         } catch (e) {
@@ -1948,15 +2095,20 @@ function scheduleSurveyRestriction_(body, nowMs) {
       var after = merged_(org.values, fields)
       rememberOrgFingerprint_(orgId, after)
       forgetResolvedOrg_(orgId)
-      // 入れたことを、担当者にその場で知らせる(期限の後のリマインドと同じ文面に、停止の日時を入れる)
+      // 入れたことを、担当者に知らせる(期限の後のリマインドと同じ文面に、停止の日時を入れる)。
+      // 団体の GAS が送る団体は、次の checkIn で団体の GAS が送る(mailTasks の 'sr.')。それ以外は、その場で送る
       var mailed = 0
-      try {
-        var to = contacts[orgId] || []
-        var text = surveyText_(String(org.values.display_name || orgId), row.values, Math.max(s.day, SURVEY_DUE_DAYS + 1), at)
-        registryMail_({ to: to, subject: text.subject, body: text.body }, 'notice', orgId, nowMs)
-        mailed = to.length
-      } catch (e) {
-        console.error('機能停止の知らせを送れませんでした(' + orgId + '): ' + e)
+      if (!orgDeliversMail_(after, nowMs)) {
+        try {
+          var to = contacts[orgId] || []
+          var text = surveyText_(String(org.values.display_name || orgId), row.values, Math.max(s.day, SURVEY_DUE_DAYS + 1), at)
+          var m = registryMail_({ to: to, subject: text.subject, body: text.body }, 'notice', orgId, nowMs)
+          mailed = to.length
+          var noticed = suspensionNoticesSent_(after).concat([{ notice: 'restrict', suspendAtMs: at, at: new Date(nowMs).toISOString(), to: to.length, queued: m.queued }])
+          setRowFields_('Orgs', org.row, { suspend_notices_json: JSON.stringify(noticed) })
+        } catch (e) {
+          console.error('機能停止の知らせを送れませんでした(' + orgId + '): ' + e)
+        }
       }
       appendAudit_({ actor: session.sub, action: 'scheduleSurveyRestriction', target: orgId,
         after: { surveyId: String(row.values.survey_id), kind: 'restrict', suspendAt: fields.suspend_at, recipients: mailed }, reason: reason })
@@ -2582,6 +2734,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.07-6', security: false, required: true, note: 'レジストリからのメール(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告)を、checkIn の返事(mailTasks)をもとに団体の Gmail で担当者と代表に送り、送ったものを次の checkIn で伝える(レジストリのメールの上限に数えない)' },
   { version: '2026.10.07-5', security: false, required: true, note: 'サンプル・見本のデータを作るコードを Code.gs から外し、別のファイル(SampleData.gs。サンプル・デモの団体だけが足す)に分ける。カレンダーの予定の名前の先頭の定義を Code.gs の中に移す' },
   { version: '2026.10.07-3', security: false, required: true, note: '担当者が「完了」を選ぶと確認待ちにする(確認する人がいれば)。確認待ちが届く人は、確認者 → 担当者の報告先 → 全権管理者(代表を含む)。確認する人(報告先・全権管理者を含む)は完了にできる' },
   { version: '2026.10.07-2', security: false, required: true, note: '利用者に見える文言を今の機能に合わせる(「はじめに」のタスクの「やりたいこと」「個人設定」、やりたいことの更新のメール、メールアドレスの登録の案内)' },

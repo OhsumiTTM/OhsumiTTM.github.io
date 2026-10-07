@@ -719,13 +719,22 @@ function onSpreadsheetEdit(e) {
 }
 
 // 1時間ごと(setupOhsumi でトリガーを作る): 提供停止・機能停止の状態をレジストリに確かめ、
-// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる
+// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる。レジストリに頼まれたメール(アンケートなど)も送る
 function checkContractStatus() {
   var state = refreshContractState_() || readContractState_()
+  // レジストリに頼まれたメール(アンケート・停止の予告など。担当者と代表あて)を、ほかのメールより先に送る
   try {
-    sendContractNotices_(state, Date.now())
+    sendRegistryMailTasks_(state)
   } catch (e) {
-    console.error('停止の予告のメールを送れませんでした: ' + e)
+    console.error('レジストリからのメールを送れませんでした: ' + maskEmailsIn_(String(e)))
+  }
+  // 停止の予告は、レジストリが mailTasks を返す時は、そちらで代表にも届く(古いレジストリの時だけ、ここで代表に送る)
+  if (!(state && Array.isArray(state.mailTasks))) {
+    try {
+      sendContractNotices_(state, Date.now())
+    } catch (e) {
+      console.error('停止の予告のメールを送れませんでした: ' + e)
+    }
   }
   // 提供停止中は知らせない(機能停止中は知らせる)
   if (contractSuspendedNow_()) return
@@ -2323,7 +2332,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.07-5'
+var OHSUMI_GAS_VERSION = '2026.10.07-6'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2983,6 +2992,63 @@ function sendUrgentAnnouncementMails_(state, deps) {
   return sent
 }
 
+// ---- レジストリに頼まれて送るメール(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告) ----
+//
+// 団体あてのメールは、レジストリの代わりに、この団体の Gmail で送る(レジストリのメールの1日の上限に数えないため)。
+// checkIn の返事の mailTasks を、担当者(レジストリの Contacts)と代表に送り、送った key をスクリプトプロパティ
+// REGISTRY_MAIL_TASKS_SENT に残す(直近の分)。次の checkIn で mailDone として伝え、レジストリが記録する(二重に送らない)。
+// メールの1日の上限で送れなかった時は送ったことにせず、次の1時間ごとの確認で送り直す。
+// 1時間ごとの checkContractStatus で、ほかのメール(更新の知らせ・緊急のお知らせ)より先に送る。まとめのメール
+// (digestMailReserve の分を残して止まる)とは違い、残りを最後まで使える
+var REGISTRY_MAIL_SENT_KEEP = 100
+var REGISTRY_MAIL_DONE_REPORT = 30
+var REGISTRY_MAIL_KEY_PATTERN = /^(sv|sn|sr)\.[A-Za-z0-9_]{1,40}\.\d{1,14}$/
+
+function parseRegistryMailTasks_(list) {
+  if (!Array.isArray(list)) return null
+  return list.slice(0, 10).map(function (t) {
+    if (!t || typeof t !== 'object') return null
+    var key = String(t.key || '')
+    if (!REGISTRY_MAIL_KEY_PATTERN.test(key)) return null
+    var to = (Array.isArray(t.to) ? t.to : []).map(function (e) { return String(e).trim() })
+      .filter(function (e) { return /^[^@\s,]+@[^@\s,]+$/.test(e) }).slice(0, 10)
+    return { key: key, to: to, subject: String(t.subject || '').slice(0, 300), body: String(t.body || '').slice(0, 5000) }
+  }).filter(function (t) { return t && t.subject && t.body })
+}
+
+function registryMailTasksSent_() {
+  var list = []
+  try { list = JSON.parse(PropertiesService.getScriptProperties().getProperty('REGISTRY_MAIL_TASKS_SENT') || '[]') } catch (e) { list = [] }
+  return Array.isArray(list) ? list.map(String).filter(function (k) { return REGISTRY_MAIL_KEY_PATTERN.test(k) }) : []
+}
+
+// 送った key の一覧を返す
+function sendRegistryMailTasks_(state) {
+  var tasks = state && Array.isArray(state.mailTasks) ? state.mailTasks : []
+  if (!tasks.length) return []
+  var sent = registryMailTasksSent_()
+  var pending = tasks.filter(function (t) { return sent.indexOf(t.key) < 0 })
+  if (!pending.length) return []
+  var emails = getAllMemberEmails_()
+  var tops = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  var done = []
+  for (var i = 0; i < pending.length; i++) {
+    var t = pending[i]
+    var to = []
+    t.to.concat(tops).forEach(function (e) { if (to.map(function (x) { return x.toLowerCase() }).indexOf(e.toLowerCase()) < 0) to.push(e) })
+    if (!to.length) {
+      console.warn('レジストリからのメールを送る宛先(担当者・代表)がありません: ' + t.subject)
+      continue
+    }
+    // 送れなかった時(メールの1日の上限など)は、残りも次の確認に回す(送る順を守る)
+    if (!sendMail_({ to: to.join(','), subject: t.subject, body: t.body })) break
+    sent.push(t.key)
+    done.push(t.key)
+  }
+  if (done.length) PropertiesService.getScriptProperties().setProperty('REGISTRY_MAIL_TASKS_SENT', JSON.stringify(sent.slice(-REGISTRY_MAIL_SENT_KEEP)))
+  return done
+}
+
 function gasUpdateStatus_() {
   var state = readContractState_()
   var u = (state && state.gasUpdate) || null
@@ -3066,7 +3132,9 @@ function refreshContractState_(deps) {
     var j = jobStatus_(Date.now())
     jobs = { dailyAt: j.dailyAt, hourlyAt: j.hourlyAt }
   } catch (e) { jobs = null }
-  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION, mail: mail, jobs: jobs })
+  // レジストリから頼まれて送ったメール(sendRegistryMailTasks_)の key。レジストリが記録し、二重に送らない
+  var mailDone = registryMailTasksSent_().slice(-REGISTRY_MAIL_DONE_REPORT)
+  var payload = JSON.stringify({ action: 'checkIn', orgId: orgId, ts: ts, sig: sig, gasVersion: OHSUMI_GAS_VERSION, mail: mail, jobs: jobs, mailDone: mailDone })
   var res
   try {
     var r = fetch(registryUrl, { method: 'post', contentType: 'text/plain;charset=utf-8', payload: payload, muteHttpExceptions: true, followRedirects: true })
@@ -3101,6 +3169,8 @@ function refreshContractState_(deps) {
     disabledFeatures: parseDisabledFeatures_(out.disabledFeatures),
     // 上限・しきい値(安全な範囲に収めたもの。古いレジストリは返さない)
     tunables: parseTunables_(out.tunables),
+    // レジストリに頼まれて送るメール(アンケート・停止の予告など)。古いレジストリは返さない(null)
+    mailTasks: parseRegistryMailTasks_(out.mailTasks),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
   return state

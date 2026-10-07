@@ -165,13 +165,22 @@ function onSpreadsheetEdit(e) {
 }
 
 // 1時間ごと(setupOhsumi でトリガーを作る): 提供停止・機能停止の状態をレジストリに確かめ、
-// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる
+// 停止の予定があれば、14日前・7日前・1日前に代表へメールで知らせる。レジストリに頼まれたメール(アンケートなど)も送る
 function checkContractStatus() {
   var state = refreshContractState_() || readContractState_()
+  // レジストリに頼まれたメール(アンケート・停止の予告など。担当者と代表あて)を、ほかのメールより先に送る
   try {
-    sendContractNotices_(state, Date.now())
+    sendRegistryMailTasks_(state)
   } catch (e) {
-    console.error('停止の予告のメールを送れませんでした: ' + e)
+    console.error('レジストリからのメールを送れませんでした: ' + maskEmailsIn_(String(e)))
+  }
+  // 停止の予告は、レジストリが mailTasks を返す時は、そちらで代表にも届く(古いレジストリの時だけ、ここで代表に送る)
+  if (!(state && Array.isArray(state.mailTasks))) {
+    try {
+      sendContractNotices_(state, Date.now())
+    } catch (e) {
+      console.error('停止の予告のメールを送れませんでした: ' + e)
+    }
   }
   // 提供停止中は知らせない(機能停止中は知らせる)
   if (contractSuspendedNow_()) return
