@@ -157,6 +157,45 @@ describe('記録を1件1行のシートに移す(サンプルのデータで、�
     expect(recordRows(h, 'TaskRecords').length + recordRows(h, 'MemberRecords').length).toBe(total)
   })
 
+  it('途中で止まって30分たった後に書き込まれたコメントも、続きから移すと照合で行に入る(写し終えたタスクにも)', () => {
+    const h = harness()
+    withSampleRecords(h)
+    h.c.MIGRATE_BATCH = 10
+    const real = h.c.syncRecordListsBulk_ as (...a: unknown[]) => number
+    let calls = 0
+    h.c.syncRecordListsBulk_ = (...a: unknown[]) => {
+      calls++
+      if (calls === 4) throw new Error('実行の時間切れ(のつもり)')
+      return real(...a)
+    }
+    expect(migrate(h).ok).toBe(false)
+    expect(state(h)).toBe('migrating')
+    h.c.syncRecordListsBulk_ = real
+    // t1 は止まる前に写し終えている
+    const copied = recordRows(h, 'TaskRecords').filter((r) => String(r[1]) === 't1' && String(r[2]) === 'comment').length
+    expect(copied).toBeGreaterThan(0)
+    // 止まってから30分を過ぎた: 書き込みを受け付ける(セルが正のまま)
+    const settings = h.sheets.Settings.rows.find((r) => r[0] === 'record_rows_state')!
+    const st = JSON.parse(String(settings[1]))
+    st.touchedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString()
+    settings[1] = JSON.stringify(st)
+    h.props.DATA_VERSION = 'stale-' + Date.now()
+    const late = { id: 'c-late', text: '止まった後のコメント', byId: 'm-base', at: '2026-10-08T01:00:00Z' }
+    const added = h.post({ action: 'updateComments', sessionToken: 'm-base', taskId: 't1', listOps: [{ op: 'add', entry: late }] })
+    expect(added.ok, added.error).toBe(true)
+    expect(cell(h, 'Tasks', 't1', 'comments_json')).toContain('c-late')
+    const before = viewList(h, 'Tasks', 't1', 'comments_json')
+    // 続きから移す: 写し終えた t1 は、照合で違いが見つかり、写し直して行に入る
+    const again = migrate(h)
+    expect(again.ok, again.error).toBe(true)
+    expect(again.result.state).toBe('done')
+    expect(cell(h, 'Tasks', 't1', 'comments_json')).toBe('')
+    const rows = recordRows(h, 'TaskRecords').filter((r) => String(r[1]) === 't1' && String(r[2]) === 'comment')
+    expect(rows.map((r) => JSON.parse(String(r[7])).id)).toContain('c-late')
+    expect(viewList(h, 'Tasks', 't1', 'comments_json')).toEqual(before)
+    expect(h.backups).toEqual(['beforeMigration'])
+  })
+
   it('照合が合わない時は failed にして、セルが正のまま(何も消さない)', () => {
     const h = harness()
     withSampleRecords(h)

@@ -4,6 +4,8 @@
 //   コメント・進み具合・変更の記録・1on1・評価を、1件1行のシート(TaskRecords・MemberRecords)に移す・戻す。
 //   試す(書かずに件数と問題を見る) → 移す(実行の前に自動でバックアップ。1回ずつ進め、終わるまで続けて呼ぶ。
 //   途中で止まっても「続きから移す」) → 照合して切り替える。戻すも同じ(自動でバックアップを取ってから)
+// 「戻す」は、移してから30日以内か、照合が合わなかった(failed)時だけ出す。それ以外で行に持っている時
+// (最初から行に持つ新しい団体など)は、状態の1行だけを出す(lib/ohsumi/record-rows-mode.ts)
 // 古い GAS(初期データに recordRows が無い)では出さない
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, Rows3 } from 'lucide-react'
@@ -13,6 +15,7 @@ import { useToast } from '@/components/ohsumi/toast'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { remoteApi, type RecordRowsStatus, type RecordRowsStep } from '@/lib/ohsumi/remote'
+import { recordRowsMode } from '@/lib/ohsumi/record-rows-mode'
 
 const KINDS = ['comment', 'progress', 'history', 'one_on_one', 'evaluation'] as const
 const STEP_LIMIT = 50
@@ -43,8 +46,10 @@ export function RecordRowsPanel() {
   useEffect(() => { if (recordRows) void load() }, [load, recordRows])
   if (!recordRows) return null
 
-  const rowsOn = status?.state === 'done'
-  const counts = (rowsOn ? status?.rows : status?.cells) ?? {}
+  const mode = status ? recordRowsMode(status) : null
+  // 戻す(行からセルへ。failed・戻している途中は、記録のシートを空にしてセルのままに戻す)
+  const rowsOn = mode === 'revert'
+  const counts = (status?.state === 'done' ? status?.rows : status?.cells) ?? {}
 
   const tryIt = async () => {
     setBusy('try')
@@ -89,8 +94,22 @@ export function RecordRowsPanel() {
   const problems = trial?.problems
   const trialOk = trial ? trial.ok !== false : false
 
+  // 移してから30日より後・最初から行に持つ団体: 状態の1行だけ
+  if (mode === 'statusOnly') {
+    return (
+      <div className="flex flex-col gap-3" data-record-rows={status?.state ?? ''} data-record-rows-mode={mode}>
+        <SectionLabel>{t('recordRows.title')}</SectionLabel>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Rows3 className="size-4 text-muted-foreground" aria-hidden />
+          <span className="font-medium">{t(`recordRows.state.${status!.state}` as TranslationKey)}</span>
+        </div>
+        {error && <p className="break-all text-xs text-destructive" role="alert">{error}</p>}
+      </div>
+    )
+  }
+
   return (
-    <div className="flex flex-col gap-3" data-record-rows={status?.state ?? ''}>
+    <div className="flex flex-col gap-3" data-record-rows={status?.state ?? ''} data-record-rows-mode={mode ?? ''}>
       <SectionLabel>{t('recordRows.title')}</SectionLabel>
       <p className="text-xs text-muted-foreground">{t('recordRows.desc')}</p>
       <div className="flex flex-wrap items-center gap-2 text-sm">
