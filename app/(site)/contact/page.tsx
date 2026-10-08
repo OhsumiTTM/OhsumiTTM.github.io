@@ -34,6 +34,7 @@ export default function ContactPage() {
             <a href="/privacy" className="mx-1 font-medium text-primary underline underline-offset-2">プライバシーポリシー</a>
             をご覧ください。
           </p>
+          <p className="mb-4 text-sm text-muted-foreground">返信は、1週間以内を目安にしています。</p>
           <ContactForm />
           <p className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
             <Mail className="size-4" aria-hidden />
