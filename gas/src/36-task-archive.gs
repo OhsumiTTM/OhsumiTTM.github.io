@@ -183,9 +183,21 @@ function unarchiveTasks_(taskIds) {
     if (live[id]) return
     var t = byId[id]
     var row = headers.map(function (h) { return t[h] === undefined ? '' : t[h] })
+    // 記録を1件1行で持っている時: 移行の前に移したタスクは、セルの一覧を記録のシートに書く(39-record-rows.gs)。
+    // 移行の後に移したタスクの記録は、記録のシートに残っている(セルは空)
+    var recordFields = {}
+    if (recordRowsOn_()) {
+      headers.forEach(function (h, c) {
+        if (!isRecordColumn_(SHEET_TASKS, h)) return
+        var raw = String(row[c] || '')
+        if (raw && raw !== '[]') recordFields[h] = raw
+        row[c] = ''
+      })
+    }
     var rowNumber = sheet.getLastRow() + 1
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row])
+    if (Object.keys(recordFields).length) splitRecordFields_(SHEET_TASKS, id, recordFields)
   })
   deleteRowsById_(tasksArchiveSheet_(false), ids)
   forgetSheetGrid_(SHEET_TASKS)

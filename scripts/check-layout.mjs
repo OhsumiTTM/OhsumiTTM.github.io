@@ -176,7 +176,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -547,7 +547,7 @@ async function run({ build = true } = {}) {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps,
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps, recordRows: 'migrating',
           // 最上位の役職の人にだけ、団体のスプレッドシート・Apps Script の URL を渡す(団体設定の「GAS とスプレッドシート」)
           ...(member === ADMIN_MEMBER ? { adminLinks: { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/layout-check-sheet/edit', scriptEditUrl: 'https://script.google.com/d/layout-check-script/edit' } } : {}) }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
@@ -605,6 +605,10 @@ async function run({ build = true } = {}) {
           topActions: [{ action: 'updateTaskStatus', count: 120 }, { action: 'updateComments', count: 80 }, { action: 'aVeryLongActionNameThatShouldWrapInsideTheNarrowScreen', count: 3 }],
           errors: { last7Days: 4, byKind: [{ kind: 'conflict', count: 3 }, { kind: 'client:TypeError', count: 1 }],
             recent: [{ at: '2026-09-30T10:00:00.000Z', source: 'gas', action: 'updateComments', kind: 'conflict' }, { at: '2026-09-30T09:00:00.000Z', source: 'client', action: 'window', kind: 'client:TypeError' }] } }
+        // データの持ち方(途中で止まった移行。長いバックアップの名前・照合の知らせも、画面の幅に収まることを確かめる)
+        case 'getRecordRowsStatus': return { state: 'migrating', since: '2026-10-08T00:00:00.000Z', phase: 'copy', cursor: { sheet: 'Tasks', index: 100 },
+          backup: 'Ohsumi バックアップ 2026-10-08 09:00(移行の前)とても長い名前のバックアップでも折り返します', message: '',
+          cells: { comment: 1520, progress: 312, history: 4210, one_on_one: 48, evaluation: 12 } }
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
@@ -1217,6 +1221,9 @@ async function run({ build = true } = {}) {
           if (!(await evaluate(`!!document.querySelector('[data-backup-panel] [data-backup-select]')`))) throw new Error('団体設定に、バックアップの一覧が出ません')
           await pick('bk1'); await sleep(800)
           if (step.mode === 'full') {
+            // 同じ画面の「データの持ち方」: 途中で止まった移行は、件数と「続きから移す」を出す
+            const recordRows = await evaluate(`document.querySelector('[data-record-rows="migrating"]')?.textContent ?? ''`)
+            if (!recordRows.includes('続きから移す') || !recordRows.includes('1520')) throw new Error('団体設定に、データの持ち方(途中で止まった移行)が出ません: ' + recordRows.slice(0, 200))
             // 同じ画面の「個人情報の削除」: 保存期間と、消す前の人(すぐ消す・延長・退会を取り消す)
             const privacy = await evaluate(`document.querySelector('[data-personal-data-panel]')?.textContent ?? ''`)
             for (const want of ['保存期間', 'すぐ消す', '30 日延長', '退会を取り消す', '(延長済み)', '対応するメンバーがいないメールアドレスの行が 2 件あります', 'old.member.with.a.long.address@example.com']) {

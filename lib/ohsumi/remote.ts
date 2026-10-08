@@ -863,6 +863,40 @@ export interface InitialData {
   capabilities?: Capability[]
   // 団体のスプレッドシートと Apps Script の編集画面(最上位の役職の人にだけ届く。古い GAS では無い)
   adminLinks?: OrgAdminLinks
+  // コメント・1on1 などの記録の持ち方(gas/src/39-record-rows.gs)。古い GAS では無い
+  recordRows?: RecordRowsState
+}
+
+// none / migrating / failed: セルに持つ。done / reverting: 1件1行のシートに持つ
+export type RecordRowsState = 'none' | 'migrating' | 'done' | 'reverting' | 'failed'
+const RECORD_ROWS_STATES: RecordRowsState[] = ['none', 'migrating', 'done', 'reverting', 'failed']
+
+export interface RecordRowsStatus {
+  state: RecordRowsState
+  since: string
+  phase: string
+  cursor: { sheet: string; index: number } | null
+  backup: string
+  message: string
+  // 行に持っている件数(done の時)・セルに持っている件数(それ以外)。kind → 件数
+  rows?: Record<string, number>
+  cells?: Record<string, number>
+  problems?: { unreadable: string[]; duplicates: string[]; tooLong: string[] }
+}
+
+export interface RecordRowsStep {
+  state: RecordRowsState
+  done?: boolean
+  dryRun?: boolean
+  ok?: boolean
+  phase?: string
+  cursor?: { sheet: string; index: number } | null
+  counts?: Record<string, number>
+  entries?: number
+  backup?: string
+  mismatches?: string[]
+  tooLong?: string[]
+  problems?: { unreadable: string[]; duplicates: string[]; tooLong: string[] }
 }
 
 export interface OrgAdminLinks {
@@ -887,6 +921,7 @@ interface InitialDataResponse {
   unchanged?: boolean
   capabilities?: string[]
   adminLinks?: unknown
+  recordRows?: string
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
   background?: BackgroundData
   backgroundError?: string
@@ -909,6 +944,7 @@ function toInitialData(res: InitialDataResponse): InitialData {
     backgroundError: res.backgroundError,
     ...(Array.isArray(res.capabilities) ? { capabilities: normalizeCapabilities(res.capabilities) } : {}),
     ...(parseOrgAdminLinks(res.adminLinks) ? { adminLinks: parseOrgAdminLinks(res.adminLinks) } : {}),
+    ...(RECORD_ROWS_STATES.includes(res.recordRows as RecordRowsState) ? { recordRows: res.recordRows as RecordRowsState } : {}),
   }
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }
@@ -1342,6 +1378,10 @@ export const remoteApi = {
   // 今すぐバックアップを作る(代表だけ。前に手で作ってから10分は断られる)
   createBackupNow: () => postToGas<{ backup: BackupEntry; status: BackupStatus; backups: BackupEntry[] }>('createBackupNow', {}),
   previewRestore: (backupId: string) => postToGas<RestorePreview>('previewRestore', { backupId }),
+  // 記録の持ち方(代表だけ。gas/src/39-record-rows.gs)。移す・戻すは1回ずつ進める(done になるまで呼ぶ)
+  getRecordRowsStatus: () => postToGas<RecordRowsStatus>('getRecordRowsStatus', {}),
+  migrateRecordsToRows: (dryRun = false) => postToGas<RecordRowsStep>('migrateRecordsToRows', { dryRun }),
+  revertRecordRows: (dryRun = false) => postToGas<RecordRowsStep>('revertRecordRows', { dryRun }),
   restoreBackup: (backupId: string) => postToGas<{ restored: string[]; beforeRestore: BackupEntry }>('restoreBackup', { backupId }),
   searchBackupTasks: (backupId: string, query: string) => postToGas<{ backup: BackupEntry; tasks: BackupTaskMatch[] }>('searchBackupTasks', { backupId, query }),
   restoreTasks: (backupId: string, taskIds: string[]) =>

@@ -16,6 +16,8 @@ var BACKUP_FOLDER_PROPERTY_KEY = 'BACKUP_FOLDER_ID'
 var BACKUP_STATE_KEY = 'BACKUP_STATE'
 var BACKUP_NAME_PREFIX = 'Ohsumi バックアップ '
 var BACKUP_BEFORE_RESTORE_SUFFIX = '(戻す前)'
+// 自動で取るバックアップの名前の末尾(記録の移行・戻すの前は 39-record-rows.gs)
+var BACKUP_KIND_SUFFIXES = { beforeRestore: BACKUP_BEFORE_RESTORE_SUFFIX, beforeMigration: '(移行の前)', beforeRevert: '(移行を戻す前)' }
 var BACKUP_KEEP = { daily: 7, weekly: 4, monthly: 3 }
 var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
 // 戻している印が残ったまま(実行の途中で止まった時など)でも、これを過ぎたら書き込みを受け付ける
@@ -51,7 +53,7 @@ function backupFolder_() {
 function createBackup_(kind, nowMs) {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   var name = BACKUP_NAME_PREFIX + Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') +
-    (kind === 'beforeRestore' ? BACKUP_BEFORE_RESTORE_SUFFIX : '')
+    (BACKUP_KIND_SUFFIXES[kind] || '')
   // スプレッドシートだけをコピーする(アップロードしたファイルはコピーしない)
   var copy = DriveApp.getFileById(ss.getId()).makeCopy(name, backupFolder_())
   makeDrivePrivate_(copy)
@@ -266,6 +268,8 @@ function restoreBackup_(backupId, actorId, nowMs) {
       }
       restored.push(name)
     })
+    // 記録のシート: 移行の前のバックアップには無いので、今の分を空にする(印は Settings と一緒に戻っている)
+    afterFullRestoreRecordRows_(restored)
     SpreadsheetApp.flush()
     forgetSheetGrid_()
     bumpDataVersion()
@@ -365,11 +369,15 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   ;(Array.isArray(taskIds) ? taskIds : []).forEach(function (id) { if (id && ids.indexOf(String(id)) < 0) ids.push(String(id)) })
   if (!ids.length) throw userError_('戻すタスクを選んでください。')
   if (ids.length > RESTORE_TASKS_MAX) throw userError_('一度に戻せるタスクは ' + RESTORE_TASKS_MAX + ' 件までです。')
-  var srcSheet = SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS)
-  var srcValues = srcSheet.getDataRange().getValues()
+  var src = SpreadsheetApp.openById(b.id)
+  var srcSheet = src.getSheetByName(SHEET_TASKS)
+  // 記録を1件1行で持っている時は、バックアップ・今の、それぞれの記録のシートから一覧を組み立てて合わせる(39-record-rows.gs)
+  var srcValues = fillRecordColumnsFromSpreadsheet_(src, SHEET_TASKS, srcSheet.getDataRange().getValues())
   var backup = taskTableOf_(srcValues)
   var sheet = getSheet_(SHEET_TASKS)
   var liveValues = sheet.getDataRange().getValues()
+  fillRecordColumnsOfValues_(SHEET_TASKS, liveValues)
+  var rowsOn = recordRowsOn_()
   var headers = (liveValues[0] || []).map(function (h) { return String(h).trim() })
   var idCol = headers.indexOf('id')
   var rowOf = {}
@@ -394,15 +402,19 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
       var merged = mergeTaskList_(parseJsonList_(bt[h]), parseJsonList_(cur ? cur[c] : '[]'), h === 'history_json')
       if (h === 'history_json') {
         merged.unshift({ id: 'h-restore-' + Utilities.getUuid(), at: new Date(nowMs).toISOString(), byId: String(actorId), field: 'restored', from: label, to: '' })
-        merged = merged.slice(0, HISTORY_CAP)
+        merged = merged.slice(0, historyCap_())
       }
       return JSON.stringify(merged)
     })
     var rowNumber = isLive ? rowOf[id] + 1 : sheet.getLastRow() + 1
     var target = sheet.getRange(rowNumber, 1, 1, headers.length)
+    // 記録を行に持っている時は、一覧の列はセルを空にして、記録のシートに書く
+    var recordFields = {}
+    if (rowsOn) headers.forEach(function (h, c) { if (isRecordColumn_(SHEET_TASKS, h)) { recordFields[h] = row[c]; row[c] = '' } })
     // 文字として扱う列は、値を書く前に書式を文字にする(数式として扱われないように)
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     target.setValues([row])
+    if (rowsOn) splitRecordFields_(SHEET_TASKS, id, recordFields)
     if (!isLive) rowOf[id] = rowNumber - 1
     done.push({ id: id, title: String(bt.title || ''), state: isLive ? 'restored' : archived[id] ? 'unarchived' : 'recreated' })
   })

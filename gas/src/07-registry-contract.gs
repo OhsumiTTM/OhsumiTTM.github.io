@@ -31,7 +31,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.07-6'
+var OHSUMI_GAS_VERSION = '2026.10.08-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -343,6 +343,10 @@ var READ_ONLY_ACTIONS = [
   'createBackupNow',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
+  // 記録の持ち方の状態(移す・戻すのは書き込み)
+  'getRecordRowsStatus',
+  // 兼部の統合表示(本人の分だけを読む)
+  'getMyDigest',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
   // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)

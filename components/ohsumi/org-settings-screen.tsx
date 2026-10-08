@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Building2, ImageUp, Loader2, Mail, MessageSquare, X, Plus, Palette } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { BackupPanel } from './backup-panel'
+import { RecordRowsPanel } from './record-rows-panel'
 import { PersonalDataPanel } from './personal-data-panel'
 import { UsagePanel } from './usage-panel'
 import { MetricsPanel } from './metrics-panel'
@@ -54,6 +55,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
     currentUser,
     can,
     adminLinks,
+    recordRows,
   } = useOhsumi()
   // バックアップ・個人情報の削除・利用の状況・集計値・診断情報は代表だけ(どの設定でも渡さない)
   const isDaihyo = isTopRef(currentUser?.role)
@@ -101,6 +103,7 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
             ...(canRules ? [{ id: 'org-webhooks', label: t('orgSettings.toc.webhooks') }] : []),
             ...(isDaihyo && remoteOk ? [
               { id: 'org-backup', label: t('orgSettings.toc.backup') },
+              ...(recordRows ? [{ id: 'org-record-rows', label: t('orgSettings.toc.recordRows') }] : []),
               { id: 'org-personal-data', label: t('orgSettings.toc.personalData') },
               { id: 'org-usage', label: t('orgSettings.toc.usage') },
               { id: 'org-metrics', label: t('orgSettings.toc.metrics') },
@@ -299,6 +302,11 @@ export function OrgSettingsScreen({ embedded = false }: { embedded?: boolean } =
         {isDaihyo && remoteOk && (
           <Section id="org-backup">
             <BackupPanel />
+          </Section>
+        )}
+        {isDaihyo && remoteOk && recordRows && (
+          <Section id="org-record-rows">
+            <RecordRowsPanel />
           </Section>
         )}
         {isDaihyo && remoteOk && (

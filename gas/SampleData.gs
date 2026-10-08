@@ -19,9 +19,9 @@
 // ■ ログインできるメンバー: スクリプトプロパティ TEST_ACCOUNTS(デモの団体は DEMO_ACCOUNTS でもよい)に、枠ごとの
 //   Google アカウントを書く。例: top=a@gmail.com, admin=b@gmail.com, restricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com
 
-var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.07-4'
+var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.08-4'
 // 組になる Code.gs の版。pnpm gas:build が、Code.gs の版に合わせて書き換える(手で直さない)
-var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.07-6'
+var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.08-4'
 
 // Code.gs と組の版でなければ止める(Code.gs の関数の名前・引数が変わっていると、データを壊すことがあるため)
 function assertSampleDataMatchesCode_() {
@@ -845,6 +845,8 @@ function sheetSampleTaskRow_(o) {
 
 function appendSampleRows_(sheetName, objects) {
   if (objects.length === 0) return 0
+  // 記録を1件1行で持つ団体では、コメント・1on1 などを記録のシート(TaskRecords・MemberRecords)に書く
+  objects = appendRecordListsInBulk_(sheetName, objects)
   var sheet = getSheet_(sheetName)
   var headers = headerRow_(sheet)
   var unknown = {}
@@ -857,6 +859,40 @@ function appendSampleRows_(sheetName, objects) {
   range.setNumberFormat('@')
   range.setValues(values)
   return values.length
+}
+
+// 見本・サンプルのデータの行を足す時: 記録を1件1行で持っている団体(Code.gs の 39-record-rows)では、一覧の列を記録のシートにまとめて書き、
+// 一覧の列を空にした行を返す。objects は {列の名前: 値}(値は JSON の文字列か配列)
+function appendRecordListsInBulk_(sheetName, objects) {
+  if (!recordListsOf_(sheetName).length || !recordRowsOn_()) return objects
+  var nowIso = new Date().toISOString()
+  var byTarget = {}
+  var out = objects.map(function (o) {
+    var copy = {}
+    Object.keys(o).forEach(function (k) {
+      var cfg = recordListOf_(sheetName, k)
+      if (!cfg) { copy[k] = o[k]; return }
+      var list = Array.isArray(o[k]) ? o[k] : []
+      if (!Array.isArray(o[k]) && o[k]) { try { list = JSON.parse(String(o[k])) } catch (e) { list = [] } }
+      if (!Array.isArray(list)) list = []
+      var rows = (byTarget[cfg.target] = byTarget[cfg.target] || [])
+      list.forEach(function (entry, seq) { rows.push(recordRowValues_(cfg, o.id, entry, seq, recordEntryId_(entry, seq), nowIso)) })
+    })
+    return copy
+  })
+  Object.keys(byTarget).forEach(function (target) {
+    var rows = byTarget[target]
+    if (!rows.length) return
+    var sheet = ensureRecordSheet_(target)
+    var start = sheet.getLastRow() + 1
+    var need = start + rows.length - 1 - sheet.getMaxRows()
+    if (need > 0) sheet.insertRowsAfter(sheet.getMaxRows(), need)
+    var range = sheet.getRange(start, 1, rows.length, rows[0].length)
+    try { range.setNumberFormat('@') } catch (e) { /* 形式を変えられない時 */ }
+    range.setValues(rows)
+    forgetRecordIndex_(target)
+  })
+  return out
 }
 
 // 条件に合う行を下から削除する(連続した行はまとめて削除する)
@@ -950,6 +986,10 @@ function deleteSampleDataUnlocked_(kind) {
     var owner = SAMPLE_OWNER_COLUMNS[name]
     counts[name] = deleteSampleRows_(name, function (o) { return isSampleId_(o.id, prefix) || (owner && isSampleId_(o[owner], prefix)) })
   })
+  // 記録のシート(TaskRecords・MemberRecords)の、サンプルのタスク・メンバーの記録
+  counts[SHEET_TASK_RECORDS] = deleteSampleRows_(SHEET_TASK_RECORDS, function (o) { return isSampleId_(o.task_id, prefix) })
+  counts[SHEET_MEMBER_RECORDS] = deleteSampleRows_(SHEET_MEMBER_RECORDS, function (o) { return isSampleId_(o.member_id, prefix) })
+  forgetRecordIndex_()
   // Settings: 足した分だけを取り除き、値が1つの設定は元の値に戻す
   var state = sampleParseJson_(props.getProperty(kind.stateKey), null)
   if (state) {

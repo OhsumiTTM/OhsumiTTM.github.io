@@ -452,6 +452,10 @@ function runWriteAction_(body, actingMember) {
     case 'unarchiveTasks':
       result = unarchiveTasks_(body.taskIds)
       break
+    // 兼部の統合表示(40-my-digest.gs)。本人の分だけ
+    case 'getMyDigest':
+      result = myDigest_(actingMember.id, body)
+      break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
       // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
@@ -507,6 +511,16 @@ function runWriteAction_(body, actingMember) {
       break
     case 'restoreTasks':
       result = restoreTasks_(body.backupId, body.taskIds, actingMember.id, Date.now())
+      break
+    // 記録の持ち方(39-record-rows.gs。代表だけ)
+    case 'getRecordRowsStatus':
+      result = recordRowsStatus_()
+      break
+    case 'migrateRecordsToRows':
+      result = migrateRecordsToRows_(actingMember.id, { dryRun: body.dryRun === true }, Date.now())
+      break
+    case 'revertRecordRows':
+      result = revertRecordRows_(actingMember.id, { dryRun: body.dryRun === true }, Date.now())
       break
     case 'getPersonalDataStatus':
       result = personalDataStatus_(Date.now())

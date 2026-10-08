@@ -222,6 +222,7 @@ function stampOneOnOnes_(memberId, entries, acting) {
 // lib/ohsumi/store.tsx の appendHistory と同じ値。history_json は
 // [新しい変更, ...既存].slice(0, HISTORY_CAP) という形で常に先頭に追記される
 // ため、この値がずれるとキャップ落ちの正当な範囲が誤判定される。
+// 記録を行に持った後(39-record-rows.gs)は500件。使う時は historyCap_() で今の上限を読む
 var HISTORY_CAP = 50
 
 // F1/F10: updateComments はコメント配列を丸ごと置き換える仕様のため、
@@ -332,7 +333,7 @@ function validateHistoryUpdate_(task, newHistory, acting) {
     }
   })
 
-  var expectedKeepCount = Math.max(HISTORY_CAP - addedCount, 0)
+  var expectedKeepCount = Math.max(historyCap_() - addedCount, 0)
   var expected = oldHistory.slice(0, expectedKeepCount)
   if (
     remainingEntries.length !== expected.length ||
@@ -396,6 +397,10 @@ var LOCK_EXEMPT_ACTIONS = [
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
   // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
   'createBackupNow',
+  // 記録の持ち方の状態(シートを読むだけ)
+  'getRecordRowsStatus',
+  // 兼部の統合表示(スナップショットを読むだけ)
+  'getMyDigest',
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
@@ -592,6 +597,11 @@ function handlePost_(e, state) {
     if (listOpsList.some(legacyListWrite_)) {
       endTiming_('authMs', authStart)
       return ({ ok: false, error: LEGACY_LIST_MESSAGE, reloadRequired: true, session: renewedSession || undefined })
+    }
+    // データの持ち方を移している間は、記録の一覧への書き込みを断る(39-record-rows.gs)
+    if (listOpsList.some(function (op) { var cfg = op && LIST_ACTIONS[op.action]; return cfg && isRecordColumn_(cfg.sheet, cfg.column) }) && recordRowsBusy_(Date.now())) {
+      endTiming_('authMs', authStart)
+      return ({ ok: false, error: RECORD_ROWS_BUSY_MESSAGE, session: renewedSession || undefined })
     }
     // (形の正しくない差分は、一覧を空(null)にしておく。権限の判定か、ロックを取った後の当て直しで断る)
     listOpsList.forEach(function (op) {

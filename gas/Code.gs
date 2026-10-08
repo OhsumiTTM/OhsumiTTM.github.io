@@ -86,6 +86,10 @@ function setupOhsumi() {
   setupValueFormat_(ss)
   setupRolesSetting_()
 
+  // --- コメント・1on1 などの記録を1件1行で持つシート(39-record-rows.gs)。新しい団体は最初から行に持つ ---
+  var recordState = startRecordRowsIfEmpty_()
+  console.log(recordState.state === 'done' ? '✅ 記録は1件1行のシート(TaskRecords・MemberRecords)に持ちます' : 'ℹ️ 記録はまだセルに持っています。ADMIN の「データの持ち方」から移せます(代表)')
+
   // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
   var createdSecrets = ensureSessionSecrets_()
   console.log(createdSecrets.length
@@ -1851,10 +1855,17 @@ function appendRowByHeaders_(sheet, sheetName, obj) {
     throw userError_(sheetName + 'シートに列が見つかりません: ' + unknown.join(', ') +
       '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。')
   }
-  var row = headers.map(function (h) { return obj[h] !== undefined ? obj[h] : '' })
+  // 記録を行に持っている時は、一覧の列は記録のシートに書く(39-record-rows.gs)
+  var recordFields = null
+  if (recordListsOf_(sheetName).length && recordRowsOn_() && obj.id !== undefined && obj.id !== '') {
+    recordFields = {}
+    Object.keys(obj).forEach(function (k) { if (isRecordColumn_(sheetName, k)) recordFields[k] = obj[k] })
+  }
+  var row = headers.map(function (h) { return obj[h] !== undefined && !(recordFields && h in recordFields) ? obj[h] : '' })
   assertRowCellLengths_(sheetName, headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, sheetName)
   sheet.appendRow(row)
+  if (recordFields && Object.keys(recordFields).length) splitRecordFields_(sheetName, String(obj.id), recordFields)
 }
 
 // A member is completing a certain number of same-category tasks and
@@ -2332,7 +2343,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.07-6'
+var OHSUMI_GAS_VERSION = '2026.10.08-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2644,6 +2655,10 @@ var READ_ONLY_ACTIONS = [
   'createBackupNow',
   // 個人情報の削除の予定(消す・延ばすのは書き込み)
   'getPersonalDataStatus',
+  // 記録の持ち方の状態(移す・戻すのは書き込み)
+  'getRecordRowsStatus',
+  // 兼部の統合表示(本人の分だけを読む)
+  'getMyDigest',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
   // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)
@@ -4128,6 +4143,9 @@ function authorizeAction_(acting, action, body) {
     if (isLeader) return
     throw userError_('FSIF からのお知らせは、代表・管理者だけが見られます。')
   }
+  // 記録の持ち方を移す・戻す(39-record-rows.gs)も代表だけ
+  var recordRowsActions = ['getRecordRowsStatus', 'migrateRecordsToRows', 'revertRecordRows']
+  if (recordRowsActions.indexOf(action) >= 0) throw userError_('データの持ち方の移行は、代表だけが使えます。')
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
@@ -4436,6 +4454,7 @@ function authorizeAction_(acting, action, body) {
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyStorage',            // 本人だけの保存を読む・書く(常に acting.id の分だけ)
     'setMyStorage',
+    'getMyDigest',             // 兼部の統合表示: 本人の担当・確認待ち・回答待ちだけ(常に acting.id が対象。見えるタスクだけ)
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
     'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)
@@ -4834,6 +4853,7 @@ function stampOneOnOnes_(memberId, entries, acting) {
 // lib/ohsumi/store.tsx の appendHistory と同じ値。history_json は
 // [新しい変更, ...既存].slice(0, HISTORY_CAP) という形で常に先頭に追記される
 // ため、この値がずれるとキャップ落ちの正当な範囲が誤判定される。
+// 記録を行に持った後(39-record-rows.gs)は500件。使う時は historyCap_() で今の上限を読む
 var HISTORY_CAP = 50
 
 // F1/F10: updateComments はコメント配列を丸ごと置き換える仕様のため、
@@ -4944,7 +4964,7 @@ function validateHistoryUpdate_(task, newHistory, acting) {
     }
   })
 
-  var expectedKeepCount = Math.max(HISTORY_CAP - addedCount, 0)
+  var expectedKeepCount = Math.max(historyCap_() - addedCount, 0)
   var expected = oldHistory.slice(0, expectedKeepCount)
   if (
     remainingEntries.length !== expected.length ||
@@ -5008,6 +5028,10 @@ var LOCK_EXEMPT_ACTIONS = [
   'getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks',
   // 今すぐバックアップを作る(シートは書き換えない。Drive にコピーを作り、スクリプトプロパティに記録するだけ)
   'createBackupNow',
+  // 記録の持ち方の状態(シートを読むだけ)
+  'getRecordRowsStatus',
+  // 兼部の統合表示(スナップショットを読むだけ)
+  'getMyDigest',
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
@@ -5204,6 +5228,11 @@ function handlePost_(e, state) {
     if (listOpsList.some(legacyListWrite_)) {
       endTiming_('authMs', authStart)
       return ({ ok: false, error: LEGACY_LIST_MESSAGE, reloadRequired: true, session: renewedSession || undefined })
+    }
+    // データの持ち方を移している間は、記録の一覧への書き込みを断る(39-record-rows.gs)
+    if (listOpsList.some(function (op) { var cfg = op && LIST_ACTIONS[op.action]; return cfg && isRecordColumn_(cfg.sheet, cfg.column) }) && recordRowsBusy_(Date.now())) {
+      endTiming_('authMs', authStart)
+      return ({ ok: false, error: RECORD_ROWS_BUSY_MESSAGE, session: renewedSession || undefined })
     }
     // (形の正しくない差分は、一覧を空(null)にしておく。権限の判定か、ロックを取った後の当て直しで断る)
     listOpsList.forEach(function (op) {
@@ -5985,6 +6014,10 @@ function runWriteAction_(body, actingMember) {
     case 'unarchiveTasks':
       result = unarchiveTasks_(body.taskIds)
       break
+    // 兼部の統合表示(40-my-digest.gs)。本人の分だけ
+    case 'getMyDigest':
+      result = myDigest_(actingMember.id, body)
+      break
     case 'getMyEmails':
       // 自分自身のメールのみ返す(actingMember.idはトークン検証済みなので、
       // クライアントが送るmemberIdを信用する必要が無い — 他人のメールを
@@ -6040,6 +6073,16 @@ function runWriteAction_(body, actingMember) {
       break
     case 'restoreTasks':
       result = restoreTasks_(body.backupId, body.taskIds, actingMember.id, Date.now())
+      break
+    // 記録の持ち方(39-record-rows.gs。代表だけ)
+    case 'getRecordRowsStatus':
+      result = recordRowsStatus_()
+      break
+    case 'migrateRecordsToRows':
+      result = migrateRecordsToRows_(actingMember.id, { dryRun: body.dryRun === true }, Date.now())
+      break
+    case 'revertRecordRows':
+      result = revertRecordRows_(actingMember.id, { dryRun: body.dryRun === true }, Date.now())
       break
     case 'getPersonalDataStatus':
       result = personalDataStatus_(Date.now())
@@ -7097,6 +7140,8 @@ var RATE_LIMITS = {
   translate: { limit: 500, windowSec: 3600, tunable: 'translatePerHour' },
   // 画面のエラーの記録(1人1時間)
   clientError: { limit: 30, windowSec: 3600, tunable: 'clientErrorPerHour' },
+  // 兼部の統合表示の読み込み(getMyDigest。1人1時間)
+  digest: { limit: 120, windowSec: 3600 },
 }
 // 今の上限(レジストリから届いた値。届いていなければ RATE_LIMITS の limit)
 function rateLimitOf_(kind) {
@@ -8347,12 +8392,18 @@ function removeProject_(projectId) {
       taskLastRow > 1 ? tasks.getRange(2, projectCol, taskLastRow - 1, 1).getValues() : []
     // walk bottom-to-top so deleting a row doesn't shift the indices of
     // rows still to be checked
+    var taskIdCol = taskHeaders.indexOf('id') + 1
+    var taskIds = taskIdCol > 0 && taskLastRow > 1 ? tasks.getRange(2, taskIdCol, taskLastRow - 1, 1).getValues() : []
+    var removedTaskIds = []
     for (var j = projectIds.length - 1; j >= 0; j--) {
       if (String(projectIds[j][0]) === String(projectId)) {
+        if (taskIds[j]) removedTaskIds.push(String(taskIds[j][0]))
         tasks.deleteRow(j + 2)
         forgetSheetGrid_()
       }
     }
+    // 記録を1件1行で持っている時は、消したタスクの記録の行も消す(39-record-rows.gs)
+    deleteRecordsOfParents_(SHEET_TASKS, removedTaskIds)
   }
 
   var members = getSheet_(SHEET_MEMBERS)
@@ -8454,6 +8505,8 @@ function removeTask_(taskId) {
     if (String(ids[i][0]) === String(taskId)) {
       tasks.deleteRow(i + 2)
       forgetSheetGrid_()
+      // 記録を1件1行で持っている時は、そのタスクの記録の行も消す(39-record-rows.gs)
+      deleteRecordsOfParents_(SHEET_TASKS, [String(taskId)])
       break
     }
   }
@@ -8733,6 +8786,7 @@ function snapshotTableOrSheet_(name) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
   if (!sheet) return { headers: [], rows: [] }
   var values = sheet.getDataRange().getValues()
+  fillRecordColumnsOfValues_(name, values)
   return { headers: (values[0] || []).map(function (h) { return String(h).trim() }), rows: values.slice(1) }
 }
 
@@ -9202,6 +9256,7 @@ function findRowUnmeasured_(sheetName, rowId) {
   var values = sheet.getRange(2, 1, Math.max(lastRow - 1, 0), headers.length).getValues()
   for (var i = 0; i < values.length; i++) {
     if (String(values[i][idCol]) === String(rowId)) {
+      fillRecordColumnsOfRow_(sheetName, headers, values[i])
       var obj = {}
       headers.forEach(function (h, c) {
         obj[h] = values[i][c]
@@ -9273,7 +9328,21 @@ function updateRowFields_(sheetName, rowId, fields) {
     } catch (e) { beforeRow = null }
     calendarHints = calendarSyncHints_(fields, beforeRow)
   }
-  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  // 記録の一覧の列は、行に持っている時は記録のシートに書く(39-record-rows.gs)。移している間は断る
+  assertRecordWritable_(sheetName, fields)
+  var recordFields = null
+  var cellFields = fields
+  if (recordRowsOn_() && recordListsOf_(sheetName).length) {
+    recordFields = {}
+    cellFields = {}
+    Object.keys(fields).forEach(function (k) { (isRecordColumn_(sheetName, k) ? recordFields : cellFields)[k] = fields[k] })
+  }
+  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, cellFields) })
+  if (recordFields && Object.keys(recordFields).length) {
+    measureAction_('sheetWriteMs', function () { splitRecordFields_(sheetName, rowId, recordFields) })
+    noteRecordFieldsInGrid_(sheetName, rowId, recordFields)
+    result.updated = Object.keys(fields)
+  }
   if (calendarHints) syncCalendarForTask_(rowId, calendarHints)
   return result
 }
@@ -9294,6 +9363,8 @@ function forgetSheetGrid_(sheetName) {
 function loadSheetGrid_(sheetName) {
   var sheet = getSheet_(sheetName)
   var values = sheet.getDataRange().getValues()
+  // 記録を行に持っている時は、一覧の列に行から組み立てた一覧を入れる(39-record-rows.gs)
+  fillRecordColumnsOfValues_(sheetName, values)
   var headers = (values[0] || []).map(function (h) { return String(h).trim() })
   var idCol = headers.indexOf('id')
   var rowOf = {}
@@ -9539,7 +9610,8 @@ function applyListOps_(cfg, current, ops, strict, sheetName, rowId, normalize) {
     throw userError_('記録の変更の形式が不正です。')
   })
   if (added.length) list = added.concat(list)
-  if (cfg.cap && list.length > cfg.cap) list = list.slice(0, cfg.cap)
+  var cap = cfg.column === 'history_json' ? historyCap_() : cfg.cap
+  if (cap && list.length > cap) list = list.slice(0, cap)
   return list
 }
 
@@ -9548,6 +9620,7 @@ function applyListOps_(cfg, current, ops, strict, sheetName, rowId, normalize) {
 function expandListOps_(body, locked) {
   var cfg = body && LIST_ACTIONS[body.action]
   if (!cfg || body.listOps === undefined) return
+  if (isRecordColumn_(cfg.sheet, cfg.column) && recordRowsBusy_(Date.now())) throw userError_(RECORD_ROWS_BUSY_MESSAGE)
   var rowId = String(body[cfg.idParam] || '')
   var row = locked ? lockedRow_(cfg.sheet, rowId) : authFindRow_(cfg.sheet, rowId)
   if (!row) throw userError_('対象が見つかりません。')
@@ -9674,12 +9747,16 @@ function longRecordsNow_() {
 function longRecords_(data) {
   var groups = {}
   var maxLength = 0
+  // 記録を行に持っている時は、組み立てた一覧はセルに入っていないので数えない
+  var rowsOn = false
+  try { rowsOn = recordRowsOn_() } catch (e) { rowsOn = false }
   SNAPSHOT_SHEETS.forEach(function (name) {
     var table = data[name]
     if (!table || !table.headers) return
     var idCol = table.headers.indexOf(name === SHEET_SETTINGS ? 'key' : 'id')
     ;(table.rows || []).forEach(function (row) {
       row.forEach(function (v, col) {
+        if (rowsOn && isRecordColumn_(name, table.headers[col])) return
         var length = typeof v === 'string' ? v.length : String(v === null || v === undefined ? '' : v).length
         if (length > maxLength) maxLength = length
         if (length <= CELL_WARN_CHARS) return
@@ -9854,6 +9931,7 @@ function startRequestTiming_() {
   _prefetchedSheets = {}
   _requestEmailMap = null
   _sheetGrids = {}
+  resetRecordRowsMemo_()
 }
 
 function noteTiming_(key, value) {
@@ -11387,6 +11465,9 @@ var SHEET_VERSION_BUMPS = {
   Projects: bumpSnapshotVersion_,
   Tasks: bumpSnapshotVersion_,
   Settings: bumpSnapshotVersion_,
+  // 記録の行(39-record-rows.gs)は、スナップショットの Tasks・Members に組み立てて返す
+  TaskRecords: bumpSnapshotVersion_,
+  MemberRecords: bumpSnapshotVersion_,
   Expenses: function () { bumpTableVersion_('expenses') },
   FormSubmissions: function () { bumpTableVersion_('formSubmissions') },
   Candidates: function () { bumpTableVersion_('candidates') },
@@ -11641,7 +11722,8 @@ function loadSnapshot_() {
     return _requestSnapshot
   }
   noteTiming_('cache', 'miss')
-  var data = readSheetTables_(SNAPSHOT_SHEETS)
+  // 記録を行に持っている時は、Tasks・Members の一覧の列に、行から組み立てた一覧を入れる(39-record-rows.gs)
+  var data = fillRecordColumnsOfSnapshot_(readSheetTables_(SNAPSHOT_SHEETS))
   timed_('cacheWriteMs', function () { writeSnapshotCache_(version, data) })
   _requestSnapshot = { version: version, data: data, cacheHit: false }
   return _requestSnapshot
@@ -12122,6 +12204,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   // ログインした人のできる操作(役職の分と人ごとの例外の分。画面はこれだけを見て操作の部品を出す)
   var capabilities = memberCapabilitiesFromSnapshot_(snapshot.data, memberId)
   var out = { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
+  // 記録の持ち方(none / migrating / done。39-record-rows.gs)。古い GAS には無い(画面はこれで見分ける)
+  out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {
@@ -12895,6 +12979,8 @@ var BACKUP_FOLDER_PROPERTY_KEY = 'BACKUP_FOLDER_ID'
 var BACKUP_STATE_KEY = 'BACKUP_STATE'
 var BACKUP_NAME_PREFIX = 'Ohsumi バックアップ '
 var BACKUP_BEFORE_RESTORE_SUFFIX = '(戻す前)'
+// 自動で取るバックアップの名前の末尾(記録の移行・戻すの前は 39-record-rows.gs)
+var BACKUP_KIND_SUFFIXES = { beforeRestore: BACKUP_BEFORE_RESTORE_SUFFIX, beforeMigration: '(移行の前)', beforeRevert: '(移行を戻す前)' }
 var BACKUP_KEEP = { daily: 7, weekly: 4, monthly: 3 }
 var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
 // 戻している印が残ったまま(実行の途中で止まった時など)でも、これを過ぎたら書き込みを受け付ける
@@ -12930,7 +13016,7 @@ function backupFolder_() {
 function createBackup_(kind, nowMs) {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
   var name = BACKUP_NAME_PREFIX + Utilities.formatDate(new Date(nowMs), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') +
-    (kind === 'beforeRestore' ? BACKUP_BEFORE_RESTORE_SUFFIX : '')
+    (BACKUP_KIND_SUFFIXES[kind] || '')
   // スプレッドシートだけをコピーする(アップロードしたファイルはコピーしない)
   var copy = DriveApp.getFileById(ss.getId()).makeCopy(name, backupFolder_())
   makeDrivePrivate_(copy)
@@ -13145,6 +13231,8 @@ function restoreBackup_(backupId, actorId, nowMs) {
       }
       restored.push(name)
     })
+    // 記録のシート: 移行の前のバックアップには無いので、今の分を空にする(印は Settings と一緒に戻っている)
+    afterFullRestoreRecordRows_(restored)
     SpreadsheetApp.flush()
     forgetSheetGrid_()
     bumpDataVersion()
@@ -13244,11 +13332,15 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   ;(Array.isArray(taskIds) ? taskIds : []).forEach(function (id) { if (id && ids.indexOf(String(id)) < 0) ids.push(String(id)) })
   if (!ids.length) throw userError_('戻すタスクを選んでください。')
   if (ids.length > RESTORE_TASKS_MAX) throw userError_('一度に戻せるタスクは ' + RESTORE_TASKS_MAX + ' 件までです。')
-  var srcSheet = SpreadsheetApp.openById(b.id).getSheetByName(SHEET_TASKS)
-  var srcValues = srcSheet.getDataRange().getValues()
+  var src = SpreadsheetApp.openById(b.id)
+  var srcSheet = src.getSheetByName(SHEET_TASKS)
+  // 記録を1件1行で持っている時は、バックアップ・今の、それぞれの記録のシートから一覧を組み立てて合わせる(39-record-rows.gs)
+  var srcValues = fillRecordColumnsFromSpreadsheet_(src, SHEET_TASKS, srcSheet.getDataRange().getValues())
   var backup = taskTableOf_(srcValues)
   var sheet = getSheet_(SHEET_TASKS)
   var liveValues = sheet.getDataRange().getValues()
+  fillRecordColumnsOfValues_(SHEET_TASKS, liveValues)
+  var rowsOn = recordRowsOn_()
   var headers = (liveValues[0] || []).map(function (h) { return String(h).trim() })
   var idCol = headers.indexOf('id')
   var rowOf = {}
@@ -13273,15 +13365,19 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
       var merged = mergeTaskList_(parseJsonList_(bt[h]), parseJsonList_(cur ? cur[c] : '[]'), h === 'history_json')
       if (h === 'history_json') {
         merged.unshift({ id: 'h-restore-' + Utilities.getUuid(), at: new Date(nowMs).toISOString(), byId: String(actorId), field: 'restored', from: label, to: '' })
-        merged = merged.slice(0, HISTORY_CAP)
+        merged = merged.slice(0, historyCap_())
       }
       return JSON.stringify(merged)
     })
     var rowNumber = isLive ? rowOf[id] + 1 : sheet.getLastRow() + 1
     var target = sheet.getRange(rowNumber, 1, 1, headers.length)
+    // 記録を行に持っている時は、一覧の列はセルを空にして、記録のシートに書く
+    var recordFields = {}
+    if (rowsOn) headers.forEach(function (h, c) { if (isRecordColumn_(SHEET_TASKS, h)) { recordFields[h] = row[c]; row[c] = '' } })
     // 文字として扱う列は、値を書く前に書式を文字にする(数式として扱われないように)
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     target.setValues([row])
+    if (rowsOn) splitRecordFields_(SHEET_TASKS, id, recordFields)
     if (!isLive) rowOf[id] = rowNumber - 1
     done.push({ id: id, title: String(bt.title || ''), state: isLive ? 'restored' : archived[id] ? 'unarchived' : 'recreated' })
   })
@@ -14906,9 +15002,21 @@ function unarchiveTasks_(taskIds) {
     if (live[id]) return
     var t = byId[id]
     var row = headers.map(function (h) { return t[h] === undefined ? '' : t[h] })
+    // 記録を1件1行で持っている時: 移行の前に移したタスクは、セルの一覧を記録のシートに書く(39-record-rows.gs)。
+    // 移行の後に移したタスクの記録は、記録のシートに残っている(セルは空)
+    var recordFields = {}
+    if (recordRowsOn_()) {
+      headers.forEach(function (h, c) {
+        if (!isRecordColumn_(SHEET_TASKS, h)) return
+        var raw = String(row[c] || '')
+        if (raw && raw !== '[]') recordFields[h] = raw
+        row[c] = ''
+      })
+    }
     var rowNumber = sheet.getLastRow() + 1
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row])
+    if (Object.keys(recordFields).length) splitRecordFields_(SHEET_TASKS, id, recordFields)
   })
   deleteRowsById_(tasksArchiveSheet_(false), ids)
   forgetSheetGrid_(SHEET_TASKS)
@@ -15386,4 +15494,896 @@ function guardRolesChangeByNonTop_(acting, current, parsed) {
     }
     return next
   })
+}
+// ---- 記録を1件1行のシートに持つ(TaskRecords・MemberRecords) ----------------------------------
+//
+// タスクのコメント・進み具合の記録・変更の記録と、メンバーの 1on1 の記録・評価は、以前は1つのセルに一覧(JSON)で
+// 持っていた(1つのセルは5万文字まで)。移行(migrateRecordsToRows。下)の後は、1件1行で次のシートに持つ:
+//   TaskRecords   key, task_id, kind(comment / progress / history), entry_id, seq(一覧の中の順番), at, by_id, body_json, updated_at
+//   MemberRecords key, member_id, kind(one_on_one / evaluation), entry_id, seq, at, with_id, body_json, updated_at
+// body_json は一覧の1項目をそのまま JSON にしたもの(1件は5万文字まで)。key は <親のID>:<kind>:<entry_id>。
+//
+// どちらに持っているかは、Settings のキー record_rows_state(JSON の state: none / migrating / done)で決める
+// (バックアップから戻した時に、データと一緒に戻るように、シートの中に置く)。READ_POLICY に書かないので画面には返さない。
+//   none / migrating  これまでどおりセルに持つ(migrating は、移している間。記録の一覧への書き込みを止める)
+//   done              行に持つ。Tasks・Members の一覧の列は空にし、読む時に行から今と同じ一覧(JSON)を組み立てる
+// 組み立てる場所(読み取りの入口): スナップショット(loadSnapshot_)・書き込みの表(loadSheetGrid_)・findRow_・
+// snapshotTableOrSheet_ の予備の読み方。書く場所: updateRowFields_・appendRowByHeaders_ が、一覧の列を行に書き分ける。
+// 画面は、初期データの recordRows(状態)で見分ける(古い GAS には無い)
+var SHEET_TASK_RECORDS = 'TaskRecords'
+var SHEET_MEMBER_RECORDS = 'MemberRecords'
+var TASK_RECORDS_HEADERS = ['key', 'task_id', 'kind', 'entry_id', 'seq', 'at', 'by_id', 'body_json', 'updated_at']
+var MEMBER_RECORDS_HEADERS = ['key', 'member_id', 'kind', 'entry_id', 'seq', 'at', 'with_id', 'body_json', 'updated_at']
+var RECORD_ROWS_STATE_KEY = 'record_rows_state'
+// 行に移す一覧(シートと列 → 移す先と kind)
+var RECORD_LISTS = [
+  { sheet: 'Tasks', column: 'comments_json', kind: 'comment', target: 'TaskRecords', parentCol: 'task_id' },
+  { sheet: 'Tasks', column: 'progress_history_json', kind: 'progress', target: 'TaskRecords', parentCol: 'task_id' },
+  { sheet: 'Tasks', column: 'history_json', kind: 'history', target: 'TaskRecords', parentCol: 'task_id' },
+  { sheet: 'Members', column: 'one_on_ones_json', kind: 'one_on_one', target: 'MemberRecords', parentCol: 'member_id' },
+  { sheet: 'Members', column: 'evaluation_history_json', kind: 'evaluation', target: 'MemberRecords', parentCol: 'member_id' },
+]
+// 変更の記録の上限(セルに持つ間は、5万文字に入るよう50件。行に持った後は500件)
+var HISTORY_CAP_CELLS = 50
+var HISTORY_CAP_ROWS = 500
+var RECORD_ROWS_BUSY_MESSAGE = 'データの持ち方を移しています。数分たってから、もう一度お試しください。書いた文章は消えていないので、コピーして残してください。'
+// 移している印が残ったまま(途中で止まった時)でも、これを過ぎたら記録の書き込みを受け付ける(セルが正のまま)
+var RECORD_ROWS_STALE_MS = 30 * 60 * 1000
+
+var _recordRowsStateMemo = null
+var _recordGrids = {}
+
+function resetRecordRowsMemo_() {
+  _recordRowsStateMemo = null
+  _recordGrids = {}
+}
+
+function parseRecordRowsState_(raw) {
+  var s = null
+  try { s = JSON.parse(String(raw || '')) } catch (e) { s = null }
+  if (!s || typeof s !== 'object') return { state: 'none' }
+  if (['none', 'migrating', 'done', 'reverting', 'failed'].indexOf(s.state) < 0) s.state = 'none'
+  return s
+}
+
+// 今の状態。このリクエストで読んだスナップショットがあれば、その Settings から読む(書き込みのたびにシートを読まない)。
+// 読めない時は none(セルに持つ)
+function recordRowsState_() {
+  if (_recordRowsStateMemo) return _recordRowsStateMemo
+  var s
+  try {
+    s = _requestSnapshot && _requestSnapshot.data ? recordRowsStateOfSnapshot_(_requestSnapshot.data) : parseRecordRowsState_(getSettingValue_(RECORD_ROWS_STATE_KEY))
+  } catch (e) {
+    s = { state: 'none' }
+  }
+  _recordRowsStateMemo = s
+  return s
+}
+
+function setRecordRowsState_(fields) {
+  var s = Object.assign({}, fields)
+  updateSetting_(RECORD_ROWS_STATE_KEY, JSON.stringify(s))
+  _recordRowsStateMemo = s
+  return s
+}
+
+// 行が正か(done と、戻している間 reverting)。none・migrating・failed はセルが正
+function recordRowsOn_() {
+  var s = recordRowsState_().state
+  return s === 'done' || s === 'reverting'
+}
+
+// 移している間か(止まってから RECORD_ROWS_STALE_MS を過ぎたものは数えない)
+function recordRowsBusy_(nowMs) {
+  var s = recordRowsState_()
+  if (s.state !== 'migrating' && s.state !== 'reverting') return false
+  var at = Date.parse(String(s.touchedAt || s.since || ''))
+  return !(isFinite(at) && (nowMs || Date.now()) - at > RECORD_ROWS_STALE_MS)
+}
+
+function historyCap_() {
+  return recordRowsOn_() ? HISTORY_CAP_ROWS : HISTORY_CAP_CELLS
+}
+
+function recordListsOf_(sheetName) {
+  return RECORD_LISTS.filter(function (c) { return c.sheet === sheetName })
+}
+
+function recordListOf_(sheetName, column) {
+  for (var i = 0; i < RECORD_LISTS.length; i++) {
+    if (RECORD_LISTS[i].sheet === sheetName && RECORD_LISTS[i].column === column) return RECORD_LISTS[i]
+  }
+  return null
+}
+
+function isRecordColumn_(sheetName, column) {
+  return !!recordListOf_(sheetName, column)
+}
+
+function recordHeadersOf_(target) {
+  return target === SHEET_TASK_RECORDS ? TASK_RECORDS_HEADERS : MEMBER_RECORDS_HEADERS
+}
+
+// 記録のシートを作る(無ければ)。値は文字のまま持つ(日付・数に変えられないように、書式なしテキストにする)
+function ensureRecordSheet_(target) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  var sheet = ss.getSheetByName(target)
+  var headers = recordHeadersOf_(target)
+  if (!sheet) {
+    sheet = ss.insertSheet(target)
+    sheet.appendRow(headers)
+  } else {
+    ensureSheetHeaders_(ss, target, headers)
+  }
+  try { sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), recordHeadersOf_(target).length).setNumberFormat('@') } catch (e) { /* 形式を変えられない時 */ }
+  return sheet
+}
+
+// ---- 読む ----
+
+// 記録のシートを読み、親ごと・kind ごとにまとめる(このリクエストの中で覚える)。values は getValues の形
+function recordIndexFromValues_(values) {
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var col = {}
+  headers.forEach(function (h, i) { col[h] = i })
+  var parentCol = col.task_id !== undefined ? col.task_id : col.member_id
+  var byParent = {}
+  for (var r = 1; r < values.length; r++) {
+    var v = values[r]
+    var key = String(v[col.key] === undefined ? '' : v[col.key])
+    if (!key) continue
+    var parent = String(v[parentCol])
+    var kind = String(v[col.kind])
+    var list = (byParent[parent] = byParent[parent] || {})
+    ;(list[kind] = list[kind] || []).push({
+      row: r + 1, key: key, entryId: String(v[col.entry_id]), seq: Number(v[col.seq]) || 0, body: String(v[col.body_json] || ''),
+    })
+  }
+  Object.keys(byParent).forEach(function (p) {
+    Object.keys(byParent[p]).forEach(function (k) { byParent[p][k].sort(function (a, b) { return a.seq - b.seq }) })
+  })
+  return { headers: headers, col: col, byParent: byParent }
+}
+
+function loadRecordIndex_(target) {
+  if (_recordGrids[target]) return _recordGrids[target]
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(target)
+  var values = sheet ? sheet.getDataRange().getValues() : [recordHeadersOf_(target)]
+  if (!values.length || !values[0].length || String(values[0][0]) === '') values = [recordHeadersOf_(target)]
+  var index = recordIndexFromValues_(values)
+  index.sheet = sheet
+  _recordGrids[target] = index
+  return index
+}
+
+function forgetRecordIndex_(target) {
+  if (target) delete _recordGrids[target]
+  else _recordGrids = {}
+}
+
+function parseRecordBody_(body) {
+  try { return JSON.parse(body) } catch (e) { return null }
+}
+
+// 親の1つの一覧(順番どおり)
+function recordListFromIndex_(index, parentId, kind) {
+  var items = ((index.byParent[String(parentId)] || {})[kind]) || []
+  var out = []
+  items.forEach(function (it) {
+    var v = parseRecordBody_(it.body)
+    if (v !== null) out.push(v)
+  })
+  return out
+}
+
+// 行の値(見出しの順の配列)の一覧の列に、行から組み立てた一覧(JSON)を入れる
+function fillRecordColumns_(sheetName, headers, rowValues, indexOf) {
+  var lists = recordListsOf_(sheetName)
+  if (!lists.length) return
+  var idCol = headers.indexOf('id')
+  if (idCol < 0) return
+  var id = String(rowValues[idCol])
+  if (!id) return
+  lists.forEach(function (cfg) {
+    var c = headers.indexOf(cfg.column)
+    if (c < 0) return
+    rowValues[c] = JSON.stringify(recordListFromIndex_(indexOf(cfg.target), id, cfg.kind))
+  })
+}
+
+// 表(headers・rows)の全部の行に組み立てる(行に持っている時だけ)
+function fillRecordColumnsOfTable_(sheetName, table, indexOf) {
+  if (!table || !table.headers || !recordListsOf_(sheetName).length) return
+  ;(table.rows || []).forEach(function (row) { fillRecordColumns_(sheetName, table.headers, row, indexOf) })
+}
+
+// スナップショットの Settings から読んだ状態
+function recordRowsStateOfSnapshot_(data) {
+  var settings = data && data[SHEET_SETTINGS]
+  var raw = ''
+  if (settings && settings.headers) {
+    var k = settings.headers.indexOf('key'), v = settings.headers.indexOf('value')
+    ;(settings.rows || []).forEach(function (r) { if (String(r[k]) === RECORD_ROWS_STATE_KEY) raw = r[v] })
+  }
+  return parseRecordRowsState_(raw)
+}
+
+// スナップショット(Members・Projects・Tasks・Settings)に組み立てる。状態はスナップショットの Settings から読む
+function fillRecordColumnsOfSnapshot_(data) {
+  if (recordRowsStateOfSnapshot_(data).state !== 'done') return data
+  var tables = readSheetTables_([SHEET_TASK_RECORDS, SHEET_MEMBER_RECORDS])
+  var indexes = {}
+  var indexOf = function (target) {
+    if (!indexes[target]) {
+      var t = tables[target] || { headers: [], rows: [] }
+      indexes[target] = recordIndexFromValues_([t.headers && t.headers.length ? t.headers : recordHeadersOf_(target)].concat(t.rows || []))
+    }
+    return indexes[target]
+  }
+  fillRecordColumnsOfTable_(SHEET_TASKS, data[SHEET_TASKS], indexOf)
+  fillRecordColumnsOfTable_(SHEET_MEMBERS, data[SHEET_MEMBERS], indexOf)
+  return data
+}
+
+// 書き込みの表・1行の読み取り(getValues の形)に組み立てる
+function fillRecordColumnsOfValues_(sheetName, values) {
+  if (!recordListsOf_(sheetName).length || !recordRowsOn_()) return
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  for (var i = 1; i < values.length; i++) fillRecordColumns_(sheetName, headers, values[i], loadRecordIndex_)
+}
+
+function fillRecordColumnsOfRow_(sheetName, headers, rowValues) {
+  if (!recordListsOf_(sheetName).length || !recordRowsOn_()) return
+  fillRecordColumns_(sheetName, headers, rowValues, loadRecordIndex_)
+}
+
+// ---- 書く ----
+
+// 1件の記録の行(見出しの順の配列)
+function recordRowValues_(cfg, parentId, entry, seq, entryId, nowIso) {
+  var body = JSON.stringify(entry)
+  if (body.length > CELL_MAX_CHARS) throw cellTooLongError_(cfg.target, cfg.column, body, null)
+  var o = {
+    key: String(parentId) + ':' + cfg.kind + ':' + entryId,
+    task_id: String(parentId), member_id: String(parentId), kind: cfg.kind, entry_id: entryId, seq: String(seq),
+    at: String((entry && (entry.at || entry.date)) || ''),
+    by_id: String((entry && (entry.byId || entry.by)) || ''),
+    with_id: String((entry && (entry.withId || entry.evaluatorId || entry.byId)) || ''),
+    body_json: body, updated_at: nowIso,
+  }
+  return recordHeadersOf_(cfg.target).map(function (h) { return o[h] === undefined ? '' : o[h] })
+}
+
+function recordEntryId_(entry, seq) {
+  var id = entry && typeof entry === 'object' && entry.id !== undefined && entry.id !== null ? String(entry.id) : ''
+  return id || 'noid-' + seq
+}
+
+// 親の1つの一覧を、list(配列)と同じ中身・順番にする(足す・変える・消す)。何も変わらなければ書かない
+function writeRecordList_(cfg, parentId, list) {
+  return syncRecordListsBulk_(cfg.target, [{ cfg: cfg, parentId: parentId, list: list }]) > 0
+}
+
+// 記録のシート1枚について、いくつもの(親・kind)の一覧をまとめて、渡した一覧と同じにする。変えた行の数を返す。
+// items: [{ cfg, parentId, list }]。シートは1回だけ読み、足す行はまとめて1回で書く
+function syncRecordListsBulk_(target, items) {
+  var sheet = ensureRecordSheet_(target)
+  forgetRecordIndex_(target)
+  var index = loadRecordIndex_(target)
+  var nowIso = new Date().toISOString()
+  var width = recordHeadersOf_(target).length
+  var updates = []
+  var appends = []
+  var removes = []
+  items.forEach(function (item) {
+    var cfg = item.cfg
+    var list = Array.isArray(item.list) ? item.list : []
+    var current = ((index.byParent[String(item.parentId)] || {})[cfg.kind]) || []
+    var byKey = {}
+    current.forEach(function (it) { byKey[it.key] = it })
+    var keep = {}
+    list.forEach(function (entry, seq) {
+      var row = recordRowValues_(cfg, item.parentId, entry, seq, recordEntryId_(entry, seq), nowIso)
+      var key = row[0]
+      if (keep[key]) return // 同じ ID が2つある時は、最初の1つだけ
+      keep[key] = true
+      var old = byKey[key]
+      if (!old) { appends.push(row); return }
+      if (old.body === row[index.col.body_json] && old.seq === seq) return
+      updates.push({ row: old.row, values: row })
+    })
+    current.forEach(function (it) { if (!keep[it.key]) removes.push(it.row) })
+  })
+  if (!updates.length && !appends.length && !removes.length) return 0
+  updates.forEach(function (u) { sheet.getRange(u.row, 1, 1, width).setValues([u.values]) })
+  removes.sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
+  if (appends.length) {
+    var start = sheet.getLastRow() + 1
+    var need = start + appends.length - 1 - sheet.getMaxRows()
+    if (need > 0) sheet.insertRowsAfter(sheet.getMaxRows(), need)
+    var range = sheet.getRange(start, 1, appends.length, width)
+    try { range.setNumberFormat('@') } catch (e) { /* 形式を変えられない時 */ }
+    range.setValues(appends)
+  }
+  forgetRecordIndex_(target)
+  return updates.length + appends.length + removes.length
+}
+
+// 書き込み(列の名前 → 値)のうち、一覧の列を行に書き、残りの列だけを返す。行に持っていない時はそのまま返す
+function splitRecordFields_(sheetName, rowId, fields) {
+  if (!recordListsOf_(sheetName).length || !recordRowsOn_()) return fields
+  var rest = {}
+  Object.keys(fields).forEach(function (k) {
+    var cfg = recordListOf_(sheetName, k)
+    if (!cfg) { rest[k] = fields[k]; return }
+    var list = []
+    var v = fields[k]
+    if (Array.isArray(v)) list = v
+    else if (v !== '' && v !== null && v !== undefined) {
+      try { list = JSON.parse(String(v)) } catch (e) { throw userError_('記録の形式が不正です。') }
+      if (!Array.isArray(list)) throw userError_('記録の形式が不正です。')
+    }
+    writeRecordList_(cfg, rowId, list)
+  })
+  return rest
+}
+
+// 書き込みの表(このリクエストで覚えている Tasks・Members)の一覧の列を、書いた値にする(続けて読む処理のため)
+function noteRecordFieldsInGrid_(sheetName, rowId, recordFields) {
+  var grid = _sheetGrids[sheetName]
+  if (!grid) return
+  var r = grid.rowOf[String(rowId)]
+  if (!r || !grid.values[r - 1]) return
+  Object.keys(recordFields).forEach(function (k) {
+    var c = grid.headers.indexOf(k)
+    if (c < 0) return
+    var v = recordFields[k]
+    grid.values[r - 1][c] = Array.isArray(v) ? JSON.stringify(v) : String(v === null || v === undefined || v === '' ? '[]' : v)
+  })
+}
+
+// 記録の一覧への書き込みを、移している間は断る
+function assertRecordWritable_(sheetName, fields) {
+  if (!recordListsOf_(sheetName).length) return
+  var touches = Object.keys(fields).some(function (k) { return isRecordColumn_(sheetName, k) })
+  if (touches && recordRowsBusy_(Date.now())) throw userError_(RECORD_ROWS_BUSY_MESSAGE)
+}
+
+// 親(タスク・メンバー)の行を消した時に、その記録の行も消す
+function deleteRecordsOfParents_(sheetName, ids) {
+  if (!ids || !ids.length || !recordRowsOn_()) return
+  var targets = {}
+  recordListsOf_(sheetName).forEach(function (c) { targets[c.target] = true })
+  var wanted = {}
+  ids.forEach(function (id) { wanted[String(id)] = true })
+  Object.keys(targets).forEach(function (target) {
+    var index = loadRecordIndex_(target)
+    if (!index.sheet) return
+    var rows = []
+    Object.keys(index.byParent).forEach(function (p) {
+      if (!wanted[p]) return
+      Object.keys(index.byParent[p]).forEach(function (k) { index.byParent[p][k].forEach(function (it) { rows.push(it.row) }) })
+    })
+    rows.sort(function (a, b) { return b - a }).forEach(function (r) { index.sheet.deleteRow(r) })
+    forgetRecordIndex_(target)
+  })
+}
+
+// 新しい団体(setupOhsumi)は、最初から行に持つ。一覧の列にまだ何も入っていなければ、印を done にする
+function startRecordRowsIfEmpty_() {
+  var s = recordRowsState_()
+  if (s.state !== 'none' || s.decided) return s
+  ensureRecordSheet_(SHEET_TASK_RECORDS)
+  ensureRecordSheet_(SHEET_MEMBER_RECORDS)
+  if (countCellRecords_().entries > 0) return s
+  return setRecordRowsState_({ state: 'done', since: new Date().toISOString(), by: 'setup', version: 1 })
+}
+
+// セルに入っている記録の数(移行の試しと、新しい団体の見分けに使う)
+function countCellRecords_() {
+  var out = { entries: 0, parents: 0, unreadable: [], duplicates: [], tooLong: [], perList: {} }
+  ;['Tasks', 'Members'].forEach(function (sheetName) {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
+    if (!sheet || sheet.getLastRow() < 2) return
+    var values = sheet.getDataRange().getValues()
+    var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+    var idCol = headers.indexOf('id')
+    recordListsOf_(sheetName).forEach(function (cfg) {
+      var c = headers.indexOf(cfg.column)
+      var n = 0
+      if (c < 0) { out.perList[cfg.kind] = 0; return }
+      for (var i = 1; i < values.length; i++) {
+        var raw = String(values[i][c] || '')
+        if (!raw || raw === '[]') continue
+        var list = null
+        try { list = JSON.parse(raw) } catch (e) { list = null }
+        var id = String(values[i][idCol])
+        if (!Array.isArray(list)) { out.unreadable.push(sheetName + ':' + id + ':' + cfg.column); continue }
+        out.parents++
+        var seen = {}
+        list.forEach(function (entry, seq) {
+          var eid = recordEntryId_(entry, seq)
+          if (seen[eid]) out.duplicates.push(sheetName + ':' + id + ':' + cfg.kind + ':' + eid)
+          seen[eid] = true
+          if (JSON.stringify(entry).length > CELL_MAX_CHARS) out.tooLong.push(sheetName + ':' + id + ':' + cfg.kind + ':' + eid)
+        })
+        n += list.length
+      }
+      out.perList[cfg.kind] = n
+      out.entries += n
+    })
+  })
+  return out
+}
+
+// ---- バックアップから戻す時 ----
+
+// ほかのスプレッドシート(バックアップ)の Tasks・Members の値に、そのスプレッドシートの記録のシートから一覧を組み立てる
+function fillRecordColumnsFromSpreadsheet_(spreadsheet, sheetName, values) {
+  if (!recordListsOf_(sheetName).length) return values
+  var settings = spreadsheet.getSheetByName(SHEET_SETTINGS)
+  var raw = ''
+  if (settings && settings.getLastRow() > 1) {
+    settings.getDataRange().getValues().forEach(function (r) { if (String(r[0]) === RECORD_ROWS_STATE_KEY) raw = r[1] })
+  }
+  if (parseRecordRowsState_(raw).state !== 'done') return values
+  var indexes = {}
+  var indexOf = function (target) {
+    if (!indexes[target]) {
+      var s = spreadsheet.getSheetByName(target)
+      var v = s ? s.getDataRange().getValues() : [recordHeadersOf_(target)]
+      indexes[target] = recordIndexFromValues_(v.length && v[0].length ? v : [recordHeadersOf_(target)])
+    }
+    return indexes[target]
+  }
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  for (var i = 1; i < values.length; i++) fillRecordColumns_(sheetName, headers, values[i], indexOf)
+  return values
+}
+
+// 全体を戻した後: バックアップに無かった記録のシート(移行の前のバックアップ)は空にする
+function afterFullRestoreRecordRows_(restoredNames) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  ;[SHEET_TASK_RECORDS, SHEET_MEMBER_RECORDS].forEach(function (name) {
+    if (restoredNames.indexOf(name) >= 0) return
+    var sheet = ss.getSheetByName(name)
+    if (!sheet) return
+    sheet.clearContents()
+    sheet.getRange(1, 1, 1, recordHeadersOf_(name).length).setValues([recordHeadersOf_(name)])
+  })
+  resetRecordRowsMemo_()
+}
+
+// ---- 移す・照合する・戻す(代表だけ。ADMIN の「データの持ち方」から1回ずつ呼ぶ) -------------------------
+//
+// migrateRecordsToRows_(試す / 進める):
+//   試す(dryRun)   書かずに、一覧ごとの件数・読めない一覧・同じ ID の重なり・1件が長すぎる記録を返す
+//   1回目           問題があれば止める。実行の前に自動でバックアップを取り(「(移行の前)」)、印を migrating にする
+//                   (移している間は、記録の一覧への書き込みを断る。30分止まったままなら受け付ける)
+//   移す(copy)      Tasks → Members の順に、親の行を MIGRATE_BATCH 件ずつ記録のシートに写す。進んだ位置(cursor)を
+//                   印に残すので、途中で止まっても続きから。写すのは「セルと同じにする」なので、何度やっても重ならない
+//   照合(verify)    すべての親について、セルの一覧と行から組み立てた一覧を比べる(件数と中身)。違う親は写し直して
+//                   もう一度比べ、それでも違えば failed にして止める(セルが正のまま。何も変わらない)
+//   切り替え        印を done にしてから、セルの一覧の列を空にする。版を上げ、操作の記録(AuditLog)に残す
+// revertRecordRows_(試す / 戻す):
+//   行から今の形の一覧を組み立て、5万文字を超える親があれば止める。実行の前に自動でバックアップを取り
+//   (「(移行を戻す前)」)、セルに書き、照合してから印を none にし、記録のシートを空にする
+var MIGRATE_BATCH = 100
+var MIGRATE_TIME_BUDGET_MS = 4 * 60 * 1000
+
+function recordCellTables_(names) {
+  var out = {}
+  ;(names || ['Tasks', 'Members']).forEach(function (sheetName) {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName)
+    var values = sheet ? sheet.getDataRange().getValues() : [[]]
+    out[sheetName] = { sheet: sheet, values: values, headers: (values[0] || []).map(function (h) { return String(h).trim() }) }
+  })
+  return out
+}
+
+function cellListOf_(table, rowValues, cfg) {
+  var c = table.headers.indexOf(cfg.column)
+  if (c < 0) return []
+  var raw = String(rowValues[c] || '')
+  if (!raw) return []
+  var v = null
+  try { v = JSON.parse(raw) } catch (e) { v = null }
+  return Array.isArray(v) ? v : []
+}
+
+// 今の状態と件数(ADMIN の「データの持ち方」)
+function recordRowsStatus_() {
+  resetRecordRowsMemo_()
+  var s = recordRowsState_()
+  var out = { state: s.state, since: s.since || '', phase: s.phase || '', cursor: s.cursor || null, backup: s.backupName || '', counts: s.counts || null, message: s.message || '' }
+  if (s.state === 'done') {
+    var rows = {}
+    ;[SHEET_TASK_RECORDS, SHEET_MEMBER_RECORDS].forEach(function (target) {
+      var index = loadRecordIndex_(target)
+      Object.keys(index.byParent).forEach(function (p) {
+        Object.keys(index.byParent[p]).forEach(function (k) { rows[k] = (rows[k] || 0) + index.byParent[p][k].length })
+      })
+    })
+    out.rows = rows
+  } else {
+    var c = countCellRecords_()
+    out.cells = c.perList
+    out.problems = { unreadable: c.unreadable.slice(0, 20), duplicates: c.duplicates.slice(0, 20), tooLong: c.tooLong.slice(0, 20) }
+  }
+  return out
+}
+
+function touchRecordRowsState_(fields) {
+  var s = Object.assign({}, recordRowsState_(), fields, { touchedAt: new Date().toISOString() })
+  return setRecordRowsState_(s)
+}
+
+function migrateRecordsToRows_(actorId, opts, nowMs) {
+  opts = opts || {}
+  nowMs = nowMs || Date.now()
+  var started = Date.now()
+  resetRecordRowsMemo_()
+  var s = recordRowsState_()
+  if (s.state === 'done') return { state: 'done', done: true }
+  if (s.state === 'reverting') throw userError_('戻している途中です。先に「戻す」を最後まで進めてください。')
+  if (opts.dryRun) {
+    var c = countCellRecords_()
+    return { dryRun: true, state: s.state, counts: c.perList, entries: c.entries, parents: c.parents,
+      problems: { unreadable: c.unreadable.slice(0, 50), duplicates: c.duplicates.slice(0, 50), tooLong: c.tooLong.slice(0, 50) },
+      ok: !c.unreadable.length && !c.tooLong.length }
+  }
+  if (s.state !== 'migrating') {
+    // 1回目: 確かめて、バックアップを取ってから始める
+    var check = countCellRecords_()
+    if (check.unreadable.length || check.tooLong.length) {
+      throw userError_('移せない記録があります(読めない一覧 ' + check.unreadable.length + ' 件・長すぎる記録 ' + check.tooLong.length +
+        ' 件)。「試す」で場所を確かめてください: ' + check.unreadable.concat(check.tooLong).slice(0, 5).join('、'))
+    }
+    var backup = createBackup_('beforeMigration', nowMs)
+    ensureRecordSheet_(SHEET_TASK_RECORDS)
+    ensureRecordSheet_(SHEET_MEMBER_RECORDS)
+    s = setRecordRowsState_({ state: 'migrating', since: new Date(nowMs).toISOString(), touchedAt: new Date(nowMs).toISOString(), by: String(actorId),
+      backupId: backup.id, backupName: backup.name, phase: 'copy', cursor: { sheet: 'Tasks', index: 0 }, counts: check.perList, version: 1 })
+    appendOrgAudit_(actorId, 'migrateRecordsToRows', 'start', { backup: backup.name, counts: check.perList })
+  }
+  var tables = recordCellTables_()
+  // 移す(続きから)
+  while (s.phase === 'copy') {
+    var cur = s.cursor || { sheet: 'Tasks', index: 0 }
+    var table = tables[cur.sheet]
+    var rows = table.values.slice(1)
+    var idCol = table.headers.indexOf('id')
+    var end = Math.min(rows.length, cur.index + MIGRATE_BATCH)
+    var byTarget = {}
+    for (var i = cur.index; i < end; i++) {
+      var id = String(rows[i][idCol] || '')
+      if (!id) continue
+      recordListsOf_(cur.sheet).forEach(function (cfg) {
+        ;(byTarget[cfg.target] = byTarget[cfg.target] || []).push({ cfg: cfg, parentId: id, list: cellListOf_(table, rows[i], cfg) })
+      })
+    }
+    Object.keys(byTarget).forEach(function (target) { syncRecordListsBulk_(target, byTarget[target]) })
+    var next = end >= rows.length
+      ? (cur.sheet === 'Tasks' ? { phase: 'copy', cursor: { sheet: 'Members', index: 0 } } : { phase: 'verify', cursor: null })
+      : { phase: 'copy', cursor: { sheet: cur.sheet, index: end } }
+    s = touchRecordRowsState_(next)
+    if (s.phase === 'copy' && Date.now() - started > MIGRATE_TIME_BUDGET_MS) {
+      return { state: 'migrating', phase: 'copy', cursor: s.cursor, done: false }
+    }
+  }
+  // 照合する(違う親は1回だけ写し直す)
+  var result = verifyRecordRows_(tables)
+  if (result.mismatches.length) {
+    var byT = {}
+    result.mismatches.forEach(function (m) {
+      ;(byT[m.cfg.target] = byT[m.cfg.target] || []).push({ cfg: m.cfg, parentId: m.parentId, list: m.cellList })
+    })
+    Object.keys(byT).forEach(function (target) { syncRecordListsBulk_(target, byT[target]) })
+    result = verifyRecordRows_(tables)
+  }
+  if (result.mismatches.length) {
+    var where = result.mismatches.slice(0, 10).map(function (m) { return m.cfg.sheet + ':' + m.parentId + ':' + m.cfg.kind })
+    setRecordRowsState_(Object.assign({}, s, { state: 'failed', phase: 'verify', message: '照合が合いませんでした: ' + where.join('、') }))
+    appendOrgAudit_(actorId, 'migrateRecordsToRows', 'failed', { mismatches: where })
+    return { state: 'failed', done: false, mismatches: where }
+  }
+  // 切り替える: 先に印を done にしてから、セルの一覧の列を空にする(途中で止まっても、行が正になっている)
+  s = setRecordRowsState_({ state: 'done', since: new Date().toISOString(), by: String(actorId), backupId: s.backupId, backupName: s.backupName,
+    counts: result.counts, version: 1 })
+  clearRecordCells_(tables)
+  forgetSheetGrid_()
+  bumpDataVersion()
+  appendOrgAudit_(actorId, 'migrateRecordsToRows', 'done', { counts: result.counts, backup: s.backupName })
+  return { state: 'done', done: true, counts: result.counts, backup: s.backupName }
+}
+
+// セルの一覧と、行から組み立てた一覧を比べる(件数と中身)。tables はセルの値(recordCellTables_)
+function verifyRecordRows_(tables) {
+  forgetRecordIndex_()
+  var mismatches = []
+  var counts = {}
+  ;['Tasks', 'Members'].forEach(function (sheetName) {
+    var table = tables[sheetName]
+    var idCol = table.headers.indexOf('id')
+    var seen = {}
+    table.values.slice(1).forEach(function (row) {
+      var id = String(row[idCol] || '')
+      if (!id) return
+      seen[id] = true
+      recordListsOf_(sheetName).forEach(function (cfg) {
+        var cellList = cellListOf_(table, row, cfg)
+        var rowList = recordListFromIndex_(loadRecordIndex_(cfg.target), id, cfg.kind)
+        counts[cfg.kind] = (counts[cfg.kind] || 0) + rowList.length
+        if (cellList.length !== rowList.length || canonicalJson_(cellList) !== canonicalJson_(rowList)) {
+          mismatches.push({ cfg: cfg, parentId: id, cellList: cellList })
+        }
+      })
+    })
+    // 親の行が無い記録(消したタスクの残りなど)も、違いとして消す
+    recordListsOf_(sheetName).forEach(function (cfg) {
+      var index = loadRecordIndex_(cfg.target)
+      Object.keys(index.byParent).forEach(function (p) {
+        if (seen[p] || !(index.byParent[p][cfg.kind] || []).length) return
+        if (sheetName === 'Tasks' && isArchivedTaskId_(p)) return
+        mismatches.push({ cfg: cfg, parentId: p, cellList: [] })
+      })
+    })
+  })
+  return { mismatches: mismatches, counts: counts }
+}
+
+// TasksArchive に移したタスクか(その記録は、TaskRecords に残してよい)
+function isArchivedTaskId_(id) {
+  if (!_archivedTaskIds) {
+    _archivedTaskIds = {}
+    try { archivedTaskRows_().forEach(function (t) { _archivedTaskIds[String(t.id)] = true }) } catch (e) { /* シートが無い */ }
+  }
+  return !!_archivedTaskIds[String(id)]
+}
+var _archivedTaskIds = null
+
+function clearRecordCells_(tables) {
+  ;['Tasks', 'Members'].forEach(function (sheetName) {
+    var table = tables[sheetName]
+    if (!table.sheet || table.values.length < 2) return
+    recordListsOf_(sheetName).forEach(function (cfg) {
+      var c = table.headers.indexOf(cfg.column)
+      if (c < 0) return
+      var blank = table.values.slice(1).map(function () { return [''] })
+      table.sheet.getRange(2, c + 1, blank.length, 1).setValues(blank)
+    })
+  })
+}
+
+function revertRecordRows_(actorId, opts, nowMs) {
+  opts = opts || {}
+  nowMs = nowMs || Date.now()
+  resetRecordRowsMemo_()
+  var s = recordRowsState_()
+  if (s.state === 'none') return { state: 'none', done: true }
+  if (s.state === 'migrating' || s.state === 'failed') {
+    // 移している途中・照合が合わなかった時: セルが正のままなので、記録のシートを空にして none に戻す
+    if (opts.dryRun) return { dryRun: true, state: s.state, ok: true, tooLong: [] }
+    clearRecordSheets_()
+    setRecordRowsState_({ state: 'none', since: new Date(nowMs).toISOString(), by: String(actorId), decided: true })
+    appendOrgAudit_(actorId, 'revertRecordRows', 'cancel', { from: s.state })
+    bumpDataVersion()
+    return { state: 'none', done: true }
+  }
+  // TasksArchive(移したタスク): 移行の後に移したタスクの記録は行にしか無いので、それもセルに戻す
+  // (移行の前に移したタスクは、セルに一覧が残っていて行が無いので、そのままにする)
+  var sheets = ['Tasks', 'Members', SHEET_TASKS_ARCHIVE]
+  var tables = recordCellTables_(sheets)
+  var listSheetOf = function (name) { return name === SHEET_TASKS_ARCHIVE ? 'Tasks' : name }
+  forgetRecordIndex_()
+  // 行から、今の形の一覧を組み立てる
+  var built = []
+  var tooLong = []
+  sheets.forEach(function (sheetName) {
+    var table = tables[sheetName]
+    if (!table.sheet) return
+    var idCol = table.headers.indexOf('id')
+    table.values.slice(1).forEach(function (row, i) {
+      var id = String(row[idCol] || '')
+      if (!id) return
+      recordListsOf_(listSheetOf(sheetName)).forEach(function (cfg) {
+        var c = table.headers.indexOf(cfg.column)
+        if (c < 0) return
+        var list = recordListFromIndex_(loadRecordIndex_(cfg.target), id, cfg.kind)
+        if (sheetName === SHEET_TASKS_ARCHIVE && !list.length) list = cellListOf_(table, row, cfg)
+        var json = list.length ? JSON.stringify(list) : ''
+        if (json.length > CELL_MAX_CHARS) tooLong.push(sheetName + ':' + id + ':' + cfg.kind + '(' + json.length + '文字)')
+        built.push({ sheetName: sheetName, row: i + 2, col: c + 1, json: json, list: list })
+      })
+    })
+  })
+  if (opts.dryRun) return { dryRun: true, state: s.state, ok: !tooLong.length, tooLong: tooLong.slice(0, 50), parents: built.filter(function (b) { return b.list.length }).length }
+  if (tooLong.length) throw userError_('セルに入らない(5万文字を超える)記録があるため、戻せません: ' + tooLong.slice(0, 5).join('、'))
+  var backup = createBackup_('beforeRevert', nowMs)
+  setRecordRowsState_(Object.assign({}, s, { state: 'reverting', touchedAt: new Date(nowMs).toISOString(), revertBackupName: backup.name }))
+  // 列ごとに1回で書く
+  sheets.forEach(function (sheetName) {
+    var table = tables[sheetName]
+    if (!table.sheet || table.values.length < 2) return
+    recordListsOf_(listSheetOf(sheetName)).forEach(function (cfg) {
+      var c = table.headers.indexOf(cfg.column)
+      if (c < 0) return
+      var col = table.values.slice(1).map(function () { return [''] })
+      built.forEach(function (b) { if (b.sheetName === sheetName && b.col === c + 1) col[b.row - 2] = [b.json] })
+      var range = table.sheet.getRange(2, c + 1, col.length, 1)
+      try { range.setNumberFormat('@') } catch (e) { /* 形式を変えられない時 */ }
+      range.setValues(col)
+    })
+  })
+  // 照合: 書いたセルを読み直し、行から組み立てた一覧と同じか
+  var after = recordCellTables_(sheets)
+  var bad = built.filter(function (b) {
+    var table = after[b.sheetName]
+    var raw = String(table.values[b.row - 1][b.col - 1] || '')
+    var got = raw ? JSON.parse(raw) : []
+    return canonicalJson_(got) !== canonicalJson_(b.list)
+  })
+  if (bad.length) {
+    setRecordRowsState_(Object.assign({}, s, { state: 'done' }))
+    throw userError_('戻した記録の照合が合わなかったため、行に持ったままにしました(' + bad.length + ' 件)。')
+  }
+  setRecordRowsState_({ state: 'none', since: new Date().toISOString(), by: String(actorId), decided: true, revertBackupName: backup.name })
+  clearRecordSheets_()
+  forgetSheetGrid_()
+  bumpDataVersion()
+  appendOrgAudit_(actorId, 'revertRecordRows', 'done', { backup: backup.name })
+  return { state: 'none', done: true, backup: backup.name }
+}
+
+function clearRecordSheets_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+  ;[SHEET_TASK_RECORDS, SHEET_MEMBER_RECORDS].forEach(function (name) {
+    var sheet = ss.getSheetByName(name)
+    if (!sheet) return
+    sheet.clearContents()
+    sheet.getRange(1, 1, 1, recordHeadersOf_(name).length).setValues([recordHeadersOf_(name)])
+  })
+  forgetRecordIndex_()
+}
+// ---- 兼部の統合表示のための、本人に関係する分だけの読み取り(getMyDigest) -------------------------
+//
+// 画面は、端末に保存している団体ごとのログインで、各団体の GAS にこの操作を送り、答えを画面の中でだけまとめる
+// (サーバーを足さない。docs/design-multi-org-view.md)。返すのは本人の分だけ:
+//   tasks     本人が担当で完了していない(assignee)・確認待ちで本人が確認する人(reviewTarget)・
+//             日程調整・フォームに招待されていて答えていない(invitee。日程調整は候補も)タスク
+//             (件名・状態・日付・優先度・重要度・プロジェクト名だけ。説明・コメント・ほかの人の名前は返さない)
+//   counts    担当・確認待ち・期限切れ・回答待ちの数
+//   団体の名前・テーマの色(統合表示で団体を見分ける)・本人の名前・機能停止の状態
+// ほかの人のタスク・メンバーの一覧・団体の設定・人材の情報は返さない。見えるかは canViewTaskRow_ を通す。
+// 担当のタスクは、期限が to より後のものを返さない(期限の無いもの・期限切れは返す)。期間は62日まで。
+// 結果は データの版・本人・期間 ごとに5分キャッシュする。knownVersion が今の版と同じなら unchanged だけを返す。
+// 1人1時間 RATE_LIMITS.digest 回まで(超えたら、キャッシュがあればそれを返す)
+var DIGEST_MAX_TASKS = 200
+var DIGEST_MAX_DAYS = 62
+var DIGEST_CACHE_TTL = 300
+var DIGEST_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+function digestRange_(body, todayStr) {
+  var from = String((body && body.from) || todayStr)
+  var to = String((body && body.to) || '')
+  if (!DIGEST_DATE_PATTERN.test(from)) throw userError_('期間の形が正しくありません。')
+  if (!to) to = Utilities.formatDate(new Date(Date.parse(from + 'T00:00:00Z') + 27 * 86400000), 'UTC', 'yyyy-MM-dd')
+  if (!DIGEST_DATE_PATTERN.test(to)) throw userError_('期間の形が正しくありません。')
+  var days = (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000
+  if (!(days >= 0) || days > DIGEST_MAX_DAYS) throw userError_('期間は ' + DIGEST_MAX_DAYS + ' 日までにしてください。')
+  return { from: from, to: to }
+}
+
+function myDigest_(memberId, body) {
+  var snapshot = loadSnapshot_()
+  var version = snapshot.version
+  if (body && body.knownVersion && String(body.knownVersion) === version) return { version: version, unchanged: true }
+  var today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd')
+  var range = digestRange_(body, today)
+  var cache = CacheService.getScriptCache()
+  var key = 'digest:' + version + ':' + memberId + ':' + range.from + ':' + range.to
+  var cached = null
+  try { var raw = cache.get(key); if (raw) cached = JSON.parse(raw) } catch (e) { cached = null }
+  if (!takeRateLimit_('digest', memberId, 1)) {
+    if (cached) return cached
+    throw userError_('まとめて表示する読み込みが多すぎます。しばらくしてから、もう一度お試しください。')
+  }
+  if (cached) return cached
+  var out = buildMyDigest_(snapshot.data, memberId, range, today)
+  out.version = version
+  try { cache.put(key, JSON.stringify(out), DIGEST_CACHE_TTL) } catch (e) { /* 大きすぎる時は毎回作る */ }
+  return out
+}
+
+function buildMyDigest_(data, memberId, range, today) {
+  var memberRow = findMemberInSnapshot_(data, memberId)
+  if (!memberRow) throw userError_('メンバーが見つかりません。')
+  var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
+  var me = String(memberId)
+  var table = data[SHEET_TASKS] || { headers: [], rows: [] }
+  var projects = {}
+  var pt = data[SHEET_PROJECTS] || { headers: [], rows: [] }
+  var pId = pt.headers.indexOf('id'), pName = pt.headers.indexOf('name')
+  ;(pt.rows || []).forEach(function (r) { projects[String(r[pId])] = String(r[pName] || '') })
+  var tasks = []
+  var counts = { assigned: 0, reviewWaiting: 0, overdue: 0, unanswered: 0 }
+  ;(table.rows || []).forEach(function (r) {
+    var t = {}
+    table.headers.forEach(function (h, i) { t[h] = r[i] })
+    if (!String(t.id || '') || String(t.deleted_at || '') !== '') return
+    if (!canViewTaskRow_(viewer, t)) return
+    var status = normalizeCode_('status', t.status)
+    if (status === 'done') return
+    var due = String(t.due_date || '').slice(0, 10)
+    var role = null
+    var invite = digestInviteOf_(t, me)
+    if (invite) role = 'invitee'
+    else if (status === 'review' && digestIsReviewTarget_(t, me)) role = 'reviewTarget'
+    else if (splitCsvList_(t.assignee_id).indexOf(me) >= 0) {
+      if (due && due > range.to) return
+      role = 'assignee'
+    }
+    if (!role) return
+    var overdue = !!due && due < today
+    if (role === 'assignee') counts.assigned++
+    if (role === 'reviewTarget') counts.reviewWaiting++
+    if (role === 'invitee') counts.unanswered++
+    if (overdue && role !== 'invitee') counts.overdue++
+    var item = {
+      id: String(t.id), title: String(t.title || ''), status: status, role: role, overdue: overdue,
+      dueDate: due, dueTime: String(t.due_time || ''), startDate: String(t.start_date || '').slice(0, 10),
+      priority: normalizeCode_('priority', t.priority), importance: normalizeCode_('importance', t.importance),
+      projectName: projects[String(t.project_id || '')] || '',
+    }
+    if (invite && invite.candidates) item.candidates = invite.candidates
+    if (invite) item.inviteKind = invite.kind
+    tasks.push(item)
+  })
+  tasks.sort(function (a, b) {
+    var x = a.dueDate || '9999-99-99', y = b.dueDate || '9999-99-99'
+    return x < y ? -1 : x > y ? 1 : 0
+  })
+  var settingOf = function (k) {
+    var s = data[SHEET_SETTINGS] || { headers: [], rows: [] }
+    var kc = s.headers.indexOf('key'), vc = s.headers.indexOf('value')
+    for (var i = 0; i < (s.rows || []).length; i++) if (String(s.rows[i][kc]) === k) return String(s.rows[i][vc] || '')
+    return ''
+  }
+  var contract = currentContract_(Date.now())
+  return {
+    orgName: settingOf('org_name'),
+    themeColor: /^#[0-9a-fA-F]{6}$/.test(settingOf('theme_color')) ? settingOf('theme_color') : '',
+    memberId: me,
+    memberName: String(memberRow.display_name || memberRow.name || ''),
+    contract: { phase: String(contract.phase || ''), kind: String(contract.kind || '') },
+    tasks: tasks.slice(0, DIGEST_MAX_TASKS),
+    truncated: tasks.length > DIGEST_MAX_TASKS,
+    counts: counts,
+  }
+}
+
+// 確認待ちのタスクで、本人が確認する人か(確認者 → 担当者の報告先 → 全権管理者。担当者本人は除く)
+function digestIsReviewTarget_(task, me) {
+  if (splitCsvList_(task.assignee_id).indexOf(me) >= 0) return false
+  try { return reviewTargets_(task).ids.indexOf(me) >= 0 } catch (e) { return false }
+}
+
+// 日程調整・フォームに招待されていて、まだ答えていないか。日程調整は候補(ID・表示・日付・時刻)も返す
+function digestInviteOf_(task, me) {
+  var parse = function (v) { try { var o = JSON.parse(String(v || '')); return o && typeof o === 'object' ? o : null } catch (e) { return null } }
+  var schedule = parse(task.schedule_json)
+  if (schedule && Array.isArray(schedule.invitedIds) && schedule.invitedIds.map(String).indexOf(me) >= 0) {
+    var answered = schedule.responses && schedule.responses[me] && Object.keys(schedule.responses[me]).length > 0
+    if (!answered) {
+      return { kind: 'schedule', candidates: (Array.isArray(schedule.candidates) ? schedule.candidates : []).slice(0, 20).map(function (c) {
+        return { id: String(c.id || ''), label: String(c.label || '').slice(0, 100), date: String(c.date || ''), startTime: String(c.startTime || ''), endTime: String(c.endTime || '') }
+      }) }
+    }
+  }
+  var form = parse(task.form_json)
+  if (form && Array.isArray(form.invitedIds) && form.invitedIds.map(String).indexOf(me) >= 0) {
+    var done = form.responses && form.responses[me]
+    if (!done) return { kind: 'form', candidates: null }
+  }
+  return null
 }

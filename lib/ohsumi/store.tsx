@@ -290,6 +290,8 @@ interface OhsumiContextValue extends OhsumiState {
   can: (capability: Capability) => boolean
   // 団体のスプレッドシート・Apps Script の編集画面の URL(最上位の役職の人だけ。古い GAS では null)
   adminLinks: import('./remote').OrgAdminLinks | null
+  // コメント・1on1 などの記録の持ち方(古い GAS では null)
+  recordRows: import('./remote').RecordRowsState | null
   // 役職の判定(ID・名前のどちらでも)
   isAdminRef: (ref: string | null | undefined) => boolean
   isTopRef: (ref: string | null | undefined) => boolean
@@ -1312,6 +1314,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [serverCapabilities, setServerCapabilities] = useState<Capability[] | null>(null)
   // 団体のスプレッドシート・Apps Script の URL(最上位の役職の人にだけ GAS が渡す。受け取ったら消さない)
   const [adminLinks, setAdminLinks] = useState<import('./remote').OrgAdminLinks | null>(null)
+  const [recordRows, setRecordRows] = useState<import('./remote').RecordRowsState | null>(null)
   const applyInitialData = useCallback(
     (res: InitialData) => {
       if (res.data) {
@@ -1324,6 +1327,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (res.settings) applySettings(res.settings)
       if (res.capabilities) setServerCapabilities(res.capabilities)
       if (res.adminLinks) setAdminLinks(res.adminLinks)
+      if (res.recordRows) setRecordRows(res.recordRows)
       if (res.version) dataVersionRef.current = res.version
     },
     [applyLocalApprovalOverrides, applySettings],
@@ -3273,7 +3277,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // records a field change onto a task's audit trail (Admin → task detail
   // "変更履歴") — a no-op when the value didn't actually change. Capped so
   // a churny task doesn't grow the row without bound.
-  const HISTORY_CAP = 50
+  // 記録を1件1行のシートに持つ GAS(recordRows が done)では500件、セルに持つ間は50件(gas/src/39-record-rows.gs と同じ)
+  const HISTORY_CAP = recordRows === 'done' ? 500 : 50
   const appendHistory = useCallback(
     (t: Task, field: TaskHistoryEntry['field'], from: string, to: string): Task => {
       if (from === to) return t
@@ -3289,7 +3294,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (isRemoteConfigured) runRemote(remoteApi.updateHistory(t.id, history))
       return { ...t, history }
     },
-    [currentUserId, runRemote],
+    [currentUserId, runRemote, HISTORY_CAP],
   )
 
   const updatePriority = useCallback(
@@ -5656,6 +5661,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     capabilities,
     can,
     adminLinks,
+    recordRows,
     roleCapabilitiesOf,
     setRoleCapabilities,
     adminProjects,

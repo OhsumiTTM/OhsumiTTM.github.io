@@ -432,6 +432,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   // ログインした人のできる操作(役職の分と人ごとの例外の分。画面はこれだけを見て操作の部品を出す)
   var capabilities = memberCapabilitiesFromSnapshot_(snapshot.data, memberId)
   var out = { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
+  // 記録の持ち方(none / migrating / done。39-record-rows.gs)。古い GAS には無い(画面はこれで見分ける)
+  out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {

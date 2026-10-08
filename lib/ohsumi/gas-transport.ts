@@ -101,6 +101,10 @@ export const READ_ACTIONS = new Set([
   'searchBackupTasks',
   // 個人情報の削除の予定(代表だけ)
   'getPersonalDataStatus',
+  // 記録の持ち方の状態(代表だけ)
+  'getRecordRowsStatus',
+  // 兼部の統合表示(本人の分だけ)
+  'getMyDigest',
   // 毎日・毎時の処理と共有の状態(代表だけ)
   'getOpsStatus',
   // 利用の集計とエラーの件数(代表だけ)
@@ -150,6 +154,10 @@ export const LONG_ACTION_TIMEOUT_MS: Record<string, number> = {
   restoreTasks: 120000,
   previewRestore: 120000,
   searchBackupTasks: 60000,
+  // 記録の持ち方を移す・戻す(1回で最長4分ほど進め、バックアップのコピーも作る)
+  migrateRecordsToRows: 330000,
+  revertRecordRows: 330000,
+  getRecordRowsStatus: 60000,
 }
 
 export function attemptTimeoutOf(action: string): number {
@@ -549,6 +557,9 @@ export const UNBATCHED_WRITE_ACTIONS = new Set([
   'recheckSharing',
   // 今すぐバックアップを作る(時間がかかるので、ほかの書き込みとまとめない)
   'createBackupNow',
+  // 記録の持ち方を移す・戻す(時間がかかるので、ほかの書き込みとまとめない)
+  'migrateRecordsToRows',
+  'revertRecordRows',
   // 画面のエラーの記録(ロックを取らない。エラーの記録のシートに1行足すだけ)
   'reportClientError',
   // 診断情報を FSIF に送る(ロックを取らない。スクリプトプロパティに受付番号を残すだけ)

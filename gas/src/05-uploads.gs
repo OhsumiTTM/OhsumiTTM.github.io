@@ -97,10 +97,17 @@ function appendRowByHeaders_(sheet, sheetName, obj) {
     throw userError_(sheetName + 'シートに列が見つかりません: ' + unknown.join(', ') +
       '。Apps Scriptエディタで setupOhsumi() を実行してヘッダー列を追加してください。')
   }
-  var row = headers.map(function (h) { return obj[h] !== undefined ? obj[h] : '' })
+  // 記録を行に持っている時は、一覧の列は記録のシートに書く(39-record-rows.gs)
+  var recordFields = null
+  if (recordListsOf_(sheetName).length && recordRowsOn_() && obj.id !== undefined && obj.id !== '') {
+    recordFields = {}
+    Object.keys(obj).forEach(function (k) { if (isRecordColumn_(sheetName, k)) recordFields[k] = obj[k] })
+  }
+  var row = headers.map(function (h) { return obj[h] !== undefined && !(recordFields && h in recordFields) ? obj[h] : '' })
   assertRowCellLengths_(sheetName, headers, row)
   protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, sheetName)
   sheet.appendRow(row)
+  if (recordFields && Object.keys(recordFields).length) splitRecordFields_(sheetName, String(obj.id), recordFields)
 }
 
 // A member is completing a certain number of same-category tasks and
