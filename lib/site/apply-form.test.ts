@@ -6,6 +6,7 @@ const filled = () => ({
   orgType: '学生団体', address: '東京都', repTitle: '代表', repName: '山田 花子', website: 'なし',
   headcount: '1〜10名', startDate: '2026-10-20', plan: 'Ohsumiプラン', sendTo: '団体代表者',
   confirm: APPLY_FIELDS.find((f) => f.key === 'confirm')!.options!, notes: 'なし',
+  logo: 'https://abc.supabase.co/storage/v1/object/public/logos/public/ohsumi-1-abcd1234.png',
 })
 
 describe('利用契約書の発行申請フォーム', () => {
@@ -26,8 +27,27 @@ describe('利用契約書の発行申請フォーム', () => {
   })
   it('確認事項は選んだ数だけ送り、ページの通り道も送る', () => {
     const body = buildApplyBody(filled())
-    expect(body.getAll('entry.746384353')).toHaveLength(4)
+    expect(body.getAll('entry.746384353')).toHaveLength(5)
     expect(body.get('pageHistory')).toBe('0,1,2,3,4,5,6')
     expect(body.get('entry.271996791')).toBe('taro@example.com')
+  })
+  it('確認事項は5つ。5つ目はロゴの掲載について', () => {
+    const confirm = APPLY_FIELDS.find((f) => f.key === 'confirm')!
+    expect(confirm.options).toHaveLength(5)
+    expect(confirm.options![4]).toBe('OhsumiやFSIFのホームページに団体のロゴを掲載する場合があることを確認しました。')
+    expect(validateApply({ ...filled(), confirm: confirm.options!.slice(0, 4) }).confirm).toBeTruthy()
+  })
+  it('団体ロゴ: Webサイト・SNS の後のファイルの項目で、上げた URL を entry.280750689 に文字として送る', () => {
+    const keys = APPLY_FIELDS.map((f) => f.key)
+    expect(keys.indexOf('logo')).toBe(keys.indexOf('website') + 1)
+    const logo = APPLY_FIELDS.find((f) => f.key === 'logo')!
+    expect(logo).toMatchObject({ entry: '280750689', type: 'file', required: true })
+    const body = buildApplyBody(filled())
+    expect(body.get('entry.280750689')).toBe(filled().logo)
+  })
+  it('団体ロゴ: URL が無ければ「ロゴを選んでください。」。受け付けないビルドでは必須にしない', () => {
+    expect(validateApply({ ...filled(), logo: '' }).logo).toBe('ロゴを選んでください。')
+    expect(validateApply({ ...filled(), logo: '' }, { fileUpload: false })).toEqual({})
+    expect(buildApplyBody({ ...filled(), logo: '' }).has('entry.280750689')).toBe(false)
   })
 })

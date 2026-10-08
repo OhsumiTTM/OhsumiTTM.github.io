@@ -47,6 +47,10 @@ jobs:
           # 未設定なら、Ohsumi の画面と管理画面(/registry-admin/)は「設定されていません」と出すだけ
           NEXT_PUBLIC_REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
           NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID: ${{ secrets.REGISTRY_OAUTH_CLIENT_ID }}
+          # 申請フォーム(/apply)の団体ロゴの送り先(Supabase Storage の logos バケット)。anon key だけを使う
+          # (service_role のキーは使わない・置かない)。未設定なら、ロゴの欄は「いまロゴを受け付けられません」と出す
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: pnpm build
 
       - name: Upload artifact

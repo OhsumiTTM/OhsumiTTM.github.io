@@ -11,7 +11,8 @@ export const APPLY_FORM_ACTION = `https://docs.google.com/forms/d/e/${APPLY_FORM
 const PAGE_HISTORY = '0,1,2,3,4,5,6'
 const OTHER = '__other_option__'
 
-export type FieldType = 'text' | 'email' | 'textarea' | 'radio' | 'date' | 'checks'
+// file: ファイルを選ぶ欄。値はアップロードした後の公開 URL(文字)で、Google フォームには文字の項目と同じに送る
+export type FieldType = 'text' | 'email' | 'textarea' | 'radio' | 'date' | 'checks' | 'file'
 
 export interface ApplyField {
   key: string
@@ -59,6 +60,7 @@ export const APPLY_SECTIONS: ApplySection[] = [
       { key: 'repTitle', entry: '213997492', label: '代表者役職', placeholder: '例: 代表取締役、代表理事、代表、部長', type: 'text', required: true },
       { key: 'repName', entry: '1718973910', label: '代表者氏名', type: 'text', required: true },
       { key: 'website', entry: '794182366', label: 'Webサイト・SNS', help: '団体について確認できる Web サイトや公式 SNS。無い場合は「なし」とご入力ください。', type: 'textarea', required: true },
+      { key: 'logo', entry: '280750689', label: '団体ロゴ', help: 'Ohsumi や FSIF のホームページに掲載する場合があります。PNG・JPG・SVG・AI、10MBまで。', type: 'file', required: true },
     ],
   },
   {
@@ -103,6 +105,7 @@ export const APPLY_SECTIONS: ApplySection[] = [
           '本フォームの送信のみではOhsumiの利用契約が成立しないことを確認しました。',
           '契約書類の作成にあたり、FSIFから内容確認の連絡を行う場合があることを確認しました。',
           '作成された契約書類の内容を確認したうえで、正式な契約手続きを行うことを確認しました。',
+          'OhsumiやFSIFのホームページに団体のロゴを掲載する場合があることを確認しました。',
         ],
       },
       { key: 'notes', entry: '1939103158', label: 'その他・連絡事項', help: '事前に伝えておきたいこと・ご質問・ご要望。無い場合は「なし」とご入力ください。', type: 'textarea', required: true },
@@ -120,11 +123,20 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const MAX_LEN = 2000
 
-/** 入力を確かめる。項目ごとの問題(無ければ空のオブジェクト)を返す */
-export function validateApply(values: ApplyValues): Record<string, string> {
+/**
+ * 入力を確かめる。項目ごとの問題(無ければ空のオブジェクト)を返す。
+ * fileUpload: ファイルを受け付けるか(ロゴの送り先が無いビルドでは false。その時はファイルの項目を必須にしない)
+ */
+export function validateApply(values: ApplyValues, opts: { fileUpload?: boolean } = {}): Record<string, string> {
+  const fileUpload = opts.fileUpload ?? true
   const errors: Record<string, string> = {}
   for (const f of APPLY_FIELDS) {
     const v = values[f.key]
+    if (f.type === 'file') {
+      const url = typeof v === 'string' ? v.trim() : ''
+      if (fileUpload && f.required && !url) errors[f.key] = 'ロゴを選んでください。'
+      continue
+    }
     if (f.type === 'checks') {
       const list = Array.isArray(v) ? v : []
       if (f.allRequired && (f.options ?? []).some((o) => !list.includes(o))) errors[f.key] = 'すべての項目にチェックしてください。'
