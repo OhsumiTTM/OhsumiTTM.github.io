@@ -163,6 +163,13 @@ const loggedIn = () => page.evaluate<boolean>(`(() => {
   return !!document.body && document.body.innerText.includes('OUTPUT') && !document.querySelector('[data-e2e-gsi]')
 })()`)
 const clearDevice = () => page.evaluate('localStorage.clear(); sessionStorage.clear(); true')
+// 1件1行のシート(TaskRecords・MemberRecords。新しい団体は最初から)の、親の1つの一覧(順番どおり)
+const recordList = (org: Org, sheet: 'TaskRecords' | 'MemberRecords', parentId: string, kind: string) => {
+  const [head, ...rows] = (org.sheets[sheet]?.rows ?? [[]]).map((r) => r.map(String))
+  const col = (n: string) => head.indexOf(n)
+  return rows.filter((r) => r[col(sheet === 'TaskRecords' ? 'task_id' : 'member_id')] === parentId && r[col('kind')] === kind)
+    .sort((a, b) => Number(a[col('seq')]) - Number(b[col('seq')])).map((r) => JSON.parse(r[col('body_json')]))
+}
 
 beforeAll(async () => {
   if (!available) return
@@ -637,7 +644,7 @@ describe.skipIf(!available)('コメントへの返信と、ベルの通知の設
     A.org.cache.clear()
     const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
     const row = rows.find((r) => r[head.indexOf('title')] === title)
-    return row ? (JSON.parse(row[head.indexOf('comments_json')] || '[]') as { id: string; byId: string; text: string; replyToId?: string }[]) : []
+    return row ? (recordList(A.org, 'TaskRecords', row[head.indexOf('id')], 'comment') as { id: string; byId: string; text: string; replyToId?: string }[]) : []
   }
   const TITLE = '返信のE2Eのタスク'
   let topId = ''
@@ -772,5 +779,69 @@ describe.skipIf(!available)('担当者が「完了」を選ぶと、確認待ち
     await waitFor(async () => /review|確認待ち/.test(taskRow(TITLE)?.status ?? ''), 'GAS で確認待ちになりません')
     await waitFor(async () => A.org.mails.slice(mailsBefore).some((m) => m.subject.includes('確認をお願いします')), '確認する人にメールが届きません')
     expect(A.org.mails.slice(mailsBefore).some((m) => m.to.includes('base@a.example') && m.subject.includes('確認をお願いします'))).toBe(false)
+  })
+})
+
+describe.skipIf(!available)('データの持ち方: 代表が団体設定から、記録を1件1行のシートに移し、戻す', () => {
+  const TITLE = '移行のE2Eのタスク'
+  const settingState = () => {
+    const row = B.org.sheets.Settings.rows.find((r) => String(r[0]) === 'record_rows_state')
+    return row ? JSON.parse(String(row[1])).state : 'none'
+  }
+  const taskRow = () => {
+    const [head, ...rows] = B.org.sheets.Tasks.rows.map((r) => r.map(String))
+    const row = rows.find((r) => r[head.indexOf('title')] === TITLE)!
+    return { id: row[head.indexOf('id')], comments: row[head.indexOf('comments_json')] }
+  }
+  const panelText = () => page.evaluate<string>(`document.querySelector('[data-record-rows]')?.textContent ?? ''`)
+  const click = (selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)}).click(); true`)
+  const clickByText = (label: string) => page.evaluate(`(() => { const b = [...document.querySelectorAll('[data-record-rows] button')].find((x) => x.textContent.trim().startsWith(${JSON.stringify(label)})); b.click(); return true })()`)
+
+  it('記録をセルに持つ団体(移行の前)で、試す → 移す: バックアップを取ってから行に写し、セルを空にする。画面のコメントはそのまま', async () => {
+    expect(settingState()).toBe('done') // 新しい団体は最初から行に持つ
+    // 移行の前の団体のふり: 印を none にしてから、タスクとコメントを書く(セルに入る)
+    const settings = B.org.sheets.Settings.rows
+    settings.find((r) => String(r[0]) === 'record_rows_state')![1] = JSON.stringify({ state: 'none' })
+    B.org.props.DATA_VERSION = 'legacy-' + Date.now()
+    B.org.cache.clear()
+    const topB = String(world.googleLogin(B.org, 'top@b.example').result.session.token)
+    const topId = String(world.googleLogin(B.org, 'top@b.example').result.memberId)
+    const made = world.call(B.org, topB, 'createTasks', { tasks: [{ tempId: 'tm', title: TITLE, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [topId], creatorId: topId, pendingApproval: false }] })
+    expect(made.ok, made.error).toBe(true)
+    const c = world.call(B.org, topB, 'updateComments', { taskId: taskRow().id, listOps: diffList([], [{ id: 'c-legacy', byId: topId, text: '移行の前のコメント', at: new Date().toISOString() }], 'id') })
+    expect(c.ok, c.error).toBe(true)
+    expect(taskRow().comments).toContain('c-legacy')
+
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + B.orgId)
+    await googleSignIn('top@b.example')
+    await waitFor(loggedIn, 'top@b.example がログインできません')
+    await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
+    const item = `[...document.querySelectorAll('button, [role=menuitem]')].find((b) => b.textContent.trim() === '団体設定')`
+    await waitFor(() => page.evaluate<boolean>(`!!${item}`), 'アカウントのメニューに団体設定がありません')
+    await page.evaluate(`${item}.click(); true`)
+    await waitFor(async () => (await panelText()).includes('セルにまとめて持っています'), '団体設定に、データの持ち方が出ません')
+    await clickByText('試す')
+    await waitFor(async () => (await panelText()).includes('件の記録を移せます'), '試した結果が出ません')
+    await click('[data-record-rows-trial] input[type=checkbox]')
+    await clickByText('移す')
+    await waitFor(async () => settingState() === 'done', 'GAS で行に移りません', 20000)
+    expect(taskRow().comments).toBe('')
+    expect(recordList(B.org, 'TaskRecords', taskRow().id, 'comment').map((x: { id: string }) => x.id)).toEqual(['c-legacy'])
+    await waitFor(async () => (await panelText()).includes('1件1行のシートに持っています'), '画面の状態が「行に持っている」になりません')
+    // 自動のバックアップを取ったことが、操作の記録に残る
+    expect(JSON.stringify(B.org.sheets.AuditLog?.rows ?? [])).toContain('migrateRecordsToRows')
+  })
+
+  it('試す → 戻す: バックアップを取ってから、セルに同じ一覧を戻し、行を空にする', async () => {
+    await clickByText('試す')
+    await waitFor(async () => (await panelText()).includes('戻せます'), '戻す前の確かめが出ません')
+    await click('[data-record-rows-trial] input[type=checkbox]')
+    await clickByText('戻す')
+    await waitFor(async () => settingState() === 'none', 'GAS でセルに戻りません', 20000)
+    expect(JSON.parse(taskRow().comments).map((x: { id: string }) => x.id)).toEqual(['c-legacy'])
+    expect(recordList(B.org, 'TaskRecords', taskRow().id, 'comment')).toEqual([])
+    await waitFor(async () => (await panelText()).includes('セルにまとめて持っています'), '画面の状態が「セル」に戻りません')
   })
 })

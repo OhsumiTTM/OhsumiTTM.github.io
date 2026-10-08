@@ -15,6 +15,7 @@ function snapshotTableOrSheet_(name) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
   if (!sheet) return { headers: [], rows: [] }
   var values = sheet.getDataRange().getValues()
+  fillRecordColumnsOfValues_(name, values)
   return { headers: (values[0] || []).map(function (h) { return String(h).trim() }), rows: values.slice(1) }
 }
 

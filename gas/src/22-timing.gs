@@ -32,6 +32,7 @@ function startRequestTiming_() {
   _prefetchedSheets = {}
   _requestEmailMap = null
   _sheetGrids = {}
+  resetRecordRowsMemo_()
 }
 
 function noteTiming_(key, value) {

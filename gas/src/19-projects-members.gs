@@ -59,12 +59,18 @@ function removeProject_(projectId) {
       taskLastRow > 1 ? tasks.getRange(2, projectCol, taskLastRow - 1, 1).getValues() : []
     // walk bottom-to-top so deleting a row doesn't shift the indices of
     // rows still to be checked
+    var taskIdCol = taskHeaders.indexOf('id') + 1
+    var taskIds = taskIdCol > 0 && taskLastRow > 1 ? tasks.getRange(2, taskIdCol, taskLastRow - 1, 1).getValues() : []
+    var removedTaskIds = []
     for (var j = projectIds.length - 1; j >= 0; j--) {
       if (String(projectIds[j][0]) === String(projectId)) {
+        if (taskIds[j]) removedTaskIds.push(String(taskIds[j][0]))
         tasks.deleteRow(j + 2)
         forgetSheetGrid_()
       }
     }
+    // 記録を1件1行で持っている時は、消したタスクの記録の行も消す(39-record-rows.gs)
+    deleteRecordsOfParents_(SHEET_TASKS, removedTaskIds)
   }
 
   var members = getSheet_(SHEET_MEMBERS)
@@ -166,6 +172,8 @@ function removeTask_(taskId) {
     if (String(ids[i][0]) === String(taskId)) {
       tasks.deleteRow(i + 2)
       forgetSheetGrid_()
+      // 記録を1件1行で持っている時は、そのタスクの記録の行も消す(39-record-rows.gs)
+      deleteRecordsOfParents_(SHEET_TASKS, [String(taskId)])
       break
     }
   }

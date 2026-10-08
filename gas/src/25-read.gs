@@ -89,6 +89,9 @@ var SHEET_VERSION_BUMPS = {
   Projects: bumpSnapshotVersion_,
   Tasks: bumpSnapshotVersion_,
   Settings: bumpSnapshotVersion_,
+  // 記録の行(39-record-rows.gs)は、スナップショットの Tasks・Members に組み立てて返す
+  TaskRecords: bumpSnapshotVersion_,
+  MemberRecords: bumpSnapshotVersion_,
   Expenses: function () { bumpTableVersion_('expenses') },
   FormSubmissions: function () { bumpTableVersion_('formSubmissions') },
   Candidates: function () { bumpTableVersion_('candidates') },
@@ -343,7 +346,8 @@ function loadSnapshot_() {
     return _requestSnapshot
   }
   noteTiming_('cache', 'miss')
-  var data = readSheetTables_(SNAPSHOT_SHEETS)
+  // 記録を行に持っている時は、Tasks・Members の一覧の列に、行から組み立てた一覧を入れる(39-record-rows.gs)
+  var data = fillRecordColumnsOfSnapshot_(readSheetTables_(SNAPSHOT_SHEETS))
   timed_('cacheWriteMs', function () { writeSnapshotCache_(version, data) })
   _requestSnapshot = { version: version, data: data, cacheHit: false }
   return _requestSnapshot

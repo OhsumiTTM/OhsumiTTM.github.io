@@ -29,6 +29,9 @@ function authorizeAction_(acting, action, body) {
     if (isLeader) return
     throw userError_('FSIF からのお知らせは、代表・管理者だけが見られます。')
   }
+  // 記録の持ち方を移す・戻す(39-record-rows.gs)も代表だけ
+  var recordRowsActions = ['getRecordRowsStatus', 'migrateRecordsToRows', 'revertRecordRows']
+  if (recordRowsActions.indexOf(action) >= 0) throw userError_('データの持ち方の移行は、代表だけが使えます。')
   var privacyActions = ['getPersonalDataStatus', 'setPersonalDataRetention', 'purgePersonalDataNow', 'extendPersonalData', 'cancelWithdrawal', 'deleteOrphanEmails']
   if (privacyActions.indexOf(action) >= 0) throw userError_('個人情報の削除は代表だけが使えます。')
 
@@ -337,6 +340,7 @@ function authorizeAction_(acting, action, body) {
     'applyToOpenBid',          // TSK-027: 担当者未定タスクへの自己応募。既存の自己アサインと同等の緩さでよい
     'getMyStorage',            // 本人だけの保存を読む・書く(常に acting.id の分だけ)
     'setMyStorage',
+    'getMyDigest',             // 兼部の統合表示: 本人の担当・確認待ち・回答待ちだけ(常に acting.id が対象。見えるタスクだけ)
     'getMyEmails',             // 自分自身のメールを読むだけ(常にacting.id基準、bodyのmemberIdは見ない)なので誰でも呼べる
     'getExpenses',             // 経費申請の読み取り。閲覧できる申請だけを返す(canViewExpense で絞り込む)
     'getCandidates',           // 採用の候補者の読み取り。採用の権限が無い人には何も返さない(canViewRecruiting)

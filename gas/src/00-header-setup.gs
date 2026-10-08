@@ -86,6 +86,10 @@ function setupOhsumi() {
   setupValueFormat_(ss)
   setupRolesSetting_()
 
+  // --- コメント・1on1 などの記録を1件1行で持つシート(39-record-rows.gs)。新しい団体は最初から行に持つ ---
+  var recordState = startRecordRowsIfEmpty_()
+  console.log(recordState.state === 'done' ? '✅ 記録は1件1行のシート(TaskRecords・MemberRecords)に持ちます' : 'ℹ️ 記録はまだセルに持っています。ADMIN の「データの持ち方」から移せます(代表)')
+
   // --- ログイン(セッション)の団体ID・秘密鍵(無ければ作る。既にあれば変えない)---
   var createdSecrets = ensureSessionSecrets_()
   console.log(createdSecrets.length

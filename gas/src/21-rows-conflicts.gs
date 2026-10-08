@@ -58,6 +58,7 @@ function findRowUnmeasured_(sheetName, rowId) {
   var values = sheet.getRange(2, 1, Math.max(lastRow - 1, 0), headers.length).getValues()
   for (var i = 0; i < values.length; i++) {
     if (String(values[i][idCol]) === String(rowId)) {
+      fillRecordColumnsOfRow_(sheetName, headers, values[i])
       var obj = {}
       headers.forEach(function (h, c) {
         obj[h] = values[i][c]
@@ -129,7 +130,21 @@ function updateRowFields_(sheetName, rowId, fields) {
     } catch (e) { beforeRow = null }
     calendarHints = calendarSyncHints_(fields, beforeRow)
   }
-  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, fields) })
+  // 記録の一覧の列は、行に持っている時は記録のシートに書く(39-record-rows.gs)。移している間は断る
+  assertRecordWritable_(sheetName, fields)
+  var recordFields = null
+  var cellFields = fields
+  if (recordRowsOn_() && recordListsOf_(sheetName).length) {
+    recordFields = {}
+    cellFields = {}
+    Object.keys(fields).forEach(function (k) { (isRecordColumn_(sheetName, k) ? recordFields : cellFields)[k] = fields[k] })
+  }
+  var result = measureAction_('sheetWriteMs', function () { return updateRowFieldsUnmeasured_(sheetName, rowId, cellFields) })
+  if (recordFields && Object.keys(recordFields).length) {
+    measureAction_('sheetWriteMs', function () { splitRecordFields_(sheetName, rowId, recordFields) })
+    noteRecordFieldsInGrid_(sheetName, rowId, recordFields)
+    result.updated = Object.keys(fields)
+  }
   if (calendarHints) syncCalendarForTask_(rowId, calendarHints)
   return result
 }
@@ -150,6 +165,8 @@ function forgetSheetGrid_(sheetName) {
 function loadSheetGrid_(sheetName) {
   var sheet = getSheet_(sheetName)
   var values = sheet.getDataRange().getValues()
+  // 記録を行に持っている時は、一覧の列に行から組み立てた一覧を入れる(39-record-rows.gs)
+  fillRecordColumnsOfValues_(sheetName, values)
   var headers = (values[0] || []).map(function (h) { return String(h).trim() })
   var idCol = headers.indexOf('id')
   var rowOf = {}
@@ -395,7 +412,8 @@ function applyListOps_(cfg, current, ops, strict, sheetName, rowId, normalize) {
     throw userError_('記録の変更の形式が不正です。')
   })
   if (added.length) list = added.concat(list)
-  if (cfg.cap && list.length > cfg.cap) list = list.slice(0, cfg.cap)
+  var cap = cfg.column === 'history_json' ? historyCap_() : cfg.cap
+  if (cap && list.length > cap) list = list.slice(0, cap)
   return list
 }
 
@@ -404,6 +422,7 @@ function applyListOps_(cfg, current, ops, strict, sheetName, rowId, normalize) {
 function expandListOps_(body, locked) {
   var cfg = body && LIST_ACTIONS[body.action]
   if (!cfg || body.listOps === undefined) return
+  if (isRecordColumn_(cfg.sheet, cfg.column) && recordRowsBusy_(Date.now())) throw userError_(RECORD_ROWS_BUSY_MESSAGE)
   var rowId = String(body[cfg.idParam] || '')
   var row = locked ? lockedRow_(cfg.sheet, rowId) : authFindRow_(cfg.sheet, rowId)
   if (!row) throw userError_('対象が見つかりません。')
@@ -530,12 +549,16 @@ function longRecordsNow_() {
 function longRecords_(data) {
   var groups = {}
   var maxLength = 0
+  // 記録を行に持っている時は、組み立てた一覧はセルに入っていないので数えない
+  var rowsOn = false
+  try { rowsOn = recordRowsOn_() } catch (e) { rowsOn = false }
   SNAPSHOT_SHEETS.forEach(function (name) {
     var table = data[name]
     if (!table || !table.headers) return
     var idCol = table.headers.indexOf(name === SHEET_SETTINGS ? 'key' : 'id')
     ;(table.rows || []).forEach(function (row) {
       row.forEach(function (v, col) {
+        if (rowsOn && isRecordColumn_(name, table.headers[col])) return
         var length = typeof v === 'string' ? v.length : String(v === null || v === undefined ? '' : v).length
         if (length > maxLength) maxLength = length
         if (length <= CELL_WARN_CHARS) return

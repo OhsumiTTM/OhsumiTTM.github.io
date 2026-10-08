@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.07-10'
+var REGISTRY_VERSION = '2026.10.08-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2734,6 +2734,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.08-4', security: true, required: true, note: '公開の基準の版。コメント・進み具合の記録・変更の記録・1on1 の記録・評価を、1件1行のシート(TaskRecords・MemberRecords)に持つ(新しい団体は最初から。今までの団体は、代表が団体設定の「データの持ち方」から移す。実行の前に自動でバックアップを取り、件数と中身を照合してから切り替える。戻すこともできる)。変更の記録は500件まで残す。兼部の統合表示のための読み取り(getMyDigest。本人の担当・確認待ち・回答待ちだけ)' },
   { version: '2026.10.07-6', security: false, required: true, note: 'レジストリからのメール(アンケートの送付・リマインド・28日目の機能停止の知らせ・停止の予告)を、checkIn の返事(mailTasks)をもとに団体の Gmail で担当者と代表に送り、送ったものを次の checkIn で伝える(レジストリのメールの上限に数えない)' },
   { version: '2026.10.07-5', security: false, required: true, note: 'サンプル・見本のデータを作るコードを Code.gs から外し、別のファイル(SampleData.gs。サンプル・デモの団体だけが足す)に分ける。カレンダーの予定の名前の先頭の定義を Code.gs の中に移す' },
   { version: '2026.10.07-3', security: false, required: true, note: '担当者が「完了」を選ぶと確認待ちにする(確認する人がいれば)。確認待ちが届く人は、確認者 → 担当者の報告先 → 全権管理者(代表を含む)。確認する人(報告先・全権管理者を含む)は完了にできる' },
