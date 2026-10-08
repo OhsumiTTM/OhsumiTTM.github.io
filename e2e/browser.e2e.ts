@@ -830,7 +830,8 @@ describe.skipIf(!available)('データの持ち方: 代表が団体設定から�
     expect(taskRow().comments).toBe('')
     expect(recordList(B.org, 'TaskRecords', taskRow().id, 'comment').map((x: { id: string }) => x.id)).toEqual(['c-legacy'])
     await waitFor(async () => (await panelText()).includes('1件1行のシートに持っています'), '画面の状態が「行に持っている」になりません')
-    // 自動のバックアップを取ったことが、操作の記録に残る
+    // 自動のバックアップを取り、操作の記録に残る
+    expect(B.org.driveCopies.some((c) => c.name.endsWith('(移行の前)'))).toBe(true)
     expect(JSON.stringify(B.org.sheets.AuditLog?.rows ?? [])).toContain('migrateRecordsToRows')
   })
 
@@ -840,6 +841,7 @@ describe.skipIf(!available)('データの持ち方: 代表が団体設定から�
     await click('[data-record-rows-trial] input[type=checkbox]')
     await clickByText('戻す')
     await waitFor(async () => settingState() === 'none', 'GAS でセルに戻りません', 20000)
+    expect(B.org.driveCopies.some((c) => c.name.endsWith('(移行を戻す前)'))).toBe(true)
     expect(JSON.parse(taskRow().comments).map((x: { id: string }) => x.id)).toEqual(['c-legacy'])
     expect(recordList(B.org, 'TaskRecords', taskRow().id, 'comment')).toEqual([])
     await waitFor(async () => (await panelText()).includes('セルにまとめて持っています'), '画面の状態が「セル」に戻りません')

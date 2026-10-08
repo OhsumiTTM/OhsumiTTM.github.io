@@ -44,6 +44,23 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
   const cache = new Map<string, string>()
   const mails: { to: string; subject: string; body: string }[] = []
   const logs: string[] = []
+  // Drive のコピー(バックアップ)。作ったコピーの名前だけを覚える
+  const driveCopies: { id: string; name: string; at: Date }[] = []
+  const driveFile = (id: string) => noop({
+    getId: () => id,
+    makeCopy: (copyName: string) => {
+      const copy = { id: 'copy-' + (driveCopies.length + 1), name: copyName, at: new Date() }
+      driveCopies.push(copy)
+      return noop({ getId: () => copy.id, getName: () => copy.name, getDateCreated: () => copy.at })
+    },
+  })
+  const driveFolder = (id: string) => noop({
+    getId: () => id,
+    getFiles: () => {
+      let i = 0
+      return { hasNext: () => i < driveCopies.length, next: () => { const c = driveCopies[i++]; return noop({ getId: () => c.id, getName: () => c.name, getDateCreated: () => c.at }) } }
+    },
+  })
   const spreadsheet = noop({
     getName: () => name,
     getId: () => 'ss-' + name,
@@ -83,7 +100,7 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
     },
     LanguageApp: { translate: (s: string) => s },
     Session: noop({ getScriptTimeZone: () => 'Asia/Tokyo' }),
-    DriveApp: noop({}),
+    DriveApp: noop({ createFolder: () => driveFolder('folder-backup'), getFolderById: (id: string) => driveFolder(id), getFileById: (id: string) => driveFile(id) }),
     CalendarApp: noop({}),
     ScriptApp: noop({ getService: () => ({ getUrl: () => gasUrl }), getProjectTriggers: () => [], getScriptId: () => 'script-' + gasUrl.split('/')[5] }),
     UrlFetchApp: {
@@ -131,7 +148,7 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
   // 画面と同じく clientVersion を付けて送る(付けない古い画面は reloadRequired になる)
   const post = (body: Record<string, unknown>) => postRaw({ clientVersion: CLIENT_VERSION, ...body })
   const postRaw = (body: Record<string, unknown>) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: JSON.stringify(body) } }).text)
-  return { postRaw, name, gasUrl, gas, sheets, props, cache, mails, logs, post }
+  return { postRaw, name, gasUrl, gas, sheets, props, cache, mails, logs, post, driveCopies }
 }
 
 /** レジストリと団体の GAS の世界。団体は registerOrg で、本番と同じ手順(登録コード → 登録 → 初期設定コード)で立ち上げる */
