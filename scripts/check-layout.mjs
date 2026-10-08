@@ -153,6 +153,10 @@ export const THEME_STEPS = [
 export const ORG_SWITCH_STEPS = [
   { name: '団体の切り替え(ほかの団体がある)', do: 'orgSwitcher' },
   { name: '団体の切り替え(ほかの団体が無い)', do: 'orgSwitcherSingle' },
+  // 兼部の統合表示(ホームの「すべての団体」)。ほかの団体はログインが切れている
+  { name: 'すべての団体(兼部の統合表示・ログインが切れた団体)', do: 'allOrgs' },
+  // その団体に切り替えずにログインし直す小さい窓
+  { name: 'ログインし直す窓(団体を切り替えない)', do: 'reloginWindow' },
 ]
 
 // 機能停止中(読み取り専用。R1-e)に、閲覧のための欄・ボタンと書き出しが使えること、書く欄が止まることを確かめる。
@@ -605,6 +609,20 @@ async function run({ build = true } = {}) {
           topActions: [{ action: 'updateTaskStatus', count: 120 }, { action: 'updateComments', count: 80 }, { action: 'aVeryLongActionNameThatShouldWrapInsideTheNarrowScreen', count: 3 }],
           errors: { last7Days: 4, byKind: [{ kind: 'conflict', count: 3 }, { kind: 'client:TypeError', count: 1 }],
             recent: [{ at: '2026-09-30T10:00:00.000Z', source: 'gas', action: 'updateComments', kind: 'conflict' }, { at: '2026-09-30T09:00:00.000Z', source: 'client', action: 'window', kind: 'client:TypeError' }] } }
+        // 兼部の統合表示(本人の分だけ。長い件名・日程調整の候補も、画面の幅に収まることを確かめる)
+        case 'getMyDigest': {
+          const day = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') }
+          const task = (id, over) => ({ id, title: id, status: 'in_progress', role: 'assignee', overdue: false, dueDate: '', dueTime: '', startDate: '', priority: 'medium', importance: 'normal', projectName: '', ...over })
+          return { orgName: 'サンプル団体', themeColor: '#123456', memberId: member, memberName: '本人', contract: { phase: '', kind: '' }, truncated: false, version: 'layout-digest',
+            counts: { assigned: 3, reviewWaiting: 1, overdue: 1, unanswered: 1 },
+            tasks: [
+              task('期限切れのとても長い件名のタスクで、画面の幅に収まるかを確かめるための件名です', { overdue: true, dueDate: day(-2), projectName: 'とても長い名前のプロジェクトでも折り返さずに省略します' }),
+              task('今日のタスク', { dueDate: day(0) }),
+              task('確認するタスク', { role: 'reviewTarget', status: 'review', dueDate: day(1) }),
+              task('日程調整のタスク', { role: 'invitee', inviteKind: 'schedule', candidates: [{ id: 'c1', label: '10/20 10:00-11:00', date: day(12), startTime: '10:00', endTime: '11:00' }, { id: 'c2', label: '10/21 14:00-15:00', date: day(13), startTime: '14:00', endTime: '15:00' }] }),
+              task('来週のタスク', { dueDate: day(4) }),
+            ] }
+        }
         // データの持ち方(途中で止まった移行。長いバックアップの名前・照合の知らせも、画面の幅に収まることを確かめる)
         case 'getRecordRowsStatus': return { state: 'migrating', since: '2026-10-08T00:00:00.000Z', phase: 'copy', cursor: { sheet: 'Tasks', index: 100 },
           backup: 'Ohsumi バックアップ 2026-10-08 09:00(移行の前)とても長い名前のバックアップでも折り返します', message: '',
@@ -1331,6 +1349,40 @@ async function run({ build = true } = {}) {
             // 開いた状態で、はみ出しを調べる
             await evaluate(`document.querySelector('[data-org-switcher]').click()`); await sleep(400)
           }
+        }
+        if (step.do === 'allOrgs') {
+          await signIn()
+          await saveOrgs(true)
+          await evaluate(`localStorage.removeItem('ohsumi-home-scope')`)
+          await navigate('/'); await clickText('あとで設定する').catch(() => {}); await sleep(800)
+          await clickText('すべての団体', '[data-home-scope] button'); await sleep(1500)
+          const got = JSON.parse(await evaluate(`JSON.stringify({
+            view: !!document.querySelector('[data-all-orgs]'),
+            current: document.querySelector('[data-org-card="${ORG}"]')?.getAttribute('data-org-state'),
+            second: document.querySelector('[data-org-card="org_SECONDSECONDSECOND01"]')?.getAttribute('data-org-state'),
+            relogin: !!document.querySelector('[data-relogin-org="org_SECONDSECONDSECOND01"]'),
+            unanswered: [...document.querySelectorAll('[data-all-orgs-section="unanswered"] [data-all-orgs-task]')].map((b) => b.textContent),
+            week: [...document.querySelectorAll('[data-all-orgs-section="week"] [data-all-orgs-task]')].map((b) => b.textContent),
+            today: document.querySelectorAll('[data-all-orgs-section="today"] [data-all-orgs-task]').length,
+          })`))
+          if (!got.view) throw new Error('「すべての団体」の表示が出ません')
+          if (got.current !== 'ok') throw new Error('今の団体が読めていません: ' + got.current)
+          if (got.second !== 'loginNeeded' || !got.relogin) throw new Error('ログインが切れた団体に「切り替えずにログインし直す」が出ません: ' + JSON.stringify(got))
+          if (got.unanswered.length !== 1 || !got.unanswered[0].includes('候補')) throw new Error('日程調整が「回答待ち」に候補つきで出ません: ' + JSON.stringify(got))
+          if (got.week.some((t) => t.includes('日程調整'))) throw new Error('日程調整の候補が予定に出ています')
+          if (got.today !== 2) throw new Error('今日やること・期限切れの数が違います: ' + got.today)
+        }
+        if (step.do === 'reloginWindow') {
+          await signIn()
+          await saveOrgs(true)
+          await evaluate(`localStorage.setItem('ohsumi-state-v2', 'keep')`)
+          await send('Page.navigate', { url: base + '/?org=org_SECONDSECONDSECOND01&relogin=1' }); await sleep(2500)
+          const got = JSON.parse(await evaluate(`JSON.stringify({ phase: document.querySelector('[data-relogin]')?.getAttribute('data-relogin'), text: document.body.innerText,
+            current: localStorage.getItem('ohsumi-current-org'), state: localStorage.getItem('ohsumi-state-v2'), gsi: !!window.__gsiConfig, nonce: window.__gsiConfig?.nonce || '' })`))
+          if (got.phase !== 'ready') throw new Error('ログインし直す窓が出ません: ' + got.phase)
+          if (!got.text.includes('とても長い名前の特定非営利活動法人')) throw new Error('ログインし直す団体の名前が出ません')
+          if (!got.gsi || !got.nonce.startsWith('org_SECONDSECONDSECOND01.')) throw new Error('その団体の Google のログインが準備されません: ' + got.nonce)
+          if (got.current !== ORG || got.state !== 'keep') throw new Error('ログインし直す窓が、今の団体・団体ごとの保存を変えました')
         }
         if (step.do === 'skillRules') {
           await clickText('スキルの決まり', 'aside nav button'); await sleep(1200)

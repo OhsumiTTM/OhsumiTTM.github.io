@@ -47,7 +47,7 @@ describe('スマホの幅の表示の確認', () => {
       if (s.do === 'openTask' && s.view) expect(values.has(s.view), s.view).toBe(true)
     }
     for (const label of ['団体設定', '暗い', '端末に合わせる']) expect(values.has(label), label).toBe(true)
-    expect((layout.ORG_SWITCH_STEPS as { do: string }[]).map((s) => s.do)).toEqual(['orgSwitcher', 'orgSwitcherSingle'])
+    expect((layout.ORG_SWITCH_STEPS as { do: string }[]).map((s) => s.do)).toEqual(['orgSwitcher', 'orgSwitcherSingle', 'allOrgs', 'reloginWindow'])
   })
 
   it('代表で、管理画面のすべてのタブを開く(ラベルは管理画面のメニューと同じ並び・名前。明るい表示・暗い表示とも)', () => {

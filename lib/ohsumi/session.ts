@@ -112,6 +112,25 @@ export function saveSession(orgId: string, session: StoredSession): void {
   }
 }
 
+/**
+ * ほかの団体のセッションを、この端末に保存する(兼部の統合表示で、その団体に切り替えずにログインし直した時)。
+ * 今の通信に使うセッションは変えない(同じ団体なら、それも新しくする)
+ */
+export function storeSessionFor(orgId: string, session: StoredSession): void {
+  if (active?.orgId === orgId) {
+    saveSession(orgId, session)
+    return
+  }
+  const target = safeStorage(session.remember ? 'local' : 'session')
+  const other = safeStorage(session.remember ? 'session' : 'local')
+  try {
+    other?.removeItem(sessionKey(orgId))
+    target?.setItem(sessionKey(orgId), JSON.stringify(session))
+  } catch {
+    /* 保存できなくても、このページの間は統合表示のメモリで使える */
+  }
+}
+
 /** 保存済みのセッションを、以降の通信で使うようにする */
 export function activateSession(orgId: string, session: StoredSession): void {
   active = { orgId, session }
