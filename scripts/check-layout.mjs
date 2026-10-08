@@ -1371,6 +1371,25 @@ async function run({ build = true } = {}) {
           if (got.unanswered.length !== 1 || !got.unanswered[0].includes('候補')) throw new Error('日程調整が「回答待ち」に候補つきで出ません: ' + JSON.stringify(got))
           if (got.week.some((t) => t.includes('日程調整'))) throw new Error('日程調整の候補が予定に出ています')
           if (got.today !== 2) throw new Error('今日やること・期限切れの数が違います: ' + got.today)
+          // 「切り替えずにログインし直す」: スマートフォンの幅でもボタンが見え、押した処理の中で(同期で)窓を開く
+          // (スマートフォンの Safari は、押した操作の中で開いた窓だけを許す)。開く先は ?org=<団体>&relogin=1
+          const opened = JSON.parse(await evaluate(`(() => {
+            const b = document.querySelector('[data-relogin-org="org_SECONDSECONDSECOND01"]')
+            b.scrollIntoView({ block: 'center' })
+            const r = b.getBoundingClientRect()
+            const calls = []
+            const real = window.open
+            window.open = (...a) => { calls.push({ url: String(a[0]), active: navigator.userActivation ? navigator.userActivation.isActive : null }); return { closed: false } }
+            b.click()
+            const sync = calls.length
+            window.open = real
+            return JSON.stringify({ sync, calls, visible: r.width > 0 && r.left >= 0 && r.right <= window.innerWidth, width: window.innerWidth })
+          })()`, true))
+          if (!opened.visible) throw new Error('スマートフォンの幅で「切り替えずにログインし直す」が見えません: ' + JSON.stringify(opened))
+          if (opened.sync !== 1) throw new Error('ボタンを押した処理の中で窓を開いていません(非同期の後だと Safari で止められます): ' + JSON.stringify(opened))
+          if (!/[?&]org=org_SECONDSECONDSECOND01&relogin=1$/.test(opened.calls[0].url)) throw new Error('ログインし直す窓の URL が違います: ' + opened.calls[0].url)
+          if (opened.calls[0].active === false) throw new Error('人の操作の中で窓を開いていません')
+          if ((await evaluate(`localStorage.getItem('ohsumi-current-org')`)) !== ORG) throw new Error('窓を開いた時に、今の団体が変わりました')
         }
         if (step.do === 'reloginWindow') {
           await signIn()

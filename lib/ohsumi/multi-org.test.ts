@@ -1,6 +1,8 @@
 // 兼部の統合表示(lib/ohsumi/multi-org.ts)を確かめる: 団体ごとの読み込み(ログインが無い・切れた・停止・古い GAS・
 // 時間切れ)、データの版が同じ時の使い回し、同時に読む数、まとめ方(日程調整の候補は「回答待ち」で予定に出さない)、
 // 切り替えずにログインし直す窓からのメッセージの確かめ方、今の通信のセッションを変えないこと
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 class MemoryStorage {
@@ -183,5 +185,20 @@ describe('切り替えずにログインし直す', () => {
     m.rememberTaskToOpen(ORG_A, 't9')
     expect(m.takeTaskToOpen(ORG_A)).toBe('t9')
     expect(m.takeTaskToOpen(ORG_A)).toBeNull()
+  })
+
+  it('送る側は postMessage の宛先を自分のサイトの origin に限り、受け取る側は origin とこの画面が開いた窓を確かめる', () => {
+    const root = join(__dirname, '..', '..')
+    const sender = readFileSync(join(root, 'components/ohsumi/relogin-window.tsx'), 'utf8')
+    const receiver = readFileSync(join(root, 'components/ohsumi/output/all-orgs-view.tsx'), 'utf8')
+    const posts = sender.match(/postMessage\([^)]*\)/g) ?? []
+    expect(posts).toEqual(['postMessage(message, window.location.origin)'])
+    expect(sender).not.toMatch(/postMessage\([^)]*['"]\*['"]/)
+    expect(receiver).toContain('parseReloginMessage(e, window.location.origin)')
+    expect(receiver).toContain('e.source !== popupRef.current')
+    // 窓は、ボタンを押した処理の中で、await を挟まずに開く
+    const relogin = receiver.slice(receiver.indexOf('const relogin = '), receiver.indexOf('popupRef.current = w'))
+    expect(relogin).toContain('window.open(')
+    expect(relogin).not.toMatch(/await|then\(|setTimeout/)
   })
 })

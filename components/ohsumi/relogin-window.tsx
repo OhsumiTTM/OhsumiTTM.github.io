@@ -61,6 +61,7 @@ function ReloginBody() {
           setPhase('done')
           try {
             if (window.opener && window.opener !== window) {
+              // 宛先は自分のサイトの origin だけ('*' は使わない。ほかのサイトに開かれた時は届かない)
               ;(window.opener as Window).postMessage(message, window.location.origin)
               window.close()
             }

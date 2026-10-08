@@ -3,7 +3,7 @@
 // ホームの「この団体 / すべての団体」(兼部の統合表示。lib/ohsumi/multi-org.ts)。
 // この端末に団体が2つ以上ある時だけ、切り替えを出す(兼部していない人には出さない)。
 // 「すべての団体」は、団体ごとの getMyDigest(本人の分だけ)を、この画面のメモリの中でだけまとめて出す
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, CalendarClock, Inbox, Loader2, LogIn, RefreshCw, TriangleAlert, UserCheck } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
@@ -96,9 +96,13 @@ function AllOrgsView({ onOpenCurrent, onLeave }: { onOpenCurrent: (taskId: strin
 
   useEffect(() => { loadAll() }, [loadAll])
 
-  // ログインし直す窓から、セッションを受け取る(同じオリジン・この端末の団体だけ)。その団体だけ読み直す
+  // 開いた「ログインし直す」窓(この窓から来たメッセージだけを受け取る)
+  const popupRef = useRef<Window | null>(null)
+
+  // ログインし直す窓から、セッションを受け取る(同じオリジン・この画面が開いた窓・この端末の団体だけ)。その団体だけ読み直す
   useEffect(() => {
     const on = (e: MessageEvent) => {
+      if (!popupRef.current || e.source !== popupRef.current) return
       const msg = parseReloginMessage(e, window.location.origin)
       if (!msg) return
       storeSessionFor(msg.orgId, msg.session)
@@ -113,10 +117,16 @@ function AllOrgsView({ onOpenCurrent, onLeave }: { onOpenCurrent: (taskId: strin
 
   const combined = useMemo(() => combineDigests(orgs, states, today), [orgs, states, today])
 
+  // ボタンを押した時に、そのまま(await を挟まずに)窓を開く。スマートフォンの Safari は、押した操作の中で
+  // 開いた窓だけを許す(非同期の後に開くと止められる)
   const relogin = (org: DigestOrg) => {
     const w = window.open(reloginUrl(org.orgId), 'ohsumi-relogin', 'popup,width=480,height=640')
     // 小さい窓を開けない(止められた)時は、その団体に切り替えてログインする
-    if (!w) switchToOrg(org.orgId)
+    if (!w) {
+      switchToOrg(org.orgId)
+      return
+    }
+    popupRef.current = w
   }
 
   const open = (task: CombinedTask) => {
