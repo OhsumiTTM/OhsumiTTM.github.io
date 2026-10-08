@@ -17,7 +17,7 @@ import { LoginScreen } from './login-screen'
 import { OnboardingScreen } from './onboarding-screen'
 import { Header } from './header'
 import { InputScreen } from './input/input-screen'
-import { OutputScreen } from './output/output-screen'
+import { OutputHome } from './output/all-orgs-view'
 import { PersonDetail } from './people/person-detail'
 import { PersonalSettingsScreen } from './people/personal-settings'
 import { ProjectDetail } from './projects/project-detail'
@@ -245,7 +245,7 @@ function Router() {
       <Header />
       <div key={JSON.stringify(screen)} className="animate-in fade-in duration-200">
         {screen.name === 'input' && <InputScreen />}
-        {screen.name === 'output' && <OutputScreen />}
+        {screen.name === 'output' && <OutputHome />}
         {screen.name === 'person' && <PersonDetail key={screen.id} id={screen.id} />}
         {screen.name === 'personal-settings' && <PersonalSettingsScreen />}
         {screen.name === 'project' && <ProjectDetail id={screen.id} />}

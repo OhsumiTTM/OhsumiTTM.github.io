@@ -847,3 +847,67 @@ describe.skipIf(!available)('データの持ち方: 代表が団体設定から�
     await waitFor(async () => (await panelText()).includes('セルにまとめて持っています'), '画面の状態が「セル」に戻りません')
   })
 })
+
+describe.skipIf(!available)('兼部の統合表示: 団体A と団体B の両方にログインしている人は、ホームで「すべての団体」を選べる', () => {
+  const day = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+  const TITLE_A = '兼部のE2E(団体Aのタスク)'
+  const TITLE_B = '兼部のE2E(団体Bのタスク)'
+  const make = (org: Org, email: string, title: string) => {
+    const token = String(world.googleLogin(org, email).result.session.token)
+    const id = String(world.googleLogin(org, email).result.memberId)
+    const made = world.call(org, token, 'createTasks', { tasks: [{ tempId: 'tx', title, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: day(), assigneeIds: [id], creatorId: id, pendingApproval: false }] })
+    expect(made.ok, made.error).toBe(true)
+  }
+  const cardState = (orgId: string) => page.evaluate<string | null>(`document.querySelector('[data-org-card="${orgId}"]')?.getAttribute('data-org-state') ?? null`)
+  const allText2 = () => page.evaluate<string>(`document.querySelector('[data-all-orgs]')?.textContent ?? ''`)
+
+  it('両方にログインすると、両方の団体のタスクがまとめて出る。団体が1つの時は切り替えを出さない', async () => {
+    make(A.org, 'top@a.example', TITLE_A)
+    make(B.org, 'top@b.example', TITLE_B)
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('top@a.example')
+    await waitFor(loggedIn, '団体A にログインできません')
+    // この端末の団体が1つの間は、切り替えを出さない
+    expect(await page.evaluate<boolean>('!!document.querySelector("[data-home-scope]")')).toBe(false)
+    await navigate('/?org=' + B.orgId)
+    await googleSignIn('top@b.example')
+    await waitFor(loggedIn, '団体B にログインできません')
+    await navigate('/?org=' + A.orgId)
+    await waitFor(loggedIn, '団体A のログインが残っていません')
+    await waitFor(() => page.evaluate<boolean>('!!document.querySelector("[data-home-scope]")'), 'ホームに「この団体 / すべての団体」が出ません')
+    await page.evaluate(`[...document.querySelectorAll('[data-home-scope] button')].find((b) => b.textContent.trim() === 'すべての団体').click(); true`)
+    await waitFor(async () => (await cardState(A.orgId)) === 'ok' && (await cardState(B.orgId)) === 'ok', '両方の団体が読めません')
+    await waitFor(async () => (await allText2()).includes(TITLE_A) && (await allText2()).includes(TITLE_B), '両方の団体のタスクが出ません')
+    // まとめた内容は端末に保存しない
+    const stored = await page.evaluate<string>('JSON.stringify(Object.assign({}, localStorage)) + JSON.stringify(Object.assign({}, sessionStorage))')
+    expect(stored).not.toContain(TITLE_B)
+  })
+
+  it('ログインが切れた団体は、その団体に切り替えずにログインし直せる(今の団体・団体ごとの保存は変わらない)', async () => {
+    await page.evaluate(`localStorage.removeItem('ohsumi-session-${B.orgId}'); sessionStorage.removeItem('ohsumi-session-${B.orgId}'); true`)
+    await navigate('/?org=' + A.orgId)
+    await waitFor(async () => (await cardState(B.orgId)) === 'loginNeeded', 'ログインが切れた団体の知らせが出ません')
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-relogin-org="${B.orgId}"]')`)).toBe(true)
+    const stateBefore = await page.evaluate<string | null>(`localStorage.getItem('ohsumi-state-v2')`)
+    // 小さい窓と同じページ(/?org=<団体B>&relogin=1)で、団体B にログインし直す
+    await navigate(`/?org=${B.orgId}&relogin=1`)
+    await waitFor(() => page.evaluate<boolean>(`document.querySelector('[data-relogin]')?.getAttribute('data-relogin') === 'ready'`), 'ログインし直す窓が出ません')
+    await googleSignIn('top@b.example')
+    await waitFor(() => page.evaluate<boolean>(`document.querySelector('[data-relogin]')?.getAttribute('data-relogin') === 'done'`), 'ログインし直せません')
+    expect(await page.evaluate<string | null>(`localStorage.getItem('ohsumi-current-org')`)).toBe(A.orgId)
+    expect(await page.evaluate<string | null>(`localStorage.getItem('ohsumi-state-v2')`)).toBe(stateBefore)
+    expect(await page.evaluate<boolean>(`!!localStorage.getItem('ohsumi-session-${B.orgId}')`)).toBe(true)
+    await navigate('/?org=' + A.orgId)
+    await waitFor(async () => (await cardState(B.orgId)) === 'ok', 'ログインし直した団体が読めません')
+  })
+
+  it('ほかの団体のタスクを押すと、その団体に切り替えて、そのタスクを開く', async () => {
+    await page.evaluate(`[...document.querySelectorAll('[data-all-orgs-task]')].find((b) => b.textContent.includes(${JSON.stringify(TITLE_B)})).click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`localStorage.getItem('ohsumi-current-org') === ${JSON.stringify(B.orgId)}`), '団体B に切り替わりません')
+    await waitFor(loggedIn, '団体B の画面になりません')
+    await waitFor(() => page.evaluate<boolean>(`[...document.querySelectorAll('[role=dialog]')].some((d) => d.textContent.includes(${JSON.stringify(TITLE_B)}))`), '切り替えた後に、そのタスクが開きません')
+    expect(await page.evaluate<string | null>(`document.querySelector('[data-home-scope]')?.getAttribute('data-home-scope') ?? null`)).toBe('org')
+  })
+})
