@@ -33,14 +33,41 @@ export const CONNECT_SOURCES = {
 export const CALENDAR_READ_CONNECT_SOURCES = ['https://www.googleapis.com/calendar/v3/']
 
 /**
- * @param {{ scriptHashes?: string[], calendarRead?: boolean }} [options]
+ * 申請フォーム(/apply)の団体ロゴの送り先(NEXT_PUBLIC_SUPABASE_URL がある時だけ。lib/site/logo-upload.ts)。
+ * Supabase の Storage の logos バケットの場所だけを許す(origin 全体や *.supabase.co は許さない)。
+ * URL が https で、ホストが <プロジェクト>.supabase.co の形でなければ、ビルドを失敗させる(投げる)
+ * @param {string | undefined} supabaseUrl
+ * @returns {string[]}
+ */
+export function logoUploadConnectSources(supabaseUrl) {
+  const raw = (supabaseUrl ?? '').trim()
+  if (!raw) return []
+  let url
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL が URL の形ではありません')
+  }
+  if (url.protocol !== 'https:') throw new Error('NEXT_PUBLIC_SUPABASE_URL は https にしてください')
+  if (!/^[a-z0-9][a-z0-9-]*\.supabase\.co$/.test(url.hostname) || url.port || url.username || url.password) {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL のホストは <プロジェクト>.supabase.co の形にしてください')
+  }
+  if ((url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL は https://<プロジェクト>.supabase.co だけにしてください(パスは付けない)')
+  }
+  return [`${url.origin}/storage/v1/object/logos/`]
+}
+
+/**
+ * @param {{ scriptHashes?: string[], calendarRead?: boolean, supabaseUrl?: string }} [options]
  * @returns {string}
  */
-export function buildPolicy({ scriptHashes = [], calendarRead = false } = {}) {
+export function buildPolicy({ scriptHashes = [], calendarRead = false, supabaseUrl = '' } = {}) {
   const connect = [
     "'self'",
     ...Object.values(CONNECT_SOURCES).flat(),
     ...(calendarRead ? CALENDAR_READ_CONNECT_SOURCES : []),
+    ...logoUploadConnectSources(supabaseUrl),
   ]
   const directives = [
     ["default-src", "'self'"],
@@ -160,10 +187,17 @@ export function applyCspToDirectory(outDir, options = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const outDir = process.argv[2] ?? 'out'
   const calendarRead = process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_READ === 'true'
-  const { count, failures } = applyCspToDirectory(outDir, { calendarRead })
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+  try {
+    logoUploadConnectSources(supabaseUrl)
+  } catch (e) {
+    console.error(`CSP を作れません: ${e instanceof Error ? e.message : e}`)
+    process.exit(1)
+  }
+  const { count, failures } = applyCspToDirectory(outDir, { calendarRead, supabaseUrl })
   if (failures.length) {
     console.error(`CSP の確認に失敗しました(${failures.length} ファイル):\n${failures.join('\n')}`)
     process.exit(1)
   }
-  console.log(`CSP を ${count} ファイルに入れました(カレンダーの接続先: ${calendarRead ? 'あり' : 'なし'})`)
+  console.log(`CSP を ${count} ファイルに入れました(カレンダーの接続先: ${calendarRead ? 'あり' : 'なし'}・ロゴの送り先: ${supabaseUrl ? 'あり' : 'なし'})`)
 }

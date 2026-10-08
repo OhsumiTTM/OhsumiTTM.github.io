@@ -63,6 +63,30 @@ describe('CSP の meta タグ', () => {
     expect(csp.buildPolicy({ calendarRead: true })).toContain('https://www.googleapis.com/calendar/v3/')
   })
 
+  it('ロゴの送り先は NEXT_PUBLIC_SUPABASE_URL がある時だけ、logos バケットの場所を1つだけ入れる', () => {
+    const connect = (o: object) => csp.buildPolicy(o).split('; ').find((d: string) => d.startsWith('connect-src '))!
+    const without = connect({})
+    expect(without).not.toContain('supabase')
+    const withUrl = connect({ supabaseUrl: 'https://abcdefgh.supabase.co' })
+    expect(withUrl).toBe(without + ' https://abcdefgh.supabase.co/storage/v1/object/logos/')
+    expect(connect({ supabaseUrl: 'https://abcdefgh.supabase.co/' })).toBe(withUrl)
+    // origin 全体や *.supabase.co は入れない
+    expect(withUrl).not.toMatch(/https:\/\/abcdefgh\.supabase\.co(\s|$)/)
+    expect(csp.buildPolicy({ supabaseUrl: 'https://abcdefgh.supabase.co' })).not.toContain('*.supabase.co')
+    // ほかの指定は変えない
+    const rest = (p: string) => p.split('; ').filter((d: string) => !d.startsWith('connect-src ')).join('; ')
+    expect(rest(csp.buildPolicy({ supabaseUrl: 'https://abcdefgh.supabase.co' }))).toBe(rest(csp.buildPolicy({})))
+  })
+
+  it('NEXT_PUBLIC_SUPABASE_URL の値が変な時はビルドを失敗させる(https・<プロジェクト>.supabase.co だけ)', () => {
+    for (const bad of ['http://abcdefgh.supabase.co', 'https://evil.example.com', 'https://abcdefgh.supabase.co.evil.com', 'https://a.b.supabase.co',
+      'https://abcdefgh.supabase.co:8443', 'https://abcdefgh.supabase.co/storage', 'https://abcdefgh.supabase.co?x=1', 'not a url', 'https://user:pw@abcdefgh.supabase.co']) {
+      expect(() => csp.buildPolicy({ supabaseUrl: bad }), bad).toThrow()
+    }
+    expect(csp.logoUploadConnectSources('')).toEqual([])
+    expect(csp.logoUploadConnectSources(undefined)).toEqual([])
+  })
+
   it('必要な接続先を許可し、unsafe-inline のスクリプトや unsafe-eval は許可しない', () => {
     const policy = csp.buildPolicy({ scriptHashes: ['abc'] })
     const directive = (name: string) => policy.split('; ').find((d: string) => d.startsWith(name + ' ')) ?? ''
