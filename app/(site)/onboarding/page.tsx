@@ -6,7 +6,7 @@ import { ONBOARDING_STEPS, PRICING } from '@/lib/site/content'
 export const metadata: Metadata = {
   title: '導入について',
   description: 'Ohsumiの導入の流れ。問い合わせ・ヒアリング・ご契約・立ち上げ・利用開始・改善の6つのステップで、組織に合わせて導入を進めます。',
-  alternates: { canonical: '/onboarding' },
+  alternates: { canonical: '/onboarding/' },
 }
 
 const CHECKLIST = [

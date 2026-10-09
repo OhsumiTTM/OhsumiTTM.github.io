@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   title: 'Ohsumiとは',
   description:
     'Ohsumi（オオスミ）は、仕事を中心に人・プロジェクト・組織・知識をつなぐ組織運営プラットフォームです。一般的なタスク管理との違い、開発コンセプト、価値循環を紹介します。',
-  alternates: { canonical: '/overview' },
+  alternates: { canonical: '/overview/' },
 }
 
 const CONNECTED = ['要求スキル', '成果物', '進捗', '登録の承認', '完了の確認', '実績', '経験', '人材情報', 'プロジェクト情報', '組織情報']

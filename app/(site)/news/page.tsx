@@ -6,7 +6,7 @@ import { NEWS } from '@/lib/site/content'
 export const metadata: Metadata = {
   title: 'News / Updates',
   description: 'Ohsumiのお知らせ・新機能・改善・セキュリティに関する最新情報。',
-  alternates: { canonical: '/news' },
+  alternates: { canonical: '/news/' },
 }
 
 export default function NewsPage() {

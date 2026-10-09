@@ -7,7 +7,7 @@ import { FAQ } from '@/lib/site/content'
 export const metadata: Metadata = {
   title: 'FAQ よくある質問',
   description: 'Ohsumiについてのよくある質問。一般的なタスク管理との違い、対象組織、導入、料金、データの保存先などについてお答えします。',
-  alternates: { canonical: '/faq' },
+  alternates: { canonical: '/faq/' },
 }
 
 const jsonLd = {
