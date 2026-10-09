@@ -49,18 +49,18 @@ describe('スクリーンショット', () => {
     expect(checkScreenshotFile({ name: 'a.png', size: 0 })).toMatch(/空/)
   })
 
-  it('名前に元のファイル名を使わない。logos バケットの Ohsumi/ の公開 URL を返す', () => {
+  it('名前に元のファイル名を使わない。Ohsumi バケットの feedback/ の公開 URL を返す', () => {
     expect(screenshotObjectName('png', 1, 'abcd1234-ef56-7890-abcd-ef1234567890')).toBe('feedback-1-abcd1234ef567890.png')
-    expect(screenshotPublicUrl('https://p.supabase.co', 'n.png')).toBe('https://p.supabase.co/storage/v1/object/public/logos/Ohsumi/n.png')
+    expect(screenshotPublicUrl('https://p.supabase.co', 'n.png')).toBe('https://p.supabase.co/storage/v1/object/public/Ohsumi/feedback/n.png')
   })
 
-  it('anon key で Ohsumi/ に上げ(上書きしない)、公開 URL を返す。失敗は日本語の文で返す', async () => {
+  it('anon key で Ohsumi バケットの feedback/ に上げ(上書きしない)、公開 URL を返す。失敗は日本語の文で返す', async () => {
     const calls: { url: string; init: RequestInit }[] = []
     const fetchOk = (async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response('{}', { status: 200 }) }) as unknown as typeof fetch
     const file = new File([new Uint8Array([1, 2, 3])], '私の画面.png', { type: 'image/png' })
     const res = await uploadScreenshot(file, { config: { url: 'https://p.supabase.co', anonKey: 'anon' }, fetch: fetchOk, now: 5, uuid: '00000000-0000-0000-0000-000000000000' })
-    expect(res).toEqual({ ok: true, url: 'https://p.supabase.co/storage/v1/object/public/logos/Ohsumi/feedback-5-0000000000000000.png' })
-    expect(calls[0].url).toBe('https://p.supabase.co/storage/v1/object/logos/Ohsumi/feedback-5-0000000000000000.png')
+    expect(res).toEqual({ ok: true, url: 'https://p.supabase.co/storage/v1/object/public/Ohsumi/feedback/feedback-5-0000000000000000.png' })
+    expect(calls[0].url).toBe('https://p.supabase.co/storage/v1/object/Ohsumi/feedback/feedback-5-0000000000000000.png')
     const h = calls[0].init.headers as Record<string, string>
     expect(h.apikey).toBe('anon')
     expect(h['x-upsert']).toBe('false')

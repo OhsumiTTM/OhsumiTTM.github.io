@@ -4,9 +4,9 @@
 // 記録されない。no-cors で送るので、画面からは失敗が分からない)。選択肢を変えた時は、ここの FORM_* を合わせて直す。
 // 番号・選択肢は、フォームの公開ページのソースの FB_PUBLIC_LOAD_DATA_ で確かめられる。
 //
-// スクリーンショットは、Supabase Storage の logos バケットの Ohsumi/ に置き、公開 URL をフォームの「スクリーンショット」
-// (記述式)に送る。名前は feedback-<時刻>-<乱数>.<拡張子>(元のファイル名・団体名は使わない)。
-// CSP の connect-src は、ロゴと同じ {origin}/storage/v1/object/logos/ で足りる(scripts/csp.mjs)。
+// スクリーンショットは、Supabase Storage の Ohsumi バケット(公開)の feedback/ に置き、公開 URL をフォームの
+// 「スクリーンショット」(記述式)に送る。名前は feedback-<時刻>-<乱数>.<拡張子>(元のファイル名・団体名は使わない)。
+// CSP の connect-src には {origin}/storage/v1/object/Ohsumi/ を入れている(scripts/csp.mjs)。
 
 export const FEEDBACK_ENTRY = {
   orgName: 'entry.1307138965',
@@ -83,8 +83,8 @@ export const SCREENSHOT_MAX_FILES = 3
 export const SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024
 export const SCREENSHOT_ACCEPT = 'image/png,image/jpeg,image/webp'
 const SCREENSHOT_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
-const BUCKET = 'logos'
-const FOLDER = 'Ohsumi'
+const BUCKET = 'Ohsumi'
+const FOLDER = 'feedback'
 
 export interface ScreenshotUploadConfig {
   url: string

@@ -63,12 +63,12 @@ describe('CSP の meta タグ', () => {
     expect(csp.buildPolicy({ calendarRead: true })).toContain('https://www.googleapis.com/calendar/v3/')
   })
 
-  it('ロゴの送り先は NEXT_PUBLIC_SUPABASE_URL がある時だけ、logos バケットの場所を1つだけ入れる', () => {
+  it('画像の送り先は NEXT_PUBLIC_SUPABASE_URL がある時だけ、logos・Ohsumi バケットの場所だけを入れる', () => {
     const connect = (o: object) => csp.buildPolicy(o).split('; ').find((d: string) => d.startsWith('connect-src '))!
     const without = connect({})
     expect(without).not.toContain('supabase')
     const withUrl = connect({ supabaseUrl: 'https://abcdefgh.supabase.co' })
-    expect(withUrl).toBe(without + ' https://abcdefgh.supabase.co/storage/v1/object/logos/')
+    expect(withUrl).toBe(without + ' https://abcdefgh.supabase.co/storage/v1/object/logos/ https://abcdefgh.supabase.co/storage/v1/object/Ohsumi/')
     expect(connect({ supabaseUrl: 'https://abcdefgh.supabase.co/' })).toBe(withUrl)
     // origin 全体や *.supabase.co は入れない
     expect(withUrl).not.toMatch(/https:\/\/abcdefgh\.supabase\.co(\s|$)/)
