@@ -188,11 +188,12 @@ function MonthView({
           return (
             <div
               key={key}
-              className={cn('min-h-[104px] border-b border-r border-border p-1.5 last:border-r-0 [&:nth-child(7n)]:border-r-0', !d && 'bg-secondary/30', d && absentDates.includes(dateKey(d)) && 'bg-rose-50/50 dark:bg-rose-950/20')}
+              className={cn('min-h-[104px] min-w-0 border-b border-r border-border p-1.5 last:border-r-0 [&:nth-child(7n)]:border-r-0', !d && 'bg-secondary/30', d && absentDates.includes(dateKey(d)) && 'bg-rose-50/50 dark:bg-rose-950/20')}
             >
               {d && (
                 <>
-                  <div className="mb-1 flex items-center gap-1">
+                  {/* 2桁の日付・「不在」・カレンダーに足すボタンが、スマホの幅(1日 約53px)に入らない時は折り返す */}
+                  <div className="mb-1 flex flex-wrap items-center gap-1">
                     <button
                       onClick={() => onDayClick(dateKey(d))}
                       className={cn('inline-flex size-6 items-center justify-center rounded-full text-xs hover:bg-secondary', isToday ? 'bg-primary font-semibold text-primary-foreground' : 'text-muted-foreground')}
