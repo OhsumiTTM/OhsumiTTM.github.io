@@ -13,9 +13,11 @@
 // レジストリは、registerNonce が合う時だけ(登録から24時間まで)同じ結果を返す。使用済みの登録コードだけでは、
 // 共有鍵を受け取れない
 //
-// この GAS の URL(レジストリに伝える接続先): スクリプトプロパティ OHSUMI_WEBAPP_URL(無ければ ScriptApp の URL)。
+// この GAS の URL(レジストリに伝える接続先): スクリプトプロパティ OHSUMI_WEBAPP_URL → ブラウザで開いた時に覚えた URL
+// (DETECTED_WEBAPP_URL)の順(ownWebAppUrlSource_)。登録の時は、この2つのどちらかが無ければ止める(getService().getUrl() は使わない)。
 // https://script.google.com/macros/s/…/exec の形だけを使い、/dev・/u/1/・/a/macros/<ドメイン>/・? や # の付いたものは
-// 送る前に断る(checkOwnWebAppUrl_)。メニューでは、送る前に登録する URL を表示する
+// 送る前に断る(checkOwnWebAppUrl_)。さらに、その URL に GET を送り、この GAS の doGet の応答(getReceived)が返ることを
+// 確かめてから登録する(verifyOwnWebAppUrl_)。メニューでは、送る前に登録する URL を表示する
 //
 // 初期設定コード: 16文字(読み間違えない31種類の文字)。有効期限72時間・1回限り。スクリプトプロパティには
 // SHA-256 だけを保存する。最初の代表は、ログイン画面の「初期設定コード」の欄に入れて Google でログインする
@@ -31,7 +33,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.09-1'
+var OHSUMI_GAS_VERSION = '2026.10.09-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -183,19 +185,52 @@ function saveCodeDefaultsToProps_(props) {
 
 // この GAS のウェブアプリの URL(レジストリに伝える接続先)。
 //   1. スクリプトプロパティ OHSUMI_WEBAPP_URL
-//   2. ScriptApp.getService().getUrl() が …/exec の形なら、それ
-//   3. ウェブアプリの URL をブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL。doGet が覚える)
-// メニュー・エディタから実行すると、getService().getUrl() は /dev(エディタで試すための URL)を返すことがある
-function ownWebAppUrl_(all) {
+//   2. ウェブアプリの URL をブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL。doGet が覚える)
+//   3. ScriptApp.getService().getUrl()
+// メニュー・エディタから実行すると、getService().getUrl() は /dev や、「デプロイを管理」の URL とは別の ID の …/exec
+// (そこに POST すると 404)を返すことがある。そのため、登録には 1 か 2 だけを使う(ownWebAppUrlSource_ の source を見る)
+function ownWebAppUrlSource_(all) {
   all = all || {}
   var url = String(all.OHSUMI_WEBAPP_URL || '').trim()
-  if (url) return url
+  if (url) return { url: url, source: 'property' }
+  var seen = String(all.DETECTED_WEBAPP_URL || '').trim()
+  if (REGISTRY_URL_PATTERN.test(seen)) return { url: seen, source: 'detected' }
   var live = ''
   try { live = String(ScriptApp.getService().getUrl() || '') } catch (e) { live = '' }
-  if (REGISTRY_URL_PATTERN.test(live)) return live
-  var seen = String(all.DETECTED_WEBAPP_URL || '').trim()
-  if (REGISTRY_URL_PATTERN.test(seen)) return seen
-  return live
+  return { url: live, source: live ? 'service' : '' }
+}
+
+var OPEN_WEBAPP_URL_FIRST_MESSAGE = '「デプロイを管理」のウェブアプリの URL をブラウザで一度開いてから、もう一度登録してください(利用マニュアル 3.4)。'
+
+// レジストリに登録する URL を決めて確かめる(メニュー・registerWithRegistry_ の両方から)。問題があれば userError_ を投げる。
+// OHSUMI_WEBAPP_URL も DETECTED_WEBAPP_URL も無い時は、getService().getUrl() を使わずに止める
+function registrableWebAppUrl_(all) {
+  var picked = ownWebAppUrlSource_(all)
+  if (picked.source !== 'property' && picked.source !== 'detected') {
+    throw userError_('この GAS のウェブアプリの URL がまだ分かりません。' + OPEN_WEBAPP_URL_FIRST_MESSAGE)
+  }
+  var urlProblem = checkOwnWebAppUrl_(picked.url)
+  if (urlProblem) throw userError_(urlProblem)
+  return picked.url
+}
+
+// 登録する前に、その URL に GET を送り、この GAS の doGet の応答(getReceived: true)が返ることを確かめる。
+// 返らなければ(404・別の GAS・HTML のログイン画面など)、URL と確かめ方を出して止める。
+// UrlFetchApp は、レジストリへの登録で既に使っている(権限 script.external_request は増えない)
+function verifyOwnWebAppUrl_(url, fetch) {
+  var how = 'ブラウザでこの URL を開き、「Ohsumi の GAS です」と出るかを確かめてください。出ない時は、' +
+    '「デプロイを管理」のウェブアプリの URL(アクセスできるユーザー: 全員)を開き直すか、その URL をスクリプトプロパティ OHSUMI_WEBAPP_URL に入れてから、もう一度登録してください。'
+  var status = 0
+  var json = null
+  try {
+    var r = fetch(url, { method: 'get', muteHttpExceptions: true, followRedirects: true })
+    status = Number(r.getResponseCode ? r.getResponseCode() : 0)
+    json = JSON.parse(r.getContentText())
+  } catch (e) {
+    json = null
+  }
+  if (json && json.getReceived === true) return
+  throw userError_('登録する URL(' + url + ')から、この GAS の応答が返りませんでした' + (status ? '(HTTP ' + status + ')' : '') + '。登録はしていません。' + how)
 }
 
 // ウェブアプリとして開かれた時(doGet)に、その URL を覚える(…/exec の形の時だけ)
@@ -238,9 +273,8 @@ function registerWithRegistry_(code, deps) {
   if (!REGISTRY_URL_PATTERN.test(registryUrl)) {
     throw userError_('スクリプトプロパティ REGISTRY_URL に、FSIF から伝えられたレジストリの URL(https://script.google.com/macros/s/…/exec)を入れてください。')
   }
-  var gasUrl = ownWebAppUrl_(all)
-  var urlProblem = checkOwnWebAppUrl_(gasUrl)
-  if (urlProblem) throw userError_(urlProblem)
+  var gasUrl = registrableWebAppUrl_(all)
+  verifyOwnWebAppUrl_(gasUrl, fetch)
   // 同じ登録コードでやり直す時は、同じ registerNonce を使う(レジストリが送り直しと分かるように)。
   // 送る前に保存する(応答が失われても、次に同じ値で送れるように)
   var codeHash = oneTimeCodeHash_(code)

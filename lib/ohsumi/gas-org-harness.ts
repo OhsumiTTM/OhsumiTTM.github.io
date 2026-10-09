@@ -32,7 +32,8 @@ export type Reg = ReturnType<typeof registry>
 // レジストリの Secrets に保存した共有鍵(先頭の ' は、シートが文字として扱う印なので除く)
 export const storedKey = (reg: Reg) => String(reg.sheets.get('Secrets')!.rows[1][1]).replace(/^'/, '')
 
-export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Record<string, string>; emails?: Record<string, string>; serviceUrl?: string } = {}) {
+// ownGet: 登録の前に、この GAS の URL に送る GET の応答(既定は、この GAS の doGet の応答)
+export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; props?: Record<string, string>; emails?: Record<string, string>; serviceUrl?: string; ownGet?: { code: number; text: string } } = {}) {
   const props: Record<string, string> = { REGISTRY_URL, OHSUMI_WEBAPP_URL: ORG_URL, GOOGLE_OAUTH_CLIENT_ID: 'x', ...(opts.props ?? {}) }
   const cache = new Map<string, string>()
   const logs: string[] = []
@@ -40,6 +41,7 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
   const members: string[][] = opts.members ?? [['id', 'name', 'role']]
   const added: { id: string; name: string; email: string; role: string }[] = []
   let fetches = 0
+  const ownGets: string[] = []
   const dialogs: { title: string; text: string }[] = []
   let promptAnswer = ''
   const ctx = vm.createContext({
@@ -83,7 +85,13 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
     },
     // レジストリへの通信: レジストリの doPost につなぐ。lose に入れた回は、処理はされたが応答が失われたことにする
     UrlFetchApp: {
-      fetch: (url: string, o: { payload: string }) => {
+      fetch: (url: string, o: { payload: string; method?: string }) => {
+        // 登録の前の、この GAS の URL の確かめ(GET)
+        if (o.method === 'get') {
+          ownGets.push(url)
+          if (opts.ownGet) return { getResponseCode: () => opts.ownGet!.code, getContentText: () => opts.ownGet!.text }
+          return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: false, getReceived: true, bounced: true }) }
+        }
         fetches++
         expect(url).toBe(REGISTRY_URL)
         sent.push(JSON.parse(o.payload))
@@ -118,5 +126,5 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
   const register = (code: string, now?: number) => (gas.registerWithRegistry_ as (c: string, d?: object) => Record<string, unknown>)(code, now ? { now: () => now } : undefined)
   const login = (email: string, setupCode?: string) => post({ action: 'exchangeIdToken', idToken: email, nonceSecret: 'n', setupCode })
   const menu = (answer: string) => { promptAnswer = answer; (gas.registerWithRegistryFromMenu as () => void)() }
-  return { gas, c, props, cache, logs, sent, mails, added, members, dialogs, post, register, login, menu, fetches: () => fetches }
+  return { gas, c, props, cache, logs, sent, mails, added, members, dialogs, post, register, login, menu, fetches: () => fetches, ownGets }
 }

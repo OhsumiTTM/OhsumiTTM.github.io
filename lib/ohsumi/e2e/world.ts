@@ -113,6 +113,8 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
           const out = regPost(String(o.payload))
           return { getResponseCode: () => 200, getContentText: () => JSON.stringify(out) }
         }
+        // 登録の前の、この GAS の URL の確かめ(GET。doGet と同じ応答)
+        if (url === gasUrl) return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: false, getReceived: true, bounced: true }) }
         return { getResponseCode: () => 200, getContentText: () => '{}' }
       },
     },

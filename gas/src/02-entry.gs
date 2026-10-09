@@ -10,11 +10,13 @@ function doGet(e) {
   startRequestTiming_()
   logGetRequest_(e)
   rememberWebAppUrl_()
+  // ブラウザで URL を開いた人にも分かる文にする(getReceived・bounced の値は画面の判定に使うので変えない)
   return jsonOutput_({
     ok: false,
     getReceived: true,
     bounced: true,
-    error: 'GAS に GET で届きました(結果の受け渡しの途中で送り返された、または POST の本文が転送の途中で失われた)。何も処理していません。',
+    error: 'Ohsumi の GAS です。URL を確かめました。この画面は閉じてかまいません。' +
+      '(画面からの通信でこの応答になった時は、GAS に GET で届きました。結果の受け渡しの途中で送り返されたか、POST の本文が転送の途中で失われたためで、何も処理していません。)',
   })
 }
 
@@ -69,11 +71,13 @@ function setupOhsumiFromMenu() {
 
 function registerWithRegistryFromMenu() {
   var ui = SpreadsheetApp.getUi()
-  // 送る前に、登録する接続先(この GAS の URL)を確かめる
-  var gasUrl = ownWebAppUrl_(PropertiesService.getScriptProperties().getProperties())
-  var urlProblem = checkOwnWebAppUrl_(gasUrl)
-  if (urlProblem) {
-    ui.alert('登録できませんでした', urlProblem, ui.ButtonSet.OK)
+  // 送る前に、登録する接続先(この GAS の URL)を決める。OHSUMI_WEBAPP_URL も、ブラウザで開いた時に覚えた URL も
+  // 無ければ止める(getService().getUrl() は、デプロイを管理の URL とは別の …/exec を返すことがあるため使わない)
+  var gasUrl
+  try {
+    gasUrl = registrableWebAppUrl_(PropertiesService.getScriptProperties().getProperties())
+  } catch (e) {
+    ui.alert('登録できませんでした', toErrorMessage_(e), ui.ButtonSet.OK)
     return
   }
   var input = ui.prompt('レジストリに登録',

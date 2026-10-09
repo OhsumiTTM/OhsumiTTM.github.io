@@ -331,7 +331,7 @@ Settings シートは、`setupOhsumi()` が作る初期キー(団体名など)�
 - **既定値:** `gas/src/07-registry-contract.gs` の `DEFAULT_REGISTRY_URL`(レジストリの URL)と `DEFAULT_GOOGLE_OAUTH_CLIENT_ID`(ログインの OAuth クライアント ID)に、FSIF の値を入れています。どちらもサイトの画面に入っている公開の値です。変える時は、そこを直して `pnpm gas:build` と `pnpm gas:version` を実行します。スクリプトプロパティ `REGISTRY_URL`・`GOOGLE_OAUTH_CLIENT_ID` があれば、そちらを使います
 - `setupOhsumi()` は、プロパティが無ければ既定値をプロパティに保存します。あとで `Code.gs` を貼り替えて既定値が空になっても、保存したプロパティで動き続けます
 - スプレッドシートのメニュー「Ohsumi → 初期設定」から `setupOhsumi()` を実行できます(エディタを開かなくてよい。初めての時は Google の許可の画面が出ます)
-- ウェブアプリの URL(レジストリへの登録で伝える接続先)は、自動では確実に分かりません。`ScriptApp.getService().getUrl()` は、メニュー・エディタから実行すると `/dev`(エディタで試すための URL)を返すことがあるためです。次の順に使います: スクリプトプロパティ `OHSUMI_WEBAPP_URL` → `getService().getUrl()` が `…/exec` の形ならそれ → デプロイの画面に出る URL をブラウザで一度開いた時に GAS が覚えた URL(`DETECTED_WEBAPP_URL`)。分からない時は、登録のメニューが「URL をブラウザで一度開く」か「`OHSUMI_WEBAPP_URL` に入れる」ように案内します
+- ウェブアプリの URL(レジストリへの登録で伝える接続先)は、自動では確実に分かりません。`ScriptApp.getService().getUrl()` は、メニュー・エディタから実行すると `/dev`(エディタで試すための URL)を返すことがあるためです。次の順に使います: スクリプトプロパティ `OHSUMI_WEBAPP_URL` → デプロイの画面に出る URL をブラウザで一度開いた時に GAS が覚えた URL(`DETECTED_WEBAPP_URL`)。`getService().getUrl()` は、メニューから実行すると「デプロイを管理」とは別の ID の `…/exec` を返すことがある(そこに POST すると 404)ため、登録には使いません。この2つのどちらも無い時は、登録のメニューが「『デプロイを管理』のウェブアプリの URL をブラウザで一度開いてから、もう一度登録してください」と案内して止めます。登録の前に、選んだ URL に GET を送り、この GAS の応答(ブラウザでは「Ohsumi の GAS です。URL を確かめました。」)が返ることを確かめます。返らなければ登録しません
 
 **`VALUE_FORMAT` とシートの値の形式が食い違った場合**(バックアップから戻した、別の団体のシートを
 取り込んだなど): 読み込み・権限の判定は、日本語・コードのどちらの値も受け付けるので、表示や動作は

@@ -81,14 +81,52 @@ describe('レジストリへの登録(団体の GAS)', () => {
       ['https://script.google.com/macros/s/ORGGAS/exec/', /レジストリに登録できない形/],
     ]
     for (const [url, why] of cases) {
-      // スクリプトプロパティに入れた時も、ScriptApp の URL を使う時も
-      for (const o of [org(reg, { props: { OHSUMI_WEBAPP_URL: url } }), org(reg, { props: { OHSUMI_WEBAPP_URL: '' }, serviceUrl: url })]) {
+      // スクリプトプロパティに入れた時は形を断る。ScriptApp の URL しか無い時は、形を見る前に止める(使わない)
+      for (const [o, expected] of [[org(reg, { props: { OHSUMI_WEBAPP_URL: url } }), why], [org(reg, { props: { OHSUMI_WEBAPP_URL: '' }, serviceUrl: url }), /まだ分かりません/]] as const) {
         const code = reg.issue().code
-        expect(() => o.register(code), url).toThrow(why)
+        expect(() => o.register(code), url).toThrow(expected)
         expect(o.fetches(), url).toBe(0)
         expect(o.props.REGISTRY_PENDING, url).toBeUndefined()
       }
     }
+    expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(0)
+  })
+
+  it('OHSUMI_WEBAPP_URL も、ブラウザで開いた時に覚えた URL も無い時は、getService().getUrl() を使わずに止める(メニューはコードを聞かない)', () => {
+    const reg = registry()
+    const o = org(reg, { props: { OHSUMI_WEBAPP_URL: '' }, serviceUrl: 'https://script.google.com/macros/s/OTHERID/exec' })
+    expect(() => o.register(reg.issue().code)).toThrow(/「デプロイを管理」のウェブアプリの URL をブラウザで一度開いてから、もう一度登録してください\(利用マニュアル 3\.4\)/)
+    expect(o.fetches()).toBe(0)
+    expect(o.ownGets).toEqual([])
+    o.menu(reg.issue().code)
+    expect(o.dialogs).toHaveLength(1)
+    expect(o.dialogs[0].title).toBe('登録できませんでした')
+    expect(o.dialogs[0].text).toMatch(/利用マニュアル 3\.4/)
+    expect(o.dialogs[0].text).not.toContain('OTHERID')
+    expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(0)
+  })
+
+  it('ブラウザで開いた時に覚えた URL が getService().getUrl() より優先され、その URL で登録する', () => {
+    const reg = registry()
+    const o = org(reg, { props: { OHSUMI_WEBAPP_URL: '', DETECTED_WEBAPP_URL: ORG_URL }, serviceUrl: 'https://script.google.com/macros/s/OTHERID/exec' })
+    o.register(reg.issue().code)
+    expect(o.ownGets).toEqual([ORG_URL])
+    expect(o.sent[0]).toMatchObject({ action: 'registerOrg', gasUrl: ORG_URL })
+  })
+
+  it('登録の前に、その URL に GET を送って doGet の応答を確かめる。返らなければ(404 など)レジストリに送らない', () => {
+    const reg = registry()
+    for (const ownGet of [{ code: 404, text: '<html>Sorry, unable to open the file at this time.</html>' }, { code: 200, text: '{"ok":true}' }]) {
+      const o = org(reg, { ownGet })
+      const code = reg.issue().code
+      expect(() => o.register(code)).toThrow(new RegExp('登録する URL\\(' + ORG_URL.replace(/[.?/]/g, '\\$&') + '\\)から、この GAS の応答が返りませんでした'))
+      expect(() => o.register(code)).toThrow(/登録はしていません。ブラウザでこの URL を開き/)
+      expect(o.ownGets[0]).toBe(ORG_URL)
+      expect(o.fetches()).toBe(0)
+      expect(o.props.REGISTRY_SHARED_KEY).toBeUndefined()
+    }
+    // 404 の時は HTTP の状態も出す
+    expect(() => org(reg, { ownGet: { code: 404, text: 'x' } }).register(reg.issue().code)).toThrow(/HTTP 404/)
     expect(reg.sheets.get('Orgs')!.rows.slice(1)).toHaveLength(0)
   })
 
