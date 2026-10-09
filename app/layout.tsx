@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import Script from 'next/script'
 import { FrameGuard } from '@/components/ohsumi/frame-guard'
+import { SITE } from '@/lib/site/config'
 import './globals.css'
 
 const geistSans = Geist({
@@ -14,10 +15,23 @@ const geistMono = Geist_Mono({
   variable: '--font-geist-mono',
 })
 
+const DESCRIPTION =
+  'Ohsumi(オオスミ)は、タスク・人材・育成をつなぐ組織運営プラットフォームです。仕事を進めるほど、組織の状況と人の成長が見えてきます。未来宇宙産業フォーラム(FSIF)が開発・提供しています。'
+
+// 検索・SNS で表示する情報。サイトの URL は直接書かず、ビルドの時の NEXT_PUBLIC_SITE_URL(GitHub の変数 SITE_URL)から作る
 export const metadata: Metadata = {
-  title: 'Ohsumi — タスクを打ち上げ、組織を軌道に乗せる',
-  description:
-    'Ohsumi は Task Management × Talent Management × Human Development を接続する組織運営システムです。',
+  ...(SITE.url ? { metadataBase: new URL(SITE.url) } : {}),
+  title: 'Ohsumi — 仕事を進めるほど、組織が見えてくる。',
+  description: DESCRIPTION,
+  applicationName: 'Ohsumi',
+  openGraph: {
+    type: 'website',
+    siteName: 'Ohsumi',
+    locale: 'ja_JP',
+    description: DESCRIPTION,
+    images: [{ url: '/og.png', width: 1200, height: 630, alt: 'Ohsumi — 仕事を進めるほど、組織が見えてくる。' }],
+  },
+  twitter: { card: 'summary_large_image', images: ['/og.png'] },
 }
 
 // ブラウザの上部の色: 端末の設定(prefers-color-scheme)に合わせる。Ohsumi の画面で選んだ表示があれば、

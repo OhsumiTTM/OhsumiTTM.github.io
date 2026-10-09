@@ -8,7 +8,7 @@ import { CONTACT } from '@/lib/site/config'
 export const metadata: Metadata = {
   title: 'Contact お問い合わせ',
   description: 'Ohsumiの導入相談・デモ希望・機能についてのお問い合わせはこちらから。',
-  alternates: { canonical: '/contact' },
+  alternates: { canonical: '/contact/' },
 }
 
 // 問い合わせは、サイトのフォームから裏で Google フォームに送る(lib/site/contact-form.ts)。

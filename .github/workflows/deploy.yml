@@ -51,6 +51,8 @@ jobs:
           # (service_role のキーは使わない・置かない)。未設定なら、ロゴの欄は「いまロゴを受け付けられません」と出す
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # サイトの URL(検索の正しい URL・サイトマップ・SNS の画像に使う)。秘密ではないので Secrets ではなく Variables に入れる
+          NEXT_PUBLIC_SITE_URL: ${{ vars.SITE_URL }}
         run: pnpm build
 
       - name: Upload artifact

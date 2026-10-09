@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   title: '機能',
   description:
     'Ohsumiの機能一覧。タスク管理・プロジェクト管理・ワークフロー・承認と確認(登録の承認・完了の確認)・日報と申請・通知・人材情報・人材育成・分析・権限管理を、解決する課題と実際の画面とともに紹介します。',
-  alternates: { canonical: '/features' },
+  alternates: { canonical: '/features/' },
 }
 
 function Label({ children }: { children: React.ReactNode }) {

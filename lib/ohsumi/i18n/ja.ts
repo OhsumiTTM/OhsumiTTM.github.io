@@ -172,7 +172,7 @@ export const ja = {
   'header.logoAlt': 'ロゴ',
 
   // ---- login ---------------------------------------------------------
-  'login.tagline': 'タスクを打ち上げ、組織を軌道に乗せる。',
+  'login.tagline': '仕事を進めるほど、組織が見えてくる。',
   'login.signingIn': 'ログイン中…',
   'login.notConfigured': 'このサイトは、レジストリの URL または Google の OAuth クライアントIDが設定されていません。FSIF(fsif.official@gmail.com)にお問い合わせください。',
   'login.failed': 'ログインできませんでした。もう一度お試しください。',

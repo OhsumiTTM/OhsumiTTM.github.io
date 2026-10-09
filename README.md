@@ -86,6 +86,8 @@ pnpm test:e2e       # ブラウザの通しテスト
 
 団体の GAS の URL は Secrets に入れません(招待リンクの団体ID から、レジストリが答えます)。
 
+このほか、リポジトリの **Variables**(Secrets ではない)に `SITE_URL`(サイトの URL。末尾の / は付けない)を入れます。検索エンジン向けの正しい URL(canonical)・`robots.txt`・`sitemap.xml`・SNS の画像の URL に使います。
+
 ## 守ること
 
 - **CSP を緩めない。** `pnpm build` の最後に `scripts/csp.mjs` が各 HTML に CSP を入れます。インラインのスクリプトはハッシュで許可し、`'unsafe-inline'`・iframe・外部のスクリプト・解析ツールは使いません。新しい接続先が要る時は、`scripts/csp.mjs` の一覧に用途と一緒に足します。

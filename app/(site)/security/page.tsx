@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: 'セキュリティ',
   description:
     'Ohsumiの情報管理について。認証・権限管理・閲覧範囲・データ分離・保存先・監査・責任範囲・インシデント対応の各項目の、今の仕組みをご説明します。',
-  alternates: { canonical: '/security' },
+  alternates: { canonical: '/security/' },
 }
 
 const GROUPS = [

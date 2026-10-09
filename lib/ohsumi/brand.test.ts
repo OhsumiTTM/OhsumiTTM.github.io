@@ -42,4 +42,10 @@ describe('ブランド', () => {
     const hits = targets.filter((f) => /orbit|(?<!h)osumi/i.test(read(f).replace(/ohsumi/gi, '')))
     expect(hits).toEqual([])
   })
+
+  it('Orbit のキャッチコピー(タスクを打ち上げ、組織を軌道に乗せる)を使わない', () => {
+    const targets = [...files('components'), ...files('app'), ...files('lib/ohsumi/i18n'), ...files('lib/site'), ...files('content')]
+    const hits = targets.filter((f) => /打ち上げ、組織|軌道に乗せ|Launch your tasks|get your team on track/i.test(read(f)))
+    expect(hits).toEqual([])
+  })
 })

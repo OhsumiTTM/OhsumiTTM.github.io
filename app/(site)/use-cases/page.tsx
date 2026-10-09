@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   title: '利用シーン',
   description:
     'Ohsumiの利用シーン。一般メンバー・PJリーダー・管理者・育成担当・学生団体やPJ型組織など、立場ごとのタスク管理と人材育成・人材管理での使い方を紹介します。',
-  alternates: { canonical: '/use-cases' },
+  alternates: { canonical: '/use-cases/' },
 }
 
 export default function UseCasesPage() {

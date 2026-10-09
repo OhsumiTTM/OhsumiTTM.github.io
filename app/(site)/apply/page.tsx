@@ -6,7 +6,7 @@ import { Container, Em } from '@/components/site/primitives'
 export const metadata: Metadata = {
   title: 'Apply 利用契約書の発行申請',
   description: 'Ohsumi の利用契約書・個別申込書の発行を申請するページです。',
-  alternates: { canonical: '/apply' },
+  alternates: { canonical: '/apply/' },
 }
 
 export default function ApplyPage() {
