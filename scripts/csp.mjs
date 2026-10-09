@@ -33,8 +33,10 @@ export const CONNECT_SOURCES = {
 export const CALENDAR_READ_CONNECT_SOURCES = ['https://www.googleapis.com/calendar/v3/']
 
 /**
- * 申請フォーム(/apply)の団体ロゴの送り先(NEXT_PUBLIC_SUPABASE_URL がある時だけ。lib/site/logo-upload.ts)。
- * Supabase の Storage の logos バケットの場所だけを許す(origin 全体や *.supabase.co は許さない)。
+ * Supabase の Storage への画像の送り先(NEXT_PUBLIC_SUPABASE_URL がある時だけ)。
+ *   - logos バケット: 申請フォーム(/apply)の団体ロゴ(lib/site/logo-upload.ts)
+ *   - Ohsumi バケット: フィードバックのスクリーンショット(lib/ohsumi/feedback-form.ts)
+ * この2つのバケットの場所だけを許す(origin 全体や *.supabase.co は許さない)。
  * URL が https で、ホストが <プロジェクト>.supabase.co の形でなければ、ビルドを失敗させる(投げる)
  * @param {string | undefined} supabaseUrl
  * @returns {string[]}
@@ -55,7 +57,7 @@ export function logoUploadConnectSources(supabaseUrl) {
   if ((url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) {
     throw new Error('NEXT_PUBLIC_SUPABASE_URL は https://<プロジェクト>.supabase.co だけにしてください(パスは付けない)')
   }
-  return [`${url.origin}/storage/v1/object/logos/`]
+  return [`${url.origin}/storage/v1/object/logos/`, `${url.origin}/storage/v1/object/Ohsumi/`]
 }
 
 /**
@@ -199,5 +201,5 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.error(`CSP の確認に失敗しました(${failures.length} ファイル):\n${failures.join('\n')}`)
     process.exit(1)
   }
-  console.log(`CSP を ${count} ファイルに入れました(カレンダーの接続先: ${calendarRead ? 'あり' : 'なし'}・ロゴの送り先: ${supabaseUrl ? 'あり' : 'なし'})`)
+  console.log(`CSP を ${count} ファイルに入れました(カレンダーの接続先: ${calendarRead ? 'あり' : 'なし'}・画像の送り先(Supabase): ${supabaseUrl ? 'あり' : 'なし'})`)
 }

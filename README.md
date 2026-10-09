@@ -80,7 +80,7 @@ pnpm test:e2e       # ブラウザの通しテスト
 | `REGISTRY_URL` | レジストリのウェブアプリの URL(必須) |
 | `GOOGLE_OAUTH_CLIENT_ID` | 団体のログインの OAuth クライアントID(必須) |
 | `REGISTRY_OAUTH_CLIENT_ID` | レジストリの管理画面のログインの OAuth クライアントID |
-| `SUPABASE_URL`・`SUPABASE_ANON_KEY` | 申請フォームのロゴの保存先(無ければロゴ欄は出ない) |
+| `SUPABASE_URL`・`SUPABASE_ANON_KEY` | 申請フォームのロゴ(`logos` バケット)と、フィードバックのスクリーンショット(`Ohsumi` バケット)の保存先(無ければ、どちらの欄も出ない) |
 | `FEEDBACK_FORM_URL` | フィードバックの送り先(任意) |
 | `GOOGLE_CALENDAR_READ` | カレンダーの予定の表示(入れない。入れるとプライバシーポリシーの変更と Google の審査が要る) |
 

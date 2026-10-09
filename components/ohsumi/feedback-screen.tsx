@@ -5,6 +5,10 @@ import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
 import { MessageSquare, Send, CheckCircle2, ImagePlus, X } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
+import {
+  buildFeedbackBody, checkScreenshotFile, uploadScreenshot,
+  SCREENSHOT_ACCEPT, SCREENSHOT_MAX_FILES, SCREENSHOT_UPLOAD_ENABLED,
+} from '@/lib/ohsumi/feedback-form'
 
 // 送信先のGoogleフォームURL(.../formResponse)。未設定ならフィードバックは送信できない。
 const FORM_URL = process.env.NEXT_PUBLIC_FEEDBACK_FORM_URL
@@ -86,14 +90,14 @@ const SCREEN_OPTION_KEY: Record<string, TranslationKey> = {
   'その他': 'feedback.feature.other',
 }
 
-const ORG_NAME_KEY = 'ohsumi_feedback_org_name'
-
 export function FeedbackScreen() {
-  const { currentUser, myEmail } = useOhsumi()
+  const { currentUser, myEmail, orgName: currentOrgName } = useOhsumi()
   const { goBack } = useNav()
   const { t } = useI18n()
 
-  const [orgName, setOrgName] = useState('')
+  // 団体名は、今開いている団体の名前を最初から入れる(直すこともできる)
+  const [orgName, setOrgName] = useState(currentOrgName || '')
+  const [orgNameEdited, setOrgNameEdited] = useState(false)
   const [yourName, setYourName] = useState('') // お名前は任意 — デフォルト空欄
   const [contactType, setContactType] = useState('')
   const [otherDetail, setOtherDetail] = useState('') // 「その他」選択時の追加テキスト
@@ -103,29 +107,38 @@ export function FeedbackScreen() {
   const [severity, setSeverity] = useState('')
   const [wantReply, setWantReply] = useState('')
   const [email, setEmail] = useState('')
-  const [screenshots, setScreenshots] = useState<{ name: string; dataUrl: string }[]>([])
+  // スクリーンショット: 選んだファイルと、上げ終わった時の公開 URL(送り直しで同じ画像を2回上げない)
+  const [screenshots, setScreenshots] = useState<{ file: File; preview: string; url?: string }[]>([])
+  const [shotError, setShotError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(ORG_NAME_KEY) : null
-    setOrgName(saved ?? '')
-  }, [])
-
-  const addScreenshot = (file: File) => {
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string
-      setScreenshots((prev) => [...prev, { name: file.name, dataUrl }])
+  const addScreenshots = (files: File[]) => {
+    setShotError('')
+    for (const file of files) {
+      const problem = checkScreenshotFile(file)
+      if (problem) { setShotError(problem); continue }
+      setScreenshots((prev) => {
+        if (prev.length >= SCREENSHOT_MAX_FILES) { setShotError(t('feedback.screenshot.tooMany')); return prev }
+        return [...prev, { file, preview: URL.createObjectURL(file) }]
+      })
     }
-    reader.readAsDataURL(file)
   }
 
   const removeScreenshot = (i: number) => {
-    setScreenshots((prev) => prev.filter((_, idx) => idx !== i))
+    setScreenshots((prev) => {
+      const target = prev[i]
+      if (target) URL.revokeObjectURL(target.preview)
+      return prev.filter((_, idx) => idx !== i)
+    })
   }
+
+  // 団体の名前が後から読み込まれた時(直していなければ)入れ直す
+  useEffect(() => {
+    if (!orgNameEdited && currentOrgName) setOrgName(currentOrgName)
+  }, [currentOrgName, orgNameEdited])
 
   const toggleFeature = (f: string) => {
     setFeatures((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]))
@@ -133,6 +146,7 @@ export function FeedbackScreen() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!orgName.trim()) { setError(t('feedback.error.orgName')); return }
     if (!contactType) { setError(t('feedback.error.contactType')); return }
     if (!detail.trim()) { setError(t('feedback.error.detail')); return }
     if (contactType === '不具合の報告' && !severity) { setError(t('feedback.error.severity')); return }
@@ -141,31 +155,21 @@ export function FeedbackScreen() {
     setError('')
     setSubmitting(true)
 
-    if (orgName) {
-      try { localStorage.setItem(ORG_NAME_KEY, orgName) } catch { /* ignore */ }
+    // 画像を先に上げる(上げ終わったものは上げ直さない)。1枚でも失敗したら送らない
+    const urls: string[] = []
+    for (let i = 0; i < screenshots.length; i++) {
+      const shot = screenshots[i]
+      if (shot.url) { urls.push(shot.url); continue }
+      const res = await uploadScreenshot(shot.file)
+      if (!res.ok) { setError(res.error); setSubmitting(false); return }
+      urls.push(res.url)
+      setScreenshots((prev) => prev.map((p) => (p === shot ? { ...p, url: res.url } : p)))
     }
 
-    // 「その他」の場合はその内容をcontactTypeとして送信
-    const effectiveContactType = contactType === 'その他' && otherDetail.trim()
-      ? `その他: ${otherDetail.trim()}`
-      : contactType
-
-    // スクリーンショット添付は現在Googleフォーム経由では未対応のため
-    // ファイル名のみ詳細テキストに付記する
-    const screenshotNote = screenshots.length > 0
-      ? `\n\n[添付スクリーンショット: ${screenshots.map((s) => s.name).join(', ')}]`
-      : ''
-
-    const body = new URLSearchParams()
-    body.append('entry.1307138965', orgName)
-    body.append('entry.25271577', yourName)
-    body.append('entry.619897353', effectiveContactType)
-    for (const f of features) body.append('entry.897435869', f)
-    body.append('entry.2125058687', detail + screenshotNote)
-    body.append('entry.1872882494', steps)
-    body.append('entry.1612805599', severity)
-    body.append('entry.2009922288', wantReply)
-    body.append('entry.956889890', email)
+    const body = buildFeedbackBody({
+      orgName, yourName, contactType, otherDetail, features, detail, steps, severity, wantReply, email,
+      screenshotUrls: urls,
+    })
 
     try {
       await fetch(FORM_URL, { method: 'POST', mode: 'no-cors', body })
@@ -217,7 +221,7 @@ export function FeedbackScreen() {
         <Field label={t('feedback.field.orgName')} required>
           <input
             value={orgName}
-            onChange={(e) => setOrgName(e.target.value)}
+            onChange={(e) => { setOrgName(e.target.value); setOrgNameEdited(true) }}
             placeholder={t('feedback.orgName.placeholder')}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
           />
@@ -293,54 +297,51 @@ export function FeedbackScreen() {
           />
         </Field>
 
-        {/* スクリーンショット */}
-        <Field label={t('feedback.field.screenshot')}>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            onChange={(e) => {
-              Array.from(e.target.files ?? []).forEach(addScreenshot)
-              e.target.value = ''
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-secondary/40 px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-          >
-            <ImagePlus className="size-4" />
-            {t('feedback.addImage')}
-          </button>
-          {screenshots.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-3">
-              {screenshots.map((s, i) => (
-                <div key={i} className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={s.dataUrl}
-                    alt={s.name}
-                    className="h-20 w-20 rounded-lg border border-border object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeScreenshot(i)}
-                    className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
-                    aria-label={t('common.delete')}
-                  >
-                    <X className="size-3" />
-                  </button>
-                  <p className="mt-0.5 max-w-[80px] truncate text-[10px] text-muted-foreground">{s.name}</p>
-                </div>
-              ))}
-            </div>
-          )}
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('feedback.previewNote')}
-          </p>
-        </Field>
+        {/* スクリーンショット(Supabase に上げ、リンクをフォームに送る) */}
+        {SCREENSHOT_UPLOAD_ENABLED && (
+          <Field label={t('feedback.field.screenshot')}>
+            <input
+              ref={fileRef}
+              type="file"
+              accept={SCREENSHOT_ACCEPT}
+              multiple
+              hidden
+              onChange={(e) => {
+                addScreenshots(Array.from(e.target.files ?? []))
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={screenshots.length >= SCREENSHOT_MAX_FILES}
+              className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-secondary/40 px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-60"
+            >
+              <ImagePlus className="size-4" />
+              {t('feedback.addImage')}
+            </button>
+            {screenshots.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-3">
+                {screenshots.map((s, i) => (
+                  <div key={s.preview} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={s.preview} alt={s.file.name} className="h-20 w-20 rounded-lg border border-border object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeScreenshot(i)}
+                      className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
+                      aria-label={t('common.delete')}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {shotError && <p className="mt-1 text-xs text-destructive" role="alert">{shotError}</p>}
+            <p className="mt-1 text-xs text-muted-foreground">{t('feedback.screenshotNote')}</p>
+          </Field>
+        )}
 
         {/* 再現手順・困り具合 — 不具合の報告を選んだ方のみ表示 */}
         {contactType === '不具合の報告' && (
@@ -424,7 +425,7 @@ export function FeedbackScreen() {
             className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
           >
             <Send className="size-4" />
-            {submitting ? t('feedback.submitting') : t('feedback.submit')}
+            {submitting ? (screenshots.some((x) => !x.url) ? t('feedback.uploading') : t('feedback.submitting')) : t('feedback.submit')}
           </button>
           <button
             type="button"
