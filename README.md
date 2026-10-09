@@ -1,197 +1,98 @@
 # Ohsumi
 
-タスクを打ち上げ、組織を軌道に乗せる。学生団体向けのタスク管理×人材管理ツールです。
+学生団体などの組織運営を支える、タスク管理×人材育成のサービスです。未来宇宙産業フォーラム(FSIF)が開発・提供しています。
 
-Ohsumiはもともと FSIF（学生団体）向けに作られましたが、コードはそのまま他団体でも
-セルフホストして使えるように設計されています。各団体のデータ(スプレッドシートやアップロードした
-ファイル)は、各団体のGoogleアカウントに保存されます。Ohsumiの運営(FSIF)がその内容を閲覧することはありません。
+- サイト: https://ohsumi.fsif.jp
+- 団体の導入・使い方は、利用マニュアル(FSIF が団体に渡します)を見てください。この README は、開発する人向けです。
 
-## アーキテクチャ
+## 仕組み
 
 ```
-┌─────────────────┐  読み取り・書き込み   ┌──────────────────────┐      ┌──────────────────┐
-│  Next.js (静的   │  (POST + セッション   │  Google Apps Script  │      │  Google          │
-│  エクスポート)    │   トークン)          │  Web App (Code.gs)   │─────▶│  Spreadsheet     │
-│  GitHub Pages    │ ────────────────────▶│  トークン検証・      │      │  (Members /      │
-│  でホスト         │ ◀────────────────────│  閲覧権限で絞り込み  │◀─────│   Projects /     │
-└─────────────────┘                        └──────────────────────┘      │   Tasks /        │
-                                                                           │   Settings)      │
-                                                                           └──────────────────┘
+ブラウザ(Next.js の静的サイト・GitHub Pages)
+   │  招待リンクの団体ID → レジストリが団体の GAS の URL を答える
+   ▼
+団体の GAS(gas/Code.gs。団体の Google アカウントで動く) ──▶ 団体のスプレッドシート(データ)
+   │  状態の確認・週1回の集計値
+   ▼
+レジストリ(registry/Code.gs。FSIF のアカウントで動く) ◀── 監視(registry/monitor/Monitor.gs)
 ```
 
-- **フロントエンド**: Next.js 16 (App Router) を `output: 'export'` で静的サイトとしてビルドし、
-  GitHub Pages でホストします。サーバーサイドのAPIやDBは持ちません。
-- **データベース**: Google Spreadsheet の Members / Projects / Tasks（任意で Settings）の
-  4シートが「データベース」です。
-- **読み取り**: ログイン後、Apps Script の `getInitialData` で4シート分をまとめて取得します。
-  ログインは Google の IDトークンで行い、Apps Script が団体の鍵で署名したセッショントークンを
-  発行します(`gas/README.md` の「4.2. ログインの仕組み」)。Apps Script はセッショントークンを検証し、閲覧権限のないデータ(幹部限定タスク、
-  他の人の評価・1on1記録など)を取り除いてから返します(`gas/Code.gs` の `READ_POLICY`)。
-  シートを「ウェブに公開」する必要はありません。アップロードしたファイル(プロフィール画像・
-  領収書など)も非公開で保存し、Apps Script が権限を確認してから返します。
-- **書き込み**: Google Apps Script（`gas/Code.gs`）をウェブアプリとしてデプロイし、
-  クライアントからそのURLへ POST することでシートに書き込みます。
-- **認証**: 現状は簡易的なデモ用のメンバー選択画面です（本人確認なし）。実際の
-  Google アカウントによるログイン（Google OAuth / Google Identity Services）は
-  今後実装予定の機能で、下記のセットアップ手順にはそのための準備段階の項目も含めています。
-  現時点でこの「本人確認なし」という制約を理解した上で、機密性の高い情報は
-  シートに置かないようにしてください（詳細は `gas/README.md` の注意事項を参照）。
+- **サイト**は静的な画面だけで、サーバーもデータベースも持ちません。団体のデータは FSIF を通りません。
+- **団体の GAS** が、ログイン(Google の ID トークン → 団体のセッション)・読み書き・閲覧権限の絞り込み・通知・毎日の処理を受け持ちます。
+- **レジストリ**は、団体ID・接続先・版・プラン・機能停止と提供停止の状態、アンケート、集計値を管理します。
+- **監視**は、レジストリの状態を確かめ、異常を知らせます。
 
-この構成のため、**追加のサーバー費用は一切かかりません**（GitHub Pages・Google
-Spreadsheet・Apps Script はすべて無料枠で完結します）。
-
-## セットアップ（新規団体向け）
-
-他団体がOhsumiを自分たちの団体用に導入する場合の手順です。すべて団体ごとに
-**自分たちのアカウントで新規に作成**してください（他団体のSpreadsheet・Apps Script・
-GitHubリポジトリを共用することはできません／してはいけません）。
-
-### 1. リポジトリを取得する
-
-このリポジトリを Fork するか、`git clone` した上で新しい GitHub リポジトリとして
-push してください。
-
-> **重要**: アプリはドメインのルート（`https://<org>.github.io/` または独自ドメイン）で
-> 動く前提です（`next.config.mjs` に basePath は設定していません）。GitHub Pages で
-> 公開する場合は、リポジトリ名を `<org>.github.io` にするか、独自ドメインを設定してください。
-
-### 2. Google Spreadsheet を用意する
-
-1. このリポジトリの `database.xlsx`（列構成のサンプル）を Google スプレッドシートに
-   インポートするか、新規スプレッドシートに `database.xlsx` と同じシート名・列名で
-   Members / Projects / Tasks の3シートを作成します。
-2. サンプルの黄色い行（入力例）を削除し、自団体の実データに置き換えます。
-   詳しい手順は [`docs/onboarding.md`](docs/onboarding.md) のチェックリストを参照してください。
-3. 列構成の詳細な意味は [`gas/README.md`](gas/README.md) の「1. シートの列構成」を
-   参照してください。
-
-### 3. Google Apps Script をデプロイする
-
-`gas/README.md` の「2. Apps Script のデプロイ」の手順に従い、読み書きに使う Web App URL を
-取得します。
-
-定期タスク（`RecurringTaskRule`）を毎日自動生成させたい場合は、同ファイルの
-「定期タスクの自動生成（サーバー側トリガー）」の手順で時間主導トリガーも設定してください。
-
-### 4. Google OAuth クライアントを作成する（本人認証・準備中）
-
-現バージョンのログインは、本人確認を行わないデモ用のメンバー選択画面です。将来的に
-Google アカウントでの本人認証（Google Identity Services）に置き換える計画があり、
-そのための準備として OAuth クライアントを先に作成しておくことができます。
-
-1. [Google Cloud Console](https://console.cloud.google.com/) で自団体用の新規プロジェクトを作成します
-   （Spreadsheet / Apps Script と同じ Google アカウント配下で構いません）。
-2. 「APIとサービス」→「認証情報」→「OAuth クライアント ID」を作成します。
-   - アプリケーションの種類: ウェブアプリケーション
-   - 承認済みの JavaScript 生成元: 本番URL（例: `https://<org>.github.io`）と
-     `http://localhost:3000`（ローカル開発用）
-3. 発行されたクライアントIDを控えておきます（現時点ではアプリ側での参照先はまだ
-   ありませんが、実装され次第 `.env.local` に環境変数として追加する形になる想定です）。
-4. **団体ごとに必ず自分のOAuthクライアントを発行してください。** 他団体のクライアントID・
-   APIキーを流用すると、同意画面に表示される団体名やドメイン制限が自団体のものと
-   一致せず、ログインが正しく機能しません。また、他団体のGoogle Cloudプロジェクトの
-   クォータやセキュリティ設定に影響を与えてしまいます。
-
-### 5. `.env.local` を設定する
-
-`.env.local.example` を `.env.local` にコピーし、手順3で取得したURLを入力します。
-
-```bash
-cp .env.local.example .env.local
-```
-
-すべて空欄のままにすると、`lib/ohsumi/seed.ts` のローカルモックデータで動作します
-（動作確認・開発用）。
-
-### 6. ローカルで動作確認する
-
-```bash
-pnpm install
-pnpm dev
-```
-
-`http://localhost:3000` で確認できます。
-
-- レジストリ(`NEXT_PUBLIC_REGISTRY_URL`)を設定しない時は、ローカルのサンプルのデータで動きます(開発の時だけのデモのログイン)。
-- 団体の GAS につなぐ時は、`.env.local` に `NEXT_PUBLIC_REGISTRY_URL`(テスト用のレジストリ)と `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` を入れ、
-  テスト用の団体の招待リンク(`http://localhost:3000/?org=<団体ID>`)から開きます。ビルド時に団体の GAS の URL を決める設定はありません。
-
-### 7. GitHub Pages へデプロイする
-
-1. リポジトリの Settings → Secrets and variables → Actions に、`gas/README.md`
-   「4. GitHub Secrets」の表にある Secret（`REGISTRY_URL` / `GOOGLE_OAUTH_CLIENT_ID`、
-   任意で `FEEDBACK_FORM_URL` など）を設定します。団体の GAS の URL は Secrets に入れません
-   (団体ごとに、招待リンクの団体ID からレジストリが答えます。`registry/README.md` の「1.7」)。
-2. Settings → Pages で、Source を「GitHub Actions」に設定します。
-3. `main` ブランチに push すると `.github/workflows/deploy.yml` が自動でビルド・
-   デプロイします。
-
-> **運用ルール: このアカウント(OhsumiTTM)では、他のリポジトリを GitHub Pages で公開しないでください。**
-> 同じアカウントのリポジトリを Pages で公開すると、`ohsumittm.github.io/<リポジトリ名>/` のように
-> 同じ場所(オリジン)で配信され、そのページのスクリプトからブラウザに保存したログイン情報を
-> 読み取れてしまいます。独自ドメインに移行した後も、同じアカウントの他のリポジトリの Pages は
-> 同じドメインの下で公開されるため、このルールは引き続き必要です。
-
-## セキュリティ・注意事項
-
-- **APIキー・OAuthクライアント・Apps Script の Web App は団体ごとに必ず自分で発行し、
-  他団体と使い回さないでください。** Web App URL と OAuthクライアントIDはクライアント
-  サイドのJavaScriptに埋め込まれます（`gas/README.md`の注意事項参照）。
-- 本人確認なしの内輪利用を前提とした設計です。機密性の高い情報（給与・成績など）は
-  シートに置かないでください。
-- 詳しい既知の制約は `gas/README.md` の「既知の制約」を参照してください。
-
-### Content-Security-Policy(CSP)
-
-GitHub Pages ではレスポンスヘッダーを設定できないため、`pnpm build` の最後に
-`scripts/csp.mjs` が `out/` の各 HTML へ `<meta http-equiv="Content-Security-Policy">` を入れます。
-
-- **インラインのスクリプトはハッシュ方式**で許可します(`'unsafe-inline'` は使いません)。
-  Next.js がページごとに出力するインラインのスクリプトの SHA-256 を、ページごとに `script-src` に並べます。
-- 次の場合は**ビルドを失敗**させます: ハッシュが入っていないインラインのスクリプトがある/
-  スクリプトの数が合わない/インラインのイベントハンドラー(`onclick="…"` など)や `javascript:` の URL がある。
-- 接続先(`connect-src`)は用途ごとに `scripts/csp.mjs` の先頭で管理しています。
-  新しい外部サービスへ通信する機能を追加したときは、ここにも追加してください。
-
-  | 接続先 | 用途 |
-  |---|---|
-  | `https://script.google.com`・`https://script.googleusercontent.com` | 団体の Apps Script |
-  | `https://accounts.google.com/gsi/` | Googleでログイン(ボタン・FedCM も含む) |
-  | `https://sheets.googleapis.com` | 個人スプレッドシートの作成・同期 |
-  | `https://docs.google.com/forms/` | フィードバックの送信 |
-  | `https://www.googleapis.com/calendar/v3/` | 予定の表示(`GOOGLE_CALENDAR_READ` が `true` でビルドした時だけ入る) |
-
-- 画像(`img-src`)は、手入力の外部の画像 URL を表示できるよう `https:` をすべて許可しています。
-- meta タグでは `frame-ancestors` が使えないため、iframe への埋め込み対策は
-  `components/ohsumi/frame-guard.tsx` が引き続き担います。
-- 本番で CSP の違反が起きると、ブラウザの開発者ツールのコンソールに
-  「Refused to …because it violates the following Content Security Policy directive」と表示されます。
-
-## ディレクトリ構成
+## ディレクトリ
 
 | パス | 内容 |
 |---|---|
-| `app/` | Next.js App Router のエントリポイント |
-| `components/ohsumi/` | 画面ごとのReactコンポーネント（INPUT / OUTPUT / Admin / 個人ページなど） |
-| `lib/ohsumi/` | 状態管理（`store.tsx`）、型定義（`types.ts`）、スプレッドシート連携（`remote.ts`）、ローカルモックデータ（`seed.ts`） |
-| `gas/` | Google Apps Script（`Code.gs`）とスプレッドシート連携のセットアップ手順 |
-| `database.xlsx` | シート構成のサンプルスプレッドシート |
-| `docs/onboarding.md` | 新規団体向けの初期化チェックリスト |
-| `docs/features.md` | 機能一覧(リリース機能・開発予定・将来構想) |
-| `docs/release-checklist.md` | リリースのチェックリスト(Go/No-Go。下書き) |
-| `docs/release-e2e.md` | 公開前の通しテスト(自動・手の確かめ) |
-| `docs/brand.md` | ブランドガイドラインの画面への当てはめ(色・ロゴ・アイコン・旧名) |
-| `docs/gas-change-forecast.md` | 公開の後に団体の GAS の更新が要る場面と、減らす仕組みの案(調査) |
+| `app/` | 画面(Next.js App Router)。`(site)/` は紹介サイト、`registry-admin/` はレジストリの管理画面 |
+| `components/ohsumi/` | アプリの画面(INPUT・OUTPUT・ADMIN・団体設定など) |
+| `components/site/` | 紹介サイトの部品(申請フォームなど) |
+| `lib/ohsumi/` | 状態管理・GAS との通信・型・翻訳(i18n)と、そのテスト |
+| `lib/site/` | 紹介サイトの処理(申請フォームなど) |
+| `content/legal/` | 利用規約・プライバシーポリシー・紹介ページの文 |
+| `gas/src/` | 団体の GAS のソース(機能ごとのファイル)。`gas/Code.gs` はビルドで作る |
+| `gas/sample/` | サンプル・見本のデータを作るコード(`gas/SampleData.gs` にまとめる。デモ・テストの団体だけで使う) |
+| `registry/` | レジストリ(`Code.gs`)と監視(`monitor/Monitor.gs`) |
+| `scripts/` | ビルド・CSP・GAS のまとめ・版・レイアウトの確認 |
+| `e2e/` | ブラウザの通しテスト |
+| `docs/features.md` | 機能一覧(実装済み・開発予定・将来構想) |
 
-## テスト
+詳しい仕様は、[`gas/README.md`](gas/README.md)(団体の GAS)と [`registry/README.md`](registry/README.md)(レジストリ・監視)にあります。
+
+## 開発
 
 ```bash
-npx tsc --noEmit -p tsconfig.json   # 型チェック
-pnpm test                            # ユニットテスト（Vitest）
-pnpm build                           # 本番ビルド（ローカルモックデータ）
+pnpm install
+cp .env.local.example .env.local   # 空欄のままなら、ローカルのサンプルのデータで動く
+pnpm dev                           # http://localhost:3000
 ```
+
+団体の GAS につないで確かめる時は、`.env.local` に `NEXT_PUBLIC_REGISTRY_URL`(テスト用のレジストリ)と `NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID` を入れ、テスト用の団体の招待リンク(`http://localhost:3000/?org=<団体ID>`)から開きます。
+
+### 確かめること(プッシュの前)
+
+```bash
+pnpm test           # ユニットテスト(Vitest。GAS・レジストリのテストも含む)
+pnpm build          # 本番のビルド(CSP の挿入・GAS のそろい方の確認を含む)
+pnpm check:layout   # スマホ・PC の幅で、はみ出しが無いか
+pnpm test:e2e       # ブラウザの通しテスト
+```
+
+## 団体の GAS・レジストリを変える時
+
+1. `gas/src/` を直す(`gas/Code.gs` は直接直さない)
+2. `pnpm gas:build` で `gas/Code.gs`・`gas/SampleData.gs` を作り直す
+3. `pnpm gas:version` で版を上げる(中身が変わったファイルだけ上がる)
+4. `registry/Code.gs` の `KNOWN_GAS_VERSIONS` に新しい版を足す。安全の修正なら `security`、古い版を使わせないなら `required` を付ける
+5. マージした後の入れ替えの順: レジストリ → FSIF の団体 → デモの団体(`SampleData.gs` も) → テンプレート
+
+団体の GAS の更新は、団体ごとに担当者がコードを貼り替える必要があります。変更は、なるべく月1回にまとめてください。
+止めたい機能や上限の調整は、GAS を変えずにレジストリの管理画面からできるものがあります(`gas/README.md`)。
+
+## デプロイ
+
+`main` にマージすると、`.github/workflows/deploy.yml` がビルドして GitHub Pages に公開します。
+
+| Secret | 内容 |
+|---|---|
+| `REGISTRY_URL` | レジストリのウェブアプリの URL(必須) |
+| `GOOGLE_OAUTH_CLIENT_ID` | 団体のログインの OAuth クライアントID(必須) |
+| `REGISTRY_OAUTH_CLIENT_ID` | レジストリの管理画面のログインの OAuth クライアントID |
+| `SUPABASE_URL`・`SUPABASE_ANON_KEY` | 申請フォームのロゴの保存先(無ければロゴ欄は出ない) |
+| `FEEDBACK_FORM_URL` | フィードバックの送り先(任意) |
+| `GOOGLE_CALENDAR_READ` | カレンダーの予定の表示(入れない。入れるとプライバシーポリシーの変更と Google の審査が要る) |
+
+団体の GAS の URL は Secrets に入れません(招待リンクの団体ID から、レジストリが答えます)。
+
+## 守ること
+
+- **CSP を緩めない。** `pnpm build` の最後に `scripts/csp.mjs` が各 HTML に CSP を入れます。インラインのスクリプトはハッシュで許可し、`'unsafe-inline'`・iframe・外部のスクリプト・解析ツールは使いません。新しい接続先が要る時は、`scripts/csp.mjs` の一覧に用途と一緒に足します。
+- **OhsumiTTM のアカウントで、ほかのリポジトリを GitHub Pages で公開しない。** 同じオリジンになり、ブラウザに保存したログイン情報を読まれるおそれがあります。
+- **実在の人の名前・メールアドレスを、画面の見本・テストのデータ・スクリーンショットに入れない。**
+- **Secrets の値・共有鍵・登録コードを、コード・ログ・PR に書かない。**
 
 ## ライセンス
 
-[MIT License](LICENSE)（Copyright (c) 2026 FSIF）— 自由に使用・改変・再配布できます。著作権者は、
-配布されたコードの利用によって生じたいかなる損害についても責任を負いません（詳細はLICENSE参照）。
+[MIT License](LICENSE)(Copyright (c) 2026 FSIF)

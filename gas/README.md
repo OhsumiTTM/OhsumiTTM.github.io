@@ -1546,7 +1546,7 @@ Excel等で開いた場合には効きません（CSVには書式情報が乗ら
 
 コメント・進み具合の記録・変更の記録(Tasks の `comments_json`・`progress_history_json`・`history_json`)と、
 1on1 の記録・評価(Members の `one_on_ones_json`・`evaluation_history_json`)は、1件1行で次のシートに持てます
-(`gas/src/39-record-rows.gs`。設計は [docs/design-record-rows.md](../docs/design-record-rows.md))。
+(`gas/src/39-record-rows.gs`)。
 
 | シート | 列 |
 |---|---|
@@ -1575,7 +1575,7 @@ Excel等で開いた場合には効きません（CSVには書式情報が乗ら
 
 ## 9.6.5. 兼部の統合表示のための読み取り(getMyDigest)
 
-`getMyDigest`(`gas/src/40-my-digest.gs`)は、ログインした本人に関係する分だけを返す読み取りです(設計は [docs/design-multi-org-view.md](../docs/design-multi-org-view.md))。
+`getMyDigest`(`gas/src/40-my-digest.gs`)は、ログインした本人に関係する分だけを返す読み取りです。
 
 - 返すもの: 本人が担当で完了していないタスク(期限が期間の終わりより後のものは除く)・確認待ちで本人が確認する人のタスク・日程調整・フォームに招待されていて答えていないタスク(日程調整は候補も)。件名・状態・日付・優先度・重要度・プロジェクト名だけです。団体の名前・テーマの色・本人の名前・機能停止の状態も返します。
 - 返さないもの: ほかの人のタスク・メンバーの一覧・団体の設定・人材の情報・説明・コメント。見えるかは `canViewTaskRow_` を通します。
