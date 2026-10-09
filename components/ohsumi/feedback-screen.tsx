@@ -1,9 +1,9 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { useNav } from '@/lib/ohsumi/nav'
-import { MessageSquare, Send, CheckCircle2, ImagePlus, X } from 'lucide-react'
+import { MessageSquare, Send, CheckCircle2 } from 'lucide-react'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 
 // 送信先のGoogleフォームURL(.../formResponse)。未設定ならフィードバックは送信できない。
@@ -86,14 +86,14 @@ const SCREEN_OPTION_KEY: Record<string, TranslationKey> = {
   'その他': 'feedback.feature.other',
 }
 
-const ORG_NAME_KEY = 'ohsumi_feedback_org_name'
-
 export function FeedbackScreen() {
-  const { currentUser, myEmail } = useOhsumi()
+  const { currentUser, myEmail, orgName: currentOrgName } = useOhsumi()
   const { goBack } = useNav()
   const { t } = useI18n()
 
-  const [orgName, setOrgName] = useState('')
+  // 団体名は、今開いている団体の名前を最初から入れる(直すこともできる)
+  const [orgName, setOrgName] = useState(currentOrgName || '')
+  const [orgNameEdited, setOrgNameEdited] = useState(false)
   const [yourName, setYourName] = useState('') // お名前は任意 — デフォルト空欄
   const [contactType, setContactType] = useState('')
   const [otherDetail, setOtherDetail] = useState('') // 「その他」選択時の追加テキスト
@@ -103,29 +103,14 @@ export function FeedbackScreen() {
   const [severity, setSeverity] = useState('')
   const [wantReply, setWantReply] = useState('')
   const [email, setEmail] = useState('')
-  const [screenshots, setScreenshots] = useState<{ name: string; dataUrl: string }[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [error, setError] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
 
+  // 団体の名前が後から読み込まれた時(直していなければ)入れ直す
   useEffect(() => {
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(ORG_NAME_KEY) : null
-    setOrgName(saved ?? '')
-  }, [])
-
-  const addScreenshot = (file: File) => {
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string
-      setScreenshots((prev) => [...prev, { name: file.name, dataUrl }])
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const removeScreenshot = (i: number) => {
-    setScreenshots((prev) => prev.filter((_, idx) => idx !== i))
-  }
+    if (!orgNameEdited && currentOrgName) setOrgName(currentOrgName)
+  }, [currentOrgName, orgNameEdited])
 
   const toggleFeature = (f: string) => {
     setFeatures((prev) => (prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]))
@@ -141,27 +126,17 @@ export function FeedbackScreen() {
     setError('')
     setSubmitting(true)
 
-    if (orgName) {
-      try { localStorage.setItem(ORG_NAME_KEY, orgName) } catch { /* ignore */ }
-    }
-
     // 「その他」の場合はその内容をcontactTypeとして送信
     const effectiveContactType = contactType === 'その他' && otherDetail.trim()
       ? `その他: ${otherDetail.trim()}`
       : contactType
-
-    // スクリーンショット添付は現在Googleフォーム経由では未対応のため
-    // ファイル名のみ詳細テキストに付記する
-    const screenshotNote = screenshots.length > 0
-      ? `\n\n[添付スクリーンショット: ${screenshots.map((s) => s.name).join(', ')}]`
-      : ''
 
     const body = new URLSearchParams()
     body.append('entry.1307138965', orgName)
     body.append('entry.25271577', yourName)
     body.append('entry.619897353', effectiveContactType)
     for (const f of features) body.append('entry.897435869', f)
-    body.append('entry.2125058687', detail + screenshotNote)
+    body.append('entry.2125058687', detail)
     body.append('entry.1872882494', steps)
     body.append('entry.1612805599', severity)
     body.append('entry.2009922288', wantReply)
@@ -217,7 +192,7 @@ export function FeedbackScreen() {
         <Field label={t('feedback.field.orgName')} required>
           <input
             value={orgName}
-            onChange={(e) => setOrgName(e.target.value)}
+            onChange={(e) => { setOrgName(e.target.value); setOrgNameEdited(true) }}
             placeholder={t('feedback.orgName.placeholder')}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
           />
@@ -291,55 +266,8 @@ export function FeedbackScreen() {
             rows={5}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
           />
-        </Field>
-
-        {/* スクリーンショット */}
-        <Field label={t('feedback.field.screenshot')}>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            onChange={(e) => {
-              Array.from(e.target.files ?? []).forEach(addScreenshot)
-              e.target.value = ''
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-secondary/40 px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-          >
-            <ImagePlus className="size-4" />
-            {t('feedback.addImage')}
-          </button>
-          {screenshots.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-3">
-              {screenshots.map((s, i) => (
-                <div key={i} className="relative">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={s.dataUrl}
-                    alt={s.name}
-                    className="h-20 w-20 rounded-lg border border-border object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeScreenshot(i)}
-                    className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow"
-                    aria-label={t('common.delete')}
-                  >
-                    <X className="size-3" />
-                  </button>
-                  <p className="mt-0.5 max-w-[80px] truncate text-[10px] text-muted-foreground">{s.name}</p>
-                </div>
-              ))}
-            </div>
-          )}
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t('feedback.previewNote')}
-          </p>
+          {/* 画像はフォームでは送れない(Google フォームに添付できない。公開の保存先に画面の画像を置くこともしない) */}
+          <p className="text-xs text-muted-foreground">{t('feedback.screenshotNote')}</p>
         </Field>
 
         {/* 再現手順・困り具合 — 不具合の報告を選んだ方のみ表示 */}
