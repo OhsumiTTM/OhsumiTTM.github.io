@@ -45,19 +45,31 @@ describe('テンプレートの既定値', () => {
     expect((c.saveCodeDefaultsToProps_ as Fn)(props)).toEqual([])
   })
 
-  it('ウェブアプリの URL: /dev しか分からない時は、ブラウザで開いた時(doGet)に覚えた /exec の URL を使う', () => {
+  it('ウェブアプリの URL: OHSUMI_WEBAPP_URL → ブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL)→ getService().getUrl() の順', () => {
     const h = guardHarness()
     const c = h.c as Record<string, unknown>
-    let live = 'https://script.google.com/macros/s/DEPLOY/dev'
+    const src = c.ownWebAppUrlSource_ as Fn
+    // デプロイを管理の URL とは別の ID の …/exec を返すことがある(メニューから実行した時)
+    let live = 'https://script.google.com/macros/s/OTHERID/exec'
     c.ScriptApp = noop({ getService: () => ({ getUrl: () => live }) })
-    expect((c.ownWebAppUrl_ as Fn)({})).toBe(live)
-    // ウェブアプリとして開かれた時は /exec が分かる
+    expect(src({})).toEqual({ url: live, source: 'service' })
+    // ウェブアプリとして開かれた時(doGet)に覚えた URL が、getService().getUrl() より先
     live = 'https://script.google.com/macros/s/DEPLOY/exec'
     ;(c.doGet as Fn)({ parameter: {} })
     expect(h.props.DETECTED_WEBAPP_URL).toBe(live)
-    live = 'https://script.google.com/macros/s/DEPLOY/dev'
-    expect((c.ownWebAppUrl_ as Fn)({ DETECTED_WEBAPP_URL: h.props.DETECTED_WEBAPP_URL })).toBe('https://script.google.com/macros/s/DEPLOY/exec')
+    live = 'https://script.google.com/macros/s/OTHERID/exec'
+    expect(src({ DETECTED_WEBAPP_URL: h.props.DETECTED_WEBAPP_URL })).toEqual({ url: 'https://script.google.com/macros/s/DEPLOY/exec', source: 'detected' })
+    // 形の違う覚えた URL は使わない
+    expect(src({ DETECTED_WEBAPP_URL: 'https://script.google.com/macros/s/DEPLOY/dev' })).toMatchObject({ source: 'service' })
     // プロパティ OHSUMI_WEBAPP_URL がいちばん先
-    expect((c.ownWebAppUrl_ as Fn)({ OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/SET/exec', DETECTED_WEBAPP_URL: 'x' })).toBe('https://script.google.com/macros/s/SET/exec')
+    expect(src({ OHSUMI_WEBAPP_URL: 'https://script.google.com/macros/s/SET/exec', DETECTED_WEBAPP_URL: 'https://script.google.com/macros/s/DEPLOY/exec' }))
+      .toEqual({ url: 'https://script.google.com/macros/s/SET/exec', source: 'property' })
+  })
+
+  it('doGet の応答: ブラウザで開いた人に分かる文。getReceived・bounced の値は変えない', () => {
+    const h = guardHarness()
+    const out = JSON.parse(((h.c as Record<string, unknown>).doGet as (e: object) => { text?: string; getContent?: () => string })({ parameter: {} }).text ?? '{}')
+    expect(out).toMatchObject({ ok: false, getReceived: true, bounced: true })
+    expect(out.error).toMatch(/^Ohsumi の GAS です。URL を確かめました。この画面は閉じてかまいません。/)
   })
 })
