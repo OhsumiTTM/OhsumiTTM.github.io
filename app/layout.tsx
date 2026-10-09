@@ -21,7 +21,7 @@ const DESCRIPTION =
 // 検索・SNS で表示する情報。サイトの URL は直接書かず、ビルドの時の NEXT_PUBLIC_SITE_URL(GitHub の変数 SITE_URL)から作る
 export const metadata: Metadata = {
   ...(SITE.url ? { metadataBase: new URL(SITE.url) } : {}),
-  title: 'Ohsumi — タスクを打ち上げ、組織を軌道に乗せる',
+  title: 'Ohsumi — 仕事を進めるほど、組織が見えてくる。',
   description: DESCRIPTION,
   applicationName: 'Ohsumi',
   openGraph: {

@@ -172,7 +172,7 @@ export const en = {
   'header.logoAlt': 'Logo',
 
   // ---- login ---------------------------------------------------------
-  'login.tagline': 'Launch your tasks, get your team on track.',
+  'login.tagline': 'The more your work moves forward, the clearer your organization becomes.',
   'login.signingIn': 'Signing in…',
   'login.notConfigured': "This site is missing the registry URL or the Google OAuth client ID. Please contact FSIF (fsif.official@gmail.com).",
   'login.failed': 'Sign-in failed. Please try again.',
