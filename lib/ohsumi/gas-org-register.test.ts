@@ -2,6 +2,8 @@
 // 最初の代表が団体に入ること(exchangeIdToken の setupCode)を確かめる。
 // レジストリへの通信は、テストの中でレジストリのコード(registry/Code.gs)につなぐ
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { CODE_GS, HOUR, ORG_URL, org, registry, storedKey } from './gas-org-harness'
 
 describe('レジストリへの登録(団体の GAS)', () => {
@@ -289,7 +291,116 @@ describe('共有鍵・初期設定コードを残さない', () => {
 
   it('メニューの関数は、初期設定コードをダイアログにだけ出す(実行ログには出さない)', () => {
     const src = CODE_GS.slice(CODE_GS.indexOf('function registerWithRegistryFromMenu('), CODE_GS.indexOf('\nfunction ', CODE_GS.indexOf('function regenerateInitialSetupCodeFromMenu(') + 10))
-    expect(src).toContain('ui.alert(')
+    expect(src).toContain('showMenuResultDialog_(')
     expect(src).not.toMatch(/console\.|Logger\./)
+    const dialog = CODE_GS.slice(CODE_GS.indexOf('function inviteLinkSection_('), CODE_GS.indexOf('\nfunction ', CODE_GS.indexOf('function showMenuResultDialog_(') + 10))
+    expect(dialog).not.toMatch(/console\.|Logger\.|setProperty|appendRow|setValue/)
+  })
+})
+
+describe('登録の後のダイアログ(コピーできる形)', () => {
+  // レジストリに確かめてサイトの URL が分かった時の招待リンク(確かめ方そのものは gas-entry-links.test.ts)
+  const withSite = (o: ReturnType<typeof org>) => {
+    o.c.setupInviteLink_ = () => 'https://site.example/?org=' + encodeURIComponent(String(o.props.ORG_ID))
+    return o
+  }
+
+  it('登録の結果は、招待リンク・初期設定コード・次にやることを、見出しを分けて、コピーできる欄に出す', () => {
+    const reg = registry()
+    const o = withSite(org(reg))
+    o.menu(reg.issue().code)
+    const d = o.dialogs[1]
+    expect(d.title).toBe('登録しました')
+    expect(d.sections!.map((s) => s.heading)).toEqual(['① 招待リンク', '② 初期設定コード', '③ 次にやること'])
+    // 招待リンクは、コピーの欄と、新しいタブで開くリンク
+    const invite = d.sections![0]
+    expect(invite.value).toContain('/?org=' + o.props.ORG_ID)
+    expect(invite.link).toBe(true)
+    expect(d.html).toContain('target="_blank"')
+    expect(invite.notes.join('\n')).toContain('「Ohsumi」→「招待リンクを表示」')
+    // 初期設定コード: 有効期限と、作り直し方
+    const code = d.sections![1]
+    expect(code.value).toMatch(/^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/)
+    expect(code.link).toBe(false)
+    expect(code.notes.join('\n')).toMatch(/72時間・1回限り/)
+    expect(code.notes.join('\n')).toContain('「初期設定コードを作り直す」で作り直せます')
+    // コピーボタン(値の欄ごと)と、使えない時の案内
+    expect((d.html!.match(/class="copy"/g) ?? []).length).toBe(2)
+    expect(d.html).toContain('Ctrl+C(Mac は ⌘+C)')
+    // 初期設定コードは、ダイアログにだけ出す(ログ・プロパティに元の形で残らない)
+    expect(o.logs.join('\n')).not.toContain(code.value)
+    expect(JSON.stringify(o.props)).not.toContain(code.value)
+  })
+
+  it('ダイアログに出す値は、HTML の文字としてエスケープする(テンプレートは <?!= ?> を使わない)', () => {
+    const html = CODE_GS.slice(CODE_GS.indexOf('function menuResultDialogHtml_('), CODE_GS.indexOf('function showMenuResultDialog_('))
+    expect(html).not.toContain('<?!=')
+    const reg = registry()
+    const o = org(reg)
+    const bad = '<img src=x onerror=alert(1)>"\'&'
+    ;(o.gas.showMenuResultDialog_ as (t: string, i: string, s: object[]) => void)('t', bad, [{ heading: bad, value: bad, link: true, notes: [bad] }])
+    const d = o.dialogs.at(-1)!
+    expect(d.html).not.toContain('<img')
+    expect(d.html).toContain('&lt;img src=x onerror=alert(1)&gt;&quot;&#39;&amp;')
+    // https で始まらない値は、リンクにしない
+    expect(d.sections![0].link).toBe(false)
+    expect(d.html).not.toContain('href=')
+    // javascript: もリンクにしない
+    ;(o.gas.showMenuResultDialog_ as (t: string, i: string, s: object[]) => void)('t', '', [{ heading: 'h', value: 'javascript:alert(1)', link: true, notes: [] }])
+    expect(o.dialogs.at(-1)!.html).not.toContain('href=')
+  })
+
+  it('「招待リンクを表示」: 登録の前は、先に登録するよう知らせる。登録の後は、いつでも招待リンクだけを出す', () => {
+    const reg = registry()
+    const o = withSite(org(reg))
+    ;(o.gas.showInviteLinkFromMenu as () => void)()
+    expect(o.dialogs.at(-1)).toMatchObject({ title: '招待リンク', text: '先に「レジストリに登録する…」で登録してください。' })
+    o.register(reg.issue().code)
+    ;(o.gas.showInviteLinkFromMenu as () => void)()
+    const d = o.dialogs.at(-1)!
+    expect(d.title).toBe('招待リンク')
+    expect(d.sections!).toHaveLength(1)
+    expect(d.sections![0].value).toContain('/?org=' + o.props.ORG_ID)
+    // 秘密の値(共有鍵)は含まない
+    expect(d.html).not.toContain(o.props.REGISTRY_SHARED_KEY)
+  })
+
+  it('サイトの URL が分からない時は、招待リンクの欄を出さず、作り方と、もう一度出す方法を書く', () => {
+    const reg = registry()
+    const o = org(reg)
+    o.c.setupInviteLink_ = () => ''
+    o.menu(reg.issue().code)
+    const invite = o.dialogs[1].sections![0]
+    expect(invite.value).toBe('')
+    expect(invite.notes.join('\n')).toContain('/?org=' + o.props.ORG_ID)
+    expect(invite.notes.join('\n')).toContain('「招待リンクを表示」')
+  })
+
+  it('「初期設定コードを作り直す」も、コピーできるダイアログで出す', () => {
+    const reg = registry()
+    const o = org(reg)
+    o.register(reg.issue().code)
+    ;(o.gas.regenerateInitialSetupCodeFromMenu as () => void)()
+    const d = o.dialogs.at(-1)!
+    expect(d.title).toBe('初期設定コードを作り直しました')
+    expect(d.text).toContain('前のコードは使えなくなりました。')
+    expect(d.sections![0].value).toMatch(/^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/)
+    expect(d.html).toContain('class="copy"')
+  })
+
+  it('メニューに「招待リンクを表示」がある。HtmlService のために権限(スコープ)は増えない', () => {
+    expect(CODE_GS).toContain(".addItem('招待リンクを表示', 'showInviteLinkFromMenu')")
+    const manifest = JSON.parse(readFileSync(join(__dirname, '..', '..', 'gas', 'appsscript.json'), 'utf8')) as { oauthScopes: string[] }
+    // ダイアログ(showModalDialog)に要るのは script.container.ui だけで、ui.alert と同じ(前から入っている)
+    expect(manifest.oauthScopes).toEqual([
+      'https://www.googleapis.com/auth/spreadsheets',
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/script.send_mail',
+      'https://www.googleapis.com/auth/script.external_request',
+      'https://www.googleapis.com/auth/script.scriptapp',
+      'https://www.googleapis.com/auth/script.container.ui',
+      'https://www.googleapis.com/auth/userinfo.email',
+    ])
   })
 })

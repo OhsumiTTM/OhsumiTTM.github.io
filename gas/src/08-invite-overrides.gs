@@ -38,20 +38,17 @@ function canonicalInviteLink_() {
   return origins.length && orgId ? origins[0] + '/?org=' + encodeURIComponent(orgId) : ''
 }
 
-// 登録を終えた時に出す招待リンク。レジストリに確かめて、サイトの URL(SITE_ORIGINS)が分かれば完全なリンクを出す
-function setupInviteLinkText_(orgId) {
-  var link = ''
+// 招待リンク(サイトの URL + /?org=団体ID)。レジストリに確かめて、サイトの URL(SITE_ORIGINS)が分かった時だけ返す(分からなければ '')。
+// 秘密の値は含まない(団体ID は、メンバーに配るリンクにそのまま入る値)
+function setupInviteLink_() {
   try {
     resetRequestProps_()
     refreshContractState_()
     resetRequestProps_()
-    link = canonicalInviteLink_()
+    return canonicalInviteLink_()
   } catch (e) {
-    link = ''
+    return ''
   }
-  if (link) return '団体ID: ' + orgId + '\n招待リンク: ' + link + '\n(メンバーには、初めての端末でこのリンクから開くよう伝えてください。代表は、ログインした後にADMIN の「メンバー」でも確かめられます)'
-  return '団体ID: ' + orgId + '\n招待リンク: Ohsumi のサイトの URL の後ろに /?org=' + orgId +
-    ' を付けたもの(レジストリからサイトの URL を受け取れませんでした。代表は、ログインした後にADMIN の「メンバー」でも確かめられます)'
 }
 
 // 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)
@@ -502,3 +499,91 @@ function getQuizDefinitions_() {
   return []
 }
 
+// ---- メニューの結果のダイアログ ----
+// ui.alert の文字は選べず、コピーしにくいため、招待リンク・初期設定コードは、コピーボタン付きのダイアログで出す。
+// 値は HtmlService のテンプレートに変数として渡し、<?= ?>(文脈に合わせてエスケープする)だけで出す(<?!= ?> は使わない)。
+// 初期設定コードは、このダイアログに1回出すだけ(ログ・シート・プロパティには残さない)
+
+function inviteLinkSection_(heading, orgId) {
+  var link = setupInviteLink_()
+  var id = String(orgId || '')
+  if (/^https:\/\//.test(link)) {
+    return {
+      heading: heading, value: link, link: true,
+      notes: ['メンバーには、初めての端末でこのリンクから開くよう伝えてください。',
+        'この画面を閉じた後も、「Ohsumi」→「招待リンクを表示」でいつでも出せます。代表は、ログインした後に ADMIN の「メンバー」でも確かめられます。',
+        '団体ID: ' + id],
+    }
+  }
+  return {
+    heading: heading, value: '',
+    notes: ['レジストリからサイトの URL を受け取れませんでした。招待リンクは、Ohsumi のサイトの URL の後ろに /?org=' + id + ' を付けたものです。',
+      '少し待ってから、「Ohsumi」→「招待リンクを表示」でもう一度試してください。',
+      '団体ID: ' + id],
+  }
+}
+
+function setupCodeSection_(heading, code, expiresAt) {
+  return {
+    heading: heading, value: String(code || ''),
+    notes: ['有効期限: ' + formatJaDateTime_(expiresAt) + '(72時間・1回限り)',
+      '最初の代表に伝えてください。最初の代表は、Ohsumi のログイン画面の「初期設定コード」の欄にこのコードを入れてから、Google でログインします。',
+      'この画面でだけ表示します。閉じた後は、メニューの「初期設定コードを作り直す」で作り直せます。'],
+  }
+}
+
+function menuResultDialogHtml_() {
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:14px;color:#1f2937;margin:0;padding:4px 2px}' +
+    'p{margin:6px 0;line-height:1.6}.intro{font-weight:600}' +
+    'section{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin:12px 0}' +
+    'h2{font-size:15px;margin:0 0 8px}' +
+    '.row{display:flex;gap:8px}.row input{flex:1;min-width:0;font:14px ui-monospace,Menlo,Consolas,monospace;padding:7px 8px;border:1px solid #9ca3af;border-radius:6px;background:#f9fafb}' +
+    'button{font:inherit;padding:7px 14px;border-radius:6px;border:1px solid #2948e8;background:#2948e8;color:#fff;cursor:pointer;white-space:nowrap}' +
+    'button.sub{background:#fff;color:#1f2937;border-color:#9ca3af}.note{color:#4b5563;font-size:13px}' +
+    '.status{margin:4px 0 0;color:#047857;font-size:13px}.status:empty{display:none}a{color:#2948e8}.foot{text-align:right;margin-top:8px}' +
+    '</style></head><body>' +
+    '<? if (intro) { ?><p class="intro"><?= intro ?></p><? } ?>' +
+    '<? for (var i = 0; i < sections.length; i++) { var s = sections[i]; ?>' +
+    '<section><h2><?= s.heading ?></h2>' +
+    '<? if (s.value) { ?>' +
+    '<div class="row"><input id="v<?= i ?>" type="text" readonly value="<?= s.value ?>" aria-label="<?= s.heading ?>">' +
+    '<button type="button" class="copy" data-target="v<?= i ?>">コピー</button></div>' +
+    '<p class="status" id="v<?= i ?>-status" role="status" aria-live="polite"></p>' +
+    '<? if (s.link) { ?><p><a href="<?= s.value ?>" target="_blank" rel="noopener noreferrer">リンクを新しいタブで開く</a></p><? } ?>' +
+    '<? } ?>' +
+    '<? for (var j = 0; j < s.notes.length; j++) { ?><p class="note"><?= s.notes[j] ?></p><? } ?>' +
+    '</section>' +
+    '<? } ?>' +
+    '<div class="foot"><button type="button" class="sub" id="close">閉じる</button></div>' +
+    '<script>' +
+    'function done(id,t){document.getElementById(id+"-status").textContent=t}' +
+    'function fallback(input,id){input.focus();input.select();var ok=false;try{ok=document.execCommand("copy")}catch(e){ok=false}' +
+    'done(id,ok?"コピーしました":"選んだ状態にしました。Ctrl+C(Mac は ⌘+C)でコピーしてください")}' +
+    'Array.prototype.forEach.call(document.querySelectorAll("button.copy"),function(b){b.addEventListener("click",function(){' +
+    'var id=b.getAttribute("data-target");var input=document.getElementById(id);' +
+    'if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(input.value).then(function(){done(id,"コピーしました")},function(){fallback(input,id)})}' +
+    'else{fallback(input,id)}})});' +
+    'Array.prototype.forEach.call(document.querySelectorAll("input[readonly]"),function(i){i.addEventListener("focus",function(){i.select()})});' +
+    'document.getElementById("close").addEventListener("click",function(){google.script.host.close()});' +
+    '</script></body></html>'
+}
+
+// sections: [{ heading, value?(コピーする値), link?(value を開けるリンクにする), notes: [文] }]
+function showMenuResultDialog_(title, intro, sections) {
+  var t = HtmlService.createTemplate(menuResultDialogHtml_())
+  t.intro = String(intro || '')
+  t.sections = (sections || []).map(function (s) {
+    return {
+      heading: String(s.heading || ''),
+      value: s.value == null ? '' : String(s.value),
+      link: !!s.link && /^https:\/\//.test(String(s.value || '')),
+      notes: (s.notes || []).map(function (n) { return String(n) }),
+    }
+  })
+  // 高さの目安(入りきらない時は、ダイアログの中でスクロールする)
+  var height = 110
+  t.sections.forEach(function (s) { height += 64 + (s.value ? 50 : 0) + (s.link ? 30 : 0) + s.notes.length * 44 })
+  var html = t.evaluate().setWidth(600).setHeight(Math.min(680, height))
+  SpreadsheetApp.getUi().showModalDialog(html, title)
+}

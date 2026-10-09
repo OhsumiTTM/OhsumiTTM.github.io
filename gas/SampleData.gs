@@ -19,9 +19,9 @@
 // ■ ログインできるメンバー: スクリプトプロパティ TEST_ACCOUNTS(デモの団体は DEMO_ACCOUNTS でもよい)に、枠ごとの
 //   Google アカウントを書く。例: top=a@gmail.com, admin=b@gmail.com, restricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com
 
-var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.09-2'
+var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.09-3'
 // 組になる Code.gs の版。pnpm gas:build が、Code.gs の版に合わせて書き換える(手で直さない)
-var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.09-2'
+var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.09-3'
 
 // Code.gs と組の版でなければ止める(Code.gs の関数の名前・引数が変わっていると、データを壊すことがあるため)
 function assertSampleDataMatchesCode_() {

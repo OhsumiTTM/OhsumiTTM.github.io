@@ -33,7 +33,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.09-2'
+var OHSUMI_GAS_VERSION = '2026.10.09-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -328,12 +328,6 @@ function registerWithRegistry_(code, deps) {
 
 function formatJaDateTime_(iso) {
   return Utilities.formatDate(new Date(iso), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm')
-}
-
-function setupCodeMessage_(setupCode, expiresAt) {
-  return '最初の代表の「初期設定コード」(この画面でだけ表示します。控えて、最初の代表に伝えてください):\n\n' +
-    setupCode + '\n\n有効期限: ' + formatJaDateTime_(expiresAt) + '(72時間・1回限り)\n' +
-    '最初の代表は、Ohsumi のログイン画面の「初期設定コード」の欄にこのコードを入れてから、Google でログインします。'
 }
 
 // ---- 提供停止・機能停止(R1-e) ---------------------------------------------------------

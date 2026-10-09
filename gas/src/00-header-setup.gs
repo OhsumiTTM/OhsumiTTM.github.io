@@ -27,7 +27,7 @@
 // ■ ほかから呼ばれる関数(名前を変えない)
 //   doGet・doPost                   ウェブアプリの入口
 //   onOpen                          スプレッドシートを開いた時に「Ohsumi」メニューを出す
-//   setupOhsumiFromMenu・registerWithRegistryFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
+//   setupOhsumiFromMenu・registerWithRegistryFromMenu・showInviteLinkFromMenu・regenerateInitialSetupCodeFromMenu  「Ohsumi」メニューから呼ばれる
 //   sendBatchNotifications・dailyMaintenance・onSpreadsheetChange・onSpreadsheetEdit・checkContractStatus  トリガーから呼ばれる
 //
 // ■ そのほかの関数は、中で使うだけ。名前の最後に _ を付けて、エディタの「実行」の一覧に出ないようにしている
