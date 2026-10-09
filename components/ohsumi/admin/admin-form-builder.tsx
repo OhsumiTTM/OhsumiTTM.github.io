@@ -227,8 +227,8 @@ function FormEditor({
   }
 
   return (
-    <Modal open={true} onClose={onClose}>
-      <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto space-y-4 p-4 sm:min-w-[500px]">
+    <Modal open={true} onClose={onClose} className="max-w-2xl">
+      <div className="max-h-[80vh] w-full overflow-y-auto space-y-4 p-4">
         <h3 className="font-semibold">{initial ? t('admin.formBuilder.editTitle') : t('admin.formBuilder.addTitle')}</h3>
 
         <div className="space-y-1">
