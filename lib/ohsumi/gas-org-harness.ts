@@ -13,6 +13,23 @@ export const ORG_URL = 'https://script.google.com/macros/s/ORGGAS/exec'
 const ROLES = JSON.stringify([{ id: 'base', name: '一般', tier: 'base' }, { id: 'top', name: '代表', tier: 'top' }])
 export const HOUR = 3600 * 1000
 
+// HtmlService のテンプレート(<? ?>・<?= ?>)を、テストの中で HTML にする。<?= ?> は HTML の文字としてエスケープする
+// (GAS は文脈に合わせてエスケープする。ここでは、どの文脈でも安全な、HTML の5文字のエスケープで代わりにする)
+export const escapeHtml = (v: unknown) => String(v).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]!)
+export function renderTemplate(html: string, vars: Record<string, unknown>): string {
+  if (html.includes('<?!=')) throw new Error('<?!= ?> (エスケープしない出力)は使わない')
+  let js = 'var __out = "";\n'
+  const re = /<\?(=?)([\s\S]*?)\?>/g
+  let last = 0
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    js += '__out += ' + JSON.stringify(html.slice(last, m.index)) + ';\n'
+    js += m[1] ? '__out += __esc(' + m[2] + ');\n' : m[2] + '\n'
+    last = re.lastIndex
+  }
+  js += '__out += ' + JSON.stringify(html.slice(last)) + ';\n__out'
+  return vm.runInNewContext(js, { ...vars, __esc: escapeHtml }) as string
+}
+
 // レジストリ(管理者のログインまで済ませ、登録コードを発行できる)
 export function registry() {
   const CLIENT = 'registry-client'
@@ -42,7 +59,7 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
   const added: { id: string; name: string; email: string; role: string }[] = []
   let fetches = 0
   const ownGets: string[] = []
-  const dialogs: { title: string; text: string }[] = []
+  const dialogs: { title: string; text: string; html?: string; sections?: { heading: string; value: string; link: boolean; notes: string[] }[] }[] = []
   let promptAnswer = ''
   const ctx = vm.createContext({
     console: { log: (m: string) => logs.push(String(m)), warn: (m: string) => logs.push(String(m)), error: (m: string) => logs.push(String(m)) },
@@ -55,6 +72,17 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
     }) },
     CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string) => { cache.set(k, v) }, remove: (k: string) => { cache.delete(k) }, getAll: () => ({}), putAll() {} }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, tryLock: () => true, releaseLock() {} }) },
+    HtmlService: {
+      createTemplate: (html: string) => {
+        const t: Record<string, unknown> = {}
+        t.evaluate = () => {
+          const vars = Object.fromEntries(Object.entries(t).filter(([k]) => k !== 'evaluate')) as never
+          const out = { html: renderTemplate(html, vars), vars, setWidth() { return out }, setHeight() { return out } }
+          return out
+        }
+        return t
+      },
+    },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (text: string) => ({ text, setMimeType() { return this } }) },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },
     SpreadsheetApp: {
@@ -67,6 +95,12 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
         prompt: (title: string, text: string) => {
           dialogs.push({ title, text })
           return { getSelectedButton: () => 'OK', getResponseText: () => promptAnswer }
+        },
+        // HtmlService のダイアログ: 表示した HTML と、文(見出し・値・説明をつなげたもの)を覚える
+        showModalDialog: (out: { html: string; vars: { intro: string; sections: { heading: string; value: string; link: boolean; notes: string[] }[] } }, title: string) => {
+          const { intro, sections } = out.vars
+          const text = [intro, ...sections.flatMap((s) => [s.heading, s.value, ...s.notes])].filter(Boolean).join('\n')
+          dialogs.push({ title, text, html: out.html, sections })
         },
       }),
       getActiveSpreadsheet: () => ({

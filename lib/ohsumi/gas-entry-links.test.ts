@@ -84,12 +84,12 @@ describe('登録されていないアカウント', () => {
 })
 
 describe('レジストリに登録した時のメッセージ', () => {
-  it('レジストリに確かめてサイトの URL が分かれば、完全な招待リンクを出す。分からなければ作り方を出す', () => {
+  it('レジストリに確かめてサイトの URL が分かれば、完全な招待リンクを返す。分からなければ空(ダイアログには作り方を出す)', () => {
     const h = guardHarness()
     h.c.refreshContractState_ = () => { h.props.CONTRACT_STATE = CHECKED; return JSON.parse(CHECKED) }
-    expect((h.c.setupInviteLinkText_ as (id: string) => string)(ORG)).toContain('招待リンク: ' + LINK)
+    expect((h.c.setupInviteLink_ as () => string)()).toBe(LINK)
     const u = guardHarness()
     u.c.refreshContractState_ = () => null
-    expect((u.c.setupInviteLinkText_ as (id: string) => string)(ORG)).toContain('Ohsumi のサイトの URL の後ろに /?org=' + ORG)
+    expect((u.c.setupInviteLink_ as () => string)()).toBe('')
   })
 })

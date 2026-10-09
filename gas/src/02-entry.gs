@@ -49,6 +49,7 @@ function onOpen() {
       .createMenu('Ohsumi')
       .addItem('初期設定', 'setupOhsumiFromMenu')
       .addItem('レジストリに登録する…', 'registerWithRegistryFromMenu')
+      .addItem('招待リンクを表示', 'showInviteLinkFromMenu')
       .addItem('初期設定コードを作り直す', 'regenerateInitialSetupCodeFromMenu')
       .addToUi()
   } catch (e) {
@@ -61,8 +62,10 @@ function setupOhsumiFromMenu() {
   var ui = SpreadsheetApp.getUi()
   try {
     setupOhsumi()
-    ui.alert('Ohsumi', '初期設定が終わりました。\n\n次は「デプロイ → 新しいデプロイ」でウェブアプリとして公開し、' +
-      'メニューの「Ohsumi → レジストリに登録する…」に進んでください(手順は Ohsumi の案内のとおりです)。', ui.ButtonSet.OK)
+    ui.alert('Ohsumi', '初期設定が終わりました。\n\n次にやること(利用マニュアル 3.3〜3.5):\n' +
+      '1. 「拡張機能」→「Apps Script」を開き、「デプロイ」→「新しいデプロイ」でウェブアプリとして公開して、URL をコピーする(3.3)\n' +
+      '2. コピーした URL を、ブラウザで一度開く(3.4)。「Ohsumi の GAS です。URL を確かめました。」と出れば大丈夫です\n' +
+      '3. このスプレッドシートを再読み込みし、「Ohsumi」→「レジストリに登録する…」で、FSIF から受け取った登録コードを入れる(3.5)', ui.ButtonSet.OK)
   } catch (e) {
     ui.alert('Ohsumi', '初期設定を最後まで実行できませんでした: ' + toErrorMessage_(e) +
       '\n\nもう一度「Ohsumi → 初期設定」を選んでください。続く時は、表示された内容を FSIF にお伝えください。', ui.ButtonSet.OK)
@@ -91,12 +94,30 @@ function registerWithRegistryFromMenu() {
     ui.alert('登録できませんでした', toErrorMessage_(e), ui.ButtonSet.OK)
     return
   }
-  var msg = '団体「' + out.displayName + '」をレジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました。'
+  var intro = '団体「' + out.displayName + '」をレジストリに' + (out.kind === 'reissue' ? '再登録' : '登録') + 'しました。'
   // 招待リンク(R1-d): メンバーは、初めての端末でこのリンクから開く。サイトの URL は、レジストリに確かめて受け取る(SITE_ORIGINS)
   var orgId = PropertiesService.getScriptProperties().getProperty('ORG_ID')
-  msg += '\n\n' + setupInviteLinkText_(orgId)
-  if (out.setupCode) msg += '\n\n' + setupCodeMessage_(out.setupCode, out.setupExpiresAt)
-  ui.alert('登録しました', msg, ui.ButtonSet.OK)
+  var sections = [inviteLinkSection_('① 招待リンク', orgId)]
+  if (out.setupCode) sections.push(setupCodeSection_('② 初期設定コード', out.setupCode, out.setupExpiresAt))
+  sections.push({
+    heading: out.setupCode ? '③ 次にやること' : '② 次にやること',
+    notes: out.setupCode
+      ? ['最初の代表になる人に、招待リンクと初期設定コードを伝えてください。',
+         '最初の代表は、招待リンクを開き、ログイン画面の「初期設定コード」の欄にコードを入れてから、Google でログインします(利用マニュアル 3.6)。']
+      : ['メンバーは、これまでどおりログインできます。'],
+  })
+  showMenuResultDialog_('登録しました', intro, sections)
+}
+
+// メニューの「招待リンクを表示」: 登録した後なら、いつでも招待リンクを出す(秘密の値は含まない)
+function showInviteLinkFromMenu() {
+  var ui = SpreadsheetApp.getUi()
+  var props = PropertiesService.getScriptProperties()
+  if (!props.getProperty('REGISTRY_SHARED_KEY')) {
+    ui.alert('招待リンク', '先に「レジストリに登録する…」で登録してください。', ui.ButtonSet.OK)
+    return
+  }
+  showMenuResultDialog_('招待リンク', '', [inviteLinkSection_('招待リンク', props.getProperty('ORG_ID'))])
 }
 
 function regenerateInitialSetupCodeFromMenu() {
@@ -110,7 +131,8 @@ function regenerateInitialSetupCodeFromMenu() {
     return
   }
   var setup = createInitialSetupCode_(Date.now())
-  ui.alert('初期設定コードを作り直しました', '前のコードは使えなくなりました。\n\n' + setupCodeMessage_(setup.code, setup.expiresAt), ui.ButtonSet.OK)
+  showMenuResultDialog_('初期設定コードを作り直しました', '前のコードは使えなくなりました。',
+    [setupCodeSection_('初期設定コード', setup.code, setup.expiresAt)])
 }
 
 // Time-triggered: send all queued batch notifications.
