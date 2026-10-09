@@ -96,7 +96,7 @@ function seedDataOfKind_(kind) {
     })
 
     // 役職の設定(roles)を使っている団体では、サンプルの役職を roles に足す
-    var settings = kind.withRoles && hasRolesSetting_() ? kind.withRoles(data.settings) : data.settings
+    var settings = kind.withRoles && hasRolesSetting_() ? kind.withRoles(data.settings, getRoles_()) : data.settings
     var merged = mergeSampleSettings_(readSettingsValues_(sampleSettingKeys_(settings)), settings, kind.prefix)
     Object.keys(merged.values).forEach(function (k) { updateSetting_(k, sheetSettingValue_(k, merged.values[k])) })
     props.setProperty(kind.stateKey, JSON.stringify(merged.state))

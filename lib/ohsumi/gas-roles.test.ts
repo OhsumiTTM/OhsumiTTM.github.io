@@ -102,8 +102,15 @@ describe('移行前(roles が無い): 今までの設定に書く', () => {
   })
 })
 
+// 既にある団体の役職(以前の既定。事業責任者 r_manager がある)。新しい団体の最初の役職(defaultRoles)には無い
+const rolesWithManager = (): RoleDef[] => {
+  const roles = defaultRoles()
+  roles.splice(roles.length - 1, 0, { id: 'r_manager', name: '事業責任者', tier: 'admin', restricted: false })
+  return roles
+}
+
 describe('移行後(roles がある): roles に書き、ID で扱う', () => {
-  const settings = { roles: JSON.stringify(defaultRoles()) }
+  const settings = { roles: JSON.stringify(rolesWithManager()) }
   const members: [string, string][] = [['m-top', 'top'], ['m-admin', 'r_manager'], ['m-lead', 'r_leader'], ['m-1', 'base'], ['m-old', '班長']]
 
   it('名前を変えても、メンバーの役職(ID)と判定は変わらない', () => {
@@ -193,6 +200,26 @@ describe('setupOhsumi での役職の設定', () => {
     expect(t.gas.setupRolesSetting_()).toBe('already')
   })
 
+  it('新しい団体の最初の役職は「一般・班長(設定例)・代表」。事業責任者は作らない', () => {
+    const t = setup([], {}, { VALUE_FORMAT: 'codes' })
+    t.gas.setupRolesSetting_()
+    const roles = JSON.parse(t.writes.roles) as RoleDef[]
+    expect(roles.map((r) => [r.id, r.name, r.tier])).toEqual([['base', '一般', 'base'], ['r_leader', '班長', 'admin'], ['top', '代表', 'top']])
+  })
+
+  it('既に roles がある団体(事業責任者あり)の役職は、setupOhsumi で変えない', () => {
+    const existing = JSON.stringify(rolesWithManager())
+    const t = setup([['m-admin', 'r_manager']], { roles: existing }, { VALUE_FORMAT: 'codes' })
+    expect(t.gas.setupRolesSetting_()).toBe('already')
+    expect(t.writes.roles).toBeUndefined()
+    expect(t.gas.isFullAdminRoleRef_(t.gas.getRoles_(), 'r_manager')).toBe(true)
+  })
+
+  it('役職の設定が何も無い、今までの形式の団体は、今までどおり事業責任者を含む(既にある団体の役職を変えない)', () => {
+    const t = setup([['m-admin', '事業責任者']], {})
+    expect((t.gas.getRoles_() as RoleDef[]).map((r) => r.name)).toEqual(['一般', '班長', '事業責任者', '代表'])
+  })
+
   it('今までの役職の設定がある団体では、それを元に ID を付けて作る(一般 → base、代表 → top)', () => {
     const t = setup([], { role_levels: '会計,代表', restricted_roles: '会計' }, { VALUE_FORMAT: 'codes' })
     t.gas.setupRolesSetting_()
@@ -215,7 +242,7 @@ describe('サンプルのデータ', () => {
   it('roles を使う団体では、サンプルの役職(制限付き)を roles の1件として足す', () => {
     const t = setup([], {})
     const data = t.gas.buildSampleData_('2026-10-01', {}) as { settings: { lists: Record<string, unknown>; items: Record<string, RoleDef[]>; maps: Record<string, unknown> } }
-    const converted = t.gas.sampleSettingsWithRoles_(data.settings) as typeof data.settings
+    const converted = t.gas.sampleSettingsWithRoles_(data.settings, rolesWithManager()) as typeof data.settings
     expect(converted.lists.role_levels).toBeUndefined()
     expect(converted.maps.role_permissions).toBeUndefined()
     expect(JSON.parse(JSON.stringify(converted.items.roles))).toEqual([
@@ -227,5 +254,20 @@ describe('サンプルのデータ', () => {
     const roles = t.gas.parseRolesSetting_(merged.values.roles) as RoleDef[]
     expect(t.gas.isFullAdminRoleRef_(roles, 'サンプル班長')).toBe(false)
     expect(t.gas.isAdminRoleRef_(roles, 'サンプル班長')).toBe(true)
+  })
+
+  it('事業責任者が無い団体(新しい団体の最初の役職)では、サンプルの全権管理者の役職もサンプルの分として足し、消す時に取り除く', () => {
+    const t = setup([], {})
+    const data = t.gas.buildSampleData_('2026-10-01', {}) as { settings: { lists: Record<string, unknown>; items: Record<string, RoleDef[]>; maps: Record<string, unknown> } }
+    const converted = t.gas.sampleSettingsWithRoles_(data.settings, defaultRoles()) as typeof data.settings
+    expect(converted.items.roles.map((r) => [r.id, r.name, r.tier, r.restricted])).toEqual([
+      ['sample-role-admin', '事業責任者', 'admin', false], ['sample-role-restricted', 'サンプル班長', 'admin', true]])
+    const current = { roles: JSON.stringify(defaultRoles()) }
+    const merged = t.gas.mergeSampleSettings_(current, converted) as { values: Record<string, string>; state: unknown }
+    const roles = t.gas.parseRolesSetting_(merged.values.roles) as RoleDef[]
+    // サンプルの全権管理者(役職は名前の「事業責任者」)は、全権管理者として判定される
+    expect(t.gas.isFullAdminRoleRef_(roles, '事業責任者')).toBe(true)
+    const restored = t.gas.restoreSampleSettings_({ roles: merged.values.roles }, merged.state) as Record<string, string>
+    expect(JSON.parse(restored.roles)).toEqual(defaultRoles())
   })
 })

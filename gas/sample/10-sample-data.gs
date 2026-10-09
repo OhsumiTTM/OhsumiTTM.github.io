@@ -686,18 +686,21 @@ function sampleParseJson_(raw, fallback) {
 
 // current: { キー: 今の値(文字列) } → { values: { キー: 書き込む値 }, state: 元に戻すための記録 }
 // 役職の設定(roles)を使う団体向けに、サンプルの役職(サンプル班長)を今までの設定
-// (role_levels など)ではなく roles の1件として足す形に変える
-function sampleSettingsWithRoles_(settings) {
+// (role_levels など)ではなく roles の1件として足す形に変える。
+// サンプルの全権管理者の役職(事業責任者)が団体に無ければ、それもサンプルの役職として足す
+// (新しい団体の最初の役職は班長・代表だけのため。消す時はサンプルの分として取り除く)
+function sampleSettingsWithRoles_(settings, currentRoles) {
   var out = JSON.parse(JSON.stringify(settings))
   var name = SAMPLE_ROLES.restricted
   var role = { id: SAMPLE_ID_PREFIX + 'role-restricted', name: name, tier: 'admin', restricted: true }
+  var hasAdminRole = (currentRoles || []).some(function (r) { return r && (r.name === SAMPLE_ROLES.admin || r.id === SAMPLE_ROLES.admin) })
   if (out.maps.role_permissions && out.maps.role_permissions[name]) role.sections = out.maps.role_permissions[name]
   if (out.maps.job_requirements && out.maps.job_requirements[name]) role.requiredSkills = out.maps.job_requirements[name]
   delete out.lists.role_levels
   delete out.lists.restricted_roles
   delete out.maps.role_permissions
   delete out.maps.job_requirements
-  out.items.roles = [role]
+  out.items.roles = hasAdminRole ? [role] : [{ id: SAMPLE_ID_PREFIX + 'role-admin', name: SAMPLE_ROLES.admin, tier: 'admin', restricted: false }, role]
   return out
 }
 
