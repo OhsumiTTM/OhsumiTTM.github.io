@@ -19,9 +19,9 @@
 // ■ ログインできるメンバー: スクリプトプロパティ TEST_ACCOUNTS(デモの団体は DEMO_ACCOUNTS でもよい)に、枠ごとの
 //   Google アカウントを書く。例: top=a@gmail.com, admin=b@gmail.com, restricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com
 
-var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.08-4'
+var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.09-1'
 // 組になる Code.gs の版。pnpm gas:build が、Code.gs の版に合わせて書き換える(手で直さない)
-var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.08-4'
+var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.09-1'
 
 // Code.gs と組の版でなければ止める(Code.gs の関数の名前・引数が変わっていると、データを壊すことがあるため)
 function assertSampleDataMatchesCode_() {
@@ -719,18 +719,21 @@ function sampleParseJson_(raw, fallback) {
 
 // current: { キー: 今の値(文字列) } → { values: { キー: 書き込む値 }, state: 元に戻すための記録 }
 // 役職の設定(roles)を使う団体向けに、サンプルの役職(サンプル班長)を今までの設定
-// (role_levels など)ではなく roles の1件として足す形に変える
-function sampleSettingsWithRoles_(settings) {
+// (role_levels など)ではなく roles の1件として足す形に変える。
+// サンプルの全権管理者の役職(事業責任者)が団体に無ければ、それもサンプルの役職として足す
+// (新しい団体の最初の役職は班長・代表だけのため。消す時はサンプルの分として取り除く)
+function sampleSettingsWithRoles_(settings, currentRoles) {
   var out = JSON.parse(JSON.stringify(settings))
   var name = SAMPLE_ROLES.restricted
   var role = { id: SAMPLE_ID_PREFIX + 'role-restricted', name: name, tier: 'admin', restricted: true }
+  var hasAdminRole = (currentRoles || []).some(function (r) { return r && (r.name === SAMPLE_ROLES.admin || r.id === SAMPLE_ROLES.admin) })
   if (out.maps.role_permissions && out.maps.role_permissions[name]) role.sections = out.maps.role_permissions[name]
   if (out.maps.job_requirements && out.maps.job_requirements[name]) role.requiredSkills = out.maps.job_requirements[name]
   delete out.lists.role_levels
   delete out.lists.restricted_roles
   delete out.maps.role_permissions
   delete out.maps.job_requirements
-  out.items.roles = [role]
+  out.items.roles = hasAdminRole ? [role] : [{ id: SAMPLE_ID_PREFIX + 'role-admin', name: SAMPLE_ROLES.admin, tier: 'admin', restricted: false }, role]
   return out
 }
 
@@ -1123,7 +1126,7 @@ function seedDataOfKind_(kind) {
     })
 
     // 役職の設定(roles)を使っている団体では、サンプルの役職を roles に足す
-    var settings = kind.withRoles && hasRolesSetting_() ? kind.withRoles(data.settings) : data.settings
+    var settings = kind.withRoles && hasRolesSetting_() ? kind.withRoles(data.settings, getRoles_()) : data.settings
     var merged = mergeSampleSettings_(readSettingsValues_(sampleSettingKeys_(settings)), settings, kind.prefix)
     Object.keys(merged.values).forEach(function (k) { updateSetting_(k, sheetSettingValue_(k, merged.values[k])) })
     props.setProperty(kind.stateKey, JSON.stringify(merged.state))

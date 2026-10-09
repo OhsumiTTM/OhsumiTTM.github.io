@@ -11,15 +11,18 @@ var TOP_ROLE_ID = 'top'
 var BASE_ROLE_ID = 'base'
 var DEFAULT_TOP_ROLE_NAME = '代表'
 var DEFAULT_BASE_ROLE_NAME = '一般'
+// role_levels も roles も無い、今までの形式の団体の既定(一般より上、低い順)。既にある団体の役職を変えないため、そのままにする。
+// 新しく導入する団体の最初の役職は defaultRoles_(班長・代表)
 var DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
 // Settings のうち役職の設定
 var ROLE_SETTING_KEYS = ['roles', 'role_levels', 'restricted_roles', 'role_permissions', 'job_requirements']
 
+// 新しく導入する団体の最初の役職(setupOhsumi が Settings の roles に書く)。班長は設定例で、名前を変えたり役職を足したりしてよい。
+// 既に roles がある団体・今までの役職の設定がある団体には使わない(setupRolesSetting_)
 function defaultRoles_() {
   return [
     { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
     { id: 'r_leader', name: '班長', tier: 'admin', restricted: false },
-    { id: 'r_manager', name: '事業責任者', tier: 'admin', restricted: false },
     { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
   ]
 }

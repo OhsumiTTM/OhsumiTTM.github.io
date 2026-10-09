@@ -1125,15 +1125,18 @@ var TOP_ROLE_ID = 'top'
 var BASE_ROLE_ID = 'base'
 var DEFAULT_TOP_ROLE_NAME = '代表'
 var DEFAULT_BASE_ROLE_NAME = '一般'
+// role_levels も roles も無い、今までの形式の団体の既定(一般より上、低い順)。既にある団体の役職を変えないため、そのままにする。
+// 新しく導入する団体の最初の役職は defaultRoles_(班長・代表)
 var DEFAULT_ROLE_LEVELS = ['班長', '事業責任者', '代表']
 // Settings のうち役職の設定
 var ROLE_SETTING_KEYS = ['roles', 'role_levels', 'restricted_roles', 'role_permissions', 'job_requirements']
 
+// 新しく導入する団体の最初の役職(setupOhsumi が Settings の roles に書く)。班長は設定例で、名前を変えたり役職を足したりしてよい。
+// 既に roles がある団体・今までの役職の設定がある団体には使わない(setupRolesSetting_)
 function defaultRoles_() {
   return [
     { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
     { id: 'r_leader', name: '班長', tier: 'admin', restricted: false },
-    { id: 'r_manager', name: '事業責任者', tier: 'admin', restricted: false },
     { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
   ]
 }
@@ -2343,7 +2346,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.08-4'
+var OHSUMI_GAS_VERSION = '2026.10.09-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -8594,7 +8597,7 @@ var INITIAL_MEMBER_TASKS = [
 ]
 var INITIAL_LEADER_TASKS = [
   { name: '団体の情報を設定する', description: 'ADMIN →「団体設定」で、団体名・ロゴ・テーマの色を入れます。' },
-  { name: '役職と部署を決める', description: 'ADMIN →「部署と役職」で、役職(班長など)と部署を作ります。タスクの領域は「タスクの設定」で決めます。' },
+  { name: '役職と部署を決める', description: 'ADMIN →「部署と役職」で、団体に合わせて役職と部署を決めます。最初にある役職は「代表」と、設定例の「班長」です。班長の名前を変えたり、役職を足したり消したりしてかまいません。タスクの領域は「タスクの設定」で決めます。' },
   { name: 'メンバーを追加して招待する', description: 'ADMIN →「メンバー」の「メンバーを登録」で、名前とメールアドレスを入れ、「招待メールを送る」を選びます。' },
   { name: '最初のプロジェクトを作る', description: 'ADMIN →「プロジェクト」で、プロジェクトを1つ作ります(このタスクの「はじめに」とは別に作ります)。' },
   { name: '最初のタスクを作って担当を決める', description: 'INPUT の画面でタスクを入れ、担当者と期限を決めます。' },
