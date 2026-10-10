@@ -46,6 +46,10 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # 営業用のデモ(/demo/)のビルド(デモの部品が入っていること・外につながない CSP を確かめる)
+      - name: Build demo
+        run: pnpm build:demo
+
       # スマホの幅(375px)で主な画面を開き、横にはみ出す箇所が無いことを確かめる
       # (テスト用の設定でもう一度ビルドし、ランナーの Chrome で開く)
       - name: Layout check (375px)
