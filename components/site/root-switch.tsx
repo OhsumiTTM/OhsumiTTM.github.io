@@ -1,5 +1,7 @@
 'use client'
 
+// デモのビルドでは、保存・通信をデモ用に差し替える(lib/demo/entry.ts。本番では何もしない)。ほかの部品より先に読み込む
+import { demo } from '@/lib/demo/entry'
 import { useEffect, useState, type ReactNode } from 'react'
 import { OhsumiApp } from '@/components/ohsumi/ohsumi-app'
 import { ReloginWindow } from '@/components/ohsumi/relogin-window'
@@ -19,9 +21,16 @@ export function RootSwitch({ home }: { home: ReactNode }) {
   const [app, setApp] = useState<'app' | 'relogin' | null>(null)
   useEffect(() => {
     const search = window.location.search
-    setApp(isReloginSearch(search) ? 'relogin' : wantsApp(search) ? 'app' : null)
+    // デモは、いつも Ohsumi の画面(ホームページは本番のサイトにある)
+    setApp(isReloginSearch(search) ? 'relogin' : demo || wantsApp(search) ? 'app' : null)
   }, [])
   if (app === 'relogin') return <ReloginWindow />
+  if (app && demo) return (
+    <>
+      <demo.Banner />
+      <OhsumiApp />
+    </>
+  )
   if (app) return <OhsumiApp />
   return <div data-site-home="">{home}</div>
 }

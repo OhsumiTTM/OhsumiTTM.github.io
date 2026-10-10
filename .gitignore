@@ -4,6 +4,8 @@
 # next.js
 /.next/
 /out/
+/out-demo/
+/out.main-during-demo-build/
 
 # typescript
 *.tsbuildinfo

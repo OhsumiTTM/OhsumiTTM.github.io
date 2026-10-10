@@ -9,6 +9,9 @@ import { pathToFileURL } from 'node:url'
 
 // demo-login.tsx の DEMO_LOGIN_MARKER と同じ文字列(テストで一致を確かめる)
 export const DEMO_LOGIN_MARKER = 'ohsumi-demo-login-only-in-development'
+// 営業用のデモ(/demo/。lib/demo/runtime.ts の DEMO_RUNTIME_MARKER)。役割を選ぶだけで入れるログインと、
+// ブラウザの中の GAS は、デモのビルドだけに入る。本番のビルドに入っていたら失敗させる
+export const DEMO_RUNTIME_MARKER = 'ohsumi-demo-runtime-only-in-demo-build'
 
 function files(dir) {
   return readdirSync(dir).flatMap((name) => {
@@ -18,15 +21,27 @@ function files(dir) {
 }
 
 /** 目印の文字列を含むファイルの一覧 */
-export function findDemoLogin(outDir) {
-  return files(outDir).filter((f) => readFileSync(f).includes(DEMO_LOGIN_MARKER))
+export function findDemoLogin(outDir, marker = DEMO_LOGIN_MARKER) {
+  return files(outDir).filter((f) => readFileSync(f).includes(marker))
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const outDir = process.argv[2] ?? 'out'
+  const args = process.argv.slice(2)
+  // --demo: デモのビルド(scripts/build-demo.mjs)を確かめる。開発用のログインは無く、デモの部品はある
+  const demo = args.includes('--demo')
+  const outDir = args.find((a) => !a.startsWith('--')) ?? 'out'
   const found = findDemoLogin(outDir)
   if (found.length) {
     console.error(`開発環境専用のデモ用ログイン画面が本番のビルドに含まれています:\n  ${found.join('\n  ')}`)
+    process.exit(1)
+  }
+  const runtime = findDemoLogin(outDir, DEMO_RUNTIME_MARKER)
+  if (!demo && runtime.length) {
+    console.error(`営業用のデモの部品(役割を選ぶだけのログイン)が本番のビルドに含まれています:\n  ${runtime.join('\n  ')}`)
+    process.exit(1)
+  }
+  if (demo && !runtime.length) {
+    console.error('デモのビルドに、デモの部品が入っていません(next.config.mjs の差し替えが効いていません)')
     process.exit(1)
   }
   console.log('デモ用のログイン画面が含まれていないことを確認しました')

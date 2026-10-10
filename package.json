@@ -10,7 +10,8 @@
     "check:layout": "node scripts/check-layout.mjs",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "gas:build": "node scripts/gas-build.mjs",
-    "gas:version": "node scripts/gas-version.mjs"
+    "gas:version": "node scripts/gas-version.mjs",
+    "build:demo": "node scripts/build-demo.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

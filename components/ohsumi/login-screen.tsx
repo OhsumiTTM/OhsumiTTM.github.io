@@ -28,6 +28,7 @@ import {
   takeLoginRetryNotice,
 } from '@/lib/ohsumi/session'
 import { LegalLinks } from './legal-links'
+import { demo } from '@/lib/demo/entry'
 
 // ログイン画面の状態:
 //   checking      団体の設定(団体ID)を確認中
@@ -70,7 +71,8 @@ const DemoLogin =
 const isDemo = DemoLogin !== null && !isRemoteConfigured
 
 function initialMode(): LoginMode {
-  if (isRemoteConfigured && isGoogleOAuthConfigured()) return 'checking'
+  // デモは Google のログインを使わない(役割を選んで入る)
+  if (isRemoteConfigured && (isGoogleOAuthConfigured() || demo)) return 'checking'
   return isDemo ? 'demo' : 'notConfigured'
 }
 
@@ -261,7 +263,8 @@ export function LoginScreen() {
   prepareRef.current = prepare
 
   useEffect(() => {
-    if (mode === 'id') prepare()
+    // デモ: Google のログインは使わない(役割を選んで入る)
+    if (mode === 'id' && !demo) prepare()
     // 言語を切り替えた時は、準備済みの試行のままボタンの表示だけやり直す
   }, [mode, prepare, locale])
 
@@ -337,6 +340,8 @@ export function LoginScreen() {
             </div>
           ) : mode === 'demo' && DemoLogin ? (
             <DemoLogin />
+          ) : demo && mode === 'id' && orgId ? (
+            <demo.LoginPanel orgId={orgId} />
           ) : (
             <>
               {/* Google が表示する「Googleでログイン」ボタン(IDトークン) */}
@@ -405,9 +410,11 @@ export function LoginScreen() {
             </div>
           )}
 
-          <p className="mt-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {t('login.poweredByGoogle')}
-          </p>
+          {!demo && (
+            <p className="mt-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              {t('login.poweredByGoogle')}
+            </p>
+          )}
         </div>
         <LegalLinks className="mt-6" />
       </div>
