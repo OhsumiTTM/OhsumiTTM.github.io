@@ -256,6 +256,49 @@ export function setOrgDemo(session: AdminSession, orgId: string, demo: boolean, 
   return callRegistry<OrgSummary>('setOrgDemo', { session: session.token, orgId, demo, reason })
 }
 
+// ---- 団体の情報(団体名・契約・属性・担当者)と、団体ごとの集計値 ----
+export type ContractStatus = '' | 'active' | 'ending' | 'ended'
+export interface OrgContact { name: string; email: string; phone: string }
+export interface OrgAttributes { field: string; size: string; affiliation: string; started_year: string }
+export interface OrgUsageEntry { period: string; receivedAt: string; version: number; demo: boolean; metrics: Record<string, number> }
+export interface OrgDetail {
+  orgId: string
+  contacts: OrgContact[]
+  attributes: OrgAttributes
+  // 新しい期間から
+  usage: OrgUsageEntry[]
+  metricKeys: string[]
+}
+export interface OrgProfileInput {
+  displayName?: string
+  contract?: { status: ContractStatus; until: string; note: string }
+  attributes?: OrgAttributes
+}
+export const ORG_CONTACTS_MAX = 5
+
+/** 担当者・属性・集計値の推移を読む */
+export function getOrgDetail(session: AdminSession, orgId: string): Promise<OrgDetail> {
+  return callRegistry<OrgDetail>('getOrgDetail', { session: session.token, orgId })
+}
+
+/** 団体名・契約の状態・属性を変える(送った項目だけ)。送り直さない */
+export function setOrgProfile(session: AdminSession, orgId: string, input: OrgProfileInput, reason: string): Promise<OrgSummary> {
+  return callRegistry<OrgSummary>('setOrgProfile', { session: session.token, orgId, ...input, reason })
+}
+
+/** 担当者を入れ替える(5分以内のログインが要る)。送り直さない */
+export function setOrgContacts(session: AdminSession, orgId: string, contacts: OrgContact[], reason: string): Promise<{ orgId: string; contacts: OrgContact[] }> {
+  return callRegistry('setOrgContacts', { session: session.token, orgId, contacts, reason })
+}
+
+/** 契約の終了日(YYYY-MM-DD)。シートが日時に変えた値も、日本の日付にそろえる */
+export function contractDateKey(v: string): string {
+  if (!v) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v
+  const ms = Date.parse(v)
+  return Number.isFinite(ms) ? new Date(ms + 9 * 3600 * 1000).toISOString().slice(0, 10) : ''
+}
+
 // ---- レジストリのメールの1日の上限(PR R) ----
 export interface MailQueueStatus {
   // 送れていないメールの数・その宛先の数
