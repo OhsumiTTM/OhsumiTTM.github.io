@@ -175,3 +175,13 @@ describe('needsGasUpdate', () => {
     expect([g('updateRequired'), g('updateRequired', true), g('outdated'), g('latest', true), {}].map(needsGasUpdate)).toEqual([true, true, false, false, false])
   })
 })
+
+describe('contractDateKey(契約の終了日)', () => {
+  it('YYYY-MM-DD はそのまま、シートが日時に変えた値は日本の日付にそろえる', async () => {
+    const { contractDateKey } = await import('./admin-api')
+    expect(contractDateKey('')).toBe('')
+    expect(contractDateKey('2027-03-31')).toBe('2027-03-31')
+    expect(contractDateKey('2027-03-30T15:00:00.000Z')).toBe('2027-03-31')
+    expect(contractDateKey('なし')).toBe('')
+  })
+})

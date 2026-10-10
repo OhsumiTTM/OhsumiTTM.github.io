@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { OhsumiLogo } from '@/components/ohsumi/primitives'
 import { waitForGIS } from '@/lib/ohsumi/google-sheet-sync'
 import { inviteLink } from '@/lib/ohsumi/org-directory'
+import { OrgProfilePanel } from './org-profile-panel'
 import {
   REGISTRY_CLIENT_ID,
   RegistryError,
@@ -122,6 +123,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   suspendNow: '当日の提供停止(緊急)',
   setOrgPlan: 'プランの変更',
   setOrgDemo: 'デモの印の付け外し',
+  setOrgProfile: '団体の情報(団体名・契約・属性)の変更',
+  setOrgContacts: '担当者の変更',
   setFeatureSwitches: '機能を止めた・再開した',
   setTunables: '上限・しきい値を変えた',
   sendSuspensionNotice: '停止の予告を担当者に送った',
@@ -486,6 +489,7 @@ function OrgList({
             {typeof window !== 'undefined' && <Field label="招待リンク">{inviteLink(window.location.origin, '', o.orgId)}</Field>}
             {o.contractNote && <Field label="契約のメモ">{o.contractNote}</Field>}
           </dl>
+          <OrgProfilePanel org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           <DemoControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           {features && <FeatureSwitchControl features={features} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
