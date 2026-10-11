@@ -243,7 +243,7 @@ describe('守る処理を外すと失敗する', () => {
   })
 
   it('戻した直後の消し直しを外すと、消した個人情報が戻ってしまう', () => {
-    const h = setup(mutated("    // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す\n    purgeExpiredPersonalData_(nowMs, actorId)\n", ''))
+    const h = setup(mutated("    // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す\n    purgeExpiredPersonalData_(nowMs, actorId)\n    // 前に消した人(バックアップの後に消した人も)の個人情報が戻ってきていたら、もう一度消す\n    reapplyPersonalDataPurges_(nowMs, actorId)\n", ''))
     const d = withDrive(h)
     withdraw(h)
     h.sheets.Members.rows.find((r) => r[0] === 'm-base')![h.sheets.Members.rows[0].indexOf('withdrawn_at')] = new Date(Date.now() - 40 * DAY).toISOString()
