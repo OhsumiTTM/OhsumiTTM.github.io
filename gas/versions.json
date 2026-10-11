@@ -1,18 +1,18 @@
 {
   "registry/Code.gs": {
-    "version": "2026.10.11-3",
-    "sha256": "d913cf9e6c59b1f3381940c78f9726fa3ffc73a2d27537e312108755f1dd7130"
+    "version": "2026.10.11-5",
+    "sha256": "2c4b7d7781c117eddad26cd4867eca70ec3afba8ec7eac10d6782d9e0f0db42e"
   },
   "registry/monitor/Monitor.gs": {
     "version": "2026.10.02-2",
     "sha256": "bda48f8b17a2c020c87c74f2a5952fe21876874a7414b65c8850008e4b683100"
   },
   "gas/Code.gs": {
-    "version": "2026.10.11-2",
-    "sha256": "64668a34dad8e9f5702b0c449527b875997a5a58640ffd8377d2405897120417"
+    "version": "2026.10.11-3",
+    "sha256": "84bf2bbbed496a1064704964bc5abb1e011bae869f63e0181f3fabb37397926c"
   },
   "gas/SampleData.gs": {
-    "version": "2026.10.11-2",
-    "sha256": "72f5c89d9cc546c716e09ebc0c023409d636e0c16aaf8bd062833c219e6be156"
+    "version": "2026.10.11-3",
+    "sha256": "6ec0ad39f4e25444dea651d2023769d480c26cf2bb198c725f2b62be628a0344"
   }
 }
