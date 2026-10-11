@@ -1253,6 +1253,9 @@ async function run({ build = true } = {}) {
           await sleep(800)
           await evaluate(`(() => { const bs = [...document.querySelectorAll('button[aria-expanded]')].filter((b) => b.querySelector('img, span.rounded-full')); bs[bs.length - 1].click() })()`)
           await sleep(500); await clickText('団体設定'); await sleep(1500)
+          // バックアップの一覧・利用の状況は、押した時に読む
+          await evaluate(`document.querySelector('[data-backup-show]')?.click(); document.querySelector('[data-usage-show]')?.click(); true`)
+          await sleep(800)
           const pick = (id) => evaluate(`(() => { const s = document.querySelector('[data-backup-select]'); const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; set.call(s, '${id}'); s.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
           if (!(await evaluate(`!!document.querySelector('[data-backup-panel] [data-backup-select]')`))) throw new Error('団体設定に、バックアップの一覧が出ません')
           await pick('bk1'); await sleep(800)
