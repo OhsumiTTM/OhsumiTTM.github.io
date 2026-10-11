@@ -29,6 +29,14 @@ export type TranslationKey = keyof typeof ja
 
 const DICTS: Record<Locale, Record<TranslationKey, string>> = { ja, en }
 
+/**
+ * 文章の {name} を値に置き換える。値は関数で返す(値の中の `$&`・`$1` などを、置き換えの記号として扱わない)。
+ * 1回で置き換えるので、値の中に {ほかの名前} があっても、それは置き換えない
+ */
+export function interpolate(str: string, vars: Record<string, string | number>): string {
+  return str.replace(/\{([^{}]+)\}/g, (whole, name: string) => (Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : whole))
+}
+
 const LOCALE_STORAGE_KEY = 'ohsumi-locale'
 
 // TaskStatus（内部enum、GAS/シートにもこのまま保存される）から翻訳キーへの
@@ -152,13 +160,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   const t = useCallback(
     (key: TranslationKey, vars?: Record<string, string | number>) => {
-      let str = DICTS[locale][key] ?? DICTS[DEFAULT_LOCALE][key] ?? key
-      if (vars) {
-        for (const [k, v] of Object.entries(vars)) {
-          str = str.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v))
-        }
-      }
-      return str
+      const str = DICTS[locale][key] ?? DICTS[DEFAULT_LOCALE][key] ?? key
+      return vars ? interpolate(str, vars) : str
     },
     [locale],
   )

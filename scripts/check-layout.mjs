@@ -732,7 +732,7 @@ async function run({ build = true } = {}) {
       await evaluate(`localStorage.setItem('ohsumi-session-${ORG}', JSON.stringify({ token: 'v1.layout.check', exp: Math.floor(Date.now() / 1000) + ${expSec} }))`)
     }
     // INPUT の書きかけ(ログインが切れても消えないこと)
-    const DRAFT_KEY = 'ohsumi-input-draft-' + MEMBER
+    const DRAFT_KEY = 'ohsumi-input-draft-o:' + ORG + ':' + MEMBER
 
     await navigate('/')
     const passes = [

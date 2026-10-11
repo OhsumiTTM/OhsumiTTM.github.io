@@ -87,6 +87,29 @@ export function withListOps<T extends Record<string, unknown>>(body: T, baseOf: 
   return out as T
 }
 
+/**
+ * 送った差分(ops)を、一覧(base)から取り消す(保存に失敗した時に、画面が覚える一覧を元に戻すのに使う)。
+ * 足した項目は除き、変えた項目は変える前に戻し、消した項目は戻す。ほかの項目はそのまま
+ */
+export function revertListOps(base: readonly unknown[], ops: readonly ListOp[], key: string): unknown[] {
+  const keyOf = (e: unknown) => {
+    const v = e && typeof e === 'object' ? (e as Record<string, unknown>)[key] : undefined
+    return v === undefined || v === null ? '' : String(v)
+  }
+  let out = base.slice()
+  for (const op of [...ops].reverse()) {
+    if (op.op === 'add') {
+      const k = keyOf(op.entry)
+      out = out.filter((e) => keyOf(e) !== k)
+    } else if (op.op === 'update') {
+      out = out.map((e) => (keyOf(e) === op.key ? op.before : e))
+    } else if (!out.some((e) => keyOf(e) === op.key)) {
+      out.push(op.before)
+    }
+  }
+  return out
+}
+
 /** セルの値(JSON の一覧)を読む。読めなければ空 */
 export function parseListCell(raw: unknown): unknown[] {
   try {

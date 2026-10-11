@@ -105,6 +105,7 @@ export const STORE_ACTION_CAPABILITIES: Record<string, Capability> = {
   restoreTask: 'trash',
   revokeMemberSessions: 'org.rules',
   saveDepartments: 'org.rules',
+  saveRecurringRules: 'org.rules',
   saveRoles: 'org.rules',
   setDiscordWebhookUrl: 'org.rules',
   setJobRequirements: 'org.rules',

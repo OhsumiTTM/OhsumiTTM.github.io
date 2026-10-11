@@ -625,14 +625,17 @@ function takeGroup(): PendingWrite[] {
   return group
 }
 
-// 変更の記録(updateHistory)は配列を丸ごと置き換える。同じタスクの記録が同じ束に2つ以上あれば、
-// 最後のもの(それまでの記録を含む)だけを送り、前のものにも同じ結果を返す
+// 変更の記録(updateHistory)を配列で丸ごと置き換える書き込み(古い送り方)は、同じタスクの記録が同じ束に
+// 2つ以上あれば、最後のもの(それまでの記録を含む)だけを送り、前のものにも同じ結果を返す。
+// 差分(listOps)で送る書き込みは、それぞれが別の記録を足すので、まとめずにすべて順番に送る
+// (最後のものだけを送ると、前の差分の記録が保存されない)
 function coalesce(group: PendingWrite[]): { sent: PendingWrite[]; sameAs: Map<PendingWrite, PendingWrite> } {
   const sameAs = new Map<PendingWrite, PendingWrite>()
+  const replacesWhole = (p: PendingWrite) => p.body.action === 'updateHistory' && p.body.listOps === undefined && Array.isArray(p.body.history)
   const lastHistory = new Map<string, PendingWrite>()
-  for (const p of group) if (p.body.action === 'updateHistory') lastHistory.set(String(p.body.taskId), p)
+  for (const p of group) if (replacesWhole(p)) lastHistory.set(String(p.body.taskId), p)
   const sent = group.filter((p) => {
-    if (p.body.action !== 'updateHistory') return true
+    if (!replacesWhole(p)) return true
     const last = lastHistory.get(String(p.body.taskId))!
     if (last === p) return true
     sameAs.set(p, last)
@@ -818,6 +821,7 @@ async function sendWithRetry<T>(
  */
 export function sendToGas<T = unknown>(url: string, body: Record<string, unknown> & { action: string }): Promise<GasResponse<T>> {
   const action = body.action
+  if (isWriteAction(action)) writesEnqueued++
   const payload = isWriteAction(action) ? { ...body, requestId: deps.newId() } : body
   if (isBatchableWrite(action)) return enqueueBatchableWrite<T>(url, payload)
   const text = JSON.stringify(payload)
@@ -832,6 +836,13 @@ export function sendToGas<T = unknown>(url: string, body: Record<string, unknown
     return writeChain.then(() => enqueueRead('foreground', () => task(Date.now() - queuedAt)))
   }
   return enqueueRead(priorityOf(action), task)
+}
+
+// 書き込みを列に入れた回数。読み込み(getInitialData)の応答が、読み込みを始めた後の書き込みを
+// 含まないかもしれない(古い内容で画面を上書きしてしまう)かを、始めた時と比べて見分ける(remote.ts)
+let writesEnqueued = 0
+export function writeGeneration(): number {
+  return writesEnqueued
 }
 
 // ---- 切り分け用の ping ----

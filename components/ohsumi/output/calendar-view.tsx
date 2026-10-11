@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Task } from '@/lib/ohsumi/types'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar } from '../primitives'
-import { todayStr, googleCalendarAllDayUrl } from '@/lib/ohsumi/utils'
+import { todayStr, googleCalendarAllDayUrl, startOfLocalDay } from '@/lib/ohsumi/utils'
 import { Button } from '@/components/ui/button'
 import { ChevronRight, Calendar, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -41,8 +41,10 @@ function useGCalEvents(year: number, month: number, weekStart?: Date, dayDate?: 
         end.setDate(end.getDate() + 7)
         tMax = end.toISOString()
       } else if (view === 'day' && dayDate) {
-        tMin = new Date(dayDate).toISOString()
-        const end = new Date(dayDate)
+        // その日の0時から(今の時刻からにすると、その日の過ぎた予定が出ない)
+        const start = startOfLocalDay(dayDate)
+        tMin = start.toISOString()
+        const end = new Date(start)
         end.setDate(end.getDate() + 1)
         tMax = end.toISOString()
       } else {
@@ -446,7 +448,7 @@ export function CalendarView({
 
   const [calView, setCalView] = useState<CalView>('month')
   const [monthView, setMonthView] = useState(initial)
-  const [selectedDay, setSelectedDay] = useState<Date>(() => new Date())
+  const [selectedDay, setSelectedDay] = useState<Date>(() => startOfLocalDay(new Date()))
   const [weekStart, setWeekStart] = useState<Date>(() => {
     const d = new Date()
     d.setDate(d.getDate() - d.getDay())
@@ -480,7 +482,7 @@ export function CalendarView({
   const goToday = () => {
     const n = new Date()
     setMonthView({ year: n.getFullYear(), month: n.getMonth() })
-    setSelectedDay(new Date())
+    setSelectedDay(startOfLocalDay(new Date()))
     const ws = new Date()
     ws.setDate(ws.getDate() - ws.getDay())
     ws.setHours(0, 0, 0, 0)
