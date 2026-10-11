@@ -906,7 +906,8 @@ function issueRegistrationCode_(body, nowMs) {
   if (!orgName) throw registryError_('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
   var contactName = cleanText_(body.contactName, 100)
   var contactEmail = cleanText_(body.contactEmail, 200)
-  if (contactEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contactEmail)) throw registryError_('担当者のメールアドレスの形が正しくありません。')
+  // 担当者の画面(setOrgContacts_)と同じ形で確かめる(, ; の入ったアドレスは、宛先が分かれてしまう)
+  if (contactEmail && !CONTACT_EMAIL_PATTERN.test(contactEmail)) throw registryError_('担当者のメールアドレスの形が正しくありません。')
   var note = cleanText_(body.note, 500)
   return withRegistryLock_(function () {
     var code = generateRegistrationCode_()
@@ -1199,6 +1200,23 @@ var SUSPEND_NOTICE_DAYS = [14, 7, 1]
 var CHECKIN_MAX_SKEW_SEC = 300
 var CHECKIN_WRITE_INTERVAL_MS = 10 * 60 * 1000
 var CHECKIN_INVALID = '確認できませんでした(団体ID・共有鍵・時刻を確かめてください)。'
+var CHECKIN_REPLAYED = '同じ確認がもう届いています。少し待ってから、もう一度確かめてください。'
+// 使った署名を覚える秒数(時刻の幅の前後5分を覆う)
+var CHECKIN_REPLAY_TTL_SEC = 2 * CHECKIN_MAX_SKEW_SEC + 60
+
+// checkIn の署名が、時刻の幅の間にもう使われたか。使われていなければ、使ったことを覚えて false を返す。
+// CacheService が使えない時は断らない(団体の確認を止めない)
+function checkInReplayed_(orgId, ts, sig) {
+  var key = 'ci:' + orgId + '.' + ts + '.' + sig
+  try {
+    var cache = CacheService.getScriptCache()
+    if (cache.get(key)) return true
+    cache.put(key, '1', CHECKIN_REPLAY_TTL_SEC)
+  } catch (e) {
+    console.warn('checkIn の送り直しを確かめられませんでした: ' + e)
+  }
+  return false
+}
 
 // 契約の状態(Google のサービスを使わない純粋な関数)。
 //   phase: none(停止の予定なし)/ scheduled(予定あり。まだ前)/ inEffect(停止中)。kind: suspend / restrict
@@ -1220,13 +1238,19 @@ function suspensionNoticesSent_(values) {
   }
 }
 
-// 予告を送る日数(純粋な関数): 停止の予定まで days 日以内になった予告のうち、まだ送っていないいちばん近いもの。無ければ null
-function dueSuspensionNotice_(values, nowMs) {
+// 予告を送る日数(純粋な関数): 停止の予定まで days 日以内になった予告のうち、まだ送っていないいちばん近いもの。無ければ null。
+// leadDays: 何日早めに送るか。レジストリの毎日の処理(1日1回)は SUSPEND_NOTICE_LEAD_DAYS(1日)早める。
+// 「あと days 日」を、残りが days 日を切った後の毎日の処理で送ると、1日前の予告が停止の直前(数十分前)に届くことがあるため、
+// 残りが days 日以上ある最後の毎日の処理で送る(本文には停止の日時をそのまま書く)。
+// 団体の GAS が送る分(checkIn の mailTasks。1時間ごと)は早めない(0)
+var SUSPEND_NOTICE_LEAD_DAYS = 1
+function dueSuspensionNotice_(values, nowMs, leadDays) {
   var c = contractState_(values, nowMs)
   if (c.phase !== 'scheduled') return null
   var left = (timeOf_(c.suspendAt) - nowMs) / (24 * 3600 * 1000)
+  var lead = Number(leadDays) > 0 ? Number(leadDays) : 0
   var sent = suspensionNoticesSent_(values).map(function (n) { return Number(n.days) })
-  var due = SUSPEND_NOTICE_DAYS.filter(function (d) { return left <= d })
+  var due = SUSPEND_NOTICE_DAYS.filter(function (d) { return left <= d + lead })
   if (!due.length) return null
   var nearest = Math.min.apply(null, due)
   return sent.indexOf(nearest) >= 0 ? null : nearest
@@ -1244,13 +1268,14 @@ function suspensionNoticeText_(orgName, c, days) {
   }
 }
 
-// 担当者(Contacts)のメールアドレス(団体ID → 一覧)
+// 担当者(Contacts)のメールアドレス(団体ID → 一覧)。担当者の画面と同じ形(CONTACT_EMAIL_PATTERN)のものだけ
+// (, ; の入ったアドレスは、宛先をカンマでつないで送る時に、別の宛先に分かれてしまう)
 function contactEmails_() {
   var contacts = {}
   readRows_('Contacts').forEach(function (r) {
     var id = String(r.values.org_id || '')
     var email = String(r.values.email || '').trim()
-    if (id && /^[^@\s]+@[^@\s]+$/.test(email)) (contacts[id] = contacts[id] || []).push(email)
+    if (id && CONTACT_EMAIL_PATTERN.test(email)) (contacts[id] = contacts[id] || []).push(email)
   })
   return contacts
 }
@@ -1263,7 +1288,8 @@ function contactEmails_() {
 //   - 団体の GAS は、送ったメールの key を次の checkIn の mailDone で伝える。レジストリは、送ったことを記録する(二重に送らない)
 //   - key: 'sv.<アンケートID>.<日目>' / 'sn.<日数><s(提供停止)|r(機能停止)>.<停止の時刻(ms)>' / 'sr.<アンケートID>.<停止の時刻(ms)>'
 // レジストリが代わりに送るのは、この仕組みに対応していない古い版の団体と、最後の checkIn から24時間を超えた団体(団体の GAS が
-// 止まっている)だけ(毎日の処理で)。
+// 止まっている)だけ(毎日の処理で)。停止の予告だけは、団体の GAS が送れていないおそれがあれば、24時間を待たずに
+// 代わりに送る(registryTakesOverNotice_。停止の前に1回も届かないことを防ぐ)。
 // 団体の GAS が mailTasks に対応した版(これより前の版には、今までどおりレジストリから送る)
 var ORG_MAIL_DELIVERY_SINCE = '2026.10.07-6'
 var ORG_MAIL_STALE_MS = 24 * 3600 * 1000
@@ -1330,10 +1356,26 @@ function orgMailTasks_(orgValues, surveys, contacts, nowMs) {
   return tasks.slice(0, ORG_MAIL_TASKS_MAX)
 }
 
-// 団体の GAS が送ったメール(checkIn の mailDone)を記録する。記録した key の数を返す
+// 団体の GAS が送ったメール(checkIn の mailDone)を記録する。記録した key の数を返す。
+// 毎日の処理・管理画面の操作と同時に書かないよう、ロックを取り、その中で行を読み直してから書く
+// (読み直した値は orgRow・surveys にも入れる。続けて作る mailTasks が新しい記録を見るように)
 function recordOrgMailDone_(orgRow, surveys, keys, nowMs) {
   var list = (Array.isArray(keys) ? keys : []).map(String).filter(function (k) { return ORG_MAIL_KEY_PATTERN.test(k) }).slice(0, ORG_MAIL_DONE_MAX)
   if (!list.length) return 0
+  var orgId = String(orgRow.values.org_id)
+  return withRegistryLock_(function () {
+    var fresh = findOrgRow_(orgId)
+    if (!fresh) return 0
+    orgRow.row = fresh.row
+    orgRow.values = fresh.values
+    var freshSurveys = readRows_('Surveys').filter(function (r) { return String(r.values.org_id) === orgId })
+    surveys.length = 0
+    freshSurveys.forEach(function (r) { surveys.push(r) })
+    return recordOrgMailDoneLocked_(orgRow, surveys, list, nowMs)
+  })
+}
+
+function recordOrgMailDoneLocked_(orgRow, surveys, list, nowMs) {
   var at = new Date(nowMs).toISOString()
   var notices = suspensionNoticesSent_(orgRow.values)
   var noticesChanged = false
@@ -1373,6 +1415,22 @@ function recordOrgMailDone_(orgRow, surveys, keys, nowMs) {
   return recorded
 }
 
+// 団体の GAS が送る団体でも、停止の予告をレジストリが代わりに送る時か(毎日の処理。days は送る予告の日数):
+//   - 最後の checkIn から ORG_NOTICE_CHECKIN_STALE_MS(2時間)を超えた(団体の GAS が止まっているかもしれない)
+//   - 団体の GAS が送るはずの時刻(残り days 日)から ORG_NOTICE_GRACE_MS(2時間)を過ぎても、送ったと伝えられていない
+//   - 次の毎日の処理(1日後)まで待つと、送れなかった時に残りが ORG_NOTICE_MIN_LEFT_MS(12時間)を切る
+// 予告が停止の前に1回も届かないことを防ぐ(二重に届くことより、届かないことを避ける)
+var ORG_NOTICE_CHECKIN_STALE_MS = 2 * 3600 * 1000
+var ORG_NOTICE_GRACE_MS = 2 * 3600 * 1000
+var ORG_NOTICE_MIN_LEFT_MS = 12 * 3600 * 1000
+function registryTakesOverNotice_(values, days, nowMs) {
+  var at = timeOf_(values.suspend_at)
+  var last = timeOf_(values.last_check_at)
+  if (!(last > 0) || nowMs - last > ORG_NOTICE_CHECKIN_STALE_MS) return true
+  if (nowMs - (at - days * DAY_MS) >= ORG_NOTICE_GRACE_MS) return true
+  return at - (nowMs + DAY_MS) < ORG_NOTICE_MIN_LEFT_MS
+}
+
 // 毎日の処理(dailyRegistryBackup)から呼ぶ: 予告の時期になった団体の担当者(Contacts)にメールを送り、送ったことを記録する
 function sendSuspensionNotices_(nowMs) {
   var contacts = contactEmails_()
@@ -1380,8 +1438,15 @@ function sendSuspensionNotices_(nowMs) {
   var surveys = null
   readRows_('Orgs').forEach(function (row) {
     var orgId = String(row.values.org_id || '')
-    // 団体の GAS が送る団体には、レジストリからは送らない(checkIn の mailTasks)
-    if (!orgId || orgDeliversMail_(row.values, nowMs)) return
+    if (!orgId) return
+    // 団体の GAS が送る団体には、レジストリからは送らない(checkIn の mailTasks)。
+    // ただし停止の予告は、団体の GAS が送れていないおそれがある時は代わりに送る(registryTakesOverNotice_)
+    if (orgDeliversMail_(row.values, nowMs)) {
+      var orgDays = dueSuspensionNotice_(row.values, nowMs, SUSPEND_NOTICE_LEAD_DAYS)
+      if (orgDays === null || !registryTakesOverNotice_(row.values, orgDays, nowMs)) return
+      if (sendSuspensionNoticeRow_(row, contacts[orgId] || [], orgDays, nowMs, 'registry(org)')) sent.push(orgId)
+      return
+    }
     // 28日目の機能停止の知らせ(団体の GAS が止まっていて、まだ届いていないもの)
     var restrict = dueRestrictionNotice_(row.values, nowMs)
     if (restrict) {
@@ -1398,19 +1463,25 @@ function sendSuspensionNotices_(nowMs) {
         appendAudit_({ actor: 'registry', action: 'sendRestrictionNotice', target: orgId, after: { surveyId: restrict.surveyId, recipients: rto.length } })
       }
     }
-    var days = dueSuspensionNotice_(row.values, nowMs)
+    var days = dueSuspensionNotice_(row.values, nowMs, SUSPEND_NOTICE_LEAD_DAYS)
     if (days === null) return
-    var c = contractState_(row.values, nowMs)
-    var text = suspensionNoticeText_(String(row.values.display_name || orgId), c, days)
-    var to = contacts[orgId] || []
-    var m = registryMail_({ to: to, subject: text.subject, body: text.body }, 'notice', orgId, nowMs)
-    var list = suspensionNoticesSent_(row.values).concat([{ days: days, at: new Date(nowMs).toISOString(), to: to.length, queued: m.queued }])
-    setRowFields_('Orgs', row.row, { suspend_notices_json: JSON.stringify(list) })
-    appendAudit_({ actor: 'registry', action: 'sendSuspensionNotice', target: orgId, after: { days: days, kind: c.kind, suspendAt: c.suspendAt, recipients: to.length } })
-    sent.push(orgId)
+    if (sendSuspensionNoticeRow_(row, contacts[orgId] || [], days, nowMs, 'registry')) sent.push(orgId)
   })
   if (sent.length) console.log('停止の予告を送りました: ' + sent.join(', '))
   return sent
+}
+
+// 停止の予告を1通送り(上限の時は MailQueue に入れ)、送ったことを記録する。actor は操作の記録の人
+function sendSuspensionNoticeRow_(row, to, days, nowMs, actor) {
+  var orgId = String(row.values.org_id)
+  var c = contractState_(row.values, nowMs)
+  var text = suspensionNoticeText_(String(row.values.display_name || orgId), c, days)
+  var m = registryMail_({ to: to, subject: text.subject, body: text.body }, 'notice', orgId, nowMs)
+  var list = suspensionNoticesSent_(row.values).concat([{ days: days, at: new Date(nowMs).toISOString(), to: to.length, queued: m.queued }])
+  row.values.suspend_notices_json = JSON.stringify(list)
+  setRowFields_('Orgs', row.row, { suspend_notices_json: row.values.suspend_notices_json })
+  appendAudit_({ actor: actor, action: 'sendSuspensionNotice', target: orgId, after: { days: days, kind: c.kind, suspendAt: c.suspendAt, recipients: to.length } })
+  return true
 }
 
 // テスト環境の停止の操作(testSuspendNow・testScheduleSuspension・testLiftSuspension)。mode: now / schedule / lift
@@ -1508,21 +1579,25 @@ function scheduleSuspension_(body, nowMs) {
     forgetResolvedOrg_(orgId)
     if (immediate) {
       // 当日の停止は、担当者にその場で知らせる(予告は送れないため)
+      // 停止はもう書いたので、メールが送れなくても(MailApp の例外)止めずに、MailQueue に入れて毎日の処理で送る。
+      // 操作の記録・知らせの記録は必ず残す
       var to = contactEmails_()[orgId] || []
       var name = String(row.values.display_name || orgId)
-      registryMail_({
+      var m = registryMailOrQueue_({
         to: to,
         subject: '[Ohsumi] ' + name + ': Ohsumi の提供を停止しました',
         body: name + ' ご担当者さま\n\n緊急のため、本日、Ohsumi の提供を停止しました。Ohsumi にはログインできなくなります' +
           '(団体のデータは、団体のスプレッドシートにそのまま残ります)。\n\n理由: ' + reason + '\n\nご不明な点は FSIF にお問い合わせください。',
       }, 'notice', orgId, nowMs)
-      var notices = [{ days: 0, at: new Date(nowMs).toISOString(), to: to.length }]
+      var notices = [{ days: 0, at: new Date(nowMs).toISOString(), to: to.length, queued: m.queued }]
       setRowFields_('Orgs', row.row, { suspend_notices_json: JSON.stringify(notices) })
       after = merged_(after, { suspend_notices_json: JSON.stringify(notices) })
     }
+    var auditAfter = { kind: kind, suspendAt: fields.suspend_at }
+    if (immediate) auditAfter.mail = m.sent ? 'sent' : m.queued ? 'queued' : m.error ? 'failed' : 'none'
     appendAudit_({ actor: session.sub, action: immediate ? 'suspendNow' : 'scheduleSuspension', target: orgId,
       before: before.phase === 'none' ? undefined : { kind: before.kind, suspendAt: before.suspendAt },
-      after: { kind: kind, suspendAt: fields.suspend_at }, reason: reason })
+      after: auditAfter, reason: reason })
     return { ok: true, result: orgSummary_(after, nowMs) }
   })
 }
@@ -1610,6 +1685,13 @@ function checkIn_(body, nowMs) {
   if (!row || !expected || !safeEquals_(expected, sig)) {
     countRejected_(nowMs)
     throw registryError_(CHECKIN_INVALID, { authError: true })
+  }
+  // 送り直し(リプレイ)を断る: 署名は団体ID と時刻だけにかかるので、同じ署名を時刻の幅(前後5分)の間覚え、2回目は断る。
+  // 団体の GAS は呼ぶたびにその時の時刻で署名する。同じ秒に2回呼んだ時(まれ)は2回目が断られるが、団体の GAS は
+  // 確かめられなかったとして、覚えた状態のまま使い、次の確認で確かめ直す(団体の GAS は変えなくてよい)
+  if (checkInReplayed_(orgId, ts, sig)) {
+    countRejected_(nowMs)
+    throw registryError_(CHECKIN_REPLAYED)
   }
   var lastCheck = timeOf_(row.values.last_check_at)
   var gasVersion = cleanText_(body.gasVersion, 40)
@@ -2403,56 +2485,109 @@ function registryMail_(mail, kind, orgId, nowMs) {
     MailApp.sendEmail({ to: to.join(','), subject: mail.subject, body: mail.body })
     return { sent: true, queued: false, recipients: to.length }
   }
+  return queueRegistryMail_(mail, kind, orgId, nowMs, '')
+}
+
+// MailQueue に入れる(毎日の処理で、優先度の順に送る)。lastError: その場で送れなかった時の理由
+function queueRegistryMail_(mail, kind, orgId, nowMs, lastError) {
+  var to = (mail.to || []).filter(Boolean)
+  if (!to.length) return { sent: false, queued: false, recipients: 0 }
   appendRowByHeaders_('MailQueue', {
     mail_id: 'ml_' + generateSecret_().replace(/[^A-Za-z0-9]/g, '').slice(0, 12),
     queued_at: new Date(nowMs || Date.now()).toISOString(),
     priority: MAIL_PRIORITY.hasOwnProperty(kind) ? MAIL_PRIORITY[kind] : MAIL_PRIORITY.other,
     kind: kind, org_id: orgId || '', to: to.join(','), subject: mail.subject, body: mail.body, attempts: 0,
+    last_error: lastError ? String(lastError).slice(0, 200) : '',
   })
   return { sent: false, queued: true, recipients: to.length }
 }
 
-// MailQueue のまだ送っていないものを、優先度の順に、残りの数の分だけ送る。送った数と残った数を返す
+// registryMail_ と同じ。ただし MailApp が失敗した時(例外)も止めずに MailQueue に入れる(毎日の処理で送り直す)。
+// MailQueue にも入れられなかった時は { error } を返す(呼んだ側の記録は続ける)
+function registryMailOrQueue_(mail, kind, orgId, nowMs) {
+  try {
+    return registryMail_(mail, kind, orgId, nowMs)
+  } catch (e) {
+    console.error('メールを送れませんでした(' + (orgId || '') + '): ' + e)
+    try {
+      return queueRegistryMail_(mail, kind, orgId, nowMs, String((e && e.message) || e))
+    } catch (e2) {
+      console.error('メールを MailQueue にも入れられませんでした(' + (orgId || '') + '): ' + e2)
+      return { sent: false, queued: false, recipients: 0, error: String((e2 && e2.message) || e2) }
+    }
+  }
+}
+
+// 送れなかった(例外)メールを送り直す回数。この回数で送れなければ、送り直しをやめる(送れなかったものとして、管理画面に数を出す)
+var MAIL_MAX_ATTEMPTS = 5
+
+// MailQueue の行が、送り直しをやめたもの(送れなかったもの)か
+function mailQueueFailed_(values) {
+  return !String(values.sent_at || '') && Number(values.attempts || 0) >= MAIL_MAX_ATTEMPTS
+}
+
+// MailQueue のまだ送っていない(送り直しをやめていない)行
+function mailQueuePending_() {
+  return readRows_('MailQueue').filter(function (r) { return String(r.values.mail_id || '') && !String(r.values.sent_at || '') && !mailQueueFailed_(r.values) })
+}
+
+// MailQueue のまだ送っていないものを、優先度の順に、残りの数の分だけ送る。送った数・残った数・送り直しをやめた数を返す。
+// 1通が失敗(例外)しても、その行に理由と回数を書いて次へ進む(1通のために、後のメールが止まり続けないように)。
+// 止めるのは、1日の上限に達した時だけ(送る順を守るため、その後のものは少ない宛先でも送らない)
 function flushMailQueue_(nowMs) {
-  var rows = readRows_('MailQueue').filter(function (r) { return String(r.values.mail_id || '') && !String(r.values.sent_at || '') })
+  var rows = mailQueuePending_()
   rows.sort(function (a, b) {
     return (Number(a.values.priority) - Number(b.values.priority)) || String(isoOf_(a.values.queued_at)).localeCompare(String(isoOf_(b.values.queued_at)))
   })
   var remaining = mailRemaining_()
   var sent = 0
   var left = 0
+  var failed = 0
+  var stopped = false
   rows.forEach(function (r) {
     var to = String(r.values.to || '').split(',').filter(Boolean)
-    // 送る順を守るため、前のものが送れなかった後は、少ない宛先のものでも送らない
-    if (left > 0 || to.length > remaining) { left++; return }
+    if (stopped || to.length > remaining) { stopped = true; left++; return }
+    var attempts = Number(r.values.attempts || 0) + 1
     try {
       MailApp.sendEmail({ to: to.join(','), subject: String(r.values.subject || ''), body: String(r.values.body || '') })
       remaining -= to.length
       sent++
-      setRowFields_('MailQueue', r.row, { sent_at: new Date(nowMs).toISOString(), attempts: Number(r.values.attempts || 0) + 1 })
+      setRowFields_('MailQueue', r.row, { sent_at: new Date(nowMs).toISOString(), attempts: attempts })
     } catch (e) {
-      left++
-      setRowFields_('MailQueue', r.row, { attempts: Number(r.values.attempts || 0) + 1, last_error: String((e && e.message) || e).slice(0, 200) })
+      // 1日の上限に達した(残りの数が足りない)時は、回数に数えずに止める
+      remaining = mailRemaining_()
+      if (to.length > remaining) { stopped = true; left++; return }
+      setRowFields_('MailQueue', r.row, { attempts: attempts, last_error: String((e && e.message) || e).slice(0, 200) })
+      if (attempts >= MAIL_MAX_ATTEMPTS) {
+        failed++
+        console.error('メールの送り直しをやめました(' + MAIL_MAX_ATTEMPTS + '回送れませんでした): ' + String(r.values.mail_id) + ' ' + String(r.values.org_id || '') + ' ' + e)
+      } else {
+        left++
+      }
     }
   })
   trimMailQueue_(nowMs)
-  if (sent || left) console.log('レジストリのメール: ' + sent + ' 通を送りました' + (left ? '(上限のため ' + left + ' 通を翌日以降に回しました)' : ''))
-  return { sent: sent, left: left }
+  if (sent || left || failed) {
+    console.log('レジストリのメール: ' + sent + ' 通を送りました' + (left ? '(' + left + ' 通を翌日以降に回しました)' : '') +
+      (failed ? '(' + failed + ' 通は送り直しをやめました)' : ''))
+  }
+  return { sent: sent, left: left, failed: failed }
 }
 
-// 送ってから MAIL_QUEUE_KEEP_DAYS 日を過ぎた行を消す(下から消す)
+// 送ってから MAIL_QUEUE_KEEP_DAYS 日を過ぎた行・送り直しをやめてから(入れてから)同じ日数を過ぎた行を消す(下から消す)
 function trimMailQueue_(nowMs) {
   var sheet = registrySheet_('MailQueue')
   var rows = readRows_('MailQueue')
   for (var i = rows.length - 1; i >= 0; i--) {
-    var at = timeOf_(rows[i].values.sent_at)
+    var at = timeOf_(rows[i].values.sent_at) || (mailQueueFailed_(rows[i].values) ? timeOf_(rows[i].values.queued_at) : 0)
     if (at > 0 && nowMs - at > MAIL_QUEUE_KEEP_DAYS * DAY_MS) sheet.deleteRow(rows[i].row)
   }
 }
 
-// 送れていないメールの状態(管理画面・監視の毎朝のまとめ)
+// 送れていないメールの状態(管理画面・監視の毎朝のまとめ)。failed: 送り直しをやめたもの(MAIL_MAX_ATTEMPTS 回送れなかった)
 function mailQueueStatus_() {
-  var pending = readRows_('MailQueue').filter(function (r) { return String(r.values.mail_id || '') && !String(r.values.sent_at || '') })
+  var all = readRows_('MailQueue').filter(function (r) { return String(r.values.mail_id || '') && !String(r.values.sent_at || '') })
+  var pending = all.filter(function (r) { return !mailQueueFailed_(r.values) })
   var byKind = {}
   var recipients = 0
   var oldest = ''
@@ -2463,7 +2598,14 @@ function mailQueueStatus_() {
     var at = isoOf_(r.values.queued_at)
     if (!oldest || at < oldest) oldest = at
   })
-  return { pending: pending.length, recipients: recipients, byKind: byKind, oldestAt: oldest, remainingToday: mailRemaining_() }
+  var failed = all.filter(function (r) { return mailQueueFailed_(r.values) })
+  var failedByKind = {}
+  failed.forEach(function (r) {
+    var k = String(r.values.kind || 'other')
+    failedByKind[k] = (failedByKind[k] || 0) + 1
+  })
+  return { pending: pending.length, recipients: recipients, byKind: byKind, oldestAt: oldest, remainingToday: mailRemaining_(),
+    failed: failed.length, failedByKind: failedByKind }
 }
 
 // ---- デモの団体(PR S) ----
@@ -2944,11 +3086,14 @@ function gasVersionList_() {
   KNOWN_GAS_VERSIONS.forEach(function (v) {
     byVersion[v.version] = { version: v.version, security: !!v.security, required: !!v.required, note: String(v.note || ''), updatedAt: '', updatedBy: '' }
   })
+  var newestKnown = KNOWN_GAS_VERSIONS.map(function (v) { return v.version }).sort(compareGasVersions_).pop() || ''
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('GasVersions')
   if (sheet) {
     readRows_('GasVersions').forEach(function (r) {
       var version = String(r.values.version || '').trim()
       if (!GAS_VERSION_PATTERN.test(version)) return
+      // コードの一覧のどの版より新しい版(まだ出していない版)は使わない(全団体が「古い」「更新が要る」にならないように)
+      if (!byVersion[version] && newestKnown && compareGasVersions_(version, newestKnown) > 0) return
       byVersion[version] = {
         version: version, security: boolCell_(r.values.security), required: boolCell_(r.values.required),
         note: String(r.values.note || ''), updatedAt: isoOf_(r.values.updated_at), updatedBy: String(r.values.updated_by || ''),
@@ -3008,10 +3153,22 @@ function gasVersionCounts_(nowMs) {
 function setGasVersionMarks_(body, nowMs) {
   var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
+  // 印は、全団体の「更新が要る」の判定を変える(誤って未来の版に付けると、全団体が更新が要るになる)
+  requireAdminReauth_(session, nowMs, '版の印の変更')
   var version = String(body.version || '').trim()
   if (!GAS_VERSION_PATTERN.test(version)) throw registryError_('版は「YYYY.MM.DD-N」の形で入れてください。')
   var marks = { security: body.security === true, required: body.required === true, note: cleanText_(body.note, 500) }
   var reason = cleanText_(body.reason, 500)
+  // 印を付けられるのは、コードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。GasVersions に前から残っている版
+  // (一覧から外した古い版・以前に入れた知らない版)は、印を外すことだけできる
+  var known = KNOWN_GAS_VERSIONS.some(function (v) { return v.version === version })
+  if (!known) {
+    var listed = gasVersionList_().some(function (v) { return v.version === version })
+    if (!listed || marks.security || marks.required) {
+      throw registryError_('版 ' + version + ' は、レジストリの版の一覧(registry/Code.gs の KNOWN_GAS_VERSIONS)にありません。' +
+        '新しい版は、先にコードの一覧に足してレジストリを更新してください。')
+    }
+  }
   return withRegistryLock_(function () {
     var before = null
     gasVersionList_().forEach(function (v) { if (v.version === version) before = { security: v.security, required: v.required, note: v.note } })

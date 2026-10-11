@@ -309,6 +309,9 @@ export interface MailQueueStatus {
   oldestAt: string
   // 今日まだ送れる宛先の数
   remainingToday: number
+  // 送り直しをやめたもの(何回送っても失敗したもの)の数と種類ごとの数。古いレジストリは返さない
+  failed?: number
+  failedByKind?: Record<string, number>
 }
 export const MAIL_KIND_LABELS: Record<string, string> = { notice: '停止の予告', reminder: 'リマインド', send: 'アンケートの送付', other: 'そのほか' }
 
