@@ -10,6 +10,7 @@
 // 場合だけ要求する(既定では無効)。
 
 import { isGoogleCalendarReadEnabled } from './features'
+import { orgScopedStorageKey } from './org-directory'
 import { neutralizeFormula } from './csv-safe'
 
 export const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
@@ -200,12 +201,13 @@ export async function syncTasksToSheet(
 // 既存のシートに連携)で保存したシートIDは LEGACY のキーに残っている場合がある。
 // そのシートは drive.file では書き込めないため、新しいシートの作成を案内する。
 
+// 団体も付ける(メンバーの ID は団体ごとの通し番号なので、ほかの団体の同じ ID の人のシートに書かない)
 function personalSheetKey(userId: string) {
-  return `ohsumi-personal-sheet-v2-${userId}`
+  return orgScopedStorageKey('ohsumi-personal-sheet-v2-', userId)
 }
 
 function legacyPersonalSheetKey(userId: string) {
-  return `ohsumi-personal-sheet-id-${userId}`
+  return orgScopedStorageKey('ohsumi-personal-sheet-id-', userId)
 }
 
 export function loadPersonalSheet(userId: string): PersonalSheet | null {

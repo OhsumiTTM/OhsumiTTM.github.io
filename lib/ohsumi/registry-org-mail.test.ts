@@ -4,7 +4,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { setup, type TokenInfo } from './registry-harness'
+import { setup, type TokenInfo, checkInTs } from './registry-harness'
 
 const CLIENT = 'registry-client.apps.googleusercontent.com'
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -32,7 +32,7 @@ function ready() {
   expect(t.post({ action: 'setOrgPlan', session, orgId: ORG_A, plan: 'ohsumi', reason: '' }).ok).toBe(true)
   const NEW = String((t.gas as unknown as { ORG_MAIL_DELIVERY_SINCE: string }).ORG_MAIL_DELIVERY_SINCE)
   const checkIn = (extra: Record<string, unknown> = {}, gasVersion = NEW) => {
-    const ts = Math.floor(Date.now() / 1000)
+    const ts = checkInTs()
     const res = t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion, sig: createHmac('sha256', key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url'), ...extra })
     expect(res.ok, JSON.stringify(res)).toBe(true)
     return res.result as { mailTasks?: Task[] }
@@ -97,7 +97,8 @@ describe('団体の GAS がメールを送る(対応した版)', () => {
   it('停止の予告(14・7・1日前)も、団体の GAS に渡す。止まっている団体には、レジストリが送る', () => {
     const t = ready()
     t.checkIn()
-    const at = Date.now() + 10 * DAY
+    // 14日前を1時間過ぎたところ(団体の GAS が checkIn で受け取ったばかりで、まだ送ったと伝えていない)
+    const at = Date.now() + 14 * DAY - 3600 * 1000
     t.org().set('suspend_at', new Date(at).toISOString())
     t.org().set('suspend_kind', 'suspend')
     t.org().set('suspend_reason', '契約の終了')

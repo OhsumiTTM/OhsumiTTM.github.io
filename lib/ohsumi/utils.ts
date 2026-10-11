@@ -74,6 +74,13 @@ export function todayStr(): string {
   return todayStrInTz(loadCachedTimezone())
 }
 
+/** その日(端末の時刻)の0時 */
+export function startOfLocalDay(d: Date): Date {
+  const out = new Date(d.getTime())
+  out.setHours(0, 0, 0, 0)
+  return out
+}
+
 export function formatDeadline(d: string | null): string {
   if (!d) return '未設定'
   const [y, m, day] = d.split('-')

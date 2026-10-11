@@ -1,7 +1,7 @@
 // レジストリ(registry/Code.gs)の定量データ(PR N): 団体の GAS が週1回送る集計値(reportMetrics)と、checkIn のプラン
 import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { setup, type TokenInfo } from './registry-harness'
+import { setup, type TokenInfo, checkInTs } from './registry-harness'
 
 const CLIENT = 'registry-client.apps.googleusercontent.com'
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -60,7 +60,7 @@ describe('reportMetrics', () => {
   it('checkIn で、団体のプランを伝える', () => {
     const t = ready()
     const checkIn = () => {
-      const ts = Math.floor(Date.now() / 1000)
+      const ts = checkInTs()
       return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion: '2026.10.01-9', sig: createHmac('sha256', t.key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url') })
     }
     expect(checkIn().result.plan).toBe('')

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import { expect } from 'vitest'
-import { setup as setupRegistry, type TokenInfo } from './registry-harness'
+import { checkInTs, setup as setupRegistry, type TokenInfo } from './registry-harness'
 
 export const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
 export const REGISTRY_URL = 'https://script.google.com/macros/s/REGISTRY/exec'
@@ -155,6 +155,14 @@ export function org(reg: Reg, opts: { members?: string[][]; lose?: number[]; pro
   c.sendMail_ = (m: { to: string; subject: string; body: string }) => { mails.push(m); return true }
   c.getAllMemberEmails_ = () => Object.fromEntries(Object.entries(opts.emails ?? {}).map(([email, id]) => [id, email]))
   c.getSettingValue_ = (key: string) => (key === 'org_name' ? 'テスト団体' : '')
+  // レジストリは同じ署名(団体ID と時刻(秒))の checkIn の2回目を断る(送り直しの防止)。テストは同じ秒に何回も
+  // 確かめるので、checkIn の時刻だけ、呼ぶたびに1秒ずつ進める(本物の団体の GAS は、1時間ごとなどに呼ぶ)
+  const realRefresh = c.refreshContractState_ as (...a: unknown[]) => unknown
+  const realNowSec = c.nowSec_ as () => number
+  c.refreshContractState_ = (...a: unknown[]) => {
+    c.nowSec_ = () => checkInTs()
+    try { return realRefresh(...a) } finally { c.nowSec_ = realNowSec }
+  }
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown>
   const post = (body: object) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: JSON.stringify(body) } }).text)
   const register = (code: string, now?: number) => (gas.registerWithRegistry_ as (c: string, d?: object) => Record<string, unknown>)(code, now ? { now: () => now } : undefined)

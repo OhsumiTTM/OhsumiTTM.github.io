@@ -756,6 +756,10 @@ function GasVersionsPanel({ versions, session, onChanged, onAuthError }: { versi
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editing) return
+    if (needsReauth(session)) {
+      onAuthError('版の印の変更の前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。')
+      return
+    }
     setBusy(true)
     setMessage(null)
     try {
@@ -763,7 +767,7 @@ function GasVersionsPanel({ versions, session, onChanged, onAuthError }: { versi
       setEditing(null)
       onChanged()
     } catch (err) {
-      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      if (err instanceof RegistryError && (err.authError || err.reauthRequired)) onAuthError(err.message)
       else setMessage(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
@@ -1708,14 +1712,26 @@ function DiagnosticsTab({ overview, session, onAuthError }: { overview: Overview
 
 // レジストリのメールの1日の上限(PR R)。送れていないメールがある時だけ、どのタブでも上に出す
 function MailQueueNotice({ q }: { q: MailQueueStatus }) {
-  if (!q.pending) return null
+  const failed = q.failed ?? 0
+  if (!q.pending && !failed) return null
   const kinds = Object.keys(q.byKind).map((k) => `${MAIL_KIND_LABELS[k] ?? k} ${q.byKind[k]}`).join('・')
+  const failedKinds = Object.keys(q.failedByKind ?? {}).map((k) => `${MAIL_KIND_LABELS[k] ?? k} ${q.failedByKind![k]}`).join('・')
   return (
-    <p data-mail-queue className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
-      レジストリのメールで、1日の上限のため送れていないもの: {q.pending} 通(宛先 {q.recipients} 件。{kinds})。
-      翌日以降の毎日の処理で、停止の予告 → リマインド → アンケートの送付の順に送ります。今日の残り: {q.remainingToday}
-      {q.oldestAt ? `。いちばん古いもの: ${fmt(q.oldestAt)}` : ''}
-    </p>
+    <div className="mb-3 space-y-2">
+      {q.pending > 0 && (
+        <p data-mail-queue className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
+          レジストリのメールで、1日の上限のため送れていないもの: {q.pending} 通(宛先 {q.recipients} 件。{kinds})。
+          翌日以降の毎日の処理で、停止の予告 → リマインド → アンケートの送付の順に送ります。今日の残り: {q.remainingToday}
+          {q.oldestAt ? `。いちばん古いもの: ${fmt(q.oldestAt)}` : ''}
+        </p>
+      )}
+      {failed > 0 && (
+        <p data-mail-queue-failed className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs break-words text-red-900">
+          何回送っても送れず、送り直しをやめたレジストリのメール: {failed} 通({failedKinds})。
+          レジストリのスプレッドシートの MailQueue シートの last_error で理由を確かめ、必要なら担当者に直接連絡してください。
+        </p>
+      )}
+    </div>
   )
 }
 

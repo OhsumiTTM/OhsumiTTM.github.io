@@ -332,6 +332,8 @@ export const en = {
   'usage.errorsHint': 'Only the time, action name and error type of up to the latest 500 errors are kept (no error messages or entered content). conflict means someone else changed it first, lockBusy means the server was busy, and entries starting with client: are errors in the screen.',
   'app.cellTooLongNoticeTitle': 'Not saved because this record is too long',
   'app.cellTooLongNoticeBody': 'This record exceeded the maximum length of one record (50,000 characters). You can copy what you wrote below. The screen has been reset to what is saved. Ask the representative about tidying up old entries.',
+  'app.saveFailedNoticeTitle': 'Could not be saved',
+  'app.saveFailedNoticeBody': 'This could not be saved because the connection failed. It has been removed from the screen, so copy what you wrote below and enter it again.',
   'app.conflictNoticeTitle': 'Not saved because someone else changed this first',
   'app.conflictNoticeBody': 'Someone else changed this after you opened it. To avoid overwriting their change, your save was stopped and the latest content has been loaded. You can copy what you wrote below; check the latest content, then enter it again.',
   'app.longRecordWritten': 'This record is getting long ({name}, {field}: {length} / {max} characters). Once it exceeds the limit it can no longer be saved, so ask the representative about tidying up old entries.',

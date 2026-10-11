@@ -9,6 +9,7 @@ import { Drawer, Modal } from '../modal'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Button } from '@/components/ui/button'
 import { useOhsumi } from '@/lib/ohsumi/store'
+import { orgScopedStorageKey } from '@/lib/ohsumi/org-directory'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '../toast'
 import { EditableTags } from '../editable-tags'
@@ -2475,8 +2476,9 @@ interface TimerState {
   accumulatedMs: number
 }
 
+// 団体も付ける(タスク・メンバーの ID は団体ごとの通し番号なので、ほかの団体の同じ ID のタスクに出さない)
 function timerStorageKey(taskId: string, userId: string): string {
-  return `ohsumi-timer-${taskId}-${userId}`
+  return orgScopedStorageKey('ohsumi-timer-', taskId, userId)
 }
 
 function loadTimerState(taskId: string, userId: string): TimerState {

@@ -10,6 +10,8 @@ class MemoryStorage {
   getItem(k: string) { return this.data.get(k) ?? null }
   setItem(k: string, v: string) { this.data.set(k, v) }
   removeItem(k: string) { this.data.delete(k) }
+  get length() { return this.data.size }
+  key(i: number) { return [...this.data.keys()][i] ?? null }
 }
 
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -331,6 +333,29 @@ describe('団体の切り替え', () => {
     for (const k of d.ORG_SCOPED_STORAGE_KEYS) expect(local.getItem(k), k).toBe('x')
     d.activateOrg(saved(ORG_A, URL_A2))
     for (const k of d.ORG_SCOPED_STORAGE_KEYS) expect(local.getItem(k), k).toBe('x')
+  })
+
+  it('団体と人を付けた保存(書きかけ・計測・表示の設定・個人のシート)は、切り替えた先の団体の分だけ残し、団体を付けていない以前のキーは消す', async () => {
+    const d = await load()
+    local.setItem('ohsumi-current-org', ORG_A)
+    d.activateOrg(saved(ORG_A, URL_A))
+    const keyA = d.orgScopedStorageKey('ohsumi-input-draft-', '1')
+    expect(keyA).toBe(`ohsumi-input-draft-o:${ORG_A}:1`)
+    local.setItem(keyA, 'A の書きかけ')
+    local.setItem(`ohsumi-timer-o:${ORG_B}:5:1`, 'B の計測')
+    local.setItem(`ohsumi-card-fields-o:${ORG_B}:1`, 'B の表示')
+    local.setItem('ohsumi-input-draft-1', '以前の書きかけ')
+    local.setItem('ohsumi-personal-sheet-v2-1', '以前のシート')
+    local.setItem('ohsumi-locale', 'en')
+    d.activateOrg(saved(ORG_B, URL_B))
+    expect(local.getItem(keyA)).toBeNull()
+    expect(local.getItem('ohsumi-input-draft-1')).toBeNull()
+    expect(local.getItem('ohsumi-personal-sheet-v2-1')).toBeNull()
+    expect(local.getItem(`ohsumi-timer-o:${ORG_B}:5:1`)).toBe('B の計測')
+    expect(local.getItem(`ohsumi-card-fields-o:${ORG_B}:1`)).toBe('B の表示')
+    expect(local.getItem('ohsumi-locale')).toBe('en')
+    // 同じ ID の人でも、団体が違えばキーが違う
+    expect(d.orgScopedStorageKey('ohsumi-input-draft-', '1')).not.toBe(keyA)
   })
 
   it('団体ごとの保存の一覧は、store.tsx の団体名・ロゴ・テーマ色・データの保存のキーを含む', async () => {

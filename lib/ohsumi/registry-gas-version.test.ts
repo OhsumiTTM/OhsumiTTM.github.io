@@ -4,7 +4,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { setup, type TokenInfo } from './registry-harness'
+import { setup, type TokenInfo, checkInTs } from './registry-harness'
 
 const CLIENT = 'registry-client.apps.googleusercontent.com'
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -37,7 +37,7 @@ function ready() {
   const code = t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
   const key = String(t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: NONCE }).result.registryKey)
   const checkIn = (gasVersion: string) => {
-    const ts = Math.floor(Date.now() / 1000)
+    const ts = checkInTs()
     return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion, sig: createHmac('sha256', key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url') })
   }
   const org = () => t.post({ action: 'adminOverview', session }).result.orgs.find((o: { orgId: string }) => o.orgId === ORG_A)
@@ -103,6 +103,9 @@ describe('checkIn と管理画面の一覧', () => {
   it('管理画面で印を付けられる(記録に残る)。新しい版に「更新が要る」を付けると、古い団体は更新が要る', () => {
     const t = ready()
     t.checkIn(CURRENT)
+    // 印を付けられるのは、コードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出した(一覧に足した)ことにする
+    ;(t.gas.KNOWN_GAS_VERSIONS as unknown as object[]).unshift({ version: '2099.01.01-1', security: false, required: false, note: '' })
+    ;(t.gas.forgetGasVersions_ as () => void)()
     const res = t.mark('2099.01.01-1', { required: true, note: '大事な修正' })
     expect(res.ok, res.error).toBe(true)
     expect(res.result.versions[0]).toMatchObject({ version: '2099.01.01-1', required: true, security: false, note: '大事な修正', updatedBy: 'admin@example.com' })

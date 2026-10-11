@@ -6,6 +6,14 @@ import vm from 'node:vm'
 
 export const CODE = readFileSync(join(__dirname, '..', '..', 'registry', 'Code.gs'), 'utf8')
 
+// checkIn の時刻(Unix 秒)。レジストリは同じ署名(団体ID と時刻)の2回目を断る(送り直しの防止)ので、
+// テストで続けて checkIn する時は、呼ぶたびに1秒ずつ進める(本物の団体の GAS は、1時間ごとなどに呼ぶ)
+let lastCheckInTs = 0
+export function checkInTs(): number {
+  lastCheckInTs = Math.max(Math.floor(Date.now() / 1000), lastCheckInTs + 1)
+  return lastCheckInTs
+}
+
 export class FakeSheet {
   rows: unknown[][] = []
   protections: object[] = []

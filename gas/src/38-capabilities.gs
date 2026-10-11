@@ -62,7 +62,7 @@ function normalizeCapabilities_(list) {
   return CAPABILITY_KEYS.filter(function (k) { return seen[k] })
 }
 
-// 役職のできる操作(人ごとの例外は含まない)。一覧に無い役職は、今までと同じく制限なしの管理者として扱う
+// 役職のできる操作(人ごとの例外は含まない)。一覧に無い役職は一般と同じ(何もできない)
 function roleCapabilities_(roles, ref) {
   var tier = roleTier_(roles, ref)
   if (tier === 'top') return CAPABILITY_KEYS.slice()

@@ -761,7 +761,9 @@ function runWriteAction_(body, actingMember) {
       result = updateMemberFields_(body.memberId, { absent_dates: checkDateList_(body.dates, '不在の日').join(',') })
       break
     case 'updateLastLogin':
-      result = updateMemberFields_(body.memberId, { last_login: new Date().toISOString() })
+      // 常にログインしている本人(actingMember.id)の日時だけを書く。body.memberId は見ない
+      // (ほかの人の最終ログイン日時を書き換えられないように)
+      result = updateMemberFields_(actingMember.id, { last_login: new Date().toISOString() })
       break
     case 'submitSurveyResponse':
       // actingMember.id を使うことでクライアントの自己申告値(body.memberId)による偽装を防ぐ

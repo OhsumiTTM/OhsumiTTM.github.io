@@ -307,7 +307,7 @@ function authorizeAction_(acting, action, body) {
     'uploadExpenseReceipt',    // EXP-003: 領収書アップロードはログイン済み誰でも
     'submitCustomForm',        // フォーム申請はログイン済み誰でも
     'submitDailyReport',       // REP-004: 日報・週報の保存はログイン済み誰でも
-    'updateLastLogin',         // ログイン日時更新は誰でも（本人のみ実質的）
+    'updateLastLogin',         // ログイン日時の更新。常に acting.id が対象(body の memberId は見ない)
     'translateText',           // 自由入力テキストの自動翻訳は読み取り専用、誰でも
     'submitSurveyResponse',    // アンケート回答の送信はログイン済み誰でも（本人のみ実質的）
     'approveTaskReview',       // 複数確認者の承認（本人が確認者かどうかは下記でチェック）

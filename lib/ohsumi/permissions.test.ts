@@ -45,8 +45,8 @@ describe('isFullAdminRole', () => {
     expect(isFullAdminRole(UNRESTRICTED, '一般')).toBe(false)
   })
 
-  it('a role name not in the list is still full admin (as before)', () => {
-    expect(isFullAdminRole(ROLES, '未知の役職')).toBe(true)
+  it('a role name not in the list is treated as 一般 (least privilege)', () => {
+    expect(isFullAdminRole(ROLES, '未知の役職')).toBe(false)
   })
 
   it('after migration, roles are judged by their type, whatever their names are', () => {

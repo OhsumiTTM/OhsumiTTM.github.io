@@ -1235,8 +1235,25 @@ function parseRolesSetting_(value) {
   return validateRoles_(roles).length === 0 ? roles : null
 }
 
+// roles が書いてあるのに読めない(JSON が壊れている・決まりに合わない)か
+function rolesSettingBroken_(settings) {
+  return !!String(settings.roles || '').trim() && !parseRolesSetting_(settings.roles)
+}
+
+// roles が読めない間の役職(一般と最上位だけ)。今までの設定から組み立てると、移行の後に
+// 残った役職名(班長など)が既定の制限なしの管理者になってしまうため、管理者の役職は作らない。
+// 最上位の人(role 列が top か 代表)は権限を保ち、Settings を直せる。ほかの人は一般として扱う
+function brokenRolesFallback_() {
+  return [
+    { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
+    { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
+  ]
+}
+
 function rolesFromSettings_(settings) {
-  return parseRolesSetting_(settings.roles) || rolesFromLegacy_(settings)
+  var parsed = parseRolesSetting_(settings.roles)
+  if (parsed) return parsed
+  return rolesSettingBroken_(settings) ? brokenRolesFallback_() : rolesFromLegacy_(settings)
 }
 
 function validateRoles_(roles) {
@@ -1262,11 +1279,13 @@ function findRole_(roles, ref) {
   return undefined
 }
 
+// 役職の種類。空は一般。一覧に無い役職(書き間違い・消した役職など)も一般として扱う
+// (いちばん権限の少ない扱い。管理者にしたい役職は、役職の一覧に足す)
 function roleTier_(roles, ref) {
   var v = String(ref === null || ref === undefined ? '' : ref).trim()
   if (!v) return 'base'
   var role = findRole_(roles, v)
-  return role ? role.tier : 'admin'
+  return role ? role.tier : 'base'
 }
 
 function isTopRoleRef_(roles, ref) { return roleTier_(roles, ref) === 'top' }
@@ -1326,7 +1345,7 @@ function readRoleSettings_() {
 var _requestRoles = null
 function requestRolesFrom_(settings) {
   var parsed = parseRolesSetting_(settings.roles)
-  return { roles: parsed || rolesFromLegacy_(settings), fromSetting: !!parsed }
+  return { roles: rolesFromSettings_(settings), fromSetting: !!parsed }
 }
 function getRoles_() {
   if (!_requestRoles) _requestRoles = requestRolesFrom_(readRoleSettings_())
@@ -1732,6 +1751,11 @@ function setupRolesSetting_() {
   invalidateRoles_()
   if (hasRolesSetting_()) return 'already'
   var legacy = readRoleSettings_()
+  // roles が壊れている時は上書きしない(直せば元の役職に戻せるように)
+  if (rolesSettingBroken_(legacy)) {
+    console.log('⚠️ 役職の設定(roles)が読めません。Settings の roles を直してください(直すまで、最上位の人以外は一般として扱います)')
+    return 'broken'
+  }
   var hasLegacy = ['role_levels', 'restricted_roles', 'role_permissions', 'job_requirements'].some(function (k) { return !!legacy[k] })
   var roles = hasLegacy ? rolesWithCodeIds_(getRoles_()) : defaultRoles_()
   updateSetting_('roles', JSON.stringify(roles))
@@ -2376,7 +2400,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.11-2'
+var OHSUMI_GAS_VERSION = '2026.10.11-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -4198,6 +4222,10 @@ function submitQuizResult_(quizId, memberId, answers, acting) {
 
   var questions = quiz.questions || []
   if (questions.length === 0) throw userError_('検定に設問がありません。')
+  // 受験の回数の上限(操作した人ごと)。返すのは合否と点数だけで、どの設問が正解かは返さない
+  if (!takeRateLimit_('quiz', String(acting.id), 1)) {
+    throw userError_('検定の受験は1時間に' + rateLimitOf_('quiz') + '回までです。しばらくしてから、もう一度受けてください。')
+  }
 
   var correct = 0
   for (var j = 0; j < questions.length; j++) {
@@ -4570,7 +4598,7 @@ function authorizeAction_(acting, action, body) {
     'uploadExpenseReceipt',    // EXP-003: 領収書アップロードはログイン済み誰でも
     'submitCustomForm',        // フォーム申請はログイン済み誰でも
     'submitDailyReport',       // REP-004: 日報・週報の保存はログイン済み誰でも
-    'updateLastLogin',         // ログイン日時更新は誰でも（本人のみ実質的）
+    'updateLastLogin',         // ログイン日時の更新。常に acting.id が対象(body の memberId は見ない)
     'translateText',           // 自由入力テキストの自動翻訳は読み取り専用、誰でも
     'submitSurveyResponse',    // アンケート回答の送信はログイン済み誰でも（本人のみ実質的）
     'approveTaskReview',       // 複数確認者の承認（本人が確認者かどうかは下記でチェック）
@@ -6484,7 +6512,9 @@ function runWriteAction_(body, actingMember) {
       result = updateMemberFields_(body.memberId, { absent_dates: checkDateList_(body.dates, '不在の日').join(',') })
       break
     case 'updateLastLogin':
-      result = updateMemberFields_(body.memberId, { last_login: new Date().toISOString() })
+      // 常にログインしている本人(actingMember.id)の日時だけを書く。body.memberId は見ない
+      // (ほかの人の最終ログイン日時を書き換えられないように)
+      result = updateMemberFields_(actingMember.id, { last_login: new Date().toISOString() })
       break
     case 'submitSurveyResponse':
       // actingMember.id を使うことでクライアントの自己申告値(body.memberId)による偽装を防ぐ
@@ -7423,6 +7453,8 @@ var RATE_LIMITS = {
   clientError: { limit: 30, windowSec: 3600, tunable: 'clientErrorPerHour' },
   // 兼部の統合表示の読み込み(getMyDigest。1人1時間)
   digest: { limit: 120, windowSec: 3600 },
+  // 検定の受験(submitQuizResult。受ける人ごとに1時間)。点数から正解を総当たりで探られないように
+  quiz: { limit: 10, windowSec: 3600 },
 }
 // 今の上限(レジストリから届いた値。届いていなければ RATE_LIMITS の limit)
 function rateLimitOf_(kind) {
@@ -14250,16 +14282,18 @@ function purgeMember_(memberId, nowMs) {
   fields.inactive = 'TRUE'
   fields.purge_at = ''
   fields.personal_data_purged_at = new Date(nowMs).toISOString()
-  // メールアドレスは、まとめ・キューの片付けに使ってから消す
+  // メールアドレスは、カレンダー・まとめ・キューの片付けに使ってから消す
   var emails = String(getAllMemberEmails_()[String(memberId)] || '')
-  updateRowFields_(SHEET_MEMBERS, memberId, fields)
-  deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
-  deletePersonalStore_(memberId)
-  forgetPersonalProps_(memberId, emails)
-  bumpMemberEmailsVersion_()
-  // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)
+  // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)。
+  // 時間のかかる処理を先に済ませ、消した印(personal_data_purged_at)は最後に書く。途中で止まった時は
+  // 印が無いので、次の日にもう一度消す(どの処理も、2回行っても同じ結果になる)
   removeCalendarGuest_(emails, nowMs)
   trashAvatarFiles_(memberId)
+  deletePersonalStore_(memberId)
+  forgetPersonalProps_(memberId, emails)
+  deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
+  bumpMemberEmailsVersion_()
+  updateRowFields_(SHEET_MEMBERS, memberId, fields)
 }
 
 // 個人情報を消す時に、カレンダーの予定([Ohsumi] で始まる予定。前後 PURGE_CALENDAR_DAYS 日)のゲストから、そのメールアドレスを外す
@@ -14341,13 +14375,25 @@ function deleteRowsWhere_(sheetName, test) {
   return removed
 }
 
-// 期限を過ぎた個人情報を消す(毎日の処理・バックアップから戻した直後)。ロックを取った中で呼ぶ
-function purgeExpiredPersonalData_(nowMs, actorId) {
+// 毎日の処理で個人情報を消すのに使ってよい時間(消し始めてから)。1人ずつ、カレンダーの予定(前後 400 日)と
+// アップロード用のフォルダを調べるため、人数が多いと GAS の1回の実行の上限(6分)に届くことがある。
+// 時間を過ぎたら、残りの人は次の日に回す
+var PURGE_TIME_BUDGET_MS = 150 * 1000
+
+// 期限を過ぎた個人情報を消す(毎日の処理・バックアップから戻した直後)。ロックを取った中で呼ぶ。
+// deadlineMs(省略可)を過ぎたら、まだ消していない人は次の回に回す(done.deferred に人数)。
+// 1人分の途中では止めない(消した印は、その人の分をすべて済ませてから書く。purgeMember_)
+function purgeExpiredPersonalData_(nowMs, actorId, deadlineMs) {
   var days = personalDataRetentionDays_()
   var done = { members: [], candidates: [] }
+  var deferred = 0
   pendingPersonalData_(days).forEach(function (p) {
     var at = Date.parse(p.purgeAt)
     if (!(at > 0) || at > nowMs) return
+    if (deadlineMs && Date.now() >= deadlineMs) {
+      deferred++
+      return
+    }
     if (p.kind === 'member') {
       purgeMember_(p.id, nowMs)
       done.members.push(p.id)
@@ -14356,6 +14402,10 @@ function purgeExpiredPersonalData_(nowMs, actorId) {
       done.candidates.push(p.id)
     }
   })
+  if (deferred) {
+    done.deferred = deferred
+    console.warn('個人情報を消す時間の上限に達したため、' + deferred + '件を次の日に回しました')
+  }
   // 対応するメンバーがいないメールアドレスの行は、ここでは消さない(代表が一覧を確かめて消す。orphanEmailRows_)
   if (done.members.length || done.candidates.length) {
     appendOrgAudit_(actorId || 'system', 'purgePersonalData', '', done)
@@ -14397,12 +14447,12 @@ function deleteOrphanEmails_(ids, actorId) {
   return { deleted: removed, skipped: Object.keys(wanted).length - targets.length }
 }
 
-// 毎日の処理から(ロックを取る)
+// 毎日の処理から(ロックを取る)。消し始めてから PURGE_TIME_BUDGET_MS を過ぎたら、残りは次の日に回す
 function purgeExpiredPersonalDataLocked_(nowMs) {
   var lock = LockService.getScriptLock()
   lock.waitLock(30000)
   try {
-    return purgeExpiredPersonalData_(nowMs, 'system')
+    return purgeExpiredPersonalData_(nowMs, 'system', Date.now() + PURGE_TIME_BUDGET_MS)
   } finally {
     SpreadsheetApp.flush()
     lock.releaseLock()
@@ -14674,8 +14724,6 @@ function dailyMaintenanceUnrecorded_() {
   if (restoreInProgress_()) return
   // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
   dailyBackup_(Date.now())
-  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
-  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
   // ゴミ箱に入れてから30日たったタスクを消す
   try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   // 完了してから日数がたったタスクを TasksArchive に移す
@@ -14696,6 +14744,9 @@ function dailyMaintenanceUnrecorded_() {
   try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + maskEmailsIn_(String(err))) }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
+  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す。時間がかかることがあるので最後に行い、
+  // 時間の上限(PURGE_TIME_BUDGET_MS)を過ぎたら残りは次の日に回す(ほかの毎日の処理を止めないように)
+  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
 }
 
 // ---- 利用の集計とエラーの記録 ----
@@ -16143,7 +16194,7 @@ function normalizeCapabilities_(list) {
   return CAPABILITY_KEYS.filter(function (k) { return seen[k] })
 }
 
-// 役職のできる操作(人ごとの例外は含まない)。一覧に無い役職は、今までと同じく制限なしの管理者として扱う
+// 役職のできる操作(人ごとの例外は含まない)。一覧に無い役職は一般と同じ(何もできない)
 function roleCapabilities_(roles, ref) {
   var tier = roleTier_(roles, ref)
   if (tier === 'top') return CAPABILITY_KEYS.slice()

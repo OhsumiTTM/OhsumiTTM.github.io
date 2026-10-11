@@ -214,8 +214,6 @@ function dailyMaintenanceUnrecorded_() {
   if (restoreInProgress_()) return
   // 最初にバックアップを作る(この後の処理が失敗しても、今日のコピーは残る)
   dailyBackup_(Date.now())
-  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す
-  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
   // ゴミ箱に入れてから30日たったタスクを消す
   try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   // 完了してから日数がたったタスクを TasksArchive に移す
@@ -236,6 +234,9 @@ function dailyMaintenanceUnrecorded_() {
   try { checkSharing_(Date.now()) } catch (err) { console.error('共有を確かめられませんでした: ' + maskEmailsIn_(String(err))) }
   // 定期タスクの生成などでシートが変わるため、読み取りキャッシュを無効にする
   bumpDataVersion()
+  // 保存期間を過ぎた個人情報(退会したメンバー・採用しなかった候補者)を消す。時間がかかることがあるので最後に行い、
+  // 時間の上限(PURGE_TIME_BUDGET_MS)を過ぎたら残りは次の日に回す(ほかの毎日の処理を止めないように)
+  try { purgeExpiredPersonalDataLocked_(Date.now()) } catch (err) { console.error('個人情報を消せませんでした: ' + maskEmailsIn_(String(err))) }
 }
 
 // ---- 利用の集計とエラーの記録 ----

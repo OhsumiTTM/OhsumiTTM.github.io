@@ -2,6 +2,7 @@
 
 import { migrateAdminSections, sectionsForSave } from './admin-sections'
 import { revertTaskChange } from './optimistic'
+import { currentTaskId, swapTaskIds } from './temp-ids'
 import {
   createContext,
   useContext,
@@ -93,7 +94,6 @@ import {
   rolesFromLegacy,
   rolesToLegacySettings,
   sameRole,
-  withMemberRoles,
   resolveMemberCapabilities,
   roleCapabilities,
   type RoleDef,
@@ -128,6 +128,7 @@ import {
   isSettingsConfigured,
   remoteApi,
   toCreatePayload,
+  type CreateTaskPayload,
   type WebhookStatus,
 } from './remote'
 import { selectProjectHealthReports } from './project-health-report'
@@ -140,7 +141,7 @@ import { doneTaskCountsOf, levelPointsFor, skillLevelOf, type SkillEvidence, typ
 import { useI18n } from './i18n'
 import { cacheTimezone, DEFAULT_TIMEZONE } from './timezone'
 import { setCalendarToken } from './google-sheet-sync'
-import { ORG_CHANGED_EVENT, getActiveOrg, rememberOrgName, setLoginNotice, type LoginNotice } from './org-directory'
+import { ORG_CHANGED_EVENT, ORG_SCOPED_STORAGE_PREFIXES, getActiveOrg, rememberOrgName, setLoginNotice, type LoginNotice } from './org-directory'
 import {
   activateSession,
   clearSession,
@@ -706,10 +707,13 @@ const THEME_COLOR_STORAGE_KEY = 'ohsumi-theme-color'
 // ディング済みの記録などは残す)
 // INPUT の書きかけ(components/ohsumi/input/input-screen.tsx)
 const INPUT_DRAFT_PREFIX = 'ohsumi-input-draft-'
+// 作業時間の計測(components/ohsumi/output/task-detail-drawer.tsx)。書きかけと同じく、ログインし直す時は残す
+const TIMER_PREFIX = 'ohsumi-timer-'
 const PER_USER_STORAGE_PREFIXES = [
   // 以前の「〇〇さんとして続行」に表示していた名前(残っているブラウザから消す)
   'ohsumi-last-user-name',
-  INPUT_DRAFT_PREFIX,
+  // 団体ごと・人ごとの保存(書きかけ・計測・表示の設定・個人のシート。org-directory.ts)
+  ...ORG_SCOPED_STORAGE_PREFIXES,
   'ohsumi-daily-reports',
   'ohsumi-avatar-url-',
   'ohsumi-org-notification-emails',
@@ -720,7 +724,7 @@ function clearPerUserBrowserData(keepDrafts = false) {
     const keys: string[] = []
     for (let i = 0; i < window.localStorage.length; i++) {
       const key = window.localStorage.key(i)
-      if (!key || (keepDrafts && key.startsWith(INPUT_DRAFT_PREFIX))) continue
+      if (!key || (keepDrafts && (key.startsWith(INPUT_DRAFT_PREFIX) || key.startsWith(TIMER_PREFIX)))) continue
       if (PER_USER_STORAGE_PREFIXES.some((p) => key.startsWith(p))) keys.push(key)
     }
     keys.forEach((k) => window.localStorage.removeItem(k))
@@ -977,12 +981,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 役職の一覧(Settings の roles、無ければ今までの設定から組み立てたもの)
   const [storedRoles, setStoredRoles] = useState<RoleDef[]>(() => rolesFromLegacy({}))
   const [rolesFromSetting, setRolesFromSetting] = useState(false)
-  // 画面で使う役職の一覧。移行前は、メンバーの役職名のうち一覧に無いものも足す
-  // (今までの画面と同じく選択肢に出す。判定は GAS と同じく制限の無い管理者)
-  const roles = useMemo(
-    () => (rolesFromSetting ? storedRoles : withMemberRoles(storedRoles, members.map((m) => m.role))),
-    [storedRoles, rolesFromSetting, members],
-  )
+  // 画面で使う役職の一覧。メンバーの役職が一覧に無い時(書き間違いなど)は、GAS と同じく一般として扱う
+  // (以前は一覧に足して管理者扱いにしていたが、権限が広がりすぎるのでやめた)
+  const roles = storedRoles
   const baseRoleId = useMemo(() => roles.find((r) => r.tier === 'base')?.id ?? DEFAULT_BASE_ROLE_NAME, [roles])
   const roleLevels = useMemo(() => roles.filter((r) => r.tier !== 'base').map((r) => r.id), [roles])
   const restrictedRoles = useMemo(() => roles.filter((r) => r.tier === 'admin' && r.restricted).map((r) => r.id), [roles])
@@ -1116,8 +1117,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   // fire a remote write; clears a stale error banner on success, reports on failure.
   // onFailure を渡した時は、失敗した時に画面の変更を元に戻し(楽観的な更新の取り消し)、戻したことも知らせる
+  // unsavedTexts: 保存できなかった時にコピーできるように出す文章(GAS の断りが文章を返さない時・通信の失敗の時)
   const runRemote = useCallback(
-    (promise: Promise<unknown>, onFailure?: () => void) => {
+    (promise: Promise<unknown>, onFailure?: () => void, unsavedTexts?: string[]) => {
       promise
         .then(() => {
           setRemoteError(null)
@@ -1147,6 +1149,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             setReadOnlyNotice({ texts: err.texts, at: Date.now(), kind: 'conflict' })
             refreshAllRef.current()
           }
+          // それ以外の失敗(通信の失敗など)で、書いた文章を画面から戻した時は、コピーできるように出す
+          const noticed = err instanceof ContractRestrictedError || err instanceof ReloadRequiredError || err instanceof CellTooLongError || err instanceof ConflictError
+          const texts = [...new Set((unsavedTexts ?? []).map((x) => x.trim()).filter(Boolean))]
+          if (!noticed && texts.length && getSessionToken()) setReadOnlyNotice({ texts, at: Date.now(), kind: 'saveFailed' })
           reportRemoteError(err)
         })
     },
@@ -1157,7 +1163,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // change は、変える前のタスクから変えた後のタスクを作る(setTasks の中で呼ぶ)。
   // 保存を待っている間に同じ項目をさらに変えていたら戻さない(lib/ohsumi/optimistic.ts)
   const changeTaskOptimistically = useCallback(
-    <K extends keyof Task>(id: string, fields: readonly K[], change: (t: Task) => Task, save: () => Promise<unknown>) => {
+    <K extends keyof Task>(givenId: string, fields: readonly K[], change: (t: Task) => Task, save: () => Promise<unknown>) => {
+      // 画面が仮の ID のままでも、本当の ID に差し替わっていれば、そのタスクを変える
+      const id = currentTaskId(givenId)
       let before: Task | undefined
       let after: Task | undefined
       setTasks((prev) =>
@@ -1169,8 +1177,39 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         }),
       )
       if (isRemoteConfigured) {
-        runRemote(save(), () => setTasks((prev) => revertTaskChange(prev, id, before, after, fields)))
+        // 作ったばかりのタスク(仮の ID)は、保存を待つ間に本当の ID に差し替わっていることがある。戻す時は今の ID で探す
+        runRemote(save(), () => setTasks((prev) => revertTaskChange(prev, currentTaskId(id), before, after, fields)))
       }
+    },
+    [runRemote],
+  )
+
+  // タスクを GAS に作る。画面には仮の ID('t-…')ですぐに出し、GAS が付けた ID に差し替える
+  // (ほかのタスクの dependsOnIds も)。作れなかった時は、仮のタスクを画面から除き(onFailed で、ほかの
+  // 変更も戻す)、書いた文章をコピーできるように出す(unsavedTexts)。onCreated は差し替えた後の処理
+  const createTasksRemote = useCallback(
+    (
+      payloads: CreateTaskPayload[],
+      opts: { onCreated?: (realId: Map<string, string>) => void; onFailed?: () => void; unsavedTexts?: string[] } = {},
+    ) => {
+      const tempIds = new Set(payloads.map((p) => p.tempId))
+      const created = remoteApi.createTasks(payloads).then((mapping) => {
+        const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
+        setTasks((prev) => swapTaskIds(prev, realId))
+        opts.onCreated?.(realId)
+      })
+      runRemote(
+        created,
+        () => {
+          setTasks((prev) =>
+            prev
+              .filter((t) => !tempIds.has(t.id))
+              .map((t) => (t.dependsOnIds?.some((d) => tempIds.has(d)) ? { ...t, dependsOnIds: t.dependsOnIds.filter((d) => !tempIds.has(d)) } : t)),
+          )
+          opts.onFailed?.()
+        },
+        opts.unsavedTexts,
+      )
     },
     [runRemote],
   )
@@ -1611,8 +1650,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       // Reactのローカルstateにしか残らず、リロードで消え他メンバーにも
       // 共有されない。
       if (isRemoteConfigured) {
-        remoteApi
-          .createTasks([
+        createTasksRemote(
+          [
             {
               tempId: newTask.id,
               title: newTask.name,
@@ -1625,15 +1664,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               deadline,
               pendingApproval: false,
             },
-          ])
-          .then((mapping) => {
-            const realId = mapping[0]?.id
-            if (realId) setTasks((prev) => prev.map((t) => (t.id === newTask.id ? { ...t, id: realId } : t)))
-          })
-          .catch(reportRemoteError)
+          ],
+        )
       }
     })
-  }, [hydrated, recurringRules, reportRemoteError, refreshAll])
+  }, [hydrated, recurringRules, createTasksRemote, refreshAll])
 
   // keep the skill/category pools growing with whatever actually shows up
   // on tasks (from the sheet or elsewhere), not just manually-added ones
@@ -2637,7 +2672,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         // チェックが本来の判定）。他のタスクが既にあっても2人目以降の新規
         // メンバーに初期タスクを付与できるよう、組織全体のタスク有無は見ない。
         const now = new Date().toISOString()
-        const base = { assigneeIds: [userId], status: 'todo' as const, progressHistory: [] as import('./types').ProgressEntry[], department: UNCATEGORIZED_DEPARTMENT, category: '未分類', skills: [], priority: 'medium' as const, difficulty: 'beginner' as const, deadline: null, createdAt: now, lastActivity: now.slice(0, 10) }
+        const base = { assigneeIds: [userId], status: 'todo' as const, progressHistory: [] as import('./types').ProgressEntry[], department: UNCATEGORIZED_DEPARTMENT, category: '未分類', skills: [], priority: 'medium' as const, difficulty: 'beginner' as const, deadline: null, createdAt: now, lastActivity: todayStr() }
         const taskDefs = initialTasksFromSettings.length ? initialTasksFromSettings : HARDCODED_INITIAL_TASKS
         const newTasks: import('./types').Task[] = taskDefs.map((t, i) => ({
           ...base,
@@ -3052,21 +3087,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           creatorId: currentUserId ?? undefined,
           pendingApproval: true,
         }))
-        remoteApi
-          .createTasks(payloads)
-          .then((mapping) => {
-            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
-            setTasks((prev) =>
-              prev.map((t) =>
-                realId.has(t.id)
-                  ? {
-                      ...t,
-                      id: realId.get(t.id)!,
-                      dependsOnIds: (t.dependsOnIds ?? []).map((depId) => realId.get(depId) ?? depId),
-                    }
-                  : t,
-              ),
-            )
+        createTasksRemote(payloads, {
+          onCreated: (realId) => {
             newTasks.forEach((t) => {
               if (!t.dependsOnIds || t.dependsOnIds.length === 0) return
               const resolvedId = realId.get(t.id)
@@ -3074,12 +3096,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               const resolvedDeps = t.dependsOnIds.map((depId) => realId.get(depId) ?? depId)
               runRemote(remoteApi.updateDependsOn(resolvedId, resolvedDeps))
             })
-            setRemoteError(null)
-          })
-          .catch(reportRemoteError)
+          },
+        })
       }
     },
-    [taskSetTemplates, currentUserId, reportRemoteError, runRemote],
+    [taskSetTemplates, currentUserId, createTasksRemote, runRemote],
   )
 
   // PRJ-016/017: 過去の実プロジェクトのタスクをコピーして現在のプロジェクトに
@@ -3138,22 +3159,21 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           creatorId: currentUserId ?? undefined,
           pendingApproval: false,
         }))
-        remoteApi
-          .createTasks(payloads)
-          .then((mapping) => {
-            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
-            setTasks((prev) =>
-              prev.map((t) => (realId.has(t.id) ? { ...t, id: realId.get(t.id)! } : t)),
-            )
-            setRemoteError(null)
-          })
-          .catch(reportRemoteError)
+        createTasksRemote(payloads)
       }
     },
-    [tasks, currentUserId, reportRemoteError, runRemote],
+    [tasks, currentUserId, createTasksRemote],
   )
 
   // 定期タスク (item 2) — admin-defined recurring generation rules
+  // 次の一覧を作ってから、画面に入れて1回だけ送る(setRecurringRules の中では送らない)
+  const saveRecurringRules = useCallback(
+    (next: RecurringTaskRule[]) => {
+      setRecurringRules(next)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
+    },
+    [runRemote],
+  )
   const addRecurringRule = useCallback(
     (rule: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>) => {
       const entry: RecurringTaskRule = {
@@ -3161,54 +3181,35 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         id: `rr-${Math.random().toString(36).slice(2, 9)}`,
         active: true,
       }
-      setRecurringRules((prev) => {
-        const next = [...prev, entry]
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
-        return next
-      })
+      saveRecurringRules([...recurringRules, entry])
     },
-    [runRemote],
+    [recurringRules, saveRecurringRules],
   )
   const removeRecurringRule = useCallback(
     (ruleId: string) => {
-      setRecurringRules((prev) => {
-        const next = prev.filter((r) => r.id !== ruleId)
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
-        return next
-      })
+      saveRecurringRules(recurringRules.filter((r) => r.id !== ruleId))
     },
-    [runRemote],
+    [recurringRules, saveRecurringRules],
   )
   const toggleRecurringRule = useCallback(
     (ruleId: string) => {
-      setRecurringRules((prev) => {
-        const next = prev.map((r) => (r.id === ruleId ? { ...r, active: !r.active } : r))
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
-        return next
-      })
+      saveRecurringRules(recurringRules.map((r) => (r.id === ruleId ? { ...r, active: !r.active } : r)))
     },
-    [runRemote],
+    [recurringRules, saveRecurringRules],
   )
   const updateRecurringRule = useCallback(
     (ruleId: string, fields: Omit<RecurringTaskRule, 'id' | 'active' | 'lastGeneratedDate'>) => {
-      setRecurringRules((prev) => {
-        const next = prev.map((r) => (r.id === ruleId ? { ...r, ...fields } : r))
-        if (isSettingsConfigured)
-          runRemote(remoteApi.updateSetting('recurring_rules', JSON.stringify(next)))
-        return next
-      })
+      saveRecurringRules(recurringRules.map((r) => (r.id === ruleId ? { ...r, ...fields } : r)))
     },
-    [runRemote],
+    [recurringRules, saveRecurringRules],
   )
 
   const addTasksFromInput = useCallback(
     (text: string, parsed: ParsedTask[], kind: 'text' | 'form' = 'text') => {
       const inputId = `in-${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
-      const today = now.slice(0, 10)
+      // 最終の活動日は、団体のタイムゾーンの今日(UTC の日付にすると、日本の朝9時前は前の日になる)
+      const today = todayStr()
       const createdById = currentUserId ?? undefined
 
       const newTasks: Task[] = parsed.map((p) => ({
@@ -3253,13 +3254,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         const payloads = newTasks.map((t, i) =>
           toCreatePayload(t.id, parsed[i], createdById, inputId),
         )
-        remoteApi
-          .createTasks(payloads)
-          .then((mapping) => {
-            const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
-            setTasks((prev) =>
-              prev.map((t) => (realId.has(t.id) ? { ...t, id: realId.get(t.id)! } : t)),
-            )
+        createTasksRemote(payloads, {
+          onCreated: (realId) =>
             setInputs((prev) =>
               prev.map((inp) =>
                 inp.id === inputId
@@ -3271,13 +3267,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                     }
                   : inp,
               ),
-            )
-            setRemoteError(null)
-          })
-          .catch(reportRemoteError)
+            ),
+          // 登録できなかった時は、入力の履歴からも除き、書いた文章(INPUT の欄は消している)をコピーできるように出す
+          onFailed: () => setInputs((prev) => prev.filter((inp) => inp.id !== inputId)),
+          unsavedTexts: [text, ...parsed.flatMap((p) => [p.name, p.description ?? ''])],
+        })
       }
     },
-    [currentUserId, reportRemoteError],
+    [currentUserId, createTasksRemote],
   )
 
   // records a field change onto a task's audit trail (Admin → task detail
@@ -3285,6 +3282,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // a churny task doesn't grow the row without bound.
   // 記録を1件1行のシートに持つ GAS(recordRows が done)では500件、セルに持つ間は50件(gas/src/39-record-rows.gs と同じ)
   const HISTORY_CAP = recordRows === 'done' ? 500 : 50
+  // 足した変更の記録(画面に反映された後に送る)
+  const pendingHistoryRef = useRef<{ taskId: string; entryId: string }[]>([])
   const appendHistory = useCallback(
     (t: Task, field: TaskHistoryEntry['field'], from: string, to: string): Task => {
       if (from === to) return t
@@ -3297,11 +3296,26 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         to,
       }
       const history = [entry, ...(t.history ?? [])].slice(0, HISTORY_CAP)
-      if (isRemoteConfigured) runRemote(remoteApi.updateHistory(t.id, history))
+      // setTasks の中で呼ばれるので、ここでは送らない。画面に反映された後に送る(下の useEffect)
+      if (isRemoteConfigured) pendingHistoryRef.current.push({ taskId: t.id, entryId: entry.id })
       return { ...t, history }
     },
-    [currentUserId, runRemote, HISTORY_CAP],
+    [currentUserId, HISTORY_CAP],
   )
+  // 足した変更の記録を、画面に反映された後に送る。反映されなかった記録(取り消した変更・
+  // 開発時に2回呼ばれた setTasks の片方など)は送らない。同じタスクの記録は1回にまとめて送る
+  useEffect(() => {
+    const pending = pendingHistoryRef.current
+    if (pending.length === 0) return
+    pendingHistoryRef.current = []
+    const toSend = new Map<string, Task>()
+    for (const p of pending) {
+      const id = currentTaskId(p.taskId)
+      const t = tasks.find((x) => x.id === id)
+      if (t && (t.history ?? []).some((h) => h.id === p.entryId)) toSend.set(id, t)
+    }
+    for (const [id, t] of toSend) runRemote(remoteApi.updateHistory(id, t.history ?? []))
+  }, [tasks, runRemote])
 
   const updatePriority = useCallback(
     (id: string, priority: Priority) => {
@@ -3496,34 +3510,26 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       }
       setTasks((prev) => [confirmTask, ...prev])
       if (isRemoteConfigured) {
-        remoteApi
-          .createTasks([
-            {
-              tempId,
-              title: confirmTask.name,
-              projectId: confirmTask.projectId,
-              department: confirmTask.department,
-              category: confirmTask.category,
-              skills: [],
-              difficulty: confirmTask.difficulty,
-              priority: confirmTask.priority,
-              deadline: null,
-              assigneeIds: reviewerIds,
-              creatorId: currentUserId ?? undefined,
-              pendingApproval: false,
-              relatedReviewTaskId: original.id,
-            },
-          ])
-          .then((mapping) => {
-            const realId = mapping[0]?.id
-            if (!realId) return
-            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
-            setRemoteError(null)
-          })
-          .catch(reportRemoteError)
+        createTasksRemote([
+          {
+            tempId,
+            title: confirmTask.name,
+            projectId: confirmTask.projectId,
+            department: confirmTask.department,
+            category: confirmTask.category,
+            skills: [],
+            difficulty: confirmTask.difficulty,
+            priority: confirmTask.priority,
+            deadline: null,
+            assigneeIds: reviewerIds,
+            creatorId: currentUserId ?? undefined,
+            pendingApproval: false,
+            relatedReviewTaskId: original.id,
+          },
+        ])
       }
     },
-    [currentUserId, reportRemoteError],
+    [currentUserId, createTasksRemote],
   )
 
   const updateTaskStatus = useCallback(
@@ -3785,7 +3791,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (templateTasks.length > 0) setTasks((prev) => [...templateTasks, ...prev])
 
       if (isRemoteConfigured) {
-        remoteApi
+        const createdProject = remoteApi
           .createProject(name, description, type, parentId)
           .then(({ id }) => {
             setProjects((prev) => prev.map((p) => (p.id === tempProjectId ? { ...p, id } : p)))
@@ -3806,21 +3812,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                 creatorId: currentUserId ?? undefined,
                 pendingApproval: false,
               }))
-              remoteApi
-                .createTasks(payloads)
-                .then((mapping) => {
-                  const realId = new Map(mapping.map((m) => [m.tempId, m.id]))
-                  setTasks((prev) =>
-                    prev.map((t) =>
-                      realId.has(t.id)
-                        ? {
-                            ...t,
-                            id: realId.get(t.id)!,
-                            dependsOnIds: (t.dependsOnIds ?? []).map((depId) => realId.get(depId) ?? depId),
-                          }
-                        : t,
-                    ),
-                  )
+              createTasksRemote(payloads, {
+                onCreated: (realId) => {
                   templateTasks.forEach((t) => {
                     if (!t.dependsOnIds || t.dependsOnIds.length === 0) return
                     const resolvedId = realId.get(t.id)
@@ -3828,15 +3821,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                     const resolvedDeps = t.dependsOnIds.map((depId) => realId.get(depId) ?? depId)
                     runRemote(remoteApi.updateDependsOn(resolvedId, resolvedDeps))
                   })
-                })
-                .catch(reportRemoteError)
+                },
+              })
             }
-            setRemoteError(null)
           })
-          .catch(reportRemoteError)
+        // プロジェクトを作れなかった時は、仮のプロジェクトとテンプレートのタスクを画面から除く
+        runRemote(createdProject, () => {
+          setProjects((prev) => prev.filter((p) => p.id !== tempProjectId))
+          setTasks((prev) => prev.filter((t) => t.projectId !== tempProjectId))
+        })
       }
     },
-    [projectTemplates, currentUserId, reportRemoteError, runRemote],
+    [projectTemplates, currentUserId, createTasksRemote, runRemote],
   )
 
   // a task can't exist without a project (Task.projectId is required), so
@@ -4600,8 +4596,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setTasks((prev) => [newTask, ...prev])
 
       if (isRemoteConfigured) {
-        remoteApi
-          .createTasks([
+        createTasksRemote(
+          [
             {
               tempId,
               title: name,
@@ -4618,17 +4614,18 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               quickKind: 'schedule',
               schedule,
             },
-          ])
-          .then((mapping) => {
-            const realId = mapping.find((m) => m.tempId === tempId)?.id
-            if (!realId) return
-            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
-            runRemote(remoteApi.updateTaskSchedule(realId, schedule))
-          })
-          .catch(reportRemoteError)
+          ],
+          {
+            onCreated: (realId) => {
+              const id = realId.get(tempId)
+              if (id) runRemote(remoteApi.updateTaskSchedule(id, schedule))
+            },
+            unsavedTexts: [name, ...candidates.map((c) => c.label)],
+          },
+        )
       }
     },
-    [currentUserId, runRemote, reportRemoteError],
+    [currentUserId, runRemote, createTasksRemote],
   )
 
   // 汎用フォームツール — 質問項目＋招待メンバーを設定する（作成者/管理者）
@@ -4713,8 +4710,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setTasks((prev) => [newTask, ...prev])
 
       if (isRemoteConfigured) {
-        remoteApi
-          .createTasks([
+        createTasksRemote(
+          [
             {
               tempId,
               title: name,
@@ -4730,50 +4727,67 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
               quickKind: 'form',
               form,
             },
-          ])
-          .then((mapping) => {
-            const realId = mapping.find((m) => m.tempId === tempId)?.id
-            if (!realId) return
-            setTasks((prev) => prev.map((t) => (t.id === tempId ? { ...t, id: realId } : t)))
-            runRemote(remoteApi.updateTaskForm(realId, form))
-          })
-          .catch(reportRemoteError)
+          ],
+          {
+            onCreated: (realId) => {
+              const id = realId.get(tempId)
+              if (id) runRemote(remoteApi.updateTaskForm(id, form))
+            },
+            unsavedTexts: [name, ...fields.map((f) => f.label)],
+          },
+        )
       }
     },
-    [currentUserId, runRemote, reportRemoteError],
+    [currentUserId, runRemote, createTasksRemote],
   )
 
   // 成果物リンク管理（item 12） — Drive/Canva/GitHub/Figma等へのリンクを
   // タスクに複数紐付ける
+  // 保存に失敗した時は、画面からも除く(消した時は戻す)。送る一覧も元に戻すので、次の保存で
+  // 保存できなかった項目を「保存済み」として扱わない(remote.ts の postListOps)。
+  // setTasks の中では送らない(開発時に2回呼ばれても1回だけ送る)
   const addDeliverable = useCallback(
     (id: string, label: string, url: string) => {
       const l = label.trim()
       const u = url.trim()
       if (!l || !u) return
       const entry: TaskDeliverable = { id: `dl-${Math.random().toString(36).slice(2, 9)}`, label: l, url: u }
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
-          const next = [...(t.deliverables ?? []), entry]
-          if (isRemoteConfigured) runRemote(remoteApi.updateDeliverables(id, next))
-          return { ...t, deliverables: next }
-        }),
-      )
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, deliverables: [...(t.deliverables ?? []), entry] } : t)))
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.addDeliverable(id, entry),
+          () => {
+            const now = currentTaskId(id)
+            setTasks((prev) => prev.map((t) => (t.id === now ? { ...t, deliverables: (t.deliverables ?? []).filter((d) => d.id !== entry.id) } : t)))
+          },
+          [l, u],
+        )
+      }
     },
     [runRemote],
   )
   const removeDeliverable = useCallback(
     (id: string, deliverableId: string) => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
-          const next = (t.deliverables ?? []).filter((d) => d.id !== deliverableId)
-          if (isRemoteConfigured) runRemote(remoteApi.updateDeliverables(id, next))
-          return { ...t, deliverables: next }
-        }),
-      )
+      const before = tasks.find((t) => t.id === id)?.deliverables ?? []
+      const index = before.findIndex((d) => d.id === deliverableId)
+      const removed = before[index]
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, deliverables: (t.deliverables ?? []).filter((d) => d.id !== deliverableId) } : t)))
+      if (isRemoteConfigured) {
+        runRemote(remoteApi.removeDeliverable(id, deliverableId), () => {
+          if (!removed) return
+          const now = currentTaskId(id)
+          setTasks((prev) =>
+            prev.map((t) => {
+              if (t.id !== now || (t.deliverables ?? []).some((d) => d.id === deliverableId)) return t
+              const list = [...(t.deliverables ?? [])]
+              list.splice(Math.min(index, list.length), 0, removed)
+              return { ...t, deliverables: list }
+            }),
+          )
+        })
+      }
     },
-    [runRemote],
+    [tasks, runRemote],
   )
 
   // コメント機能 — a discussion thread on the task, separate from
@@ -4792,30 +4806,44 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         mentionedIds: mentionedIds.length > 0 ? mentionedIds : undefined,
         ...(replyToId ? { replyToId } : {}),
       }
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
-          const next = [...(t.comments ?? []), entry]
-          // メンションの通知は、GAS が保存したコメントから宛先を決めて送る
-          if (isRemoteConfigured) runRemote(remoteApi.updateComments(id, next))
-          return { ...t, comments: next }
-        }),
-      )
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, comments: [...(t.comments ?? []), entry] } : t)))
+      // メンションの通知は、GAS が保存したコメントから宛先を決めて送る
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.addComment(id, entry),
+          // 保存できなかったコメントは画面から除き、書いた文章をコピーできるように出す
+          () => {
+            const now = currentTaskId(id)
+            setTasks((prev) => prev.map((t) => (t.id === now ? { ...t, comments: (t.comments ?? []).filter((c) => c.id !== entry.id) } : t)))
+          },
+          [trimmed],
+        )
+      }
     },
     [currentUserId, runRemote, members],
   )
   const removeComment = useCallback(
     (id: string, commentId: string) => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          if (t.id !== id) return t
-          const next = (t.comments ?? []).filter((c) => c.id !== commentId)
-          if (isRemoteConfigured) runRemote(remoteApi.updateComments(id, next))
-          return { ...t, comments: next }
-        }),
-      )
+      const before = tasks.find((t) => t.id === id)?.comments ?? []
+      const index = before.findIndex((c) => c.id === commentId)
+      const removed = before[index]
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, comments: (t.comments ?? []).filter((c) => c.id !== commentId) } : t)))
+      if (isRemoteConfigured) {
+        runRemote(remoteApi.removeComment(id, commentId), () => {
+          if (!removed) return
+          const now = currentTaskId(id)
+          setTasks((prev) =>
+            prev.map((t) => {
+              if (t.id !== now || (t.comments ?? []).some((c) => c.id === commentId)) return t
+              const list = [...(t.comments ?? [])]
+              list.splice(Math.min(index, list.length), 0, removed)
+              return { ...t, comments: list }
+            }),
+          )
+        })
+      }
     },
-    [runRemote],
+    [tasks, runRemote],
   )
 
   const updateAvatar = useCallback(

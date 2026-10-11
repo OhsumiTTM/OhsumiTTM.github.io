@@ -57,7 +57,7 @@ import { type TaskVisibility } from './types'
 import { parseBellSettings } from './bell-kinds'
 import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
 import { parseWorkloadRules, type WorkloadRules } from './workload-rules'
-import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
+import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, rolesFromSettings, type RoleDef } from './roles'
 import { CLIENT_VERSION, normalizeCode } from './codes'
 import {
   normalizeHistoryEntry,
@@ -69,11 +69,12 @@ import {
   normalizeThresholdKeys,
 } from './code-normalize'
 import { activateSession, applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
-import { GasTransportError, READ_ACTIONS, pingGas, sendToGas, type GasResponse } from './gas-transport'
+import { GasTransportError, READ_ACTIONS, pingGas, sendToGas, writeGeneration, type GasResponse } from './gas-transport'
 import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
 import { noteContractResponse } from './contract'
 import { extractUnsavedTexts } from './read-only'
-import { baseVersionsFor, listOpsFor, rememberServerRows } from './sync-state'
+import { baseVersionsFor, listBaseOf, listOpsFor, rememberServerRows } from './sync-state'
+import { currentTaskId, resolveTempIdsIn, trackTempIds } from './temp-ids'
 import { LIST_ACTIONS } from './list-diff'
 
 // セッションが無効になった(期限切れ・全端末でログアウトなど)ときに window に送るイベント。
@@ -785,7 +786,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   return {
     skillOptions: splitTags(byKey.get('skill_options')),
     categoryOptions: splitTags(byKey.get('category_options')),
-    roles: rolesSetting ?? rolesFromLegacy(roleSettings),
+    roles: rolesSetting ?? rolesFromSettings(roleSettings),
     rolesFromSetting: !!rolesSetting,
     departments,
     projectTemplates: normalizeProjectTemplates(projectTemplates, departments),
@@ -933,9 +934,19 @@ interface InitialDataResponse {
 // 裏での読み込み(経費・フォームの回答・候補者・自分のメール)も同じ応答で受け取る(withBackground)。
 // 通信の回数そのものを減らす(1回ごとに、結果の受け渡しで止まる機会がある)
 // 所要時間と GAS の中の内訳は、gas-transport.ts がコンソールに出す
+// 読み込みを待つ間に書き込みを送った時は、応答がその書き込みを含まないかもしれない(古い内容で画面の変更を
+// 上書きしてしまう)ので、その応答は使わずに読み込み直す。何度読み込んでも書き込みが続く時は、
+// 前に読み込んだ内容がある(knownVersion がある)なら、今回は何も変えない(unchanged として返す)
+const STALE_REFETCH_MAX = 2
 export async function fetchInitialData(knownVersion?: string): Promise<InitialData> {
-  const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion, ...backgroundOptions() } : backgroundOptions())
-  return toInitialData(res)
+  for (let attempt = 0; ; attempt++) {
+    const gen = writeGeneration()
+    const res = await postToGas<InitialDataResponse>('getInitialData', knownVersion ? { knownVersion, ...backgroundOptions() } : backgroundOptions())
+    if (writeGeneration() === gen || res.unchanged || !res.memberId) return toInitialData(res)
+    if (attempt < STALE_REFETCH_MAX) continue
+    if (knownVersion) return { memberId: res.memberId, unchanged: true }
+    return toInitialData(res)
+  }
 }
 
 function toInitialData(res: InitialDataResponse): InitialData {
@@ -1097,9 +1108,12 @@ export async function exchangeIdToken(idToken: string, nonceSecret: string, reme
   return { ...toInitialData(res), session: res.session, lastLoginRecorded: res.lastLoginRecorded === true }
 }
 
-async function postToGas<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
+async function postToGas<T = unknown>(action: string, rawPayload: Record<string, unknown>): Promise<T> {
   const gasUrl = getActiveGasUrl()
   if (!gasUrl) throw new Error('GAS Web App URL is not configured')
+  // 作ったばかりのタスク(仮の ID)への書き込みは、本当の ID が分かるまで待ち、本当の ID で送る(temp-ids.ts)
+  const maybeResolved = resolveTempIdsIn(rawPayload)
+  const payload = maybeResolved instanceof Promise ? await maybeResolved : maybeResolved
 
   // セッショントークン(exchangeIdToken で発行されたもの)で認証する
   const sessionToken = getSessionToken()
@@ -1172,6 +1186,8 @@ export interface WebhookStatus {
 // ほかの人が後から足した記録は、差分に入らないので消えない(gas/Code.gs の「記録の一覧の差分」)
 async function postListOps<T = unknown>(action: string, id: string, next: readonly unknown[], extra: Record<string, unknown> = {}): Promise<T> {
   const def = LIST_ACTIONS[action]
+  // 仮の ID のタスクで、本当の ID が分かっていれば、本当の ID の一覧と比べる
+  if (def.idParam === 'taskId') id = currentTaskId(id)
   const { listOps, restore } = listOpsFor(action, id, next)
   try {
     return await postToGas<T>(action, { [def.idParam]: id, ...extra, listOps })
@@ -1181,9 +1197,22 @@ async function postListOps<T = unknown>(action: string, id: string, next: readon
   }
 }
 
+// 記録の一覧の1項目だけを足す・消す。画面の一覧ではなく、画面が知っている保存済みの一覧(送っている途中の
+// ものを含む)を変えた一覧で送る(続けて操作した時に、まだ画面に反映していない一覧と比べて、
+// 前に足した項目を消す差分を作らないため)
+function changeListEntry<E>(action: string, id: string, change: (base: E[]) => E[]): Promise<unknown> {
+  const def = LIST_ACTIONS[action]
+  const key = def.idParam === 'taskId' ? currentTaskId(id) : id
+  return postListOps(action, id, change((listBaseOf(action, key) ?? []) as E[]))
+}
+
 export const remoteApi = {
-  createTasks: (tasks: CreateTaskPayload[]) =>
-    postToGas<{ tempId: string; id: string }[]>('createTasks', { tasks }),
+  createTasks: (tasks: CreateTaskPayload[]) => {
+    const p = postToGas<{ tempId: string; id: string }[]>('createTasks', { tasks })
+    // 応答を待つ間に、そのタスクを変えた書き込みは、本当の ID が分かってから送る
+    trackTempIds(tasks.map((t) => t.tempId), p)
+    return p
+  },
   updateTaskStatus: (taskId: string, status: TaskStatus) =>
     postToGas('updateTaskStatus', { taskId, status }),
   assignTask: (taskId: string, assigneeIds: string[]) =>
@@ -1447,6 +1476,10 @@ export const remoteApi = {
     postToGas('setHoldReason', { taskId, note, since }),
   updateDeliverables: (taskId: string, deliverables: TaskDeliverable[]) =>
     postListOps('updateDeliverables', taskId, deliverables),
+  addDeliverable: (taskId: string, deliverable: TaskDeliverable) =>
+    changeListEntry<TaskDeliverable>('updateDeliverables', taskId, (base) => [...base.filter((d) => d.id !== deliverable.id), deliverable]),
+  removeDeliverable: (taskId: string, deliverableId: string) =>
+    changeListEntry<TaskDeliverable>('updateDeliverables', taskId, (base) => base.filter((d) => d.id !== deliverableId)),
   updateHistory: (taskId: string, history: TaskHistoryEntry[]) =>
     postListOps('updateHistory', taskId, history),
   updateProjectMembers: (projectId: string, memberIds: string[]) =>
@@ -1476,6 +1509,10 @@ export const remoteApi = {
     postToGas('reportProjectHealth', { items }),
   updateComments: (taskId: string, comments: TaskComment[]) =>
     postListOps('updateComments', taskId, comments),
+  addComment: (taskId: string, comment: TaskComment) =>
+    changeListEntry<TaskComment>('updateComments', taskId, (base) => [...base.filter((c) => c.id !== comment.id), comment]),
+  removeComment: (taskId: string, commentId: string) =>
+    changeListEntry<TaskComment>('updateComments', taskId, (base) => base.filter((c) => c.id !== commentId)),
   updateEstimatedHours: (taskId: string, hours: number | null) =>
     postToGas('updateEstimatedHours', { taskId, hours }),
   updateActualHours: (taskId: string, hours: number | null) =>

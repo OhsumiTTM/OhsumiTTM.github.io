@@ -165,8 +165,16 @@ describe('毎日・毎時の処理をレジストリに伝える(PR H)', () => {
 })
 
 describe('この GAS の版の更新(PR E)', () => {
-  const mark = (p: Pair, version: string, marks: Record<string, unknown>) =>
-    p.reg.post({ action: 'setGasVersionMarks', session: p.reg.session, version, ...marks })
+  // 印を付けられるのは、レジストリのコードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出したこと(一覧に足して
+  // レジストリを更新したこと)にしてから、印を付ける
+  const mark = (p: Pair, version: string, marks: Record<string, unknown>) => {
+    const known = p.reg.gas.KNOWN_GAS_VERSIONS as unknown as { version: string }[]
+    if (!known.some((v) => v.version === version)) {
+      known.unshift({ version, security: false, required: false, note: '' } as never)
+      ;(p.reg.gas.forgetGasVersions_ as () => void)()
+    }
+    return p.reg.post({ action: 'setGasVersionMarks', session: p.reg.session, version, ...marks })
+  }
 
   it('レジストリが「更新が要る」と返したら覚え、代表に最新の版ごとに1回だけメールで知らせる', () => {
     const p = pair()

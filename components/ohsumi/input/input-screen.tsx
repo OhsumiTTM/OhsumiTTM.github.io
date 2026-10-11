@@ -4,6 +4,7 @@ import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { useOhsumi } from '@/lib/ohsumi/store'
+import { orgScopedStorageKey } from '@/lib/ohsumi/org-directory'
 import { useNav } from '@/lib/ohsumi/nav'
 import { useToast } from '../toast'
 import { Modal } from '../modal'
@@ -65,8 +66,9 @@ type Phase = 'input' | 'parsing' | 'mapping' | 'result'
 // Keeps the in-progress draft text across screen switches (INPUT unmounts
 // whenever the user navigates away), scoped per-user so it doesn't leak
 // between demo accounts on the same browser.
+// 団体も付ける(メンバーの ID は団体ごとの通し番号なので、ほかの団体の同じ ID の人に出さない)
 function draftKey(userId: string | null | undefined): string {
-  return `ohsumi-input-draft-${userId ?? 'anon'}`
+  return orgScopedStorageKey('ohsumi-input-draft-', userId)
 }
 function loadDraft(userId: string | null | undefined): string {
   if (typeof window === 'undefined') return ''

@@ -354,8 +354,8 @@ describe('画面に渡すできる操作の一覧', () => {
     expect(gas.memberCapabilities_(roles, 'r_admin', [])).toEqual(['trash', 'org.rules'])
     expect(gas.memberCapabilities_(roles, 'r_lead', [])).toEqual([])
     expect(gas.memberCapabilities_(roles, 'base', [])).toEqual([])
-    // 一覧に無い役職は、今までと同じく制限なしの管理者
-    expect(gas.memberCapabilities_(roles, '一覧に無い役職', [])).toEqual(['trash', 'org.rules'])
+    // 一覧に無い役職(書き間違いなど)は一般と同じ(何もできない)
+    expect(gas.memberCapabilities_(roles, '一覧に無い役職', [])).toEqual([])
   })
   it('役職に書いたできる操作を使う', () => {
     expect(gas.memberCapabilities_(roles, 'r_hr', [])).toEqual(['members.add', 'members.role', 'trash', 'org.rules'])
