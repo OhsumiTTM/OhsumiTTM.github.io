@@ -10,7 +10,8 @@ export const SITE = {
 
 export const CTA = {
   primary: { label: '導入を相談する', href: '/contact' },
-  secondary: { label: 'デモを依頼する', href: '/contact' },
+  // デモ(/demo/)は別にビルドした画面なので、サイトの中の移動(next/link)ではなく、ふつうのリンクで開く
+  secondary: { label: 'デモを触る', href: '/demo/' },
   features: { label: '詳しい機能を見る', href: '/features' },
   onboarding: { label: '導入について見る', href: '/onboarding' },
   background: { label: '開発背景を見る', href: SITE.fsifUrl },

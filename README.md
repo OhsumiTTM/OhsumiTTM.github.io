@@ -37,6 +37,7 @@
 | `registry/` | レジストリ(`Code.gs`)と監視(`monitor/Monitor.gs`) |
 | `scripts/` | ビルド・CSP・GAS のまとめ・版・レイアウトの確認 |
 | `e2e/` | ブラウザの通しテスト |
+| `lib/demo/` | 営業用のデモ(`/demo/`)。団体の GAS をブラウザの中で動かす部品 |
 | `docs/features.md` | 機能一覧(実装済み・開発予定・将来構想) |
 
 詳しい仕様は、[`gas/README.md`](gas/README.md)(団体の GAS)と [`registry/README.md`](registry/README.md)(レジストリ・監視)にあります。
@@ -56,9 +57,23 @@ pnpm dev                           # http://localhost:3000
 ```bash
 pnpm test           # ユニットテスト(Vitest。GAS・レジストリのテストも含む)
 pnpm build          # 本番のビルド(CSP の挿入・GAS のそろい方の確認を含む)
+pnpm build:demo     # デモのビルド(out-demo/)
 pnpm check:layout   # スマホ・PC の幅で、はみ出しが無いか
 pnpm test:e2e       # ブラウザの通しテスト
 ```
+
+## デモ(`/demo/`)
+
+営業で「こんな感じ」と触ってもらうためのデモです。サイトの `/demo/` に置き、誰でも開けます(検索には出さない)。
+
+- 本番と同じ画面を `NEXT_PUBLIC_OHSUMI_DEMO=1` でもう一度ビルドしたもの(`pnpm build:demo` → `out-demo/`。デプロイで `out/demo/` に入れる)
+- 団体の GAS(`gas/Code.gs`)と見本データ(`gas/SampleData.gs` の架空の「つばさ学生会議」)を、ブラウザの中の偽のスプレッドシートの上で動かす。
+  ログイン・権限・書き込みは本物のコードのまま。GAS を変えると、デモにもそのまま入る
+- ログインは、役割(代表・班長・メンバー・英語のメンバー)を選ぶだけ。この部品はデモのビルドだけに入る(本番に入るとビルドが失敗する)
+- 外には一切つながない(レジストリ・団体の GAS・Google・フォームなど。CSP の connect-src も `'self'` だけ)。
+  Secrets はデモのビルドに渡さない
+- 操作した内容は、そのタブの中だけに残る(ブラウザの sessionStorage の `ohsumi-demo:` で始まる名前)。本番の Ohsumi のログイン・団体の一覧には触らない。
+  「最初からやり直す」か、タブを閉じると消える
 
 ## 団体の GAS・レジストリを変える時
 

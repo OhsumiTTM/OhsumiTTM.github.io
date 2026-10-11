@@ -61,24 +61,29 @@ export function logoUploadConnectSources(supabaseUrl) {
 }
 
 /**
- * @param {{ scriptHashes?: string[], calendarRead?: boolean, supabaseUrl?: string }} [options]
+ * demo: デモ(/demo/。scripts/build-demo.mjs)。外には一切つながない(団体の GAS はブラウザの中で動かす)ので、
+ * 接続先・Google のログインのスクリプトと iframe を許さない
+ * @param {{ scriptHashes?: string[], calendarRead?: boolean, supabaseUrl?: string, demo?: boolean }} [options]
  * @returns {string}
  */
-export function buildPolicy({ scriptHashes = [], calendarRead = false, supabaseUrl = '' } = {}) {
-  const connect = [
-    "'self'",
-    ...Object.values(CONNECT_SOURCES).flat(),
-    ...(calendarRead ? CALENDAR_READ_CONNECT_SOURCES : []),
-    ...logoUploadConnectSources(supabaseUrl),
-  ]
+export function buildPolicy({ scriptHashes = [], calendarRead = false, supabaseUrl = '', demo = false } = {}) {
+  const connect = demo
+    ? ["'self'"]
+    : [
+        "'self'",
+        ...Object.values(CONNECT_SOURCES).flat(),
+        ...(calendarRead ? CALENDAR_READ_CONNECT_SOURCES : []),
+        ...logoUploadConnectSources(supabaseUrl),
+      ]
+  const google = (src) => (demo ? [] : [src])
   const directives = [
     ["default-src", "'self'"],
-    ['script-src', "'self'", 'https://accounts.google.com/gsi/client', ...scriptHashes.map((h) => `'sha256-${h}'`)],
+    ['script-src', "'self'", ...google('https://accounts.google.com/gsi/client'), ...scriptHashes.map((h) => `'sha256-${h}'`)],
     // React の style 属性と、Google のボタンのスタイル
-    ['style-src', "'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/style'],
+    ['style-src', "'self'", "'unsafe-inline'", ...google('https://accounts.google.com/gsi/style')],
     ['connect-src', ...connect],
     // Google のログインボタン・One Tap は iframe で表示される
-    ['frame-src', 'https://accounts.google.com/gsi/'],
+    ['frame-src', ...(demo ? ["'none'"] : ['https://accounts.google.com/gsi/'])],
     // アップロードしたファイルは blob: で表示する。手入力の外部の画像 URL(https:)も表示できるようにする
     ['img-src', "'self'", 'data:', 'blob:', 'https:'],
     ['font-src', "'self'"],
@@ -188,6 +193,7 @@ export function applyCspToDirectory(outDir, options = {}) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const outDir = process.argv[2] ?? 'out'
+  const demo = process.env.NEXT_PUBLIC_OHSUMI_DEMO === '1'
   const calendarRead = process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_READ === 'true'
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
   try {
@@ -196,7 +202,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.error(`CSP を作れません: ${e instanceof Error ? e.message : e}`)
     process.exit(1)
   }
-  const { count, failures } = applyCspToDirectory(outDir, { calendarRead, supabaseUrl })
+  const { count, failures } = applyCspToDirectory(outDir, demo ? { demo } : { calendarRead, supabaseUrl })
   if (failures.length) {
     console.error(`CSP の確認に失敗しました(${failures.length} ファイル):\n${failures.join('\n')}`)
     process.exit(1)

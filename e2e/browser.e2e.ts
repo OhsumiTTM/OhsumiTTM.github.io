@@ -267,11 +267,12 @@ describe.skipIf(!available)('公開前の通しテスト(画面)', () => {
 
   it('トップ: 団体コード(?org=)が無ければホームページ、ログインから Ohsumi の画面に入れる', async () => {
     await navigate('/')
-    await waitFor(() => page.evaluate<boolean>("(document.body?.innerText ?? '').includes('仕事を進めるほど')"), 'ホームページが出ません')
+    // ホームページとログイン画面は同じキャッチコピーを出すので、ホームページの入れ物(data-site-home)で見分ける
+    await waitFor(() => page.evaluate<boolean>("!!document.querySelector('[data-site-home]') && (document.body?.innerText ?? '').includes('仕事を進めるほど')"), 'ホームページが出ません')
     expect(await page.evaluate<boolean>('!!document.querySelector("[data-e2e-gsi]")')).toBe(false)
     expect(await allText()).not.toContain('団体Aのタスク')
     await navigate('/?login=1')
-    await waitFor(() => page.evaluate<boolean>("!(document.body?.innerText ?? '').includes('仕事を進めるほど')"), 'ログインから Ohsumi の画面になりません')
+    await waitFor(() => page.evaluate<boolean>("!document.querySelector('[data-site-home]')"), 'ログインから Ohsumi の画面になりません')
   })
 
   it('URL の直打ち: 公開のページは開け、無いページは 404、知らない団体は「見つかりません」、レジストリの管理画面はログインが要る', async () => {

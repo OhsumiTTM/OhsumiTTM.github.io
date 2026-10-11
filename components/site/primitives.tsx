@@ -84,11 +84,11 @@ export function PrimaryCta({ className, href = CTA.primary.href, children = CTA.
 }
 
 export function SecondaryCta({ className, href = CTA.secondary.href, children = CTA.secondary.label }: { className?: string; href?: string; children?: ReactNode }) {
+  const cls = cn(ctaBase, 'border border-border bg-background text-foreground hover:border-primary/40 hover:bg-pale', className)
+  // デモ(/demo/)は別のビルドの画面なので、ページごと開く
+  if (href.startsWith('/demo/')) return <a href={href} className={cls}>{children}</a>
   return (
-    <Link
-      href={href}
-      className={cn(ctaBase, 'border border-border bg-background text-foreground hover:border-primary/40 hover:bg-pale', className)}
-    >
+    <Link href={href} className={cls}>
       {children}
     </Link>
   )

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google'
 import Script from 'next/script'
 import { FrameGuard } from '@/components/ohsumi/frame-guard'
 import { SITE } from '@/lib/site/config'
+import { IS_DEMO } from '@/lib/demo/config'
 import './globals.css'
 
 const geistSans = Geist({
@@ -32,6 +33,8 @@ export const metadata: Metadata = {
     images: [{ url: '/og.png', width: 1200, height: 630, alt: 'Ohsumi — 仕事を進めるほど、組織が見えてくる。' }],
   },
   twitter: { card: 'summary_large_image', images: ['/og.png'] },
+  // デモ(/demo/)は検索に出さない
+  ...(IS_DEMO ? { title: 'Ohsumi デモ', robots: { index: false, follow: false } } : {}),
 }
 
 // ブラウザの上部の色: 端末の設定(prefers-color-scheme)に合わせる。Ohsumi の画面で選んだ表示があれば、
@@ -51,7 +54,7 @@ export const viewport: Viewport = {
 //   ・ブラウザの上部の色も、その表示に合わせる
 const BEFORE_PAINT_SCRIPT =
   "(function(){var d=document.documentElement,t='light';" +
-  "if(/[?&](org|login)=/.test(location.search)){d.classList.add('ohsumi-app');" +
+  "if(" + (IS_DEMO ? 'true' : "/[?&](org|login)=/.test(location.search)") + "){d.classList.add('ohsumi-app');" +
   "try{t=localStorage.getItem('ohsumi-theme')}catch(e){t=null}" +
   "if(t!=='light'&&t!=='dark')t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';" +
   "if(t==='dark')d.classList.add('dark')}" +
@@ -75,7 +78,8 @@ export default function RootLayout({
       </head>
       <body className="font-sans antialiased">
         <FrameGuard>{children}</FrameGuard>
-        <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />
+        {/* デモは Google のログインを使わない(外部のスクリプトを読まない) */}
+        {!IS_DEMO && <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />}
       </body>
     </html>
   )

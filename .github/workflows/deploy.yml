@@ -38,6 +38,13 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
+      # 営業用のデモ(/demo/)。本番の Secrets は渡さない(外には一切つながず、団体の GAS はブラウザの中で動かす)。
+      # 出力は out-demo/。本番のビルドの後に out/demo/ に入れる(本番のビルドの確かめ(CSP・デモの部品が無いこと)は、入れる前に終わる)
+      - name: Build demo
+        env:
+          NEXT_PUBLIC_SITE_URL: ${{ vars.SITE_URL }}
+        run: pnpm build:demo
+
       - name: Build static site
         env:
           NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
@@ -54,6 +61,12 @@ jobs:
           # サイトの URL(検索の正しい URL・サイトマップ・SNS の画像に使う)。秘密ではないので Secrets ではなく Variables に入れる
           NEXT_PUBLIC_SITE_URL: ${{ vars.SITE_URL }}
         run: pnpm build
+
+      - name: Add demo
+        run: |
+          test -f out-demo/index.html
+          test ! -e out/demo
+          mv out-demo out/demo
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
