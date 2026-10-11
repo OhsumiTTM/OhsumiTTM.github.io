@@ -3,7 +3,9 @@
 // バックアップから戻す(団体の設定の画面。代表だけ)。gas/Code.gs の「バックアップ」
 //   - 全体を戻す: バックアップを選び、シートごとの件数の差を見てから戻す(戻す前の状態は自動でバックアップされる)
 //   - 一部のタスクだけ戻す: バックアップを選び、タスクを名前で探して選ぶ。今との違いを並べ、今は消えているタスクは「復元」と出す
-import { useCallback, useEffect, useState } from 'react'
+//   - 一覧は「バックアップの一覧を表示する」を押した時に読む(団体設定を開くたびに Drive を読まない。作れなかった時の知らせは
+//     管理画面の上部(admin/backup-banner.tsx)にも出る)
+import { useCallback, useState } from 'react'
 import { DatabaseBackup, Loader2, RotateCcw, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SectionLabel } from '@/components/ohsumi/primitives'
@@ -47,7 +49,6 @@ export function BackupPanel() {
       setBusy('')
     }
   }, [])
-  useEffect(() => { void load() }, [load])
 
   // 今すぐバックアップを作る(代表だけ)。作った後は一覧を新しくする
   const createNow = async () => {
@@ -151,7 +152,14 @@ export function BackupPanel() {
         <p className="mt-2 text-xs break-words text-warning">{t('backup.failedBanner', { date: fmt(list.status.failedAt), error: list.status.error })}</p>
       )}
       {loadError && <p className="mt-2 text-xs break-words text-destructive">{loadError}</p>}
-      {busy === 'list' && !list && <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />{t('backup.loading')}</p>}
+      {!list && (
+        <div className="mt-2">
+          <Button size="sm" variant="ghost" disabled={busy !== ''} onClick={() => void load()} data-backup-show>
+            {busy === 'list' && <Loader2 className="size-3.5 animate-spin" />}
+            {t(busy === 'list' ? 'backup.loading' : 'backup.show')}
+          </Button>
+        </div>
+      )}
 
       {list && (
         <div className="mt-3 space-y-3">

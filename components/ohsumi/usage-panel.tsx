@@ -4,8 +4,10 @@
 //   - 直近14日の、ログイン・画面の読み込み・書き込みの回数(日ごと。誰の操作かは残していない)
 //   - 直近30日に多い操作
 //   - 直近7日のエラーの件数と種類、直近の記録(日時・操作の名前・エラーの種類だけ)
-import { useEffect, useState } from 'react'
+//   - 「利用の状況を表示する」を押した時に読む(団体設定を開くたびには読まない)
+import { useState } from 'react'
 import { Activity, Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { SectionLabel } from '@/components/ohsumi/primitives'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { remoteApi, type UsageStatus } from '@/lib/ohsumi/remote'
@@ -14,14 +16,15 @@ export function UsagePanel() {
   const { t, locale } = useI18n()
   const [status, setStatus] = useState<UsageStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let alive = true
+  const [loading, setLoading] = useState(false)
+  const load = () => {
+    setLoading(true)
+    setError(null)
     remoteApi.getUsageStatus().then(
-      (s) => { if (alive) setStatus(s) },
-      (e: unknown) => { if (alive) setError(e instanceof Error ? e.message : String(e)) },
-    )
-    return () => { alive = false }
-  }, [])
+      (s) => setStatus(s),
+      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    ).finally(() => setLoading(false))
+  }
   const fmtDay = (d: string) => new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { month: 'numeric', day: 'numeric' }).format(new Date(d + 'T00:00:00'))
   const fmtAt = (iso: string) => (iso ? new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)) : '—')
   const sum = (k: 'login' | 'open' | 'writes') => (status ? status.days.slice(-7).reduce((n, d) => n + d[k], 0) : 0)
@@ -33,7 +36,14 @@ export function UsagePanel() {
         <SectionLabel>{t('usage.title')}</SectionLabel>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{t('usage.desc')}</p>
-      {!status && !error && <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />{t('backup.loading')}</p>}
+      {!status && (
+        <div className="mt-2">
+          <Button size="sm" variant="ghost" disabled={loading} onClick={load} data-usage-show>
+            {loading && <Loader2 className="size-3.5 animate-spin" />}
+            {t(loading ? 'backup.loading' : 'usage.show')}
+          </Button>
+        </div>
+      )}
       {error && <p className="mt-2 text-xs break-words text-destructive">{error}</p>}
       {status && (
         <div className="mt-3 space-y-3 text-xs">
