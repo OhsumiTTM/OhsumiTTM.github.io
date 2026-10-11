@@ -324,6 +324,10 @@ function submitQuizResult_(quizId, memberId, answers, acting) {
 
   var questions = quiz.questions || []
   if (questions.length === 0) throw userError_('検定に設問がありません。')
+  // 受験の回数の上限(操作した人ごと)。返すのは合否と点数だけで、どの設問が正解かは返さない
+  if (!takeRateLimit_('quiz', String(acting.id), 1)) {
+    throw userError_('検定の受験は1時間に' + rateLimitOf_('quiz') + '回までです。しばらくしてから、もう一度受けてください。')
+  }
 
   var correct = 0
   for (var j = 0; j < questions.length; j++) {

@@ -93,7 +93,6 @@ import {
   rolesFromLegacy,
   rolesToLegacySettings,
   sameRole,
-  withMemberRoles,
   resolveMemberCapabilities,
   roleCapabilities,
   type RoleDef,
@@ -977,12 +976,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 役職の一覧(Settings の roles、無ければ今までの設定から組み立てたもの)
   const [storedRoles, setStoredRoles] = useState<RoleDef[]>(() => rolesFromLegacy({}))
   const [rolesFromSetting, setRolesFromSetting] = useState(false)
-  // 画面で使う役職の一覧。移行前は、メンバーの役職名のうち一覧に無いものも足す
-  // (今までの画面と同じく選択肢に出す。判定は GAS と同じく制限の無い管理者)
-  const roles = useMemo(
-    () => (rolesFromSetting ? storedRoles : withMemberRoles(storedRoles, members.map((m) => m.role))),
-    [storedRoles, rolesFromSetting, members],
-  )
+  // 画面で使う役職の一覧。メンバーの役職が一覧に無い時(書き間違いなど)は、GAS と同じく一般として扱う
+  // (以前は一覧に足して管理者扱いにしていたが、権限が広がりすぎるのでやめた)
+  const roles = storedRoles
   const baseRoleId = useMemo(() => roles.find((r) => r.tier === 'base')?.id ?? DEFAULT_BASE_ROLE_NAME, [roles])
   const roleLevels = useMemo(() => roles.filter((r) => r.tier !== 'base').map((r) => r.id), [roles])
   const restrictedRoles = useMemo(() => roles.filter((r) => r.tier === 'admin' && r.restricted).map((r) => r.id), [roles])

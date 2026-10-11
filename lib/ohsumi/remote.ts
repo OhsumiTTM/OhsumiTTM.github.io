@@ -57,7 +57,7 @@ import { type TaskVisibility } from './types'
 import { parseBellSettings } from './bell-kinds'
 import { defaultDepartments, normalizeDepartment, parseDepartmentsSetting, type DepartmentDef } from './departments'
 import { parseWorkloadRules, type WorkloadRules } from './workload-rules'
-import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, type RoleDef } from './roles'
+import { DEFAULT_BASE_ROLE_NAME, ROLE_SETTING_KEYS, isAdminRoleRef, parseRolesSetting, rolesFromLegacy, rolesFromSettings, type RoleDef } from './roles'
 import { CLIENT_VERSION, normalizeCode } from './codes'
 import {
   normalizeHistoryEntry,
@@ -785,7 +785,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
   return {
     skillOptions: splitTags(byKey.get('skill_options')),
     categoryOptions: splitTags(byKey.get('category_options')),
-    roles: rolesSetting ?? rolesFromLegacy(roleSettings),
+    roles: rolesSetting ?? rolesFromSettings(roleSettings),
     rolesFromSetting: !!rolesSetting,
     departments,
     projectTemplates: normalizeProjectTemplates(projectTemplates, departments),

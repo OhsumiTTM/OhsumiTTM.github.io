@@ -131,9 +131,24 @@ export function parseRolesSetting(value: string | undefined): RoleDef[] | null {
   return validateRoles(roles).length === 0 ? roles : null
 }
 
-// Settings(key → value)から役職の一覧を作る。roles があればそれを、無ければ今までの設定から
+// roles が書いてあるのに読めない(JSON が壊れている・決まりに合わない)か
+export function rolesSettingBroken(settings: Record<string, string | undefined>): boolean {
+  return !!String(settings.roles ?? '').trim() && !parseRolesSetting(settings.roles)
+}
+
+// roles が読めない間の役職(一般と最上位だけ。GAS の brokenRolesFallback_ と同じ)。
+// 今までの設定から組み立てると、移行の後に残った役職名が制限なしの管理者になってしまうため
+export function brokenRolesFallback(): RoleDef[] {
+  return [
+    { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
+    { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
+  ]
+}
+
+// Settings(key → value)から役職の一覧を作る。roles があればそれを、無ければ今までの設定から。
+// roles が書いてあるのに読めない時は、一般と最上位だけ
 export function rolesFromSettings(settings: Record<string, string | undefined>): RoleDef[] {
-  return parseRolesSetting(settings.roles) ?? rolesFromLegacy(settings)
+  return parseRolesSetting(settings.roles) ?? (rolesSettingBroken(settings) ? brokenRolesFallback() : rolesFromLegacy(settings))
 }
 
 // 役職の一覧の決まりごと。問題があれば、その説明の一覧を返す
@@ -159,11 +174,12 @@ export function findRole(roles: RoleDef[], ref: string | null | undefined): Role
   return roles.find((r) => r.id === v) ?? roles.find((r) => r.name === v)
 }
 
-// 役職の種類。空は一般。一覧に無い役職は、今までと同じく(制限の無い)管理者として扱う
+// 役職の種類。空は一般。一覧に無い役職(書き間違い・消した役職など)も一般として扱う
+// (いちばん権限の少ない扱い。GAS の roleTier_ と同じ)
 export function roleTier(roles: RoleDef[], ref: string | null | undefined): RoleTier {
   const v = String(ref ?? '').trim()
   if (!v) return 'base'
-  return findRole(roles, v)?.tier ?? 'admin'
+  return findRole(roles, v)?.tier ?? 'base'
 }
 
 export function isTopRoleRef(roles: RoleDef[], ref: string | null | undefined): boolean {
@@ -220,23 +236,10 @@ export function newRoleId(): string {
   return 'r_' + Math.random().toString(36).slice(2, 8)
 }
 
-// 移行前(roles が無い間)は、メンバーの role 列にある役職名が役職の一覧に無いことがある
-// (今までの画面では、それも役職の選択肢に出していた)。制限の無い管理者として一覧に足す
-// (GAS の roleTier と同じ扱い)
-export function withMemberRoles(roles: RoleDef[], memberRoles: string[]): RoleDef[] {
-  const extra: RoleDef[] = []
-  for (const ref of memberRoles) {
-    const v = String(ref ?? '').trim()
-    if (!v || findRole(roles, v) || extra.some((r) => r.id === v)) continue
-    extra.push({ id: v, name: v, tier: 'admin', restricted: false })
-  }
-  return extra.length ? [...roles, ...extra] : roles
-}
-
 // ---- できる操作(capabilities.ts)。gas/src/38-capabilities.gs と同じ ----------------------
 
 // 役職のできる操作(人ごとの例外は含まない)。最上位はすべて、一般はなし。
-// 管理者で書いていなければ既定(制限なし: org.rules・trash、制限あり: なし)。一覧に無い役職は制限なしの管理者
+// 管理者で書いていなければ既定(制限なし: org.rules・trash、制限あり: なし)。一覧に無い役職は一般と同じ
 export function roleCapabilities(roles: RoleDef[], ref: string | null | undefined): Capability[] {
   const tier = roleTier(roles, ref)
   if (tier === 'top') return [...CAPABILITY_KEYS]

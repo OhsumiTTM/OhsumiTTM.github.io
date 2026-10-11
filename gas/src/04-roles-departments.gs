@@ -95,8 +95,25 @@ function parseRolesSetting_(value) {
   return validateRoles_(roles).length === 0 ? roles : null
 }
 
+// roles が書いてあるのに読めない(JSON が壊れている・決まりに合わない)か
+function rolesSettingBroken_(settings) {
+  return !!String(settings.roles || '').trim() && !parseRolesSetting_(settings.roles)
+}
+
+// roles が読めない間の役職(一般と最上位だけ)。今までの設定から組み立てると、移行の後に
+// 残った役職名(班長など)が既定の制限なしの管理者になってしまうため、管理者の役職は作らない。
+// 最上位の人(role 列が top か 代表)は権限を保ち、Settings を直せる。ほかの人は一般として扱う
+function brokenRolesFallback_() {
+  return [
+    { id: BASE_ROLE_ID, name: DEFAULT_BASE_ROLE_NAME, tier: 'base' },
+    { id: TOP_ROLE_ID, name: DEFAULT_TOP_ROLE_NAME, tier: 'top' },
+  ]
+}
+
 function rolesFromSettings_(settings) {
-  return parseRolesSetting_(settings.roles) || rolesFromLegacy_(settings)
+  var parsed = parseRolesSetting_(settings.roles)
+  if (parsed) return parsed
+  return rolesSettingBroken_(settings) ? brokenRolesFallback_() : rolesFromLegacy_(settings)
 }
 
 function validateRoles_(roles) {
@@ -122,11 +139,13 @@ function findRole_(roles, ref) {
   return undefined
 }
 
+// 役職の種類。空は一般。一覧に無い役職(書き間違い・消した役職など)も一般として扱う
+// (いちばん権限の少ない扱い。管理者にしたい役職は、役職の一覧に足す)
 function roleTier_(roles, ref) {
   var v = String(ref === null || ref === undefined ? '' : ref).trim()
   if (!v) return 'base'
   var role = findRole_(roles, v)
-  return role ? role.tier : 'admin'
+  return role ? role.tier : 'base'
 }
 
 function isTopRoleRef_(roles, ref) { return roleTier_(roles, ref) === 'top' }
@@ -186,7 +205,7 @@ function readRoleSettings_() {
 var _requestRoles = null
 function requestRolesFrom_(settings) {
   var parsed = parseRolesSetting_(settings.roles)
-  return { roles: parsed || rolesFromLegacy_(settings), fromSetting: !!parsed }
+  return { roles: rolesFromSettings_(settings), fromSetting: !!parsed }
 }
 function getRoles_() {
   if (!_requestRoles) _requestRoles = requestRolesFrom_(readRoleSettings_())
@@ -592,6 +611,11 @@ function setupRolesSetting_() {
   invalidateRoles_()
   if (hasRolesSetting_()) return 'already'
   var legacy = readRoleSettings_()
+  // roles が壊れている時は上書きしない(直せば元の役職に戻せるように)
+  if (rolesSettingBroken_(legacy)) {
+    console.log('⚠️ 役職の設定(roles)が読めません。Settings の roles を直してください(直すまで、最上位の人以外は一般として扱います)')
+    return 'broken'
+  }
   var hasLegacy = ['role_levels', 'restricted_roles', 'role_permissions', 'job_requirements'].some(function (k) { return !!legacy[k] })
   var roles = hasLegacy ? rolesWithCodeIds_(getRoles_()) : defaultRoles_()
   updateSetting_('roles', JSON.stringify(roles))

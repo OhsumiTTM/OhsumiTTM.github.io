@@ -232,16 +232,18 @@ function purgeMember_(memberId, nowMs) {
   fields.inactive = 'TRUE'
   fields.purge_at = ''
   fields.personal_data_purged_at = new Date(nowMs).toISOString()
-  // メールアドレスは、まとめ・キューの片付けに使ってから消す
+  // メールアドレスは、カレンダー・まとめ・キューの片付けに使ってから消す
   var emails = String(getAllMemberEmails_()[String(memberId)] || '')
-  updateRowFields_(SHEET_MEMBERS, memberId, fields)
-  deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
-  deletePersonalStore_(memberId)
-  forgetPersonalProps_(memberId, emails)
-  bumpMemberEmailsVersion_()
-  // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)
+  // カレンダーの予定のゲストからメールアドレスを外し、プロフィール画像のファイルを消す(できなくても、ほかの削除は済ませる)。
+  // 時間のかかる処理を先に済ませ、消した印(personal_data_purged_at)は最後に書く。途中で止まった時は
+  // 印が無いので、次の日にもう一度消す(どの処理も、2回行っても同じ結果になる)
   removeCalendarGuest_(emails, nowMs)
   trashAvatarFiles_(memberId)
+  deletePersonalStore_(memberId)
+  forgetPersonalProps_(memberId, emails)
+  deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return String(o.id) === String(memberId) })
+  bumpMemberEmailsVersion_()
+  updateRowFields_(SHEET_MEMBERS, memberId, fields)
 }
 
 // 個人情報を消す時に、カレンダーの予定([Ohsumi] で始まる予定。前後 PURGE_CALENDAR_DAYS 日)のゲストから、そのメールアドレスを外す
@@ -323,13 +325,25 @@ function deleteRowsWhere_(sheetName, test) {
   return removed
 }
 
-// 期限を過ぎた個人情報を消す(毎日の処理・バックアップから戻した直後)。ロックを取った中で呼ぶ
-function purgeExpiredPersonalData_(nowMs, actorId) {
+// 毎日の処理で個人情報を消すのに使ってよい時間(消し始めてから)。1人ずつ、カレンダーの予定(前後 400 日)と
+// アップロード用のフォルダを調べるため、人数が多いと GAS の1回の実行の上限(6分)に届くことがある。
+// 時間を過ぎたら、残りの人は次の日に回す
+var PURGE_TIME_BUDGET_MS = 150 * 1000
+
+// 期限を過ぎた個人情報を消す(毎日の処理・バックアップから戻した直後)。ロックを取った中で呼ぶ。
+// deadlineMs(省略可)を過ぎたら、まだ消していない人は次の回に回す(done.deferred に人数)。
+// 1人分の途中では止めない(消した印は、その人の分をすべて済ませてから書く。purgeMember_)
+function purgeExpiredPersonalData_(nowMs, actorId, deadlineMs) {
   var days = personalDataRetentionDays_()
   var done = { members: [], candidates: [] }
+  var deferred = 0
   pendingPersonalData_(days).forEach(function (p) {
     var at = Date.parse(p.purgeAt)
     if (!(at > 0) || at > nowMs) return
+    if (deadlineMs && Date.now() >= deadlineMs) {
+      deferred++
+      return
+    }
     if (p.kind === 'member') {
       purgeMember_(p.id, nowMs)
       done.members.push(p.id)
@@ -338,6 +352,10 @@ function purgeExpiredPersonalData_(nowMs, actorId) {
       done.candidates.push(p.id)
     }
   })
+  if (deferred) {
+    done.deferred = deferred
+    console.warn('個人情報を消す時間の上限に達したため、' + deferred + '件を次の日に回しました')
+  }
   // 対応するメンバーがいないメールアドレスの行は、ここでは消さない(代表が一覧を確かめて消す。orphanEmailRows_)
   if (done.members.length || done.candidates.length) {
     appendOrgAudit_(actorId || 'system', 'purgePersonalData', '', done)
@@ -379,12 +397,12 @@ function deleteOrphanEmails_(ids, actorId) {
   return { deleted: removed, skipped: Object.keys(wanted).length - targets.length }
 }
 
-// 毎日の処理から(ロックを取る)
+// 毎日の処理から(ロックを取る)。消し始めてから PURGE_TIME_BUDGET_MS を過ぎたら、残りは次の日に回す
 function purgeExpiredPersonalDataLocked_(nowMs) {
   var lock = LockService.getScriptLock()
   lock.waitLock(30000)
   try {
-    return purgeExpiredPersonalData_(nowMs, 'system')
+    return purgeExpiredPersonalData_(nowMs, 'system', Date.now() + PURGE_TIME_BUDGET_MS)
   } finally {
     SpreadsheetApp.flush()
     lock.releaseLock()

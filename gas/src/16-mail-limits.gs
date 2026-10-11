@@ -30,6 +30,8 @@ var RATE_LIMITS = {
   clientError: { limit: 30, windowSec: 3600, tunable: 'clientErrorPerHour' },
   // 兼部の統合表示の読み込み(getMyDigest。1人1時間)
   digest: { limit: 120, windowSec: 3600 },
+  // 検定の受験(submitQuizResult。受ける人ごとに1時間)。点数から正解を総当たりで探られないように
+  quiz: { limit: 10, windowSec: 3600 },
 }
 // 今の上限(レジストリから届いた値。届いていなければ RATE_LIMITS の limit)
 function rateLimitOf_(kind) {

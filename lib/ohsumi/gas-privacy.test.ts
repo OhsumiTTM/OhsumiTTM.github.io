@@ -222,7 +222,7 @@ describe('守る処理を外すと失敗する', () => {
   }
 
   it('期限の確かめを外すと、保存期間の前に消してしまう', () => {
-    const h = setup(mutated('if (!(at > 0) || at > nowMs) return\n    if (p.kind', 'if (!(at > 0)) return\n    if (p.kind'))
+    const h = setup(mutated('if (!(at > 0) || at > nowMs) return\n    if (deadlineMs', 'if (!(at > 0)) return\n    if (deadlineMs'))
     withdraw(h)
     call(h, 'purgeExpiredPersonalData_', Date.now(), 'system')
     expect(rowOf(h, 'Members', 'm-base')!.name).toBe('退会したメンバー')
