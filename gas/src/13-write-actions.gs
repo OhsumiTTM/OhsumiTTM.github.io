@@ -80,7 +80,7 @@ function runWriteAction_(body, actingMember) {
       result = updateTaskFields_(body.taskId, progressFields)
       break
     case 'translateText':
-      result = translateTexts_(body.texts, body.targetLang, actingMember.id)
+      result = translateTexts_(body.texts, body.targetLang, actingMember.id, { markFailed: body.markFailed === true })
       break
     case 'updateWill':
       result = updateMemberFields_(body.memberId, { will_tags: (body.will || []).join(',') })

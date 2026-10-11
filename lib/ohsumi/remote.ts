@@ -1281,8 +1281,9 @@ export const remoteApi = {
     postToGas('updateTimezone', { memberId, timezone }),
   updateLocale: (memberId: string, locale: string) =>
     postToGas('updateLocale', { memberId, locale }),
+  // markFailed: 訳せなかった文を null で返してもらう(古い GAS は原文を返す)
   translateTexts: (texts: string[], targetLang: string) =>
-    postToGas<string[]>('translateText', { texts, targetLang }),
+    postToGas<(string | null)[]>('translateText', { texts, targetLang, markFailed: true }),
   updateSchedule: (taskId: string, startDate: string | null, deadline: string | null) =>
     postToGas('updateSchedule', { taskId, startDate, deadline }),
   updateDependsOn: (taskId: string, dependsOnIds: string[]) =>

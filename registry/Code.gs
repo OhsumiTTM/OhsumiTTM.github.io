@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.11-1'
+var REGISTRY_VERSION = '2026.10.11-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -2900,6 +2900,7 @@ function orgKpis_(nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.11-1', security: false, required: false, note: '自動翻訳: 訳した文を団体の GAS で6時間覚え、メンバーをまたいで訳し直さない。訳せなかった文は原文を訳として返さず、画面が後で訳し直す(以前は、一度失敗すると原文を訳として覚え、二度と訳さなかった)。上限に達したら残りを呼ばない。失敗の種類を「利用の状況」のエラーに残す' },
   { version: '2026.10.09-3', security: false, required: false, note: '「レジストリに登録する…」の結果(招待リンク・初期設定コード・次にやること)と「初期設定コードを作り直す」を、コピーボタン付きのダイアログで出す。メニューに「招待リンクを表示」を足す(登録した後なら、いつでも招待リンクを出せる)。「初期設定」が終わった時の案内に、次にやること(利用マニュアル 3.3〜3.5)を書く' },
   { version: '2026.10.09-2', security: false, required: false, note: 'レジストリに登録する URL を、OHSUMI_WEBAPP_URL → ブラウザで開いた時に覚えた URL(DETECTED_WEBAPP_URL)の順に選ぶ(getService().getUrl() は、デプロイを管理とは別の ID の …/exec を返すことがあるため、登録には使わない。どちらも無ければ止める)。登録の前に、その URL に GET を送り、この GAS の応答が返ることを確かめる。ブラウザで GAS の URL を開いた時の文を分かりやすくする' },
   { version: '2026.10.09-1', security: false, required: false, note: '新しく導入する団体の最初の役職を「一般・班長(設定例)・代表」にする(事業責任者を作らない)。既にある団体の役職は変えない。初期タスク「役職と部署を決める」の説明を、班長は設定例で名前の変更・役職の追加ができる文にする。SampleData.gs: 事業責任者が無い団体では、サンプルの全権管理者の役職もサンプルの分として足す' },

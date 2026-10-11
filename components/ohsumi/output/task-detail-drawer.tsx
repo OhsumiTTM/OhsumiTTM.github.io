@@ -1540,7 +1540,7 @@ function DrawerBody({
             </p>
             <p className="mt-1 inline-flex items-center gap-1.5 text-base font-semibold">
               <span className="size-1.5 rounded-full bg-primary/60" />
-              {projectName}
+              <TranslatedText text={projectName} />
             </p>
           </div>
         </div>
@@ -2004,7 +2004,7 @@ function DrawerBody({
             <ul className="space-y-2.5">
               {task.progressHistory.map((entry) => (
                 <li key={entry.id} className="rounded-lg border border-border bg-secondary/40 px-3 py-2">
-                  <p className="text-sm leading-relaxed">{entry.text}</p>
+                  <p className="text-sm leading-relaxed"><TranslatedText text={entry.text} /></p>
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     {formatDateTime(entry.at)}
                   </p>
@@ -2190,7 +2190,7 @@ function DrawerBody({
                           )}
                         </div>
                       </div>
-                      <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{c.text}</p>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed"><TranslatedText text={c.text} /></p>
                     </div>
                   )
                 }
