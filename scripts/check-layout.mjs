@@ -192,6 +192,7 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(停止の予定を入れる)', do: 'registrySuspend' },
   { name: 'レジストリ管理(当日の提供停止の確認)', do: 'registrySuspendNow' },
   { name: 'レジストリ管理(プランを変える)', do: 'registryPlan' },
+  { name: 'レジストリ管理(団体の情報・担当者・集計値)', do: 'registryProfile' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(アンケート)', do: 'click', text: 'アンケート', from: '[role=tab]' },
@@ -267,6 +268,15 @@ export function registryResponse(body) {
     case 'getDiagnosticsReport':
       return { receiptNo: 'D261001-AB2C', orgId: 'org_' + 'x'.repeat(40), orgName: long, receivedAt: iso(1), gasVersion: '2026.10.01-13',
         diagnostics: { version: '2026.10.01-13', settings: { triggers: ['sendBatchNotifications'.repeat(4)] }, limits: { rows: { Tasks: 1200 } } } }
+    case 'getOrgDetail':
+      return {
+        orgId: body.orgId,
+        contacts: [{ name: '担当 太郎', email: 'contact.person.long.address@example.org', phone: '090-0000-0000' }, { name: long, email: 'second@example.org', phone: '' }],
+        attributes: { field: '宇宙', size: '11〜30名', affiliation: long, started_year: '2024' },
+        metricKeys: ['members', 'active_7d', 'tasks', 'tasks_done', 'tasks_overdue', 'skill_points_total'],
+        usage: Array.from({ length: 10 }, (_, i) => ({ period: new Date(Date.UTC(2026, 8, 28 - i * 7)).toISOString().slice(0, 10), receivedAt: iso(1), version: 2, demo: i === 9,
+          metrics: { members: 50 - i, active_7d: 31, tasks: 1240 - i * 30, tasks_done: 980, tasks_overdue: 12, skill_points_total: 123456 } })),
+      }
     case 'issueRegistrationCode':
       return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName }
     default:
@@ -1098,6 +1108,14 @@ async function run({ build = true } = {}) {
         if (step.do === 'registryPlan') {
           await clickText('プランを変える…'); await sleep(500)
           if (!(await evaluate(`[...document.querySelectorAll('select option')].some((o) => o.textContent === '有償プラン')`))) throw new Error('プランを選ぶ欄が出ません')
+        }
+        if (step.do === 'registryProfile') {
+          await clickText('団体の情報・担当者・集計値…'); await sleep(800)
+          // 入力欄の値(担当者のメールアドレスなど)も、文として探す
+          const text = await evaluate(`document.body.textContent + [...document.querySelectorAll('input')].map((i) => i.value).join(' ')`)
+          for (const want of ['団体の情報を保存する', '担当者を保存する', 'contact.person.long.address@example.org', '集計値の推移', '期限を過ぎたタスクの数']) {
+            if (!text.includes(want)) throw new Error('団体の情報・担当者・集計値に「' + want + '」が出ません')
+          }
         }
         if (step.do === 'registrySurveys') {
           const text = await evaluate(`document.body.textContent`)

@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.09-3'
+var REGISTRY_VERSION = '2026.10.11-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -330,6 +330,9 @@ var REGISTRY_ACTIONS = {
   clearSuspension: function (body) { return clearSuspension_(body, Date.now()) },
   setOrgPlan: function (body) { return setOrgPlan_(body, Date.now()) },
   setOrgDemo: function (body) { return setOrgDemo_(body, Date.now()) },
+  setOrgProfile: function (body) { return setOrgProfile_(body, Date.now()) },
+  setOrgContacts: function (body) { return setOrgContacts_(body, Date.now()) },
+  getOrgDetail: function (body) { return getOrgDetail_(body, Date.now()) },
   setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
   setTunables: function (body) { return setTunables_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
@@ -2505,6 +2508,169 @@ function setOrgDemo_(body, nowMs) {
     appendAudit_({ actor: session.sub, action: 'setOrgDemo', target: orgId, before: { demo: before }, after: { demo: demo }, reason: reason })
     return { ok: true, result: orgSummary_(after, nowMs) }
   })
+}
+
+// ---- 団体の情報(団体名・契約・属性・担当者)と、団体ごとの集計値 ----
+//
+// 管理画面から、団体ごとに次を見る・変える(どれも操作の記録に残す。団体の GAS には関わらない):
+//   setOrgProfile  団体名(display_name)・契約の状態(contract_status / contract_until / contract_note)・属性(Attributes)
+//   setOrgContacts 担当者(Contacts。停止の予告・アンケートのメールの宛先)。宛先が変わるので、5分以内のログインが要る
+//   getOrgDetail   担当者・属性と、受け取った集計値(Usage)の推移(新しい期間から ORG_USAGE_SHOW_MAX 件)
+var CONTRACT_STATUSES = ['', 'active', 'ending', 'ended']
+var ORG_CONTACTS_MAX = 5
+var ORG_USAGE_SHOW_MAX = 26
+var ATTRIBUTE_FIELDS = ['field', 'size', 'affiliation', 'started_year']
+var CONTACT_EMAIL_PATTERN = /^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$/
+
+function contactsOf_(orgId) {
+  return readRows_('Contacts').filter(function (r) { return String(r.values.org_id || '') === orgId }).map(function (r) {
+    return { row: r.row, name: String(r.values.name || ''), email: String(r.values.email || ''), phone: String(r.values.phone || '') }
+  })
+}
+
+function attributesRow_(orgId) {
+  var rows = readRows_('Attributes')
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].values.org_id) === orgId) return rows[i]
+  return null
+}
+
+function attributesOf_(row) {
+  var out = {}
+  ATTRIBUTE_FIELDS.forEach(function (f) { out[f] = row ? String(row.values[f] === undefined ? '' : row.values[f]) : '' })
+  return out
+}
+
+// 契約の終了日: 'YYYY-MM-DD'(空は「なし」)
+function cleanDateKey_(v) {
+  var s = cleanText_(v, 10)
+  if (!s) return ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || isNaN(Date.parse(s + 'T00:00:00Z'))) throw registryError_('契約の終了日は YYYY-MM-DD の形で入れてください。')
+  return s
+}
+
+// 管理画面: 団体名・契約の状態・属性を変える。{ session, orgId, displayName?, contract?: { status, until, note }, attributes?: {...}, reason }
+// 送られた項目だけを変える(無い項目は、そのまま)
+function setOrgProfile_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  var reason = cleanText_(body.reason, 500)
+  var fields = {}
+  if (body.displayName !== undefined) {
+    var name = cleanText_(body.displayName, 100)
+    if (!name) throw registryError_('団体名を入れてください。')
+    fields.display_name = name
+  }
+  if (body.contract && typeof body.contract === 'object') {
+    var status = String(body.contract.status === undefined ? '' : body.contract.status)
+    if (CONTRACT_STATUSES.indexOf(status) < 0) throw registryError_('契約の状態は、契約中・終了予定・終了・未設定から選んでください。')
+    fields.contract_status = status
+    fields.contract_until = cleanDateKey_(body.contract.until)
+    fields.contract_note = cleanText_(body.contract.note, 500)
+  }
+  var attrs = null
+  if (body.attributes && typeof body.attributes === 'object') {
+    attrs = {}
+    ATTRIBUTE_FIELDS.forEach(function (f) { attrs[f] = cleanText_(body.attributes[f], 100) })
+    if (attrs.started_year && !/^\d{4}$/.test(attrs.started_year)) throw registryError_('設立年は4桁の数字(例: 2024)で入れてください。')
+  }
+  if (!Object.keys(fields).length && !attrs) throw registryError_('変える項目がありません。')
+  return withRegistryLock_(function () {
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var before = {}
+    var after = {}
+    Object.keys(fields).forEach(function (k) {
+      var was = k === 'contract_until' ? usageDateKey_(row.values[k]) : String(row.values[k] === undefined ? '' : row.values[k])
+      if (was !== fields[k]) { before[k] = was; after[k] = fields[k] }
+    })
+    var attrRow = attrs ? attributesRow_(orgId) : null
+    if (attrs) {
+      var wasAttrs = attributesOf_(attrRow)
+      ATTRIBUTE_FIELDS.forEach(function (f) {
+        if (wasAttrs[f] !== attrs[f]) { before['attr.' + f] = wasAttrs[f]; after['attr.' + f] = attrs[f] }
+      })
+    }
+    if (!Object.keys(after).length) return { ok: true, result: orgSummary_(row.values, nowMs) }
+    var changedOrg = {}
+    Object.keys(fields).forEach(function (k) { if (k in after) changedOrg[k] = fields[k] })
+    if (Object.keys(changedOrg).length) {
+      changedOrg.updated_at = new Date(nowMs).toISOString()
+      setRowFields_('Orgs', row.row, changedOrg)
+    }
+    if (attrs && ATTRIBUTE_FIELDS.some(function (f) { return ('attr.' + f) in after })) {
+      if (attrRow) setRowFields_('Attributes', attrRow.row, attrs)
+      else appendRowByHeaders_('Attributes', merged_({ org_id: orgId }, attrs))
+    }
+    appendAudit_({ actor: session.sub, action: 'setOrgProfile', target: orgId, before: before, after: after, reason: reason })
+    return { ok: true, result: orgSummary_(merged_(row.values, changedOrg), nowMs) }
+  })
+}
+
+// 管理画面: 担当者を入れ替える。{ session, orgId, contacts: [{ name, email, phone }], reason }(送った一覧で置き換える)
+function setOrgContacts_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '担当者を変える')
+  var reason = cleanText_(body.reason, 500)
+  var list = Array.isArray(body.contacts) ? body.contacts : null
+  if (!list) throw registryError_('担当者の一覧を送ってください。')
+  if (list.length > ORG_CONTACTS_MAX) throw registryError_('担当者は' + ORG_CONTACTS_MAX + '人までです。')
+  var seen = {}
+  var contacts = list.map(function (c) {
+    c = c || {}
+    var email = cleanText_(c.email, 200).toLowerCase()
+    if (!CONTACT_EMAIL_PATTERN.test(email)) throw registryError_('担当者のメールアドレスが正しくありません: ' + (email || '(空)'))
+    if (seen[email]) throw registryError_('同じメールアドレスが2回入っています: ' + email)
+    seen[email] = true
+    return { name: cleanText_(c.name, 100), email: email, phone: cleanText_(c.phone, 30) }
+  })
+  if (!contacts.length) throw registryError_('担当者を1人以上入れてください(停止の予告・アンケートの宛先になります)。')
+  return withRegistryLock_(function () {
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var current = contactsOf_(orgId)
+    var strip = function (c) { return { name: c.name, email: c.email, phone: c.phone } }
+    var beforeList = current.map(strip)
+    if (JSON.stringify(beforeList) === JSON.stringify(contacts)) return { ok: true, result: { orgId: orgId, contacts: contacts } }
+    // 今の行を下から消して、新しい一覧を足す
+    var sheet = registrySheet_('Contacts')
+    current.slice().sort(function (a, b) { return b.row - a.row }).forEach(function (c) { sheet.deleteRow(c.row) })
+    contacts.forEach(function (c) { appendRowByHeaders_('Contacts', merged_({ org_id: orgId }, c)) })
+    appendAudit_({ actor: session.sub, action: 'setOrgContacts', target: orgId, before: beforeList, after: contacts, reason: reason })
+    return { ok: true, result: { orgId: orgId, contacts: contacts } }
+  })
+}
+
+// 管理画面: 団体の担当者・属性と、受け取った集計値の推移。{ session, orgId }
+function getOrgDetail_(body, nowMs) {
+  var props = registryProps_()
+  verifyAdminSession_(body.session, props, nowMs)
+  var row = findOrgRow_(String(body.orgId || ''))
+  if (!row) throw registryError_('その団体は見つかりません。')
+  var orgId = String(row.values.org_id)
+  var usage = []
+  readRows_('Usage').forEach(function (r) {
+    if (String(r.values.org_id || '') !== orgId) return
+    var m
+    try { m = JSON.parse(String(r.values.metrics_json || '{}')) } catch (e) { m = {} }
+    var metrics = {}
+    METRIC_KEYS.forEach(function (k) { if (m && typeof m[k] === 'number') metrics[k] = m[k] })
+    usage.push({ period: usageDateKey_(r.values.date), receivedAt: isoOf_(r.values.received_at), version: Number(r.values.metrics_version) || 0,
+      demo: boolCell_(r.values.demo), metrics: metrics })
+  })
+  usage.sort(function (a, b) { return b.period.localeCompare(a.period) })
+  return {
+    ok: true,
+    result: {
+      orgId: orgId,
+      contacts: contactsOf_(orgId).map(function (c) { return { name: c.name, email: c.email, phone: c.phone } }),
+      attributes: attributesOf_(attributesRow_(orgId)),
+      usage: usage.slice(0, ORG_USAGE_SHOW_MAX),
+      metricKeys: METRIC_KEYS,
+    },
+  }
 }
 
 // ---- 機能のスイッチ(団体の GAS の機能を止める。PR W) ----
