@@ -8,7 +8,8 @@ import { OrgAdminLinks } from './org-admin-links'
 import { useEffect, useState } from 'react'
 import { Copy, ShieldAlert } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { isRemoteConfigured, remoteApi, type GasUpdateStatus } from '@/lib/ohsumi/remote'
+import { isRemoteConfigured, type GasUpdateStatus } from '@/lib/ohsumi/remote'
+import { adminStatusPart } from '@/lib/ohsumi/admin-status'
 import { copySiteGasCode } from '@/lib/ohsumi/gas-code-copy'
 
 type CopyState =
@@ -25,7 +26,7 @@ export function GasUpdateBanner() {
   useEffect(() => {
     if (!isRemoteConfigured) return
     let alive = true
-    remoteApi.getGasUpdateStatus().then(
+    adminStatusPart('gasUpdate').then(
       (s) => { if (alive) setStatus(s) },
       () => { /* 確かめられない時(古い GAS など)は何も出さない */ },
     )

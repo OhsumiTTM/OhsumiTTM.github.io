@@ -33,7 +33,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.11-3'
+var OHSUMI_GAS_VERSION = '2026.10.11-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -382,6 +382,8 @@ var READ_ONLY_ACTIONS = [
   'getMyDigest',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
+  // 管理画面の上部の知らせの状態(まとめて。読み取りだけ)
+  'getAdminStatus',
   // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)
   'getUsageStatus',
   // FSIF に送る集計値の状態・プレビュー・送信の履歴(読み取りだけ)

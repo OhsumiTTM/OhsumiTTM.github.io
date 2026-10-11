@@ -8,7 +8,8 @@ import { useEffect, useState } from 'react'
 import { Megaphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
-import { isRemoteConfigured, remoteApi, type Announcement, type AnnouncementImportance, type AnnouncementsStatus } from '@/lib/ohsumi/remote'
+import { isRemoteConfigured, type Announcement, type AnnouncementImportance, type AnnouncementsStatus } from '@/lib/ohsumi/remote'
+import { adminStatusPart } from '@/lib/ohsumi/admin-status'
 
 const READ_KEY = 'ohsumi-announcements-read'
 const ORDER: Record<AnnouncementImportance, number> = { urgent: 0, important: 1, normal: 2 }
@@ -55,7 +56,7 @@ export function AnnouncementsBanner() {
     if (!isRemoteConfigured) return
     let alive = true
     setRead(loadRead())
-    remoteApi.getAnnouncements().then(
+    adminStatusPart('announcements').then(
       (s) => { if (alive) setStatus(s) },
       () => { /* 確かめられない時(古い GAS など)は何も出さない */ },
     )

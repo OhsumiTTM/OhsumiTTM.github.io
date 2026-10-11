@@ -180,7 +180,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getAdminStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -569,6 +569,11 @@ async function run({ build = true } = {}) {
         case 'getInviteMailStatus': return inviteMail === 'available' ? { available: true, remaining: 3 } : { available: false, reason: inviteMail, remaining: 3 }
         case 'sendInviteLinkToMe': inviteBodies.push(body); return { sent: true, count: 1, remaining: 2 }
         case 'checkAndGenerateRecurringTasks': return { generated: [] }
+        // 管理画面の上部の知らせ(まとめて): それぞれの操作の偽の応答を集める(lib/ohsumi/admin-status.ts)
+        case 'getAdminStatus': {
+          const parts = { announcements: 'getAnnouncements', gasUpdate: 'getGasUpdateStatus', mailQuota: 'getMailQuotaStatus', ops: 'getOpsStatus', backup: 'getBackupStatus', personalData: 'getPersonalDataStatus' }
+          return Object.fromEntries(Object.entries(parts).map(([key, action]) => [key, gas({ ...body, action })]))
+        }
         // 管理画面の上部に、メールの上限の知らせを出す
         // 毎日の処理の止まり・共有の警告
         case 'getOpsStatus': return {

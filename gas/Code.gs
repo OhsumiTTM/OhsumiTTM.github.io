@@ -1991,6 +1991,8 @@ var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
   'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks',
+  // 管理画面の上部の知らせ(まとめて)。部分ごとの確かめも、同じスナップショットのメンバーで行う
+  'getAdminStatus',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2400,7 +2402,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.11-3'
+var OHSUMI_GAS_VERSION = '2026.10.11-4'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2749,6 +2751,8 @@ var READ_ONLY_ACTIONS = [
   'getMyDigest',
   // 毎日・毎時の処理と共有の状態・長くなっている記録(読み取りだけ)
   'getOpsStatus',
+  // 管理画面の上部の知らせの状態(まとめて。読み取りだけ)
+  'getAdminStatus',
   // 利用の集計とエラーの件数(代表の管理画面に出す。読み取りだけ)
   'getUsageStatus',
   // FSIF に送る集計値の状態・プレビュー・送信の履歴(読み取りだけ)
@@ -4621,6 +4625,7 @@ function authorizeAction_(acting, action, body) {
     'getOrgStorage',           // 団体の保存。キーごとに決めた役職だけが読める(getOrgStorage_ で確かめる)
     'setOrgStorage',           // 団体の保存。キーごとに決めた役職だけが書ける(setOrgStorage_ で確かめる)
     'searchArchivedTasks',     // 移したタスクの検索。見てよいタスクだけを返す(canViewTaskRow_ で絞り込む)
+    'getAdminStatus',          // 管理画面の上部の知らせ。部分ごとに、その部分の操作と同じ決まりで見られる人にだけ入れる(adminStatus_)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。それ以外は担当者・確認者だけ。
@@ -5224,7 +5229,7 @@ var LOCK_EXEMPT_ACTIONS = [
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
-  'getOpsStatus', 'recheckSharing',
+  'getOpsStatus', 'recheckSharing', 'getAdminStatus',
   // 利用の集計とエラーの件数(読むだけ)・画面のエラーの記録(エラーの記録のシートに1行足すだけ)
   'getUsageStatus', 'reportClientError',
   // FSIF に送る集計値の状態・プレビュー(シートとスクリプトプロパティを読むだけ)
@@ -6331,7 +6336,10 @@ function runWriteAction_(body, actingMember) {
       result = { recorded: reportClientError_(body, actingMember.id) }
       break
     case 'getOpsStatus':
-      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_(), disabledFeatures: disabledFeaturesForClient_() }
+      result = opsStatus_()
+      break
+    case 'getAdminStatus':
+      result = adminStatus_(actingMember)
       break
     case 'recheckSharing':
       result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()), surveys: surveysStatus_() }
@@ -14973,6 +14981,44 @@ function isPermissionError_(err) {
   return /You do not have permission to call|Required permissions:|Authorization is required|権限がありません.*(必要な権限|許可)/i.test(msg)
 }
 
+
+// ---- 管理画面の上部の知らせ(まとめて1回で) ----
+//
+// 管理画面を開くと、上部の知らせ(FSIF からのお知らせ・GAS の更新・毎日の処理と共有・バックアップ・メールの上限・
+// 個人情報の削除の予定)の状態を、それぞれ別の通信で読んでいた。1回の通信の往復(1〜2秒)が処理(0.1〜0.5秒)より
+// ずっと長いので、まとめて返す。それぞれの部分は、その部分の操作と同じ決まりで見られる人にだけ入れる
+// (見られない部分は入れない)。1つの部分が失敗しても、ほかの部分は返す
+function opsStatus_() {
+  return { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_(), disabledFeatures: disabledFeaturesForClient_() }
+}
+
+var ADMIN_STATUS_PARTS = [
+  { key: 'announcements', action: 'getAnnouncements', read: function () { return announcementsStatus_(Date.now()) } },
+  { key: 'gasUpdate', action: 'getGasUpdateStatus', read: function () { return gasUpdateStatus_() } },
+  { key: 'mailQuota', action: 'getMailQuotaStatus', read: function () { return mailQuotaStatus_() } },
+  { key: 'ops', action: 'getOpsStatus', read: function () { return opsStatus_() } },
+  { key: 'backup', action: 'getBackupStatus', read: function () { return backupStatus_() } },
+  { key: 'personalData', action: 'getPersonalDataStatus', read: function () { return personalDataStatus_(Date.now()) } },
+]
+
+function adminStatus_(acting) {
+  var out = {}
+  ADMIN_STATUS_PARTS.forEach(function (part) {
+    try {
+      authorizeAction_(acting, part.action, {})
+    } catch (e) {
+      return
+    }
+    try {
+      out[part.key] = part.read()
+    } catch (e) {
+      logGasError_(e, part.action)
+      out.errors = out.errors || {}
+      out.errors[part.key] = toErrorMessage_(e)
+    }
+  })
+  return out
+}
 // ---- 定量データ(個人を特定しない集計値)を週1回 FSIF に送る ----
 //
 // 送るかはプランで決まる(レジストリの checkIn が伝える CONTRACT_STATE.plan):

@@ -463,3 +463,41 @@ function isPermissionError_(err) {
   return /You do not have permission to call|Required permissions:|Authorization is required|権限がありません.*(必要な権限|許可)/i.test(msg)
 }
 
+
+// ---- 管理画面の上部の知らせ(まとめて1回で) ----
+//
+// 管理画面を開くと、上部の知らせ(FSIF からのお知らせ・GAS の更新・毎日の処理と共有・バックアップ・メールの上限・
+// 個人情報の削除の予定)の状態を、それぞれ別の通信で読んでいた。1回の通信の往復(1〜2秒)が処理(0.1〜0.5秒)より
+// ずっと長いので、まとめて返す。それぞれの部分は、その部分の操作と同じ決まりで見られる人にだけ入れる
+// (見られない部分は入れない)。1つの部分が失敗しても、ほかの部分は返す
+function opsStatus_() {
+  return { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_(), disabledFeatures: disabledFeaturesForClient_() }
+}
+
+var ADMIN_STATUS_PARTS = [
+  { key: 'announcements', action: 'getAnnouncements', read: function () { return announcementsStatus_(Date.now()) } },
+  { key: 'gasUpdate', action: 'getGasUpdateStatus', read: function () { return gasUpdateStatus_() } },
+  { key: 'mailQuota', action: 'getMailQuotaStatus', read: function () { return mailQuotaStatus_() } },
+  { key: 'ops', action: 'getOpsStatus', read: function () { return opsStatus_() } },
+  { key: 'backup', action: 'getBackupStatus', read: function () { return backupStatus_() } },
+  { key: 'personalData', action: 'getPersonalDataStatus', read: function () { return personalDataStatus_(Date.now()) } },
+]
+
+function adminStatus_(acting) {
+  var out = {}
+  ADMIN_STATUS_PARTS.forEach(function (part) {
+    try {
+      authorizeAction_(acting, part.action, {})
+    } catch (e) {
+      return
+    }
+    try {
+      out[part.key] = part.read()
+    } catch (e) {
+      logGasError_(e, part.action)
+      out.errors = out.errors || {}
+      out.errors[part.key] = toErrorMessage_(e)
+    }
+  })
+  return out
+}

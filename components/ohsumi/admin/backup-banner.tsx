@@ -4,7 +4,8 @@
 import { useEffect, useState } from 'react'
 import { DatabaseBackup } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { isRemoteConfigured, remoteApi, type BackupStatus } from '@/lib/ohsumi/remote'
+import { isRemoteConfigured, type BackupStatus } from '@/lib/ohsumi/remote'
+import { adminStatusPart } from '@/lib/ohsumi/admin-status'
 
 export function BackupBanner() {
   const { t, locale } = useI18n()
@@ -13,7 +14,7 @@ export function BackupBanner() {
   useEffect(() => {
     if (!isRemoteConfigured) return
     let alive = true
-    remoteApi.getBackupStatus().then(
+    adminStatusPart('backup').then(
       (s) => { if (alive) setStatus(s) },
       () => { /* 確かめられない時(古い GAS など)は何も出さない */ },
     )

@@ -404,7 +404,7 @@ var LOCK_EXEMPT_ACTIONS = [
   // 個人情報の削除の予定(シートを読むだけ)
   'getPersonalDataStatus',
   // 毎日・毎時の処理と共有の状態(スクリプトプロパティを読むだけ)・共有の確かめ直し(Drive を読み、スクリプトプロパティだけを書く)
-  'getOpsStatus', 'recheckSharing',
+  'getOpsStatus', 'recheckSharing', 'getAdminStatus',
   // 利用の集計とエラーの件数(読むだけ)・画面のエラーの記録(エラーの記録のシートに1行足すだけ)
   'getUsageStatus', 'reportClientError',
   // FSIF に送る集計値の状態・プレビュー(シートとスクリプトプロパティを読むだけ)

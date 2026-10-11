@@ -1383,6 +1383,8 @@ export const remoteApi = {
   getWebhookStatus: () => postToGas<WebhookStatus>('getWebhookStatus', {}),
   // メールの1日の上限の状態(代表・全権管理者だけ)
   getMailQuotaStatus: () => postToGas<MailQuotaStatus>('getMailQuotaStatus', {}),
+  // 管理画面の上部の知らせの状態(まとめて。lib/ohsumi/admin-status.ts から使う)
+  getAdminStatus: () => postToGas<import('./admin-status').AdminStatus>('getAdminStatus', {}),
   // 毎日・毎時の処理と共有の状態(代表だけ)・共有を確かめ直す
   getOpsStatus: () => postToGas<OpsStatus>('getOpsStatus', {}),
   recheckSharing: () => postToGas<OpsStatus>('recheckSharing', {}),

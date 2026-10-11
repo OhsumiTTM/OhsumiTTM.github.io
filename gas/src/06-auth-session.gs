@@ -43,6 +43,8 @@ var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
   'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks',
+  // 管理画面の上部の知らせ(まとめて)。部分ごとの確かめも、同じスナップショットのメンバーで行う
+  'getAdminStatus',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)

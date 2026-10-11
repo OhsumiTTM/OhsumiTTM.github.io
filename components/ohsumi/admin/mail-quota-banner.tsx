@@ -6,7 +6,8 @@
 import { useEffect, useState } from 'react'
 import { MailWarning } from 'lucide-react'
 import { useI18n } from '@/lib/ohsumi/i18n'
-import { isRemoteConfigured, remoteApi, type MailQuotaStatus } from '@/lib/ohsumi/remote'
+import { isRemoteConfigured, type MailQuotaStatus } from '@/lib/ohsumi/remote'
+import { adminStatusPart } from '@/lib/ohsumi/admin-status'
 
 // これ以下になったら、上限に近いことを知らせる
 const MAIL_LOW_REMAINING = 20
@@ -18,7 +19,7 @@ export function MailQuotaBanner() {
   useEffect(() => {
     if (!isRemoteConfigured) return
     let alive = true
-    remoteApi.getMailQuotaStatus().then(
+    adminStatusPart('mailQuota').then(
       (s) => { if (alive) setStatus(s) },
       () => { /* 確かめられない時は何も出さない */ },
     )

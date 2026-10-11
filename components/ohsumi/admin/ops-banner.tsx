@@ -11,6 +11,7 @@ import { ClipboardList, ExternalLink, FileWarning, PauseCircle, ShieldAlert, Tim
 import { Button } from '@/components/ui/button'
 import { useI18n, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { isRemoteConfigured, remoteApi, type OpsStatus, type SharingProblem } from '@/lib/ohsumi/remote'
+import { adminStatusPart } from '@/lib/ohsumi/admin-status'
 import { cellFieldLabel } from '@/lib/ohsumi/cell-limits'
 
 const TARGET_KEYS: Record<SharingProblem['target'], TranslationKey> = {
@@ -64,7 +65,7 @@ export function OpsBanner() {
   useEffect(() => {
     if (!isRemoteConfigured) return
     let alive = true
-    remoteApi.getOpsStatus().then(
+    adminStatusPart('ops').then(
       (s) => { if (alive) setStatus(s) },
       () => { /* 確かめられない時(古い GAS など)は何も出さない */ },
     )

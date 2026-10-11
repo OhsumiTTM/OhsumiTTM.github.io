@@ -107,6 +107,8 @@ export const READ_ACTIONS = new Set([
   'getMyDigest',
   // 毎日・毎時の処理と共有の状態(代表だけ)
   'getOpsStatus',
+  // 管理画面の上部の知らせ(まとめて)
+  'getAdminStatus',
   // 利用の集計とエラーの件数(代表だけ)
   'getUsageStatus',
   // FSIF に送る集計値の状態・プレビュー・送信の履歴(代表だけ)

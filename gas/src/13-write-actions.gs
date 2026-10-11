@@ -580,7 +580,10 @@ function runWriteAction_(body, actingMember) {
       result = { recorded: reportClientError_(body, actingMember.id) }
       break
     case 'getOpsStatus':
-      result = { jobs: jobStatus_(Date.now()), sharing: readSharingState_(), longRecords: longRecordsNow_(), surveys: surveysStatus_(), disabledFeatures: disabledFeaturesForClient_() }
+      result = opsStatus_()
+      break
+    case 'getAdminStatus':
+      result = adminStatus_(actingMember)
       break
     case 'recheckSharing':
       result = { jobs: jobStatus_(Date.now()), sharing: checkSharing_(Date.now()), surveys: surveysStatus_() }

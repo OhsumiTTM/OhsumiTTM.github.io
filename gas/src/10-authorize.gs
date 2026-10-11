@@ -330,6 +330,7 @@ function authorizeAction_(acting, action, body) {
     'getOrgStorage',           // 団体の保存。キーごとに決めた役職だけが読める(getOrgStorage_ で確かめる)
     'setOrgStorage',           // 団体の保存。キーごとに決めた役職だけが書ける(setOrgStorage_ で確かめる)
     'searchArchivedTasks',     // 移したタスクの検索。見てよいタスクだけを返す(canViewTaskRow_ で絞り込む)
+    'getAdminStatus',          // 管理画面の上部の知らせ。部分ごとに、その部分の操作と同じ決まりで見られる人にだけ入れる(adminStatus_)
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。それ以外は担当者・確認者だけ。
