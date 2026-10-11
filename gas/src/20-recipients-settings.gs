@@ -69,7 +69,8 @@ function getMemberEmailValueCached_(memberId) {
 
 // メンバー1人分のメールを書く(行が無ければ追加、あれば上書き)。
 // ログイン用の対応表のキャッシュ(findMemberIdByEmailCached_)を無効にする。
-function setMemberEmail_(memberId, email) {
+function setMemberEmail_(memberId, email, opts) {
+  assertEmailsAvailable_(email, memberId, opts)
   var before = ''
   try { before = getMemberEmailValue_(memberId) } catch (e) { before = '' }
   try {
@@ -83,6 +84,54 @@ function setMemberEmail_(memberId, email) {
   } finally {
     bumpMemberEmailsVersion_()
   }
+}
+
+// 同じメールアドレスを、2人のメンバーに登録させない(ログインは MemberEmails の上の行が先に
+// 当たるため、退会した人と同じアドレスで登録し直すと、退会した人として扱われてログインできなくなる)。
+// アドレスごとに、大文字・小文字を区別せずに比べる(1人に複数のアドレスをカンマ区切りで持てる)。
+// exceptMemberId はそのメンバー自身(自分のアドレスの付け直しは断らない)。
+// opts.takeOverWithdrawn: 退会したメンバーのアドレスなら、そのメンバーから外して使う
+// (初期設定コードで代表を入れ直す時。代表がいないので「退会の取り消し」ができないため)
+function assertEmailsAvailable_(email, exceptMemberId, opts) {
+  var wanted = String(email || '').split(',').map(function (x) { return x.trim().toLowerCase() }).filter(Boolean)
+  if (wanted.length === 0) return
+  var sheet = getMemberEmailsSheet_()
+  var headers = headerRow_(sheet)
+  var idCol = headers.indexOf('id')
+  var emailCol = headers.indexOf('email')
+  var lastRow = sheet.getLastRow()
+  if (idCol < 0 || emailCol < 0 || lastRow < 2) return
+  var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
+  var except = exceptMemberId === undefined || exceptMemberId === null ? null : String(exceptMemberId)
+  for (var i = 0; i < values.length; i++) {
+    var otherId = String(values[i][idCol] || '')
+    if (!otherId || otherId === except) continue
+    var have = String(values[i][emailCol] || '').split(',').map(function (x) { return x.trim() }).filter(Boolean)
+    var clash = have.filter(function (x) { return wanted.indexOf(x.toLowerCase()) >= 0 })
+    if (clash.length === 0) continue
+    var state = memberRowState_(otherId)
+    var withdrawn = state === 'withdrawn'
+    if (withdrawn && opts && opts.takeOverWithdrawn) {
+      var rest = have.filter(function (x) { return wanted.indexOf(x.toLowerCase()) < 0 })
+      sheet.getRange(i + 2, emailCol + 1).setValue(rest.join(','))
+      continue
+    }
+    if (withdrawn) {
+      throw userError_('メールアドレス ' + clash.join(', ') + ' は、退会したメンバーに登録されています。同じ人を戻す時は、新しく登録せずに、団体設定の「個人情報の削除」で「退会の取り消し」をしてください。')
+    }
+    if (state === 'missing') {
+      throw userError_('メールアドレス ' + clash.join(', ') + ' は、いないメンバーのものとして残っています。代表が、団体設定の「個人情報の削除」で使われていないメールアドレスを消してから、登録し直してください。')
+    }
+    throw userError_('メールアドレス ' + clash.join(', ') + ' は、ほかのメンバーに登録されています。1つのアドレスは1人にだけ登録できます。')
+  }
+}
+
+// メンバーの行の状態: 'active'(いる)・'withdrawn'(退会した)・'missing'(行が無い)。シートから読む
+function memberRowState_(memberId) {
+  var row = null
+  try { row = findRow_(SHEET_MEMBERS, String(memberId)) } catch (e) { row = null }
+  if (!row) return 'missing'
+  return String(row.withdrawn_at || '') !== '' ? 'withdrawn' : 'active'
 }
 
 function writeMemberEmail_(memberId, email) {

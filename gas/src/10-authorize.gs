@@ -47,6 +47,8 @@ function authorizeAction_(acting, action, body) {
   if (capability) {
     if (roleHasCapability_(getRoles_(), role, capability)) {
       if (action === 'updateRole') assertRoleAssignable_(acting, body.role, body.memberId)
+      // メンバーを対象にする操作(報告先・メール・退会など)も、自分より強い人には手を出せない
+      assertMemberTargetable_(acting, action, body || {})
       if (action === 'addMember' && body.role) assertRoleAssignable_(acting, body.role, null)
       if (action === 'convertCandidateToMember' && roleTier_(getRoles_(), body.role) !== 'base') {
         // 候補者を一般以外の役職で登録するのは役職の付与にあたる(メンバーの登録・役職の付与と同じ確認)
@@ -200,20 +202,24 @@ function authorizeAction_(acting, action, body) {
     // acting.project_ids に対象プロジェクトが含まれなければ permission_overrides でのみ許可。
     var actingProjectIds = acting.project_ids ? String(acting.project_ids).split(',').map(function(s) { return s.trim() }).filter(Boolean) : []
     if (actingProjectIds.length > 0) {
-      // 対象プロジェクトIDを特定する
-      var targetProjectId = null
+      // 対象プロジェクトIDを特定する。
+      // タスクの操作は、送られてきた projectId ではなく、保存されているタスクのプロジェクトで確かめる
+      // (以前は projectId があるとそちらだけを見たため、projectId に担当のプロジェクトを付ければ
+      // ほかのプロジェクトのタスクを編集・削除できた)。タスクを別のプロジェクトへ移す時(updateTaskDetails)は、
+      // 移す先(projectId)も担当の範囲でなければならない
+      var targetProjectIds = []
+      if (body.taskId) {
+        var taskObj = null
+        try { taskObj = authFindRow_(SHEET_TASKS, String(body.taskId)) } catch(e) { taskObj = null }
+        if (taskObj) targetProjectIds.push(String(taskObj.project_id || ''))
+      }
       if (body.projectId) {
-        // プロジェクト操作（createProject/updateProjectDetails/updateProjectMembers 等）
-        targetProjectId = String(body.projectId)
-      } else if (body.taskId) {
-        // タスク操作: タスクの project_id を引く
-        try {
-          var taskObj = authFindRow_(SHEET_TASKS, String(body.taskId))
-          if (taskObj) targetProjectId = String(taskObj.project_id || '')
-        } catch(e) {}
+        // プロジェクト操作（createProject/updateProjectDetails/updateProjectMembers 等）と、タスクの移す先
+        targetProjectIds.push(String(body.projectId))
       }
       // project_id が特定できた場合のみスコープチェック（特定できない操作は通過させる）
-      if (targetProjectId && actingProjectIds.indexOf(targetProjectId) < 0) {
+      var outOfScope = targetProjectIds.some(function (pid) { return pid && actingProjectIds.indexOf(pid) < 0 })
+      if (outOfScope) {
         if (checkPermissionOverride_(acting, action, body)) return
         throw userError_('この操作は担当プロジェクトの範囲内でのみ実行できます。')
       }

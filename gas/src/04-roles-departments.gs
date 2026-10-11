@@ -457,7 +457,7 @@ function requireKnownRole_(ref) {
   return role
 }
 
-// 変更の後に、最上位の役職を持つ有効な(休止中でない)メンバーが1人以上残るか確かめる。
+// 変更の後に、最上位の役職を持つ有効な(休止中でも退会済みでもない)メンバーが1人以上残るか確かめる。
 // change: { roles?: 変更後の役職の一覧, members?: { メンバーID: { role?, inactive?, removed? } } }
 function assertTopRemains_(change) {
   var roles = change.roles || getRoles_()
@@ -473,6 +473,8 @@ function assertTopRemains_(change) {
   rows.forEach(function (r) {
     var o = overrides[String(r[idCol])] || {}
     if (o.removed) return
+    // 退会したメンバー(withdrawn_at がある)は、役職が最上位のままでも数えない
+    if (withdrawnCol >= 0 && String(r[withdrawnCol] || '').trim() !== '') return
     var inactive = o.inactive !== undefined ? o.inactive : String(inactiveCol >= 0 ? r[inactiveCol] : '').trim().toUpperCase() === 'TRUE'
     if (inactive) return
     var role = o.role !== undefined ? o.role : r[roleCol]
