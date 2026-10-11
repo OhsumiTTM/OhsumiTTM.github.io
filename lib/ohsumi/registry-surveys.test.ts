@@ -2,7 +2,7 @@
 // 期限を過ぎた団体への28日目の機能停止・checkIn で団体の GAS に伝える
 import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { setup, type TokenInfo } from './registry-harness'
+import { setup, type TokenInfo, checkInTs } from './registry-harness'
 
 const CLIENT = 'registry-client.apps.googleusercontent.com'
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -43,7 +43,7 @@ function ready() {
   const age = (surveyId: string, days: number) => sheetRow('Surveys', 'survey_id', surveyId).set('send_date', jstKey(Date.now() - days * DAY))
   const overview = () => t.post({ action: 'adminOverview', session }).result
   const checkIn = (orgId: string) => {
-    const ts = Math.floor(Date.now() / 1000)
+    const ts = checkInTs()
     return t.post({ action: 'checkIn', orgId, ts, gasVersion: '2026.10.01-11', sig: createHmac('sha256', keys[orgId]).update('checkIn.' + orgId + '.' + ts).digest('base64url') })
   }
   const audit = () => t.sheets.get('AuditLog')!.rows.slice(1).map((r) => r[2])

@@ -2,7 +2,7 @@
 // 接続先の解決での状態、担当者への予告(14日前・7日前・1日前)を確かめる
 import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { setup, type TokenInfo } from './registry-harness'
+import { setup, type TokenInfo, checkInTs } from './registry-harness'
 
 const CLIENT = 'registry-client.apps.googleusercontent.com'
 const ORG_A = 'org_AAAAAAAAAAAAAAAAAAAA'
@@ -31,7 +31,7 @@ function ready() {
     t.post({ action: 'scheduleSuspension', session, orgId: ORG_A, kind, suspendAt: new Date(at).toISOString(), reason })
   const clear = (reason = '') => t.post({ action: 'clearSuspension', session, orgId: ORG_A, reason })
   const checkIn = (opts2: { ts?: number; sig?: string; key?: string; mail?: unknown } = {}) => {
-    const ts = opts2.ts ?? Math.floor(Date.now() / 1000)
+    const ts = opts2.ts ?? checkInTs()
     const sig = opts2.sig ?? createHmac('sha256', opts2.key ?? key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url')
     return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion: 'r1e-1', sig, mail: opts2.mail })
   }

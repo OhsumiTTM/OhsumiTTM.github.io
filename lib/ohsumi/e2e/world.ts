@@ -8,7 +8,7 @@ import { createHash, createHmac } from 'node:crypto'
 import vm from 'node:vm'
 import { CLIENT_VERSION } from '../codes'
 import { CODE_GS, FakeSheet, noop, type Cell } from '../gas-guard-harness'
-import { setup as setupRegistry, type TokenInfo } from '../registry-harness'
+import { checkInTs, setup as setupRegistry, type TokenInfo } from '../registry-harness'
 
 export const REGISTRY_URL = 'https://script.google.com/macros/s/E2E_REGISTRY/exec'
 export const OAUTH_CLIENT_ID = 'e2e-client.apps.googleusercontent.com'
@@ -146,6 +146,14 @@ function createOrg(name: string, gasUrl: string, regPost: (payload: string) => u
   })
   vm.runInContext(CODE_GS, ctx)
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown>
+  // レジストリは同じ署名(団体ID と時刻(秒))の checkIn の2回目を断る(送り直しの防止)。テストは同じ秒に何回も
+  // 確かめるので、checkIn の時刻だけ、呼ぶたびに1秒ずつ進める(本物の団体の GAS は、1時間ごとなどに呼ぶ)
+  const realRefresh = gas.refreshContractState_
+  const realNowSec = gas.nowSec_
+  gas.refreshContractState_ = (...a: unknown[]) => {
+    gas.nowSec_ = () => checkInTs()
+    try { return realRefresh(...a) } finally { gas.nowSec_ = realNowSec }
+  }
   ;(gas.setupOhsumi as () => void)()
   // 画面と同じく clientVersion を付けて送る(付けない古い画面は reloadRequired になる)
   const post = (body: Record<string, unknown>) => postRaw({ clientVersion: CLIENT_VERSION, ...body })
