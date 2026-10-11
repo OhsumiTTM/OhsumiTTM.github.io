@@ -99,7 +99,15 @@ import {
   type RoleDef,
 } from './roles'
 import { normalizeCapabilities, type Capability } from './capabilities'
-import { doneTransition, isFullAdminRole, resolveVisibleAdminSections } from './permissions'
+import {
+  approvalStepNeeded,
+  currentReviewApprovals,
+  doneTransition,
+  isFullAdminRole,
+  resolveVisibleAdminSections,
+  reviewApprovalsNeeded,
+  stepApproverIds,
+} from './permissions'
 import { MEMBERS, PROJECTS, SEED_TASKS, SEED_INPUTS } from './seed'
 import {
   colorForId,
@@ -2302,6 +2310,10 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setExpenseApplications((prev) =>
         prev.map((app) => {
           if (app.id !== applicationId) return app
+          // GAS と同じ決まり: 承認待ちの申請だけ。同じ人の2回目の承認は数えない(processExpenseStep_)
+          if (app.status !== 'pending') return app
+          const step = app.approvalSteps[app.currentStepIndex]
+          if (stepApproverIds(app.approvals, step?.id).includes(actorId)) return app
           const record: ApprovalRecord = {
             stepId,
             memberId: actorId,
@@ -2310,20 +2322,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             comment,
           }
           const approvals = [...app.approvals, record]
-          const step = app.approvalSteps[app.currentStepIndex]
-          const stepApprovals = approvals.filter((a) => a.stepId === step?.id && a.action === 'approved')
-          const needed =
-            step?.requiredCount === 'all'
-              ? (app.approvalSteps[app.currentStepIndex] ? Infinity : 1)
-              : (typeof step?.requiredCount === 'number' ? step.requiredCount : 1)
-          const nextStepIndex = stepApprovals.length >= needed ? app.currentStepIndex + 1 : app.currentStepIndex
+          const needed = approvalStepNeeded(step, members, roles)
+          const nextStepIndex = stepApproverIds(approvals, step?.id).length >= needed ? app.currentStepIndex + 1 : app.currentStepIndex
           const status = nextStepIndex >= app.approvalSteps.length ? 'approved' : 'pending'
           return { ...app, approvals, currentStepIndex: nextStepIndex, status }
         }),
       )
       if (isRemoteConfigured) runRemote(remoteApi.approveExpenseStep(applicationId, stepId, actorId, comment))
     },
-    [currentUserId, runRemote],
+    [currentUserId, members, roles, runRemote],
   )
 
   const rejectExpense = useCallback(
@@ -2501,7 +2508,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setCustomFormSubmissions((prev) =>
         prev.map((sub) => {
           if (sub.id !== submissionId) return sub
+          // GAS と同じ決まり: 承認待ちの申請だけ。同じ人の2回目の承認は数えない(processFormStep_)
+          if (sub.status !== 'pending') return sub
           const form = customFormDefs.find((f) => f.id === sub.formId)
+          const step = form?.approvalSteps[sub.currentStepIndex]
+          if (stepApproverIds(sub.approvals, step?.id).includes(actorId)) return sub
           const record: ApprovalRecord = {
             stepId,
             memberId: actorId,
@@ -2510,13 +2521,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
             comment,
           }
           const approvals = [...sub.approvals, record]
-          const step = form?.approvalSteps[sub.currentStepIndex]
-          const stepApprovals = approvals.filter((a) => a.stepId === step?.id && a.action === 'approved')
-          const needed =
-            step?.requiredCount === 'all'
-              ? Infinity
-              : (typeof step?.requiredCount === 'number' ? step.requiredCount : 1)
-          const nextStepIndex = stepApprovals.length >= needed ? sub.currentStepIndex + 1 : sub.currentStepIndex
+          const needed = approvalStepNeeded(step, members, roles)
+          const nextStepIndex = stepApproverIds(approvals, step?.id).length >= needed ? sub.currentStepIndex + 1 : sub.currentStepIndex
           const totalSteps = form?.approvalSteps.length ?? 0
           const status = nextStepIndex >= totalSteps ? 'approved' : 'pending'
           return { ...sub, approvals, currentStepIndex: nextStepIndex, status }
@@ -2524,7 +2530,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       )
       if (isRemoteConfigured) runRemote(remoteApi.approveFormStep(submissionId, stepId, actorId, comment))
     },
-    [currentUserId, customFormDefs, runRemote],
+    [currentUserId, customFormDefs, members, roles, runRemote],
   )
 
   const rejectFormSubmission = useCallback(
@@ -3546,6 +3552,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                 status,
                 lastActivity: today,
                 completedDate: status === 'done' ? today : null,
+                // 確認待ち・完了以外に戻したら、確認者の承認の記録を消す(GAS の updateTaskStatus と同じ)
+                ...(status !== 'review' && status !== 'done' && t.reviewApprovals?.length ? { reviewApprovals: [] } : {}),
               },
               'status',
               t.status,
@@ -4373,35 +4381,38 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // 同様、誰が・いつ承認したかを記録する。requiredApprovals(必要承認数、
   // 'all'なら確認者全員)に達したらローカルでも楽観的にstatus: 'done'へ
   // 進める。同じ確認者が重複して承認しても追加しない（冪等）。
+  // GAS(approveTaskReview_)と同じく、数えるのは今の確認者の承認だけ。確認者でない人の承認は記録しない
+  // (代表だけは、確認者でなくても承認として数えずに完了にできる)
   const approveTaskReview = useCallback(
     (taskId: string, comment?: string) => {
       if (!currentUserId) return
+      const me = members.find((m) => m.id === currentUserId)
+      const isTop = isTopRoleRef(roles, me?.role)
+      // この承認を足した後のタスク(確認者でない人の承認は足さない)と、完了になるか
+      const applyApproval = (t: Task): { next: Task; complete: boolean } | null => {
+        const reviewerIds = t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])
+        if (!reviewerIds.includes(currentUserId)) return isTop ? { next: t, complete: true } : null
+        const already = (t.reviewApprovals ?? []).some((a) => a.memberId === currentUserId)
+        const next = already
+          ? t
+          : { ...t, reviewApprovals: [...(t.reviewApprovals ?? []), { memberId: currentUserId, at: new Date().toISOString(), comment }] }
+        return { next, complete: currentReviewApprovals(next).length >= reviewApprovalsNeeded(next) }
+      }
       // 元タスクがこの承認で完了に達するかを先に判定しておき、達する場合は
       // APR-007: 対応する確認タスク(relatedReviewTaskIdが一致するもの)も
       // 同じ更新で自動的に完了にする
       const original = tasks.find((t) => t.id === taskId)
-      let willComplete = false
-      if (original) {
-        const already = (original.reviewApprovals ?? []).some((a) => a.memberId === currentUserId)
-        const nextCount = (original.reviewApprovals ?? []).length + (already ? 0 : 1)
-        const reviewerIds = original.reviewerIds ?? (original.reviewerId ? [original.reviewerId] : [])
-        const needed = original.requiredApprovals === 'all' ? reviewerIds.length : (original.requiredApprovals ?? 1)
-        willComplete = nextCount >= needed
-      }
+      const willComplete = original ? !!applyApproval(original)?.complete : false
       const today = todayStr()
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id === taskId) {
-            const already = (t.reviewApprovals ?? []).some((a) => a.memberId === currentUserId)
-            const nextApprovals = already
-              ? t.reviewApprovals!
-              : [...(t.reviewApprovals ?? []), { memberId: currentUserId, at: new Date().toISOString(), comment }]
-            const reviewerIds = t.reviewerIds ?? (t.reviewerId ? [t.reviewerId] : [])
-            const needed = t.requiredApprovals === 'all' ? reviewerIds.length : (t.requiredApprovals ?? 1)
-            if (nextApprovals.length >= needed) {
-              return { ...t, reviewApprovals: nextApprovals, status: 'done', completedDate: today, lastActivity: today }
+            const applied = applyApproval(t)
+            if (!applied) return t
+            if (applied.complete) {
+              return { ...applied.next, status: 'done', completedDate: today, lastActivity: today }
             }
-            return { ...t, reviewApprovals: nextApprovals }
+            return applied.next
           }
           if (willComplete && t.relatedReviewTaskId === taskId && t.status !== 'done') {
             return { ...t, status: 'done', completedDate: today, lastActivity: today }
@@ -4411,7 +4422,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       )
       if (isRemoteConfigured) runRemote(remoteApi.approveTaskReview(taskId, comment))
     },
-    [currentUserId, runRemote, tasks],
+    [currentUserId, members, roles, runRemote, tasks],
   )
 
   const bulkUpdateSkills = useCallback(

@@ -44,7 +44,8 @@ import {
   type TaskVisibility,
 } from '@/lib/ohsumi/types'
 import { formatDeadlineFull, formatDateTime, googleCalendarUrl, googleCalendarAllDayUrl, isOverdue, getDepartmentTopsBySegment, directManagersOf, memberWorkloadCapacity, computeAvgSkillPoints, computeBaseSkillPoints, isSafeHttpUrl, todayStr, isActiveMember } from '@/lib/ohsumi/utils'
-import { allowedStatusOptions, canChangeTaskStatus, reviewTargets } from '@/lib/ohsumi/permissions'
+import { allowedStatusOptions, canChangeTaskStatus, currentReviewApprovals, reviewApprovalsNeeded, reviewTargets } from '@/lib/ohsumi/permissions'
+import { isTopRoleRef } from '@/lib/ohsumi/roles'
 import { useI18n, STATUS_KEY, DIFFICULTY_KEY, PRIORITY_KEY, IMPORTANCE_KEY, SCHEDULE_ANSWER_KEY, departmentLabel, type TranslationKey } from '@/lib/ohsumi/i18n'
 import { TranslatedText } from '@/components/ohsumi/translated-text'
 import { formatDateTimeInTz, DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
@@ -1304,10 +1305,13 @@ function DrawerBody({
   const statusOptions = allowedStatusOptions(isFullAdmin, isReviewer, hasReviewers, isAssignee, isReviewTarget)
   // 複数確認者の承認進捗（item: 確認フロー）— requiredApprovalsが'all'なら
   // 確認者全員、数値ならその数値が必要承認数
-  const reviewApprovals = task.reviewApprovals ?? []
-  const neededApprovals = task.requiredApprovals === 'all' ? reviewerIds.length : (task.requiredApprovals ?? 1)
+  // 数えるのは今の確認者の承認だけ(確認者から外れた人の承認は出さない。GAS の currentReviewApprovals_ と同じ)
+  const reviewApprovals = currentReviewApprovals(task)
+  const neededApprovals = reviewApprovalsNeeded(task)
   const alreadyApproved = !!currentUserId && reviewApprovals.some((a) => a.memberId === currentUserId)
-  const canApproveReview = isFullAdmin || isReviewer
+  // 承認できるのは確認者。代表は確認者でなくても、承認として数えずに完了にできる(GAS の approveTaskReview_)
+  const isTopActor = isTopRoleRef(roles, members.find((m) => m.id === currentUserId)?.role)
+  const canApproveReview = isReviewer || isTopActor
 
   return (
     <div className="flex h-full flex-col">
