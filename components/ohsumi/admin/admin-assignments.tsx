@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ChevronDown, Sparkles, Info } from 'lucide-react'
 import type { Task, Member } from '@/lib/ohsumi/types'
 import { useI18n } from '@/lib/ohsumi/i18n'
+import { localDate } from '@/lib/ohsumi/multi-org'
 
 export function AdminAssignments() {
   const { adminTasks: tasks, members, getProject, assignTask } = useOhsumi()
@@ -220,7 +221,8 @@ function currentWeekRange(): [string, string] {
   monday.setDate(now.getDate() - diffToMonday)
   const sunday = new Date(monday)
   sunday.setDate(monday.getDate() + 6)
-  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+  // 端末の日付で(toISOString は UTC なので、日本の朝9時前は前の日になる)
+  const fmt = localDate
   return [fmt(monday), fmt(sunday)]
 }
 

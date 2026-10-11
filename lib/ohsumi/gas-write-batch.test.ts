@@ -4,7 +4,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { BATCH_MAX_OPS, READ_ACTIONS, UNBATCHED_WRITE_ACTIONS, isBatchableWrite, sendToGas, setGasTransportDepsForTest } from './gas-transport'
+import { BATCH_MAX_OPS, READ_ACTIONS, UNBATCHED_WRITE_ACTIONS, isBatchableWrite, sendToGas, setGasTransportDepsForTest, writeGeneration } from './gas-transport'
+import { listOpsFor, rememberServerRows } from './sync-state'
 
 const URL = 'https://script.google.com/macros/s/TEST/exec'
 const CODE_GS = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
@@ -66,6 +67,35 @@ describe('書き込みをまとめて送る', () => {
     expect(results.map((r) => r.result)).toEqual([{ did: 'updateHistory' }, { did: 'updateHistory' }, { did: 'updateSchedule' }])
     expect(results.every((r) => r.ok && r.session?.token === 'new')).toBe(true)
     expect(h.logs[0]).toContain('GAS batch(updateHistory+updateSchedule)')
+  })
+
+  it('差分(listOps)で送る記録の一覧は、同じタスク・同じ束でも1つにせず、すべて順番に送る(前の差分の記録を落とさない)', async () => {
+    rememberServerRows({ Tasks: [{ id: 't1', history_json: '[]', comments_json: '[]' }] })
+    const h = harness(okBatch)
+    const e1 = { id: 'h1', field: 'deadline' }
+    const e2 = { id: 'h2', field: 'startDate' }
+    const first = listOpsFor('updateHistory', 't1', [e1])
+    const second = listOpsFor('updateHistory', 't1', [e2, e1])
+    const c1 = { id: 'c1', text: 'A' }
+    const c2 = { id: 'c2', text: 'B' }
+    const third = listOpsFor('updateComments', 't1', [c1])
+    const fourth = listOpsFor('updateComments', 't1', [c1, c2])
+    const results = await Promise.all([
+      sendToGas(URL, { action: 'updateHistory', taskId: 't1', listOps: first.listOps, ...session }),
+      sendToGas(URL, { action: 'updateHistory', taskId: 't1', listOps: second.listOps, ...session }),
+      sendToGas(URL, { action: 'updateComments', taskId: 't1', listOps: third.listOps, ...session }),
+      sendToGas(URL, { action: 'updateComments', taskId: 't1', listOps: fourth.listOps, ...session }),
+    ])
+    expect(h.sent).toHaveLength(1)
+    const ops = h.sent[0].ops!
+    expect(ops.map((o) => o.action)).toEqual(['updateHistory', 'updateHistory', 'updateComments', 'updateComments'])
+    expect(ops.map((o) => o.listOps)).toEqual([
+      [{ op: 'add', entry: e1 }],
+      [{ op: 'add', entry: e2 }],
+      [{ op: 'add', entry: c1 }],
+      [{ op: 'add', entry: c2 }],
+    ])
+    expect(results.map((r) => r.result)).toEqual([{ did: 'updateHistory' }, { did: 'updateHistory' }, { did: 'updateComments' }, { did: 'updateComments' }])
   })
 
   it('別のタスクの記録は、どちらも送る', async () => {
@@ -177,5 +207,16 @@ describe('GAS を更新する前に画面だけ新しくなった時', () => {
     await Promise.all([sendToGas(URL, { action: 'updateComments', ...session }), sendToGas(URL, { action: 'updateProgress', ...session })])
     expect(h.sent.map((b) => b.action).slice(3)).toEqual(['updateComments', 'updateProgress'])
     expect(h.logs.some((l) => l.includes('GAS を更新してください'))).toBe(true)
+  })
+})
+
+describe('書き込みの回数(writeGeneration)', () => {
+  it('書き込みを列に入れるたびに増え、読み取りでは増えない', async () => {
+    harness(okBatch)
+    const before = writeGeneration()
+    await sendToGas(URL, { action: 'getInitialData', ...session })
+    expect(writeGeneration()).toBe(before)
+    await sendToGas(URL, { action: 'updatePriority', taskId: 't1', ...session })
+    expect(writeGeneration()).toBe(before + 1)
   })
 })

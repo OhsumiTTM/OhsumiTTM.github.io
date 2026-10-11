@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Task, Priority, Difficulty } from '@/lib/ohsumi/types'
 import { useOhsumi } from '@/lib/ohsumi/store'
+import { orgScopedStorageKey } from '@/lib/ohsumi/org-directory'
 import { useNav } from '@/lib/ohsumi/nav'
 import { KanbanBoard } from './kanban-board'
 import { CalendarView } from './calendar-view'
@@ -121,7 +122,7 @@ const TARGET_KEY: Record<Target, TranslationKey> = {
 // 対象タブの並び順もブラウザごとの個人的な好みなので localStorage に保存する。
 // 一番左（先頭）が既定表示になる
 function targetOrderKey(userId: string | null | undefined): string {
-  return `ohsumi-target-order-${userId ?? 'anon'}`
+  return orgScopedStorageKey('ohsumi-target-order-', userId)
 }
 function loadTargetOrder(userId: string | null | undefined): Target[] {
   if (typeof window === 'undefined') return DEFAULT_TARGET_ORDER
@@ -142,7 +143,7 @@ function loadTargetOrder(userId: string | null | undefined): Target[] {
 // localStorageに保存する。デモ環境で同じブラウザから複数ユーザーを切り替える
 // ことがあるため、ユーザーIDでスコープしておく
 function cardFieldsKey(userId: string | null | undefined): string {
-  return `ohsumi-card-fields-${userId ?? 'anon'}`
+  return orgScopedStorageKey('ohsumi-card-fields-', userId)
 }
 function loadCardFields(userId: string | null | undefined): Set<KanbanCardField> {
   if (typeof window === 'undefined') return new Set(KANBAN_CARD_FIELDS)
@@ -159,7 +160,7 @@ function loadCardFields(userId: string | null | undefined): Set<KanbanCardField>
 // プロジェクト表示（対象=プロジェクト）のカードに出す項目も、同じ考え方で
 // ブラウザごとの個人設定として保存する
 function projectCardFieldsKey(userId: string | null | undefined): string {
-  return `ohsumi-project-card-fields-${userId ?? 'anon'}`
+  return orgScopedStorageKey('ohsumi-project-card-fields-', userId)
 }
 function loadProjectCardFields(userId: string | null | undefined): Set<ProjectCardField> {
   if (typeof window === 'undefined') return new Set(PROJECT_CARD_FIELDS)
@@ -178,7 +179,7 @@ function loadProjectCardFields(userId: string | null | undefined): Set<ProjectCa
 // 依存関係ツリーはプロジェクトが混在すると見づらくなるので、プロジェクト単位で
 // 表示/非表示を切り替えられるようにしている。これもブラウザごとの個人設定
 function hiddenProjectsKey(userId: string | null | undefined): string {
-  return `ohsumi-dependency-hidden-projects-${userId ?? 'anon'}`
+  return orgScopedStorageKey('ohsumi-dependency-hidden-projects-', userId)
 }
 function loadHiddenProjects(userId: string | null | undefined): Set<string> {
   if (typeof window === 'undefined') return new Set()

@@ -295,7 +295,7 @@ export function activateOrg(org: SavedOrg): void {
   // 前に使っていた団体と違う団体を使い始める時は、前の団体の保存(画面の状態・団体の名前・ロゴ・色など)を消す。
   // 招待リンクで別の団体を開いた時に、前の団体の内容が新しい団体の画面に出ないようにするため
   const previousOrgId = getCurrentOrgId()
-  if (previousOrgId && previousOrgId !== org.orgId) clearOrgScopedStorage()
+  if (previousOrgId && previousOrgId !== org.orgId) clearOrgScopedStorage(org.orgId)
   activeGasUrl = org.gasUrl
   activeOrgId = org.orgId
   upsertSavedOrg(org)
@@ -371,16 +371,54 @@ export function switchToOrg(orgId: string, reload: () => void = () => window.loc
   setCurrentOrgId(orgId)
   // 読み込み直したページが、アドレスバーの前の団体(?org=)を開かないように、先に切り替える
   syncOrgParam(orgId)
-  clearOrgScopedStorage()
+  clearOrgScopedStorage(orgId)
   reload()
 }
 
-/** 団体ごとの保存(ORG_SCOPED_STORAGE_KEYS)を消す */
-export function clearOrgScopedStorage(): void {
+// 団体ごと・人ごとの保存(キーの後ろに団体と人を付ける)。メンバーの ID は団体ごとの通し番号で、
+// 同じ ID がどの団体にもあるので、団体を付けないと、ほかの団体の同じ ID の人の内容が出てしまう。
+// 団体を切り替える時・ログアウトの時に、この始まりのキーを消す(団体を付けていない以前のキーも消える)
+export const ORG_SCOPED_STORAGE_PREFIXES = [
+  // INPUT の書きかけ(components/ohsumi/input/input-screen.tsx)
+  'ohsumi-input-draft-',
+  // タスクの作業時間の計測(components/ohsumi/output/task-detail-drawer.tsx)
+  'ohsumi-timer-',
+  // OUTPUT の表示の設定(components/ohsumi/output/output-screen.tsx)
+  'ohsumi-target-order-',
+  'ohsumi-card-fields-',
+  'ohsumi-project-card-fields-',
+  'ohsumi-dependency-hidden-projects-',
+  // 個人のスプレッドシート(lib/ohsumi/google-sheet-sync.ts)
+  'ohsumi-personal-sheet-v2-',
+  'ohsumi-personal-sheet-id-',
+]
+
+/** 今の団体を付けた保存のキー(prefix は ORG_SCOPED_STORAGE_PREFIXES のどれか) */
+export function orgScopedStorageKey(prefix: string, ...parts: (string | null | undefined)[]): string {
+  return `${prefix}o:${activeOrgId ?? 'local'}:${parts.map((p) => p ?? 'anon').join(':')}`
+}
+
+/**
+ * 団体ごとの保存(ORG_SCOPED_STORAGE_KEYS と ORG_SCOPED_STORAGE_PREFIXES で始まるキー)を消す。
+ * keepOrgId を渡した時は、その団体を付けたキーは残す(切り替えた先の団体の保存)
+ */
+export function clearOrgScopedStorage(keepOrgId?: string): void {
   const s = storage()
   for (const key of ORG_SCOPED_STORAGE_KEYS) {
     try { s?.removeItem(key) } catch { /* ignore */ }
   }
+  try {
+    const remove: string[] = []
+    for (let i = 0; i < (s?.length ?? 0); i++) {
+      const key = s?.key(i)
+      if (!key) continue
+      const prefix = ORG_SCOPED_STORAGE_PREFIXES.find((p) => key.startsWith(p))
+      if (!prefix) continue
+      if (keepOrgId && key.startsWith(`${prefix}o:${keepOrgId}:`)) continue
+      remove.push(key)
+    }
+    for (const key of remove) s?.removeItem(key)
+  } catch { /* ignore */ }
 }
 
 // テスト用: ページを読み込み直した状態に戻す
