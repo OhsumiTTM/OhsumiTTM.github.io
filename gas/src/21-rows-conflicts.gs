@@ -117,6 +117,24 @@ function protectRowFromFormulaInjection_(sheet, headers, rowNumber, sheetName) {
   })
 }
 
+// シートの大きさ(行・列の数)が、rows 行・cols 列に足りなければ、末尾に行・列を足す。
+// 実際のスプレッドシートでは、シートの大きさの外の範囲(getRange)はエラーになるため、
+// getLastRow() + 1 などに書く前に呼ぶ(appendRow は自分で行を足すので要らない)
+function ensureSheetSize_(sheet, rows, cols) {
+  var maxRows = Number(sheet.getMaxRows()) || 0
+  if (rows > maxRows) {
+    if (maxRows > 0) sheet.insertRowsAfter(maxRows, rows - maxRows)
+    else sheet.insertRows(1, rows)
+  }
+  if (cols) {
+    var maxCols = Number(sheet.getMaxColumns()) || 0
+    if (cols > maxCols) {
+      if (maxCols > 0) sheet.insertColumnsAfter(maxCols, cols - maxCols)
+      else sheet.insertColumns(1, cols)
+    }
+  }
+}
+
 function updateRowFields_(sheetName, rowId, fields) {
   // タスクの期限・担当者・名前・完了などを変えた時は、カレンダーの予定を合わせる(syncCalendarForTask_)
   var calendarHints = null

@@ -4,6 +4,8 @@
 // (BACKUP_FOLDER_ID。GAS のアカウントだけが持つ。編集者・閲覧者を外し、リンクの共有も「制限付き」にする)。
 // コピーするのはスプレッドシートだけ(アップロードしたファイルはコピーしない)。
 // 残す数は、毎日の分 BACKUP_KEEP.daily・毎週の分 BACKUP_KEEP.weekly・毎月の分 BACKUP_KEEP.monthly(最長で約3か月)。
+// 手で作った分(「(手動)」)は新しい BACKUP_KEEP.manual 個、自動で作った分(戻す前・移行の前・移行を戻す前)は
+// 作ってから BACKUP_KEEP.autoDays 日のあいだ残す(どちらも毎日の分の数には数えない)。
 // 超えた古いものはゴミ箱に移す。作るのに失敗した時は BACKUP_STATE に残し、代表の管理画面に出す(getBackupStatus)。
 // 戻す(代表だけ):
 //   - 全体を戻す(restoreBackup): データのシートをすべてバックアップの内容に置き換える(操作の記録 AuditLog は残す)。
@@ -17,14 +19,16 @@ var BACKUP_STATE_KEY = 'BACKUP_STATE'
 var BACKUP_NAME_PREFIX = 'Ohsumi バックアップ '
 var BACKUP_BEFORE_RESTORE_SUFFIX = '(戻す前)'
 // 自動で取るバックアップの名前の末尾(記録の移行・戻すの前は 39-record-rows.gs)
-var BACKUP_KIND_SUFFIXES = { beforeRestore: BACKUP_BEFORE_RESTORE_SUFFIX, beforeMigration: '(移行の前)', beforeRevert: '(移行を戻す前)' }
-var BACKUP_KEEP = { daily: 7, weekly: 4, monthly: 3 }
+var BACKUP_KIND_SUFFIXES = { beforeRestore: BACKUP_BEFORE_RESTORE_SUFFIX, beforeMigration: '(移行の前)', beforeRevert: '(移行を戻す前)', manual: '(手動)' }
+var BACKUP_KEEP = { daily: 7, weekly: 4, monthly: 3, manual: 5, autoDays: 30 }
 var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
 // 戻している印が残ったまま(実行の途中で止まった時など)でも、これを過ぎたら書き込みを受け付ける
 var RESTORE_STALE_MS = 30 * 60 * 1000
 var RESTORE_MESSAGE = 'バックアップから戻しています。終わるまで(数分)待ってから、もう一度お試しください。'
 // 戻さないシート(操作の記録は、戻した記録を含めて残す)
 var RESTORE_EXCLUDED_SHEETS = ['AuditLog']
+// 全体を戻す時に、バックアップに無ければ戻せない(戻さずに止める)シート
+var RESTORE_REQUIRED_SHEETS = ['Members', 'Tasks', 'Settings', 'MemberEmails']
 // 一部のタスクを戻す時に、行を置き換えずに合わせるもの(バックアップの後に付いたものも残す)
 var RESTORE_MERGED_TASK_LISTS = ['comments_json', 'history_json', 'progress_history_json']
 var RESTORE_TASKS_MAX = 50
@@ -119,6 +123,17 @@ function backupStatus_() {
   return { lastSuccessAt: String(s.lastSuccessAt || ''), failed: failed, failedAt: failed ? String(s.lastFailureAt) : '', error: failed ? String(s.lastError || '') : '' }
 }
 
+// バックアップの名前の末尾から、種類(daily・manual・beforeRestore・beforeMigration・beforeRevert)を返す。
+// 「(手動)」を付ける前に手で作った分は、毎日の分と見分けられないので daily になる
+function backupKindOfName_(name) {
+  var kinds = Object.keys(BACKUP_KIND_SUFFIXES)
+  for (var i = 0; i < kinds.length; i++) {
+    var suffix = BACKUP_KIND_SUFFIXES[kinds[i]]
+    if (String(name).slice(-suffix.length) === suffix) return kinds[i]
+  }
+  return 'daily'
+}
+
 // バックアップの一覧(新しい順)。フォルダの中の、名前が BACKUP_NAME_PREFIX で始まるスプレッドシートだけ
 function listBackups_() {
   var out = []
@@ -142,16 +157,24 @@ function backupPeriodKeys_(ms, tz) {
   return { day: parts.slice(0, 3).join('-'), week: monday, month: parts[0] + '-' + parts[1] }
 }
 
-// 残すバックアップの ID(純粋な関数)。entries は新しい順に並べたもの { id, at }。
+// 残すバックアップの ID(純粋な関数)。entries は新しい順に並べたもの { id, at, kind }(kind が無いものは daily)。
 // 毎日の分: 新しい順に BACKUP_KEEP.daily 個 / 毎週の分: 週ごとに一番新しいものを、新しい週から BACKUP_KEEP.weekly 週 /
-// 毎月の分: 月ごとに一番新しいものを、新しい月から BACKUP_KEEP.monthly か月
-function backupsToKeep_(entries, keysOf) {
+// 毎月の分: 月ごとに一番新しいものを、新しい月から BACKUP_KEEP.monthly か月(ここまでは毎日の分だけで数える)。
+// 手で作った分: 新しい順に BACKUP_KEEP.manual 個 / 自動で作った分(戻す前・移行の前・移行を戻す前): 作ってから
+// BACKUP_KEEP.autoDays 日のあいだ(nowMs が無い時は消さない)
+function backupsToKeep_(entries, keysOf, nowMs) {
   var keep = {}
-  entries.slice(0, BACKUP_KEEP.daily).forEach(function (e) { keep[e.id] = true })
+  var daily = entries.filter(function (e) { return !e.kind || e.kind === 'daily' })
+  daily.slice(0, BACKUP_KEEP.daily).forEach(function (e) { keep[e.id] = true })
+  entries.filter(function (e) { return e.kind === 'manual' }).slice(0, BACKUP_KEEP.manual).forEach(function (e) { keep[e.id] = true })
+  entries.forEach(function (e) {
+    if (!e.kind || e.kind === 'daily' || e.kind === 'manual') return
+    if (!nowMs || nowMs - e.at < BACKUP_KEEP.autoDays * 24 * 3600 * 1000) keep[e.id] = true
+  })
   var pick = function (kind, count) {
     var seen = {}
     var n = 0
-    entries.forEach(function (e) {
+    daily.forEach(function (e) {
       var k = keysOf(e)[kind]
       if (seen[k] || n >= count) return
       seen[k] = true
@@ -167,8 +190,8 @@ function backupsToKeep_(entries, keysOf) {
 // 残す数を超えた古いバックアップを、ゴミ箱に移す。移した数を返す
 function pruneBackups_(nowMs) {
   var tz = Session.getScriptTimeZone()
-  var entries = listBackups_().map(function (b) { return { id: b.id, at: Date.parse(b.at) } })
-  var keep = backupsToKeep_(entries, function (e) { return backupPeriodKeys_(e.at, tz) })
+  var entries = listBackups_().map(function (b) { return { id: b.id, at: Date.parse(b.at), kind: backupKindOfName_(b.name) } })
+  var keep = backupsToKeep_(entries, function (e) { return backupPeriodKeys_(e.at, tz) }, nowMs || Date.now())
   var removed = 0
   entries.forEach(function (e) {
     if (keep[e.id]) return
@@ -241,6 +264,52 @@ function previewRestore_(backupId) {
   }
 }
 
+// 1枚のシートを、バックアップの値・書式に置き換える。先にシートの大きさを足りるようにし、値を書いてから
+// 余った所(今の方が行・列が多い所)を空にする(途中で失敗しても、シートが空のまま残らないように。
+// 先に全部を消してから書くと、書けなかった時に空になる)
+function restoreSheetValues_(dst, values, formats) {
+  var rows = values.length
+  var cols = rows ? values[0].length : 0
+  if (!rows || !cols) {
+    dst.clearContents()
+    return
+  }
+  var lastRow = Number(dst.getLastRow()) || 0
+  var lastCol = Number(dst.getLastColumn()) || 0
+  var width = Math.max(cols, lastCol)
+  var height = Math.max(rows, lastRow)
+  ensureSheetSize_(dst, height, width)
+  // 書式(文字として扱う列など)を先に戻し、値が数式として扱われないようにする
+  dst.getRange(1, 1, rows, cols).setNumberFormats(formats)
+  // 余った所は空の値で上書きする(値と一緒に1回で書く)
+  var padded = []
+  for (var r = 0; r < height; r++) {
+    var line = r < rows ? values[r].slice() : []
+    while (line.length < width) line.push('')
+    padded.push(line)
+  }
+  dst.getRange(1, 1, height, width).setValues(padded)
+}
+
+// バックアップに無かった Ohsumi のシートを、見出しだけにする(戻した Tasks・Members・Settings と合わせる)。空にした名前を返す
+function clearSheetsMissingFromBackup_(ss, srcNames) {
+  var headersOf = {}
+  Object.keys(SHEET_HEADERS).forEach(function (n) { headersOf[n] = SHEET_HEADERS[n] })
+  headersOf[SHEET_TASK_RECORDS] = TASK_RECORDS_HEADERS
+  headersOf[SHEET_MEMBER_RECORDS] = MEMBER_RECORDS_HEADERS
+  var cleared = []
+  Object.keys(headersOf).forEach(function (name) {
+    if (srcNames.indexOf(name) >= 0 || RESTORE_EXCLUDED_SHEETS.indexOf(name) >= 0 || RESTORE_REQUIRED_SHEETS.indexOf(name) >= 0) return
+    var sheet = ss.getSheetByName(name)
+    if (!sheet || sheet.getLastRow() < 2) return
+    var headers = headerRow_(sheet)
+    if (!headers.some(function (h) { return h !== '' })) headers = headersOf[name]
+    restoreSheetValues_(sheet, [headers], [headers.map(function () { return '@' })])
+    cleared.push(name)
+  })
+  return cleared
+}
+
 // 全体を戻す(代表だけ。ロックを取った書き込みの中で呼ぶ)
 function restoreBackup_(backupId, actorId, nowMs) {
   nowMs = nowMs || Date.now()
@@ -248,35 +317,34 @@ function restoreBackup_(backupId, actorId, nowMs) {
   var props = PropertiesService.getScriptProperties()
   props.setProperty(RESTORE_STATE_KEY, JSON.stringify({ by: actorId, startedAt: new Date(nowMs).toISOString(), backupId: b.id }))
   try {
-    var before = createBackup_('beforeRestore', nowMs)
     var src = SpreadsheetApp.openById(b.id)
+    var srcSheets = src.getSheets().filter(function (s) { return RESTORE_EXCLUDED_SHEETS.indexOf(String(s.getName())) < 0 })
+    var srcNames = srcSheets.map(function (s) { return String(s.getName()) })
+    var lacking = RESTORE_REQUIRED_SHEETS.filter(function (n) { return srcNames.indexOf(n) < 0 })
+    if (lacking.length) throw userError_('このバックアップには、戻すのに要るシート(' + lacking.join('、') + ')がありません。')
+    var before = createBackup_('beforeRestore', nowMs)
     var ss = SpreadsheetApp.getActiveSpreadsheet()
     var restored = []
-    src.getSheets().forEach(function (s) {
+    srcSheets.forEach(function (s) {
       var name = String(s.getName())
-      if (RESTORE_EXCLUDED_SHEETS.indexOf(name) >= 0) return
       var range = s.getDataRange()
-      var values = range.getValues()
-      var formats = range.getNumberFormats()
-      var dst = ss.getSheetByName(name) || ss.insertSheet(name)
-      dst.clearContents()
-      if (values.length && values[0].length) {
-        var target = dst.getRange(1, 1, values.length, values[0].length)
-        // 書式(文字として扱う列など)を先に戻し、値が数式として扱われないようにする
-        target.setNumberFormats(formats)
-        target.setValues(values)
-      }
+      restoreSheetValues_(ss.getSheetByName(name) || ss.insertSheet(name), range.getValues(), range.getNumberFormats())
       restored.push(name)
     })
-    // 記録のシート: 移行の前のバックアップには無いので、今の分を空にする(印は Settings と一緒に戻っている)
-    afterFullRestoreRecordRows_(restored)
+    // バックアップに無かった Ohsumi のシート(バックアップの後に作った TasksArchive・記録のシートなど)は、見出しだけにする
+    // (残すと、戻した Tasks と食い違う。例: TasksArchive に残った行のせいで、次の毎日の処理が戻したタスクを消す)。
+    // 記録のシートの印(record_rows_state)は Settings と一緒に戻っている
+    var cleared = clearSheetsMissingFromBackup_(ss, srcNames)
+    afterFullRestoreRecordRows_()
     SpreadsheetApp.flush()
     forgetSheetGrid_()
     bumpDataVersion()
     bumpMemberEmailsVersion_()
-    appendOrgAudit_(actorId, 'restoreBackup', b.name, { backupId: b.id, beforeRestore: before.name, sheets: restored })
+    appendOrgAudit_(actorId, 'restoreBackup', b.name, { backupId: b.id, beforeRestore: before.name, sheets: restored, cleared: cleared })
     // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す
     purgeExpiredPersonalData_(nowMs, actorId)
+    // 前に消した人(バックアップの後に消した人も)の個人情報が戻ってきていたら、もう一度消す
+    reapplyPersonalDataPurges_(nowMs, actorId)
     try { pruneBackups_(nowMs) } catch (e) { console.error('古いバックアップを片付けられませんでした: ' + e) }
     return { restored: restored, beforeRestore: before }
   } finally {
@@ -394,6 +462,9 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
     var cur = rowOf[id] !== undefined ? liveValues[rowOf[id]] : null
     if (!cur && archived[id]) {
       cur = headers.map(function (h) { return archived[id][h] === undefined ? '' : archived[id][h] })
+      // 記録を行に持っている時、移行の後に移したタスクの記録は TaskRecords にある(TasksArchive のセルは空)。
+      // そちらを今の一覧にしてから合わせる(バックアップの後に付いたコメントなどを消さないように)
+      if (rowsOn) fillArchivedRecordColumns_(headers, cur)
       unarchived.push(id)
     }
     var isLive = rowOf[id] !== undefined
@@ -407,6 +478,7 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
       return JSON.stringify(merged)
     })
     var rowNumber = isLive ? rowOf[id] + 1 : sheet.getLastRow() + 1
+    ensureSheetSize_(sheet, rowNumber, headers.length)
     var target = sheet.getRange(rowNumber, 1, 1, headers.length)
     // 記録を行に持っている時は、一覧の列はセルを空にして、記録のシートに書く
     var recordFields = {}
@@ -422,8 +494,9 @@ function restoreTasks_(backupId, taskIds, actorId, nowMs) {
   // データの版は、書き込みの後の bumpVersionsAfterWrite_ が上げる
   forgetSheetGrid_(SHEET_TASKS)
   appendOrgAudit_(actorId, 'restoreTasks', b.name, { backupId: b.id, tasks: done })
-  // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す
+  // 戻した中に、保存期間を過ぎた個人情報があれば、すぐに消し直す。前に消した人は、もう一度消す
   purgeExpiredPersonalData_(nowMs, actorId)
+  reapplyPersonalDataPurges_(nowMs, actorId)
   return { restored: done }
 }
 

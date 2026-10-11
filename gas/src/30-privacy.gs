@@ -9,7 +9,10 @@
 //     (タスクの担当・コメント・変更の記録の書いた人は、ID のまま残り、画面には「退会したメンバー」と出る)
 //   - 採用しなかった候補者(Candidates の status が rejected): 行ごと消す
 // 消す PERSONAL_DATA_NOTICE_DAYS 日前から、代表の管理画面に「○人分を○日に消します」と出す(getPersonalDataStatus)。
-// バックアップから戻した直後にも、期限を過ぎた分を消し直す。消したことは操作の記録(AuditLog)に残す
+// バックアップから戻した直後にも、期限を過ぎた分を消し直す。消したことは操作の記録(AuditLog)に残す。
+// 消した人の ID は、スクリプトプロパティ(PURGED_PERSONAL_DATA_<番号>。戻しても変わらない)にも残し、
+// バックアップから戻した後に、戻ってきた個人情報(メンバーの行・MemberEmails の行・候補者の行)をもう一度消す
+// (reapplyPersonalDataPurges_。この印を残す前に消した人は、操作の記録 AuditLog から読む。AuditLog は戻さない)
 var PERSONAL_DATA_RETENTION_KEY = 'personal_data_retention_days'
 var PERSONAL_DATA_RETENTION = { min: 7, max: 365, defaultDays: 30 }
 var PERSONAL_DATA_NOTICE_DAYS = 7
@@ -19,6 +22,9 @@ var WITHDRAWN_MEMBER_MESSAGE = 'このアカウントは退会しています。
 var MEMBER_COLUMNS_KEPT_AFTER_PURGE = ['id', 'name', 'role', 'inactive', 'withdrawn_at', 'purge_at', 'personal_data_purged_at']
 // 退会の時に担当を残すタスクの状態(それ以外は未アサインに戻す)
 var WITHDRAW_KEEP_ASSIGNEE_STATUSES = ['done', 'review']
+// 消した人の ID の一覧(スクリプトプロパティ)。1つの値は 9KB までなので、PURGED_IDS_CHUNK 文字ずつに分ける
+var PURGED_IDS_PREFIX = 'PURGED_PERSONAL_DATA_'
+var PURGED_IDS_CHUNK = 8000
 
 function personalDataRetentionDays_() {
   var n = Math.floor(Number(getSettingValue_(PERSONAL_DATA_RETENTION_KEY)))
@@ -103,8 +109,118 @@ function setPersonalDataRetention_(days, actorId) {
   return { retentionDays: n }
 }
 
+// 消した人の ID: { member: {ID: true}, candidate: {ID: true} }。スクリプトプロパティと、操作の記録(AuditLog)の両方から読む
+function purgedPersonalIds_() {
+  var out = { member: {}, candidate: {} }
+  var add = function (key) {
+    var i = String(key).indexOf(':')
+    var kind = String(key).slice(0, i)
+    if (i > 0 && out[kind] && String(key).slice(i + 1)) out[kind][String(key).slice(i + 1)] = true
+  }
+  readPurgedIdKeys_().forEach(add)
+  auditLogEntries_().forEach(function (e) {
+    if (e.action === 'purgePersonalDataNow') { add(e.target); return }
+    if (e.action !== 'purgePersonalData') return
+    var d = null
+    try { d = JSON.parse(e.detail || '{}') } catch (err) { d = null }
+    if (!d) return
+    ;(Array.isArray(d.members) ? d.members : []).forEach(function (id) { add('member:' + id) })
+    ;(Array.isArray(d.candidates) ? d.candidates : []).forEach(function (id) { add('candidate:' + id) })
+  })
+  return out
+}
+
+// 操作の記録(AuditLog)の行: { action, target, detail }
+function auditLogEntries_() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('AuditLog')
+  if (!sheet || sheet.getLastRow() < 2) return []
+  var values = sheet.getDataRange().getValues()
+  var headers = (values[0] || []).map(function (h) { return String(h).trim() })
+  var a = headers.indexOf('action'), t = headers.indexOf('target'), d = headers.indexOf('detail_json')
+  if (a < 0) return []
+  return values.slice(1).map(function (r) {
+    return { action: String(r[a] || ''), target: t >= 0 ? String(r[t] || '') : '', detail: d >= 0 ? String(r[d] || '') : '' }
+  })
+}
+
+// スクリプトプロパティに残した「種類:ID」の一覧
+function readPurgedIdKeys_() {
+  var props = PropertiesService.getScriptProperties().getProperties()
+  var out = []
+  for (var i = 0; props[PURGED_IDS_PREFIX + i] !== undefined && props[PURGED_IDS_PREFIX + i] !== null; i++) {
+    var list = null
+    try { list = JSON.parse(props[PURGED_IDS_PREFIX + i]) } catch (e) { list = null }
+    if (Array.isArray(list)) list.forEach(function (k) { out.push(String(k)) })
+  }
+  return out
+}
+
+// 消した人を、スクリプトプロパティの一覧に足す(kind: member | candidate)
+function rememberPurgedId_(kind, id) {
+  var key = kind + ':' + String(id)
+  var keys = readPurgedIdKeys_()
+  if (keys.indexOf(key) >= 0) return
+  keys.push(key)
+  var chunks = []
+  var cur = []
+  var size = 2
+  keys.forEach(function (k) {
+    var len = JSON.stringify(k).length + 1
+    if (cur.length && size + len > PURGED_IDS_CHUNK) { chunks.push(cur); cur = []; size = 2 }
+    cur.push(k)
+    size += len
+  })
+  if (cur.length) chunks.push(cur)
+  var props = PropertiesService.getScriptProperties()
+  var values = {}
+  chunks.forEach(function (c, i) { values[PURGED_IDS_PREFIX + i] = JSON.stringify(c) })
+  props.setProperties(values)
+}
+
+// 消した人(退会したメンバー・採用しなかった候補者)の個人情報が、バックアップから戻したことで戻ってきていたら、もう一度消す。
+// メンバー: 名前・個人情報の列が残っている(消した印が無い・ログインできる)なら消し直し、MemberEmails の行は必ず消す。
+// 候補者: 行ごと消す。ロックを取った中で呼ぶ。消し直した ID を返す
+function reapplyPersonalDataPurges_(nowMs, actorId) {
+  var ids = purgedPersonalIds_()
+  var done = { members: [], candidates: [], emailRows: 0 }
+  if (!Object.keys(ids.member).length && !Object.keys(ids.candidate).length) return done
+  var nowIso = new Date(nowMs).toISOString()
+  sheetRowsAsObjects_(SHEET_MEMBERS).forEach(function (m) {
+    var id = String(m.id)
+    if (!ids.member[id]) return
+    var left = Object.keys(m).some(function (h) {
+      return h && MEMBER_COLUMNS_KEPT_AFTER_PURGE.indexOf(h) < 0 && String(m[h] === null || m[h] === undefined ? '' : m[h]) !== ''
+    })
+    if (!left && String(m.personal_data_purged_at || '') && boolCellValue_(m.inactive) && String(m.name) === WITHDRAWN_MEMBER_NAME) return
+    purgeMember_(id, nowMs)
+    // 退会の前のバックアップから戻した時は、退会した日時も無いので、消した日時を入れる
+    if (!String(m.withdrawn_at || '')) updateRowFields_(SHEET_MEMBERS, id, { withdrawn_at: nowIso })
+    done.members.push(id)
+  })
+  done.emailRows = deleteRowsWhere_(SHEET_MEMBER_EMAILS, function (o) { return !!ids.member[String(o.id)] })
+  deleteRowsWhere_(SHEET_CANDIDATES, function (o) {
+    if (!ids.candidate[String(o.id)]) return false
+    done.candidates.push(String(o.id))
+    return true
+  })
+  if (done.emailRows) bumpMemberEmailsVersion_()
+  if (done.members.length || done.candidates.length || done.emailRows) {
+    appendOrgAudit_(actorId || 'system', 'reapplyPersonalDataPurge', '', done)
+    bumpDataVersion()
+  }
+  return done
+}
+
+// 採用しなかった候補者の個人情報を消す(行ごと)
+function purgeCandidate_(candidateId) {
+  rememberPurgedId_('candidate', candidateId)
+  deleteRowsWhere_(SHEET_CANDIDATES, function (o) { return String(o.id) === String(candidateId) })
+}
+
 // 退会したメンバーの個人情報を消す
 function purgeMember_(memberId, nowMs) {
+  // 先に印を残す(途中で止まっても、バックアップから戻した後に消し直せるように)
+  rememberPurgedId_('member', memberId)
   var sheet = getSheet_(SHEET_MEMBERS)
   var headers = headerRow_(sheet)
   var fields = {}
@@ -218,7 +334,7 @@ function purgeExpiredPersonalData_(nowMs, actorId) {
       purgeMember_(p.id, nowMs)
       done.members.push(p.id)
     } else {
-      deleteRowsWhere_(SHEET_CANDIDATES, function (o) { return String(o.id) === p.id })
+      purgeCandidate_(p.id)
       done.candidates.push(p.id)
     }
   })
@@ -286,7 +402,7 @@ function pendingEntryOf_(kind, id) {
 function purgePersonalDataNow_(kind, id, actorId, nowMs) {
   var p = pendingEntryOf_(kind, id)
   if (kind === 'member') purgeMember_(p.id, nowMs)
-  else deleteRowsWhere_(SHEET_CANDIDATES, function (o) { return String(o.id) === p.id })
+  else purgeCandidate_(p.id)
   appendOrgAudit_(actorId, 'purgePersonalDataNow', kind + ':' + p.id, {})
   return { purged: { kind: kind, id: p.id } }
 }

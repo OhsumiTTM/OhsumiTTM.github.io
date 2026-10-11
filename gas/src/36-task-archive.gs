@@ -8,7 +8,9 @@
 //   ・戻す(unarchiveTasks。代表・全権管理者)で Tasks に戻す
 // 移さないもの: ゴミ箱のタスク・完了の日が分からないタスク・まだ Tasks にあるタスクから前提タスク・確認タスクとして
 // 参照されているタスク(画面で前提タスクが見えなくならないように)。1回に TASK_ARCHIVE_MAX_PER_RUN 件まで。
-// 先に TasksArchive に足してから Tasks の行を消す(途中で止まっても、次の回に同じ ID を足し直さずに消すだけにする)
+// 先に TasksArchive に足してから Tasks の行を消す(途中で止まっても、次の回に同じ ID を足し直さずに消すだけにする)。
+// TasksArchive に同じ ID の行が既にある時(途中で止まった後・バックアップから Tasks に戻した後など)は、その行を
+// Tasks の今の内容で書き換えてから消す(古い内容のまま Tasks の行を消すと、戻した内容が消えるため)
 var SHEET_TASKS_ARCHIVE = 'TasksArchive'
 var TASK_ARCHIVE_MAX_PER_RUN = 500
 var ARCHIVE_SEARCH_MAX = 200
@@ -85,15 +87,23 @@ function moveTasksToArchive_(tasks, nowMs) {
   if (!tasks.length) return []
   var archive = tasksArchiveSheet_(true)
   var aHeaders = headerRow_(archive)
+  // 移した ID → TasksArchive の行番号
   var already = {}
-  archivedTaskRows_().forEach(function (t) { already[String(t.id)] = true })
+  var idCol = aHeaders.indexOf('id')
+  if (idCol >= 0 && archive.getLastRow() >= 2) {
+    archive.getRange(2, idCol + 1, archive.getLastRow() - 1, 1).getValues().forEach(function (r, i) {
+      var id = String(r[0])
+      if (id && !already[id]) already[id] = i + 2
+    })
+  }
   var at = new Date(nowMs).toISOString()
   tasks.forEach(function (t) {
-    if (already[String(t.id)]) return
     var row = aHeaders.map(function (h) { return h === 'archived_at' ? at : (t[h] === undefined ? '' : t[h]) })
-    var rowNumber = archive.getLastRow() + 1
+    var rowNumber = already[String(t.id)] || archive.getLastRow() + 1
+    ensureSheetSize_(archive, rowNumber, aHeaders.length)
     protectRowFromFormulaInjection_(archive, aHeaders, rowNumber, SHEET_TASKS)
     archive.getRange(rowNumber, 1, 1, aHeaders.length).setValues([row])
+    already[String(t.id)] = rowNumber
   })
   deleteRowsById_(getSheet_(SHEET_TASKS), tasks.map(function (t) { return String(t.id) }))
   forgetSheetGrid_(SHEET_TASKS)
@@ -195,6 +205,7 @@ function unarchiveTasks_(taskIds) {
       })
     }
     var rowNumber = sheet.getLastRow() + 1
+    ensureSheetSize_(sheet, rowNumber, headers.length)
     protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_TASKS)
     sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row])
     if (Object.keys(recordFields).length) splitRecordFields_(SHEET_TASKS, id, recordFields)
