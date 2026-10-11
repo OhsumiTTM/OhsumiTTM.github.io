@@ -208,6 +208,7 @@ function notifyOverdueTasksToAssignees_() {
     var dueCol = headers.indexOf('due_date')
     var statusCol = headers.indexOf('status')
     var assigneeCol = headers.indexOf('assignee_id')
+    var apprCol = headers.indexOf('approval_status')
     if (titleCol === -1 || dueCol === -1 || statusCol === -1 || assigneeCol === -1) return
     var lastRow = sheet.getLastRow()
     if (lastRow < 2) return
@@ -219,8 +220,11 @@ function notifyOverdueTasksToAssignees_() {
     rows.forEach(function (r) {
       var due = cellDateStr_(r[dueCol])
       var status = String(r[statusCol] || '')
-      if (!due || due >= today || normalizeCode_('status', status) === 'done') return
+      // 完了・確認待ち(担当者はもう提出した)のタスクは、担当者に催促しない
+      if (!due || due >= today || ['done', 'review'].indexOf(normalizeCode_('status', status)) >= 0) return
       if (headers.indexOf('deleted_at') >= 0 && String(r[headers.indexOf('deleted_at')] || '') !== '') return
+      // 承認待ち(まだ承認されていない)のタスクも催促しない
+      if (apprCol >= 0 && normalizeCode_('approval', r[apprCol]) === 'pending') return
       var title = String(r[titleCol] || '')
       var assigneeIds = String(r[assigneeCol] || '')
         .split(',')
@@ -349,12 +353,17 @@ function logSuppressedChat_(kind, content) {
     String(content).slice(0, 200))
 }
 
+var DISCORD_MAX_CHARS = 1900
+
 function sendDiscordMessage_(content) {
   try {
     if (featureDisabled_('chatNotify')) return
     var url = getDiscordWebhookUrl_()
     if (!url) return
     if (isChatSuppressed_()) { logSuppressedChat_('Discord', content); return }
+    // Discord は2000文字を超える投稿を断る(投稿ごと消える)ので、超える分は切る
+    content = String(content)
+    if (content.length > DISCORD_MAX_CHARS) content = content.slice(0, DISCORD_MAX_CHARS - 1) + '…'
     UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
@@ -538,6 +547,31 @@ function cellDateStr_(v) {
   return String(v || '')
 }
 
+// 期限超過のチャンネルへの投稿の文。Discord は1回の投稿が2000文字までで、超えると投稿ごと断られるので、
+// 行数(OVERDUE_CHAT_MAX_LINES)と文字数(OVERDUE_CHAT_MAX_CHARS。後に足すサイトのリンクの分を残す)を抑え、
+// 残りは「ほか N 件」にする(Slack にも同じ文を送る)
+var OVERDUE_CHAT_MAX_LINES = 20
+var OVERDUE_CHAT_MAX_CHARS = 1700
+var OVERDUE_CHAT_TITLE_CHARS = 60
+
+function overdueChatText_(overdue) {
+  var head = '⚠️ 期限超過タスクが' + overdue.length + '件あります。'
+  var lines = []
+  var used = head.length
+  for (var i = 0; i < overdue.length && lines.length < OVERDUE_CHAT_MAX_LINES; i++) {
+    var t = overdue[i]
+    var label = chatTaskLabel_(t)
+    if (label.length > OVERDUE_CHAT_TITLE_CHARS) label = label.slice(0, OVERDUE_CHAT_TITLE_CHARS) + '…'
+    var line = '・' + label + '（期限: ' + t.due + '）'
+    // 「ほか N 件」の行の分(20文字)も残す
+    if (used + 1 + line.length + 20 > OVERDUE_CHAT_MAX_CHARS) break
+    lines.push(line)
+    used += 1 + line.length
+  }
+  if (overdue.length > lines.length) lines.push('ほか ' + (overdue.length - lines.length) + ' 件')
+  return head + '\n' + lines.join('\n')
+}
+
 // Daily sweep (see dailyMaintenance/setupDailyTrigger above) — posts one
 // message listing every task whose due_date has passed and isn't 完了.
 function notifyOverdueTasksToDiscord_() {
@@ -569,10 +603,7 @@ function notifyOverdueTasksToDiscord_() {
         return t.due && t.due < today && normalizeCode_('status', t.status) !== 'done'
       })
     if (overdue.length === 0) return
-    var lines = overdue.map(function (t) {
-      return '・' + chatTaskLabel_(t) + '（期限: ' + t.due + '）'
-    })
-    notifyChat_('⚠️ 期限超過タスクが' + overdue.length + '件あります。\n' + lines.join('\n'))
+    notifyChat_(overdueChatText_(overdue))
   } catch (err) {
     // best-effort
   }

@@ -92,7 +92,8 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
           body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
       }
-      ids.forEach(function (mid) { queueNotification_(mid, 'mention', templates) })
+      // 1人の失敗で、ほかの宛先(と次のコメント)の通知を止めない
+      queueNotificationEach_(ids, 'mention', templates)
     })
   } catch (err) {
     console.error('メンションの通知に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -162,9 +163,10 @@ function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
       return
     }
     var text = String(fresh[fresh.length - 1].text).slice(0, MENTION_NOTIFY_MAX_CHARS)
-    ids.forEach(function (mid) {
+    // 1人の失敗で、ほかの宛先の通知を止めない
+    queueNotificationEach_(ids, 'reply', function (mid) {
       var follow = recipients[mid] === 'follow'
-      queueNotification_(mid, 'reply', {
+      return {
         ja: {
           subject: follow ? '[Ohsumi] ' + actorName + 'さんがコメントしました' : '[Ohsumi] ' + actorName + 'さんが返信しました',
           body: follow
@@ -177,7 +179,7 @@ function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
             ? actorName + ' commented on task "' + task.title + '" (this may be a reply to your mention).\n\n' + text + '\n\nPlease check Ohsumi for details.'
             : actorName + ' replied to a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
-      })
+      }
     })
   } catch (err) {
     console.error('返信の通知に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -505,7 +507,8 @@ function notifyScheduleChange_(taskId) {
 // 失敗しても呼び出し元には投げない(カレンダーの上限・権限で、タスクの保存を止めない)
 var CALENDAR_TASK_TAG = 'ohsumiTaskId'
 // 予定に関わる列。これらを書き換えた時に予定を合わせる(updateRowFields_)
-var CALENDAR_TASK_FIELDS = ['title', 'due_date', 'due_time', 'assignee_id', 'deleted_at']
+// approval_status: 承認待ちの間は予定を入れず、承認した時に入れる
+var CALENDAR_TASK_FIELDS = ['title', 'due_date', 'due_time', 'assignee_id', 'deleted_at', 'approval_status']
 
 function syncCalendarForTask_(taskId, hints) {
   return measureAction_('calendarMs', function () { return syncCalendarForTaskUnmeasured_(taskId, hints || {}) })
@@ -545,8 +548,12 @@ function syncCalendarForTaskUnmeasured_(taskId, hints) {
       })
       .filter(Boolean)
     var emailMap = assigneeIds.length ? getAllMemberEmails_() : {}
-    var guests = assigneeIds.map(function (aid) { return emailMap[String(aid)] }).filter(Boolean)
-    var wanted = !hints.remove && !!dueDate && guests.length > 0 && !task.deleted_at &&
+    // 1人が複数のアドレスをカンマ区切りで持つ時も、ゲストは1つずつのアドレスにする
+    // (今の予定のゲストと比べる・addGuest に渡すのは、1つのアドレス)
+    var guests = splitEmails_(assigneeIds.map(function (aid) { return emailMap[String(aid)] }).filter(Boolean))
+    // 承認待ちのタスクは、まだ予定を入れない(招待のメールを送らない)。承認した時に合わせる(approval_status は CALENDAR_TASK_FIELDS)
+    var pendingApproval = normalizeCode_('approval', task.approval_status) === 'pending'
+    var wanted = !hints.remove && !!dueDate && guests.length > 0 && !task.deleted_at && !pendingApproval &&
       normalizeCode_('status', task.status) !== 'done'
 
     var cal = CalendarApp.getDefaultCalendar()

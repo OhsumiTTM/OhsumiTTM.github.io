@@ -102,7 +102,9 @@ function createTasks_(tasks, actingMemberId, opts) {
     protectRowFromFormulaInjection_(sheet, headers, sheet.getLastRow() + 1, 'Tasks')
     sheet.appendRow(row)
     created.push({ tempId: r.t.tempId, id: r.id })
-    if (r.t.assigneeIds && r.t.assigneeIds.length > 0) syncCalendarForTask_(r.id)
+    // 承認待ちのタスクは、承認した時に予定を入れる(approveTask → updateRowFields_ → syncCalendarForTask_)
+    var pending = !r.imported && r.t.pendingApproval !== false
+    if (r.t.assigneeIds && r.t.assigneeIds.length > 0 && !pending) syncCalendarForTask_(r.id)
   })
 
   // template tasks (pendingApproval === false) don't need an approval-queue email

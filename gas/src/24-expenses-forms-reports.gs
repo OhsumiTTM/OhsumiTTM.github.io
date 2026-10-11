@@ -643,7 +643,9 @@ function fetchDailyReports_() {
       id: String(r[idCol]),
       memberId: String(r[memberCol]),
       type: r[typeCol],
-      date: r[dateCol],
+      // 日付の形の文字列は、シートが日付(Date)に変えて返すことがある。'yyyy-MM-dd' にそろえる
+      // (Date のまま返すと、JSON で UTC の日時になり、日本時間では前の日に見える)
+      date: cellDateStr_(r[dateCol]),
       done: r[doneCol],
       todo: r[todoCol],
       issues: r[issuesCol],

@@ -145,7 +145,8 @@ function sendBatchNotificationsUnrecorded_() {
     var queue = JSON.parse(allProps[key] || '[]')
     if (queue.length === 0) return
 
-    var emails = memberEmailsByIds_([memberId])
+    // 1人が複数のアドレスをカンマ区切りで持つ時も、アドレスごとに言語を引けるよう1つずつに分ける
+    var emails = splitEmails_(memberEmailsByIds_([memberId]))
     if (emails.length === 0) {
       props.deleteProperty(key)
       return
@@ -162,8 +163,8 @@ function sendBatchNotificationsUnrecorded_() {
       if (freq === 'none') return
       // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
       if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
-        var t = item.templates[loc] || item.templates.ja
-        splitEmails_(emails).forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
+        var t = queuedTemplate_(item, loc)
+        emails.forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
         return
       }
       if (freq === 'immediate') { toSend.push(item); return }
@@ -176,13 +177,20 @@ function sendBatchNotificationsUnrecorded_() {
     if (toSend.length > 0) {
       var combined = toSend
         .map(function(i) {
-          var tpl = i.templates[loc] || i.templates.ja
+          var tpl = queuedTemplate_(i, loc)
           return '【' + tpl.subject + '】\n' + tpl.body
         })
         .join('\n\n---\n\n')
+      // キューに入りきらなかった分(件数だけ数えたもの)
+      var more = toSend.reduce(function (n, i) { return n + (Number(i.more) || 0) }, 0)
+      if (more) {
+        combined += '\n\n' + (loc === 'en'
+          ? '...and ' + more + ' more. Please check them on the Ohsumi screen.'
+          : 'ほか ' + more + ' 件あります。Ohsumi の画面で確かめてください。')
+      }
       var subject = loc === 'en'
-        ? 'Ohsumi Notification Summary (' + toSend.length + ')'
-        : 'Ohsumi 通知まとめ (' + toSend.length + '件)'
+        ? 'Ohsumi Notification Summary (' + (toSend.length + more) + ')'
+        : 'Ohsumi 通知まとめ (' + (toSend.length + more) + '件)'
       sendMail_({ to: emails.join(','), subject: subject, body: combined })
     }
     if (toKeep.length > 0) {
@@ -191,6 +199,12 @@ function sendBatchNotificationsUnrecorded_() {
       props.deleteProperty(key)
     }
   })
+}
+
+// キューの1件の、受け取る人の言語の文(キューには受け取る人の言語の文だけを入れる。以前の版は日英の両方)
+function queuedTemplate_(item, loc) {
+  var t = (item && item.templates) || {}
+  return t[loc] || t.ja || t.en || { subject: '', body: '' }
 }
 
 function dailyMaintenanceUnrecorded_() {
