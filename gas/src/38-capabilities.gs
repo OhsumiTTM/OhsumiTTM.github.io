@@ -138,6 +138,51 @@ function assertRoleAssignable_(acting, roleRef, targetId) {
   }
 }
 
+// 最上位でない人が、メンバーを対象にする操作(members.hr・members.remove)をする時の決まり。
+// 役職を変える時(assertRoleAssignable_)と同じく、自分より強い人には手を出せないようにする
+// (例: 代表のメールアドレスに自分のアドレスを足して、代表としてログインする)。
+//   - 最上位の役職の人は対象にできない
+//   - 自分の持っていない操作を持つ人(制限なしの人を含む)は対象にできない
+//   - 自分自身は、範囲が広がる操作(報告先・メンター・担当プロジェクト)の対象にできない。
+//     自分のメールアドレス・所属開始日・退会は今までどおり(個人設定の画面から自分のアドレスを足す等)
+//   - 担当プロジェクトは、自分の担当プロジェクトの範囲でだけ付けられる(担当が決まっている人の場合)。
+//     管理者の担当を空(すべてのプロジェクト)にはできない
+var MEMBER_TARGET_ACTIONS = ['updateReportsTo', 'updateMentor', 'updateJoinedAt', 'updateEmail', 'updateMemberProjects', 'removeMember']
+var MEMBER_TARGET_SELF_ALLOWED = ['updateEmail', 'updateJoinedAt', 'removeMember']
+function assertMemberTargetable_(acting, action, body) {
+  if (MEMBER_TARGET_ACTIONS.indexOf(action) < 0) return
+  var roles = getRoles_()
+  if (isTopRoleRef_(roles, acting.role)) return
+  var tid = String((body && body.memberId) || '')
+  if (!tid) throw userError_('メンバーが見つかりません。')
+  var isSelf = tid === String(acting.id)
+  if (isSelf && MEMBER_TARGET_SELF_ALLOWED.indexOf(action) < 0) {
+    throw userError_('自分自身の報告先・メンター・担当プロジェクトは変えられません。ほかの人に頼んでください。')
+  }
+  var target = null
+  try { target = authFindRow_(SHEET_MEMBERS, tid) } catch (e) { target = null }
+  if (!target) throw userError_('メンバーが見つかりません。')
+  if (!isSelf) {
+    if (isTopRoleRef_(roles, target.role)) throw userError_('最上位の役職の人には、この操作は最上位の役職の人だけができます。')
+    var actorCaps = roleCapabilities_(roles, acting.role)
+    var actorFull = isFullAdminRoleRef_(roles, acting.role)
+    if (!containsAll_(actorCaps, roleCapabilities_(roles, target.role)) || (!actorFull && isFullAdminRoleRef_(roles, target.role))) {
+      throw userError_('自分が持っていない操作ができる人には、この操作はできません。')
+    }
+  }
+  if (action === 'updateMemberProjects') {
+    var actorScope = splitCsvList_(acting.project_ids)
+    var next = (Array.isArray(body.projectIds) ? body.projectIds : []).map(function (p) { return String(p).trim() }).filter(Boolean)
+    if (actorScope.length > 0) {
+      var outside = next.filter(function (p) { return actorScope.indexOf(p) < 0 })
+      if (outside.length > 0) throw userError_('自分の担当プロジェクトの範囲でだけ、担当プロジェクトを付けられます。')
+      if (next.length === 0 && roleTier_(roles, target.role) === 'admin') {
+        throw userError_('管理者の担当プロジェクトを空(すべてのプロジェクト)にはできません。代表に頼んでください。')
+      }
+    }
+  }
+}
+
 // 最上位でない人が役職の一覧を保存する時(updateRoles)の決まり。
 //   - 役職ごとのできる操作は変えられない(できる操作の設定は最上位だけ)。
 //     既定のままの役職の制限を変えた時に既定が変わるのは今までと同じ(全権管理者が役職を制限なしにする等)。

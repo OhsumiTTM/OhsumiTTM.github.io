@@ -75,17 +75,21 @@ function topRoleRef_() {
   return DEFAULT_TOP_ROLE_NAME
 }
 
-// 代表(最上位の役職)のメンバーの ID(シートから読む)
+// 代表(最上位の役職)のメンバーの ID(シートから読む)。
+// 退会したメンバー(withdrawn_at がある)は、役職が最上位のままでも含めない(ログインできないため。
+// 代表がいなくなった時に、初期設定コードで代表を入れ直せるように)。休止中の代表はログインできるので含める
 function topMemberIds_() {
   var sheet = getSheet_(SHEET_MEMBERS)
   var values = sheet.getDataRange().getValues()
   var headers = (values[0] || []).map(function (h) { return String(h).trim() })
   var roleCol = headers.indexOf('role')
   var idCol = headers.indexOf('id')
+  var withdrawnCol = headers.indexOf('withdrawn_at')
   if (roleCol < 0 || idCol < 0) return []
   var roles = getRoles_()
   var ids = []
   for (var i = 1; i < values.length; i++) {
+    if (withdrawnCol >= 0 && String(values[i][withdrawnCol] || '').trim() !== '') continue
     if (String(values[i][idCol]) && isTopRoleRef_(roles, values[i][roleCol])) ids.push(String(values[i][idCol]))
   }
   return ids
@@ -141,7 +145,8 @@ function claimInitialSetup_(email, code, nowMs) {
     // 1回限り: 使う前に消す(代表が既にいる時も使えなくする)
     clearInitialSetupCode_(props)
     if (hasTopMember_()) throw userError_('この団体には既に代表がいます。代表に、メンバーとして追加してもらってください。')
-    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_(), { firstLeader: true })
+    // 退会した前の代表と同じアドレスなら、そのアドレスを前の行から外して使う(代表がいないので退会の取り消しができないため)
+    var added = addMember_(String(email).split('@')[0], email, '', topRoleRef_(), { firstLeader: true, takeOverWithdrawn: true })
     // メンバーが増えたので、読み取りのキャッシュ(スナップショット)を作り直させる
     bumpSnapshotVersion_()
     console.log('初期設定コードで、最初の代表を登録しました(メンバーID: ' + added.id + ')')
