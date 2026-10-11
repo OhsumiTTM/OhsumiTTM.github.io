@@ -263,36 +263,89 @@ function updateTaskFields_(taskId, fields) {
   return updateRowFields_(SHEET_TASKS, taskId, fields)
 }
 
+// タスクの確認者(reviewer_ids。無ければ reviewer_id)
+function taskReviewerIds_(task) {
+  return String((task && (task.reviewer_ids || task.reviewer_id)) || '')
+    .split(',').map(function (s) { return s.trim() }).filter(Boolean)
+}
+
+// 記録した承認のうち、今の確認者の承認だけ(1人1回)。確認者から外れた人の承認や、
+// 確認者でない管理者の承認(以前の版で記録したもの)は数えない
+function currentReviewApprovals_(task) {
+  var approvals = []
+  try { approvals = JSON.parse((task && task.review_approvals_json) || '[]') } catch (_) {}
+  if (!Array.isArray(approvals)) approvals = []
+  var reviewerIds = taskReviewerIds_(task)
+  var seen = {}
+  return approvals.filter(function (a) {
+    var id = a && String(a.memberId || '')
+    if (!id || seen[id] || reviewerIds.indexOf(id) < 0) return false
+    seen[id] = true
+    return true
+  })
+}
+
+// 必要な承認の数: required_approvals が 'all' なら今の確認者の人数、数ならその数(空なら 1)
+function reviewApprovalsNeeded_(task) {
+  var reviewerIds = taskReviewerIds_(task)
+  var raw = String((task && task.required_approvals) || '').trim()
+  if (raw === 'all') return Math.max(1, reviewerIds.length)
+  return Number(raw) || 1
+}
+
+// 確認者がいて、今の確認者の承認が必要な数に届いていない(確認者の承認を待っている)
+function reviewApprovalShortfall_(task) {
+  if (taskReviewerIds_(task).length === 0) return false
+  return currentReviewApprovals_(task).length < reviewApprovalsNeeded_(task)
+}
+
 // 確認者ごとの承認を記録し、requiredApprovals(必要承認数、'all'なら
 // 確認者全員)に達したら自動的にstatus: '完了'にする。既に承認済みの
 // actorIdが再度呼んでも重複追加しない（冪等）。
 // TSK-062+TSK-067統合: commentはレビューフィードバック兼次回への申し送り
 // メモとして任意で残せる。既に承認済みの場合は(冪等のため)commentを
 // 上書きしない。
-function approveTaskReview_(taskId, actorId, comment) {
+// 数えるのは今の確認者(reviewer_ids)の承認だけ(currentReviewApprovals_)。
+// 確認者でない人の承認は記録しない。ただし代表(opts.force)は、確認者でなくても
+// 確認者の承認を待たずに完了にできる(代わりに完了にするだけで、確認者の承認としては記録・計上しない)
+function approveTaskReview_(taskId, actorId, comment, opts) {
   var task = findRow_(SHEET_TASKS, taskId)
   if (!task) throw userError_('タスクが見つかりません: ' + taskId)
-  var approvals = []
-  try { approvals = JSON.parse(task.review_approvals_json || '[]') } catch (_) {}
-  var already = approvals.some(function (a) { return a.memberId === actorId })
-  if (!already) {
-    approvals.push({ memberId: actorId, at: new Date().toISOString(), comment: comment || undefined })
+  return recordTaskReviewApproval_(task, actorId, comment, opts).result
+}
+
+// approveTaskReview_ の中身。{ result: 書き込みの結果, completed: この承認で完了になったか } を返す
+// (確認者が updateTaskStatus で「完了」を送った時も、ここで承認として記録する。13-write-actions.gs)
+function recordTaskReviewApproval_(task, actorId, comment, opts) {
+  var taskId = String(task.id)
+  actorId = String(actorId || '')
+  var reviewerIds = taskReviewerIds_(task)
+  var fields = { last_activity: todayStr_() }
+  var completed
+  if (reviewerIds.indexOf(actorId) < 0) {
+    if (!(opts && opts.force)) throw userError_('このタスクの確認者ではないため承認できません。')
+    completed = true
+  } else {
+    var approvals = []
+    try { approvals = JSON.parse(task.review_approvals_json || '[]') } catch (_) {}
+    if (!Array.isArray(approvals)) approvals = []
+    var already = approvals.some(function (a) { return a && String(a.memberId) === actorId })
+    if (!already) {
+      approvals.push({ memberId: actorId, at: new Date().toISOString(), comment: comment || undefined })
+    }
+    fields.review_approvals_json = JSON.stringify(approvals)
+    var counted = currentReviewApprovals_({ reviewer_ids: reviewerIds.join(','), review_approvals_json: fields.review_approvals_json })
+    completed = counted.length >= reviewApprovalsNeeded_(task)
   }
-  var reviewerIds = String(task.reviewer_ids || task.reviewer_id || '')
-    .split(',').map(function (s) { return s.trim() }).filter(Boolean)
-  var needed = task.required_approvals === 'all'
-    ? reviewerIds.length
-    : (Number(task.required_approvals) || 1)
-  var fields = { review_approvals_json: JSON.stringify(approvals), last_activity: todayStr_() }
-  if (approvals.length >= needed) {
+  if (completed) {
     fields.status = sheetCode_('status', 'done')
     fields.completed_date = todayStr_()
   }
   var result = updateRowFields_(SHEET_TASKS, taskId, fields)
-  if (approvals.length >= needed) {
+  if (completed) {
     completeRelatedReviewTasks_(taskId)
   }
-  return result
+  return { result: result, completed: completed }
 }
 
 // APR-007: 元タスクの承認が完了した際、対応する確認タスク（related_review_task_id
@@ -592,6 +645,10 @@ function getNotifyFrequency_(memberId, kind) {
   }
 }
 
+// 通知のキュー(notif_queue_<ID>)の上限。スクリプトプロパティの1つの値の上限(9KB)より小さくする
+var NOTIFY_QUEUE_MAX_BYTES = 8000
+var NOTIFY_QUEUE_BODY_CHARS = 400
+
 // Queues a notification for batch delivery. kind is one of:
 // 'new_task' | 'review' | 'mention' | 'rejected' | 'deadline'
 // templates: { ja: {subject, body}, en: {subject, body} } — 送信時に受信者の
@@ -605,18 +662,52 @@ function queueNotification_(memberId, kind, templates) {
     return
   }
   if (freq !== 'immediate' && !allowRequestNotification_('通知のキュー ' + kind)) return
+  // 1人が複数のアドレスをカンマ区切りで持つ時も、アドレスごとに言語を引けるよう1つずつに分ける
+  var emails = splitEmails_(memberEmailsByIds_([memberId]))
   if (freq === 'immediate') {
-    var emails = memberEmailsByIds_([memberId])
     if (emails.length > 0) {
       sendLocalizedEmail_(emails, templates)
     }
     return
   }
+  // まとめて送る設定(3時間・6時間)は、スクリプトプロパティ notif_queue_<ID> に貯める。
+  // プロパティの1つの値は 9KB までなので、受け取る人の言語の文だけを、本文を短くして入れ、
+  // 全体を NOTIFY_QUEUE_MAX_BYTES までにする(入りきらない分は件数だけ数え、まとめのメールに「ほか N 件」と書く)
+  var locales = emails.length ? localesByEmails_(emails) : {}
+  var loc = (emails.length && locales[emails[0]] === 'en' && templates.en) ? 'en' : 'ja'
+  var tpl = templates[loc] || templates.ja || templates.en || {}
+  var body = String(tpl.body || '')
+  if (body.length > NOTIFY_QUEUE_BODY_CHARS) body = body.slice(0, NOTIFY_QUEUE_BODY_CHARS) + '…'
+  var stored = {}
+  stored[loc] = { subject: String(tpl.subject || '').slice(0, 200), body: body }
   var key = 'notif_queue_' + memberId
   var props = PropertiesService.getScriptProperties()
   var existing = props.getProperty(key)
-  var queue = existing ? JSON.parse(existing) : []
-  queue.push({ kind: kind, templates: templates, ts: new Date().toISOString() })
+  var queue = []
+  try { queue = existing ? JSON.parse(existing) : [] } catch (e) { queue = [] }
+  if (!Array.isArray(queue)) queue = []
+  var item = { kind: kind, templates: stored, ts: new Date().toISOString() }
+  queue.push(item)
+  if (queue.length > 1 && utf8Bytes_(JSON.stringify(queue)) > NOTIFY_QUEUE_MAX_BYTES) {
+    // 入りきらない: この1件は入れず、前の1件に件数だけ足す(まとめのメールで「ほか N 件」と書く)
+    queue.pop()
+    var last = queue[queue.length - 1]
+    last.more = (Number(last.more) || 0) + 1
+  }
   props.setProperty(key, JSON.stringify(queue))
+}
+
+// 通知を1人分キューに入れる(または送る)。1人の失敗で、同じコメントのほかの宛先への通知を止めない
+// (失敗した時は、画面に「通知の一部を送れなかった」と出すため notifyLimited を立てる)
+function queueNotificationEach_(memberIds, kind, templates) {
+  ;(memberIds || []).forEach(function (mid) {
+    var tpl = typeof templates === 'function' ? templates(mid) : templates
+    try {
+      queueNotification_(mid, kind, tpl)
+    } catch (err) {
+      _notifyLimited = true
+      console.error('通知(' + kind + ')を入れられませんでした: memberId=' + mid + ' ' + maskEmailsIn_(String(err)))
+    }
+  })
 }
 

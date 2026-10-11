@@ -12,10 +12,25 @@
 // - 初回表示は原文のまま返し、翻訳が届いたら該当コンポーネントだけ
 //   再レンダリングする（progressive enhancement — 翻訳の遅延がUIをブロック
 //   しない）
+// - 訳せなかった文(GAS が null を返した・通信に失敗した)は覚えない。原文を出し、RETRY_AFTER_MS の後に訳し直す
+//   (以前は、失敗して GAS が返した原文を訳として覚えてしまい、二度と訳し直さなかった)
 import { useEffect, useState } from 'react'
 import { remoteApi, isRemoteConfigured } from './remote'
 
-const CACHE_KEY = 'ohsumi-translate-cache'
+const CACHE_KEY = 'ohsumi-translate-cache-v2'
+// 以前のキャッシュ(失敗した時の原文が訳として入っていることがある)。読まずに消す
+const OLD_CACHE_KEYS = ['ohsumi-translate-cache']
+const RETRY_AFTER_MS = 10 * 60 * 1000
+// 訳せなかった文と、次に訳し直してよい時刻(このページの間だけ)
+const failedUntil = new Map<string, number>()
+
+// 古い GAS は、訳せなかった時に原文をそのまま返す。日本語・中国語などの文字を含む文を、それらの文字を使わない言語に
+// 訳したのに原文のままなら、訳せなかったとみなす(覚えずに後で訳し直す)
+const CJK = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/
+const CJK_LANGS = ['ja', 'zh-CN', 'zh-TW', 'ko']
+export function looksUntranslated(text: string, result: string, lang: string): boolean {
+  return result === text && CJK.test(text) && !CJK_LANGS.includes(lang)
+}
 type Cache = Record<string, string> // `${targetLang}::${text}` -> translated text
 
 let memoryCache: Cache | null = null
@@ -23,8 +38,10 @@ let memoryCache: Cache | null = null
 // ログアウト時: 翻訳のキャッシュ(タスク本文などの翻訳が入る)を消す
 export function clearTranslateCache() {
   memoryCache = null
+  failedUntil.clear()
   try {
     window.localStorage.removeItem(CACHE_KEY)
+    OLD_CACHE_KEYS.forEach((k) => window.localStorage.removeItem(k))
   } catch {
     /* ignore */
   }
@@ -33,6 +50,7 @@ export function clearTranslateCache() {
 function loadCache(): Cache {
   if (memoryCache) return memoryCache
   try {
+    OLD_CACHE_KEYS.forEach((k) => window.localStorage.removeItem(k))
     const raw = window.localStorage.getItem(CACHE_KEY)
     memoryCache = raw ? (JSON.parse(raw) as Cache) : {}
   } catch {
@@ -71,14 +89,18 @@ function scheduleFlush(lang: string) {
       .translateTexts(texts, lang2)
       .then((results) => {
         const cache = loadCache()
+        const list = Array.isArray(results) ? results : []
         texts.forEach((text, i) => {
-          cache[`${lang2}::${text}`] = results[i] ?? text
+          const r = list[i]
+          if (typeof r === 'string' && !looksUntranslated(text, r, lang2)) cache[`${lang2}::${text}`] = r
+          else failedUntil.set(`${lang2}::${text}`, Date.now() + RETRY_AFTER_MS)
         })
         saveCache(cache)
         listeners.forEach((l) => l())
       })
       .catch(() => {
-        // best-effort — 呼び出し元はキャッシュ未ヒットのまま原文を表示し続ける
+        // best-effort — 原文を出したまま、しばらくしてから訳し直す
+        texts.forEach((text) => failedUntil.set(`${lang2}::${text}`, Date.now() + RETRY_AFTER_MS))
       })
   }, 80)
 }
@@ -95,10 +117,11 @@ export function useAutoTranslate(text: string, locale: string): string {
 
   useEffect(() => {
     if (!shouldTranslate || cached !== undefined) return
+    if ((failedUntil.get(key) ?? 0) > Date.now()) return
     pendingTexts.add(text)
     pendingListeners.push(() => forceRerender((n) => n + 1))
     scheduleFlush(locale)
-  }, [text, locale, shouldTranslate, cached])
+  }, [text, locale, shouldTranslate, cached, key])
 
   return shouldTranslate ? (cached ?? text) : text
 }

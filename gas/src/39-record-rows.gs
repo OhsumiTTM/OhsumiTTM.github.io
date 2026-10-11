@@ -49,13 +49,15 @@ function parseRecordRowsState_(raw) {
   return s
 }
 
-// 今の状態。このリクエストで読んだスナップショットがあれば、その Settings から読む(書き込みのたびにシートを読まない)。
+// 今の状態。このリクエストで読んだスナップショットがあり、その版が今のデータの版と同じなら、その Settings から読む
+// (書き込みのたびにシートを読まない)。版が変わっていたら(全体を戻した後など)、Settings のシートから読む。
 // 読めない時は none(セルに持つ)
 function recordRowsState_() {
   if (_recordRowsStateMemo) return _recordRowsStateMemo
   var s
   try {
-    s = _requestSnapshot && _requestSnapshot.data ? recordRowsStateOfSnapshot_(_requestSnapshot.data) : parseRecordRowsState_(getSettingValue_(RECORD_ROWS_STATE_KEY))
+    var fresh = _requestSnapshot && _requestSnapshot.data && _requestSnapshot.version === getDataVersion_()
+    s = fresh ? recordRowsStateOfSnapshot_(_requestSnapshot.data) : parseRecordRowsState_(getSettingValue_(RECORD_ROWS_STATE_KEY))
   } catch (e) {
     s = { state: 'none' }
   }
@@ -143,7 +145,7 @@ function recordIndexFromValues_(values) {
     })
   }
   Object.keys(byParent).forEach(function (p) {
-    Object.keys(byParent[p]).forEach(function (k) { byParent[p][k].sort(function (a, b) { return a.seq - b.seq }) })
+    Object.keys(byParent[p]).forEach(function (k) { byParent[p][k].sort(function (a, b) { return a.seq - b.seq || a.row - b.row }) })
   })
   return { headers: headers, col: col, byParent: byParent }
 }
@@ -240,6 +242,20 @@ function fillRecordColumnsOfRow_(sheetName, headers, rowValues) {
   fillRecordColumns_(sheetName, headers, rowValues, loadRecordIndex_)
 }
 
+// TasksArchive の行の値(Tasks の見出しの順の配列)の一覧の列に、TaskRecords から組み立てた一覧を入れる(行に持っている時だけ)。
+// 移行の前に移したタスクは、TaskRecords に行が無く、セルに一覧が残っているので、行が無い一覧はセルのままにする
+function fillArchivedRecordColumns_(headers, rowValues) {
+  if (!recordRowsOn_()) return
+  var id = String(rowValues[headers.indexOf('id')] || '')
+  if (!id) return
+  recordListsOf_(SHEET_TASKS).forEach(function (cfg) {
+    var c = headers.indexOf(cfg.column)
+    if (c < 0) return
+    var list = recordListFromIndex_(loadRecordIndex_(cfg.target), id, cfg.kind)
+    if (list.length) rowValues[c] = JSON.stringify(list)
+  })
+}
+
 // ---- 書く ----
 
 // 1件の記録の行(見出しの順の配列)
@@ -260,6 +276,35 @@ function recordRowValues_(cfg, parentId, entry, seq, entryId, nowIso) {
 function recordEntryId_(entry, seq) {
   var id = entry && typeof entry === 'object' && entry.id !== undefined && entry.id !== null ? String(entry.id) : ''
   return id || 'noid-' + seq
+}
+
+// 一覧の順に並べた項目の seq を決める。olds は項目ごとの今の seq(新しい項目は null)。
+// 今ある項目の seq が一覧の順に増えていれば、そのまま使い、新しい項目には前後の間の値を振る
+// (先頭に足す時は、先頭の値より小さい値。変更の記録は新しい順なので、足すたびに -1, -2, … になる)。
+// 並べ替えた時・間に入る値が無い時は、0 から振り直す(これまでと同じ)。読む時は seq の小さい順に並べる
+function assignRecordSeqs_(olds) {
+  var renumber = function () { return olds.map(function (_, i) { return i }) }
+  var known = olds.filter(function (v) { return v !== null })
+  for (var k = 1; k < known.length; k++) if (!(known[k] > known[k - 1])) return renumber()
+  var out = olds.slice()
+  var i = 0
+  while (i < out.length) {
+    if (out[i] !== null) { i++; continue }
+    var j = i
+    while (j < out.length && out[j] === null) j++
+    var prev = i > 0 ? out[i - 1] : null
+    var next = j < out.length ? out[j] : null
+    var n = j - i
+    for (var t = 0; t < n; t++) {
+      if (prev === null && next === null) out[i + t] = t
+      else if (prev === null) out[i + t] = next - (n - t)
+      else if (next === null) out[i + t] = prev + t + 1
+      else out[i + t] = prev + (next - prev) * (t + 1) / (n + 1)
+    }
+    i = j
+  }
+  for (var m = 1; m < out.length; m++) if (!(out[m] > out[m - 1]) || !isFinite(out[m])) return renumber()
+  return out
 }
 
 // 親の1つの一覧を、list(配列)と同じ中身・順番にする(足す・変える・消す)。何も変わらなければ書かない
@@ -285,15 +330,21 @@ function syncRecordListsBulk_(target, items) {
     var byKey = {}
     current.forEach(function (it) { byKey[it.key] = it })
     var keep = {}
-    list.forEach(function (entry, seq) {
-      var row = recordRowValues_(cfg, item.parentId, entry, seq, recordEntryId_(entry, seq), nowIso)
-      var key = row[0]
+    var planned = []
+    list.forEach(function (entry, i) {
+      var entryId = recordEntryId_(entry, i)
+      var key = String(item.parentId) + ':' + cfg.kind + ':' + entryId
       if (keep[key]) return // 同じ ID が2つある時は、最初の1つだけ
       keep[key] = true
-      var old = byKey[key]
-      if (!old) { appends.push(row); return }
-      if (old.body === row[index.col.body_json] && old.seq === seq) return
-      updates.push({ row: old.row, values: row })
+      planned.push({ entry: entry, entryId: entryId, old: byKey[key] || null })
+    })
+    // 順番(seq)は、今ある行の値をなるべく変えずに決める(新しいものを先頭に足すたびに、全部の行を書き直さないように)
+    var seqs = assignRecordSeqs_(planned.map(function (p) { return p.old ? p.old.seq : null }))
+    planned.forEach(function (p, i) {
+      var row = recordRowValues_(cfg, item.parentId, p.entry, seqs[i], p.entryId, nowIso)
+      if (!p.old) { appends.push(row); return }
+      if (p.old.body === row[index.col.body_json] && p.old.seq === seqs[i]) return
+      updates.push({ row: p.old.row, values: row })
     })
     current.forEach(function (it) { if (!keep[it.key]) removes.push(it.row) })
   })
@@ -302,8 +353,7 @@ function syncRecordListsBulk_(target, items) {
   removes.sort(function (a, b) { return b - a }).forEach(function (r) { sheet.deleteRow(r) })
   if (appends.length) {
     var start = sheet.getLastRow() + 1
-    var need = start + appends.length - 1 - sheet.getMaxRows()
-    if (need > 0) sheet.insertRowsAfter(sheet.getMaxRows(), need)
+    ensureSheetSize_(sheet, start + appends.length - 1, width)
     var range = sheet.getRange(start, 1, appends.length, width)
     try { range.setNumberFormat('@') } catch (e) { /* 形式を変えられない時 */ }
     range.setValues(appends)
@@ -444,16 +494,17 @@ function fillRecordColumnsFromSpreadsheet_(spreadsheet, sheetName, values) {
   return values
 }
 
-// 全体を戻した後: バックアップに無かった記録のシート(移行の前のバックアップ)は空にする
-function afterFullRestoreRecordRows_(restoredNames) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet()
-  ;[SHEET_TASK_RECORDS, SHEET_MEMBER_RECORDS].forEach(function (name) {
-    if (restoredNames.indexOf(name) >= 0) return
-    var sheet = ss.getSheetByName(name)
-    if (!sheet) return
-    sheet.clearContents()
-    sheet.getRange(1, 1, 1, recordHeadersOf_(name).length).setValues([recordHeadersOf_(name)])
-  })
+// 全体を戻した後: このリクエストで覚えている状態・表を忘れる。記録の持ち方の印(record_rows_state)は Settings と一緒に
+// 戻っているので、リクエストの最初に読んだスナップショット(戻す前の Settings)から読まないようにする
+// (バックアップに無かった記録のシートは、戻す時に見出しだけにしている。29-backup.gs の clearSheetsMissingFromBackup_)
+function afterFullRestoreRecordRows_() {
+  _requestSnapshot = null
+  _authSnapshotVersion = null
+  _archivedTaskIds = null
+  _requestRows = {}
+  _prefetchedSheets = {}
+  _requestEmailMap = null
+  forgetSheetGrid_()
   resetRecordRowsMemo_()
 }
 

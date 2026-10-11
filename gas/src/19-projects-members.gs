@@ -216,6 +216,8 @@ function addMember_(name, email, affiliation, role, opts) {
     throw userError_('メールアドレスが無い・形が正しくないため、メンバーを追加できません(メールアドレスが無いとログインできません)。')
   }
   email = String(email).trim()
+  // 同じアドレスのメンバー(退会した人を含む)がいれば、行を足す前に断る(assertEmailsAvailable_)
+  assertEmailsAvailable_(email, null, opts)
   var sheet = getSheet_(SHEET_MEMBERS)
   var headers = headerRow_(sheet)
   var id = String(nextIntId_(sheet, headers))
@@ -239,7 +241,7 @@ function addMember_(name, email, affiliation, role, opts) {
   // affiliation isn't its own column — it's derived from project_ids (or,
   // for admin roles with none, defaulted client-side), so nothing to store
   // for it here; kept as a param for parity with the client-side call.
-  if (email) setMemberEmail_(id, email)
+  if (email) setMemberEmail_(id, email, opts)
   // 初期タスク(メンバーを作った時に1回だけ。失敗してもメンバーの追加は止めない)
   try { createInitialTasksForMember_(id, !!(opts && opts.firstLeader)) } catch (e) { console.error('初期タスクを作れませんでした: ' + maskEmailsIn_(String(e))) }
   return { id: id }

@@ -208,6 +208,7 @@ function notifyOverdueTasksToAssignees_() {
     var dueCol = headers.indexOf('due_date')
     var statusCol = headers.indexOf('status')
     var assigneeCol = headers.indexOf('assignee_id')
+    var apprCol = headers.indexOf('approval_status')
     if (titleCol === -1 || dueCol === -1 || statusCol === -1 || assigneeCol === -1) return
     var lastRow = sheet.getLastRow()
     if (lastRow < 2) return
@@ -219,8 +220,11 @@ function notifyOverdueTasksToAssignees_() {
     rows.forEach(function (r) {
       var due = cellDateStr_(r[dueCol])
       var status = String(r[statusCol] || '')
-      if (!due || due >= today || normalizeCode_('status', status) === 'done') return
+      // 完了・確認待ち(担当者はもう提出した)のタスクは、担当者に催促しない
+      if (!due || due >= today || ['done', 'review'].indexOf(normalizeCode_('status', status)) >= 0) return
       if (headers.indexOf('deleted_at') >= 0 && String(r[headers.indexOf('deleted_at')] || '') !== '') return
+      // 承認待ち(まだ承認されていない)のタスクも催促しない
+      if (apprCol >= 0 && normalizeCode_('approval', r[apprCol]) === 'pending') return
       var title = String(r[titleCol] || '')
       var assigneeIds = String(r[assigneeCol] || '')
         .split(',')
@@ -349,12 +353,17 @@ function logSuppressedChat_(kind, content) {
     String(content).slice(0, 200))
 }
 
+var DISCORD_MAX_CHARS = 1900
+
 function sendDiscordMessage_(content) {
   try {
     if (featureDisabled_('chatNotify')) return
     var url = getDiscordWebhookUrl_()
     if (!url) return
     if (isChatSuppressed_()) { logSuppressedChat_('Discord', content); return }
+    // Discord は2000文字を超える投稿を断る(投稿ごと消える)ので、超える分は切る
+    content = String(content)
+    if (content.length > DISCORD_MAX_CHARS) content = content.slice(0, DISCORD_MAX_CHARS - 1) + '…'
     UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
@@ -459,29 +468,74 @@ function testSlackWebhook_() {
 // タスク名・説明など自由入力テキストの自動翻訳（多言語対応、item: i18n）。
 // Google組み込みの LanguageApp.translate() を使うため追加のAPIキー・課金
 // 設定は不要。1件ずつ呼ぶとレイテンシが積み上がるため、フロント側
-// (lib/ohsumi/translate.ts) が複数テキストをまとめて渡し、ここでバッチ処理
-// する。1件の翻訳失敗が他の件に波及しないよう、テキストごとに個別に
-// try/catchし、失敗時はその要素だけ原文を返す。
-// 無料枠のクォータ超過時もLanguageAppは例外を投げるため、同様に原文
-// フォールバックになる。
-function translateTexts_(texts, targetLang, actorId) {
+// (lib/ohsumi/translate.ts) が複数テキストをまとめて渡し、ここでバッチ処理する。
+//   - 訳した結果は CacheService に TRANSLATE_CACHE_SEC 秒覚える(メンバーをまたいで同じ文を訳し直さない。
+//     LanguageApp の1日の回数を守るため)
+//   - 1件の翻訳失敗が他の件に波及しないよう、テキストごとに try/catch する。
+//     markFailed(新しい画面が付ける)の時は、訳せなかった文を null で返す(画面は原文を出し、覚えずに後で訳し直す)。
+//     付けない古い画面には、今まで通り原文を返す
+//   - 上限(Service invoked too many times など)に達したら、残りの文は LanguageApp を呼ばずに失敗にする
+//   - 失敗は、種類だけをエラーの記録(代表の「利用の状況」)に残す(文は残さない)
+var TRANSLATE_CACHE_SEC = 21600
+var TRANSLATE_CACHE_MAX_CHARS = 90000
+var TRANSLATE_LANGS = ['en', 'ja', 'zh-CN', 'zh-TW', 'ko', 'fr', 'de', 'es', 'pt', 'it', 'vi', 'th', 'id']
+
+function translateCacheKey_(lang, text) {
+  return 'tr:' + lang + ':' + sha256Base64Url_(text)
+}
+
+function translateTexts_(texts, targetLang, actorId, options) {
+  options = options || {}
   var list = Array.isArray(texts) ? texts : []
-  var lang = targetLang || 'en'
+  var lang = String(targetLang || 'en')
+  if (TRANSLATE_LANGS.indexOf(lang) < 0) throw userError_('翻訳できない言語です: ' + lang)
+  var failValue = function (s) { return options.markFailed ? null : s }
+  var strings = list.map(function (t) { return String(t || '') })
+  var out = strings.slice()
+  // 覚えている訳は、まとめて読む(回数の上限にも数えない)
+  var cache = CacheService.getScriptCache()
+  var todo = []
+  var keys = []
+  strings.forEach(function (s, i) {
+    if (!s.trim()) return
+    var key = translateCacheKey_(lang, s)
+    keys.push(key)
+    todo.push({ i: i, s: s, key: key })
+  })
+  var cached = {}
+  if (keys.length) {
+    try { cached = cache.getAll(keys) || {} } catch (e) { cached = {} }
+  }
+  todo = todo.filter(function (t) {
+    if (cached[t.key] == null) return true
+    out[t.i] = cached[t.key]
+    return false
+  })
   // 翻訳する文の数は、1人1時間に RATE_LIMITS.translate.limit 件まで(団体全体の翻訳の回数を守るため)
-  var count = list.filter(function (t) { return String(t || '').trim() }).length
-  if (actorId && count > 0 && !takeRateLimit_('translate', actorId, count)) {
+  if (actorId && todo.length > 0 && !takeRateLimit_('translate', actorId, todo.length)) {
     throw userError_('翻訳は1時間に' + rateLimitOf_('translate') + '件までです。しばらくしてから、もう一度お試しください。')
   }
-  return list.map(function (text) {
-    var s = String(text || '')
-    if (!s.trim()) return s
+  var stopped = ''
+  var failedKind = ''
+  var toCache = {}
+  todo.forEach(function (t) {
+    if (stopped) { out[t.i] = failValue(t.s); return }
     try {
-      return LanguageApp.translate(s, '', lang)
+      var translated = String(LanguageApp.translate(t.s, '', lang))
+      out[t.i] = translated
+      if (translated.length <= TRANSLATE_CACHE_MAX_CHARS) toCache[t.key] = translated
     } catch (err) {
-      console.error('translateTexts: ' + String(s).length + '文字の文の翻訳に失敗しました: ' + maskEmailsIn_(String(err)))
-      return s
+      out[t.i] = failValue(t.s)
+      failedKind = errorKind_(err) || 'translate'
+      if (quotaKind_(err)) stopped = failedKind
+      console.error('translateTexts: ' + t.s.length + '文字の文の翻訳に失敗しました: ' + maskEmailsIn_(String(err)).slice(0, 200))
     }
   })
+  if (Object.keys(toCache).length) {
+    try { cache.putAll(toCache, TRANSLATE_CACHE_SEC) } catch (e) { /* 覚えられなくても返す */ }
+  }
+  if (failedKind) appendErrorLog_('gas', 'translateText', failedKind.indexOf('unexpected') === 0 || failedKind === 'translate' ? 'translate:' + failedKind : failedKind)
+  return out
 }
 
 // A cell written as a plain 'yyyy-MM-dd' string can come back from
@@ -491,6 +545,31 @@ function translateTexts_(texts, targetLang, actorId) {
 function cellDateStr_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd')
   return String(v || '')
+}
+
+// 期限超過のチャンネルへの投稿の文。Discord は1回の投稿が2000文字までで、超えると投稿ごと断られるので、
+// 行数(OVERDUE_CHAT_MAX_LINES)と文字数(OVERDUE_CHAT_MAX_CHARS。後に足すサイトのリンクの分を残す)を抑え、
+// 残りは「ほか N 件」にする(Slack にも同じ文を送る)
+var OVERDUE_CHAT_MAX_LINES = 20
+var OVERDUE_CHAT_MAX_CHARS = 1700
+var OVERDUE_CHAT_TITLE_CHARS = 60
+
+function overdueChatText_(overdue) {
+  var head = '⚠️ 期限超過タスクが' + overdue.length + '件あります。'
+  var lines = []
+  var used = head.length
+  for (var i = 0; i < overdue.length && lines.length < OVERDUE_CHAT_MAX_LINES; i++) {
+    var t = overdue[i]
+    var label = chatTaskLabel_(t)
+    if (label.length > OVERDUE_CHAT_TITLE_CHARS) label = label.slice(0, OVERDUE_CHAT_TITLE_CHARS) + '…'
+    var line = '・' + label + '（期限: ' + t.due + '）'
+    // 「ほか N 件」の行の分(20文字)も残す
+    if (used + 1 + line.length + 20 > OVERDUE_CHAT_MAX_CHARS) break
+    lines.push(line)
+    used += 1 + line.length
+  }
+  if (overdue.length > lines.length) lines.push('ほか ' + (overdue.length - lines.length) + ' 件')
+  return head + '\n' + lines.join('\n')
 }
 
 // Daily sweep (see dailyMaintenance/setupDailyTrigger above) — posts one
@@ -524,10 +603,7 @@ function notifyOverdueTasksToDiscord_() {
         return t.due && t.due < today && normalizeCode_('status', t.status) !== 'done'
       })
     if (overdue.length === 0) return
-    var lines = overdue.map(function (t) {
-      return '・' + chatTaskLabel_(t) + '（期限: ' + t.due + '）'
-    })
-    notifyChat_('⚠️ 期限超過タスクが' + overdue.length + '件あります。\n' + lines.join('\n'))
+    notifyChat_(overdueChatText_(overdue))
   } catch (err) {
     // best-effort
   }

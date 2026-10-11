@@ -434,7 +434,9 @@ function localesByEmailsUnmeasured_(emails) {
 // localeが判明しない宛先は'ja'扱い（既存の全メール日本語固定という
 // 挙動からの後方互換のため）。
 function sendLocalizedEmail_(emails, templates) {
-  if (!emails || emails.length === 0) return
+  // 1人が複数のアドレスをカンマ区切りで持つ時(memberEmailsByIds_ の値)も、アドレスごとに言語を引く
+  emails = splitEmails_(emails)
+  if (emails.length === 0) return
   var locales = localesByEmails_(emails)
   var groups = { ja: [], en: [] }
   emails.forEach(function (e) {

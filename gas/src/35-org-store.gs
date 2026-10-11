@@ -116,6 +116,7 @@ function setOrgStorage_(acting, key, value) {
   chunks.forEach(function (chunk, part) {
     var o = { id: key, part: part, value: chunk, updated_at: now, updated_by: String(acting.id) }
     var target = mine[part] ? mine[part].row : sheet.getLastRow() + 1
+    ensureSheetSize_(sheet, target, headers.length)
     // 数式として扱われないよう、書式なしテキストにしてから書く
     sheet.getRange(target, 1, 1, headers.length).setNumberFormat('@')
     sheet.getRange(target, 1, 1, headers.length).setValues([headers.map(function (h) { return Object.prototype.hasOwnProperty.call(o, h) ? o[h] : '' })])
