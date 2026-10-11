@@ -19,19 +19,45 @@ function runWriteAction_(body, actingMember) {
       // body.status は入口でコードにそろえている(normalizeRequestCodes_)
       ;(function () {
         var nextStatus = body.status
-        // 担当者(確認する人でない人)が「完了」を選んだ時は、確認待ちにする(doneStatusFor_。10-authorize.gs)
+        var wasReview = false
+        var routedToApproval = false
         if (nextStatus === 'done') {
           var statusTask = findRow_(SHEET_TASKS, String(body.taskId || ''))
-          if (statusTask && doneStatusFor_(statusTask, actingMember) === 'review') nextStatus = 'review'
+          if (statusTask) {
+            wasReview = normalizeCode_('status', statusTask.status) === 'review'
+            // 確認者がいて、確認者の承認が必要な数に届いていないタスク(代表は除く):
+            //   確認者の「完了」は、その人の承認として記録する(必要な数に届けば完了、届かなければ確認待ち)
+            //   ほかの人(担当者など)の「完了」は、確認待ちにする(1人の確認者・管理者だけで完了にさせない)
+            var isTopActor = isTopRoleRef_(getRoles_(), actingMember.role)
+            if (!isTopActor && reviewApprovalShortfall_(statusTask)) {
+              if (taskReviewerIds_(statusTask).indexOf(String(actingMember.id)) >= 0) {
+                routedToApproval = true
+                var recorded = recordTaskReviewApproval_(statusTask, actingMember.id, '')
+                result = recorded.result
+                if (recorded.completed) {
+                  if (result && typeof result === 'object') result.status = 'done'
+                  return
+                }
+              }
+              nextStatus = 'review'
+            } else if (doneStatusFor_(statusTask, actingMember) === 'review') {
+              // 担当者(確認する人でない人)が「完了」を選んだ時は、確認待ちにする(doneStatusFor_。10-authorize.gs)
+              nextStatus = 'review'
+            }
+          }
         }
-        result = updateTaskFields_(body.taskId, {
+        var statusFields = {
           status: sheetCode_('status', nextStatus),
           last_activity: todayStr_(),
           completed_date: nextStatus === 'done' ? todayStr_() : '',
-        })
+        }
+        // 確認待ちから進行中・修正中などに戻した時(確認待ち・完了以外にした時)は、確認者の承認の記録を消す
+        // (次に確認待ちにした時に、前の回の承認で完了にならないように)
+        if (nextStatus !== 'review' && nextStatus !== 'done') statusFields.review_approvals_json = ''
+        result = updateTaskFields_(body.taskId, statusFields)
         if (nextStatus !== body.status && result && typeof result === 'object') result.status = nextStatus
-        // 確認待ちは、確認する人(reviewTargets_)に知らせる
-        if (nextStatus === 'review') notifyReview_(body.taskId)
+        // 確認待ちは、確認する人(reviewTargets_)に知らせる(確認者の承認を記録しただけで、もともと確認待ちだった時は知らせ直さない)
+        if (nextStatus === 'review' && !(routedToApproval && wasReview)) notifyReview_(body.taskId)
       })()
       break
     case 'assignTask':
@@ -238,7 +264,8 @@ function runWriteAction_(body, actingMember) {
       })()
       break
     case 'approveTaskReview':
-      result = approveTaskReview_(body.taskId, actingMember.id, body.comment)
+      // 代表は確認者でなくても完了にできる(確認者の承認としては数えない。approveTaskReview_)
+      result = approveTaskReview_(body.taskId, actingMember.id, body.comment, { force: isTopRoleRef_(getRoles_(), actingMember.role) })
       break
     case 'setBlocker':
       result = updateTaskFields_(body.taskId, {

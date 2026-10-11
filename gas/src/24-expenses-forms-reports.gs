@@ -163,6 +163,73 @@ function findExpenseRow_(sheet, applicationId) {
   return null
 }
 
+// ---- 申請(経費・申請フォーム)の承認の決まり ----
+// 状態の変え方:
+//   承認(approved)・却下(rejected)・差し戻し(returned): 承認待ち(pending)の時だけ
+//     (取り下げ・却下・差し戻し・承認済みの申請は、承認も却下もできない。差し戻した申請は再提出で承認待ちに戻る)
+//   取り下げ(withdrawn): 承認待ち(pending)か差し戻し(returned)の時だけ(承認済み・却下済み・取り下げ済みは取り下げられない)
+function assertApplicationTransition_(currentStatus, nextStatus, label) {
+  var current = String(currentStatus || '').trim() || 'pending'
+  if (nextStatus === 'withdrawn') {
+    if (current !== 'pending' && current !== 'returned') {
+      throw userError_('この' + label + 'は、承認待ち・差し戻しの時だけ取り下げられます。')
+    }
+    return
+  }
+  var verb = { approved: '承認', rejected: '却下', returned: '差し戻し' }[nextStatus]
+  if (!verb) throw userError_(label + 'の状態が正しくありません。')
+  if (current !== 'pending') throw userError_('この' + label + 'は承認待ちではないため、' + verb + 'できません。')
+}
+
+// その役職に、今就いている在籍中のメンバー(退会・休止を除く)の ID
+function activeRoleHolderIds_(role) {
+  var ids = []
+  if (!role) return ids
+  var sheet = getSheet_(SHEET_MEMBERS)
+  var headers = headerRow_(sheet)
+  var idCol = headers.indexOf('id'), roleCol = headers.indexOf('role')
+  var withdrawnCol = headers.indexOf('withdrawn_at'), inactiveCol = headers.indexOf('inactive')
+  if (idCol < 0 || roleCol < 0 || sheet.getLastRow() < 2) return ids
+  var roles = getRoles_()
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues().forEach(function (r) {
+    var id = String(r[idCol] || '').trim()
+    if (!id || ids.indexOf(id) >= 0) return
+    if (withdrawnCol >= 0 && String(r[withdrawnCol] || '').trim()) return
+    if (inactiveCol >= 0 && isInactiveValue_(r[inactiveCol])) return
+    if (sameRole_(roles, r[roleCol], role)) ids.push(id)
+  })
+  return ids
+}
+
+// 承認の段に必要な承認の数(承認した人の数。同じ人の2回目は数えない)。
+//   人を指定した段(type 'member'): 指定の1人が承認すれば終わる(requiredCount に関係なく 1)
+//   役職の段(type 'role'): 'all' は、承認する時点でその役職に就いている在籍中のメンバーの人数(0人なら 1)。
+//     数はその数(省略時は 1)
+// 画面の lib/ohsumi/store.tsx(approvalStepNeeded)と同じ決まり
+function approvalStepNeeded_(step) {
+  if (!step || step.type === 'member') return 1
+  if (step.requiredCount === 'all') return Math.max(1, activeRoleHolderIds_(step.role).length)
+  return typeof step.requiredCount === 'number' && step.requiredCount >= 1 ? Math.floor(step.requiredCount) : 1
+}
+
+// その段を承認した人の ID(1人1回)
+function stepApproverIds_(approvals, stepId) {
+  var ids = []
+  ;(Array.isArray(approvals) ? approvals : []).forEach(function (a) {
+    if (!a || a.stepId !== stepId || a.action !== 'approved') return
+    var id = String(a.memberId || '')
+    if (id && ids.indexOf(id) < 0) ids.push(id)
+  })
+  return ids
+}
+
+// 同じ人が同じ段を2回承認しようとしたら断る
+function assertNotApprovedTwice_(approvals, stepId, actorId) {
+  if (stepApproverIds_(approvals, stepId).indexOf(String(actorId)) >= 0) {
+    throw userError_('この承認ステップは、すでに承認しています。')
+  }
+}
+
 function processExpenseStep_(applicationId, stepId, actorId, action, comment) {
   var sheet = ensureExpensesSheet_()
   var found = findExpenseRow_(sheet, applicationId)
@@ -179,18 +246,22 @@ function processExpenseStep_(applicationId, stepId, actorId, action, comment) {
   var steps = JSON.parse(String(data[stepsCol] || '[]'))
   var currentIdx = Number(data[stepIndexCol]) || 0
 
+  // 承認できるのは承認待ちの申請だけ(取り下げ・却下・差し戻し・承認済みは不可。assertApplicationTransition_)
+  assertApplicationTransition_(data[statusCol], 'approved', '経費申請')
+
   // 3-1: stepId 順序チェック — 現在のステップと一致しない場合は拒否
   var currentStep = steps[currentIdx]
   if (!currentStep || currentStep.id !== stepId) {
     throw userError_('指定されたステップは現在の承認ステップではありません。')
   }
+  // 同じ人の2回目の承認は数えない(断る)
+  assertNotApprovedTwice_(approvals, stepId, actorId)
 
   approvals.push({ stepId: stepId, memberId: actorId, at: new Date().toISOString(), action: action, comment: comment || '' })
 
   var step = steps[currentIdx]
-  var stepApprovals = approvals.filter(function(a) { return a.stepId === (step ? step.id : '') && a.action === 'approved' })
-  var needed = (step && step.requiredCount === 'all') ? Infinity : (step && typeof step.requiredCount === 'number' ? step.requiredCount : 1)
-  var nextIdx = stepApprovals.length >= needed ? currentIdx + 1 : currentIdx
+  // 承認した人の数(1人1回)が、段に必要な数(approvalStepNeeded_)に届いたら次の段へ
+  var nextIdx = stepApproverIds_(approvals, stepId).length >= approvalStepNeeded_(step) ? currentIdx + 1 : currentIdx
   var newStatus = nextIdx >= steps.length ? 'approved' : 'pending'
 
   sheet.getRange(found.row, approvalsCol + 1).setValue(JSON.stringify(approvals))
@@ -253,6 +324,8 @@ function setExpenseStatus_(applicationId, status, reason, actorId) {
   if (status === 'withdrawn' && actorId && actorId !== applicantId) {
     throw userError_('この経費申請を取り下げる権限がありません。')
   }
+  // 今の状態から変えてよいか(却下・差し戻しは承認待ちの時だけ、取り下げは承認待ち・差し戻しの時だけ)
+  assertApplicationTransition_(found.data[statusCol], status, '経費申請')
 
   sheet.getRange(found.row, statusCol + 1).setValue(status)
   if (reason && reasonCol >= 0) {
@@ -418,16 +491,20 @@ function processFormStep_(submissionId, stepId, actorId, action, comment) {
   var totalSteps = allSteps.length
   var step = allSteps[currentIdx]
 
+  // 承認できるのは承認待ちの申請だけ(assertApplicationTransition_)
+  assertApplicationTransition_(data[statusCol], 'approved', '申請フォーム')
+
   // 3-1: stepId 順序チェック — 現在のステップと一致しない場合は拒否
   if (!step || step.id !== stepId) {
     throw userError_('指定されたステップは現在の承認ステップではありません。')
   }
+  // 同じ人の2回目の承認は数えない(断る)
+  assertNotApprovedTwice_(approvals, stepId, actorId)
 
   approvals.push({ stepId: stepId, memberId: actorId, at: new Date().toISOString(), action: action, comment: comment || '' })
-  var stepApprovals = approvals.filter(function(a) { return a.stepId === stepId && a.action === 'approved' })
 
-  var needed = (step && step.requiredCount === 'all') ? Infinity : (step && typeof step.requiredCount === 'number' ? step.requiredCount : 1)
-  var nextIdx = stepApprovals.length >= needed ? currentIdx + 1 : currentIdx
+  // 承認した人の数(1人1回)が、段に必要な数(approvalStepNeeded_)に届いたら次の段へ
+  var nextIdx = stepApproverIds_(approvals, stepId).length >= approvalStepNeeded_(step) ? currentIdx + 1 : currentIdx
   var newStatus = nextIdx >= totalSteps ? 'approved' : 'pending'
 
   sheet.getRange(found.row, approvalsCol + 1).setValue(JSON.stringify(approvals))
@@ -475,6 +552,8 @@ function setFormSubmissionStatus_(submissionId, status, reason) {
   var statusCol = headers.indexOf('status')
   var reasonCol = headers.indexOf('rejection_reason')
   var submitterIdCol = headers.indexOf('submitter_id')
+  // 今の状態から変えてよいか(却下は承認待ちの時だけ。assertApplicationTransition_)
+  assertApplicationTransition_(found.data[statusCol], status, '申請フォーム')
 
   sheet.getRange(found.row, statusCol + 1).setValue(status)
   if (reason && reasonCol >= 0) sheet.getRange(found.row, reasonCol + 1).setValue(reason)

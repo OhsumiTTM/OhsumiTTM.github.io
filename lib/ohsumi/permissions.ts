@@ -5,8 +5,8 @@
 // editing here, not by re-inlining the logic elsewhere.
 import { ADMIN_SECTIONS, STATUS_ORDER } from './types'
 import { migrateAdminSections } from './admin-sections'
-import { isAdminRoleRef, isFullAdminRoleRef, restrictedSections, type RoleDef } from './roles'
-import type { AdminSection, Member, Role, Task, TaskImportance, TaskStatus } from './types'
+import { isAdminRoleRef, isFullAdminRoleRef, restrictedSections, sameRole, type RoleDef } from './roles'
+import type { AdminSection, ApprovalRecord, ApprovalStep, Member, Role, Task, TaskImportance, TaskStatus } from './types'
 
 // 全権管理者: 最上位の役職、または制限の無い管理者の役職(roles.ts)。
 // See store.tsx's isFullAdminMember for the Member-object wrapper.
@@ -135,4 +135,53 @@ export function canApproveTask(
   if (isFullAdmin) return true
   if (isEscalatedTask(importance)) return false
   return !approverId || approverId === currentUserId
+}
+
+// ---- 申請(経費・申請フォーム)の承認の段(gas/src/24-expenses-forms-reports.gs の approvalStepNeeded_・stepApproverIds_ と同じ決まり) ----
+
+/**
+ * 承認の段に必要な承認の数(承認した人の数。同じ人の2回目は数えない)。
+ * 人を指定した段は 1(指定の1人が承認すれば終わる)。役職の段の 'all' は、その役職に今就いている
+ * 在籍中のメンバー(退会・休止を除く)の人数(0人なら 1)。数はその数(省略時は 1)
+ */
+export function approvalStepNeeded(
+  step: ApprovalStep | undefined,
+  members: Pick<Member, 'id' | 'role' | 'inactive' | 'withdrawnAt'>[],
+  roles: RoleDef[],
+): number {
+  if (!step || step.type === 'member') return 1
+  if (step.requiredCount === 'all') {
+    const holders = new Set(members.filter((m) => !m.withdrawnAt && !m.inactive && sameRole(roles, m.role, step.role)).map((m) => m.id))
+    return Math.max(1, holders.size)
+  }
+  return typeof step.requiredCount === 'number' && step.requiredCount >= 1 ? Math.floor(step.requiredCount) : 1
+}
+
+/** その段を承認した人の ID(1人1回) */
+export function stepApproverIds(approvals: ApprovalRecord[], stepId: string | undefined): string[] {
+  const ids: string[] = []
+  for (const a of approvals) {
+    if (a.stepId === stepId && a.action === 'approved' && a.memberId && !ids.includes(a.memberId)) ids.push(a.memberId)
+  }
+  return ids
+}
+
+// ---- 確認者の承認(gas/src/15-input-checks.gs の currentReviewApprovals_・reviewApprovalsNeeded_ と同じ決まり) ----
+
+/** 記録した承認のうち、今の確認者の承認だけ(1人1回)。確認者から外れた人・確認者でない人の承認は数えない */
+export function currentReviewApprovals(task: Pick<Task, 'reviewerIds' | 'reviewerId' | 'reviewApprovals'>): NonNullable<Task['reviewApprovals']> {
+  const reviewerIds = task.reviewerIds ?? (task.reviewerId ? [task.reviewerId] : [])
+  const seen = new Set<string>()
+  return (task.reviewApprovals ?? []).filter((a) => {
+    if (!a.memberId || seen.has(a.memberId) || !reviewerIds.includes(a.memberId)) return false
+    seen.add(a.memberId)
+    return true
+  })
+}
+
+/** 必要な承認の数: 'all' は今の確認者の人数、数はその数(省略時 1) */
+export function reviewApprovalsNeeded(task: Pick<Task, 'reviewerIds' | 'reviewerId' | 'requiredApprovals'>): number {
+  const reviewerIds = task.reviewerIds ?? (task.reviewerId ? [task.reviewerId] : [])
+  if (task.requiredApprovals === 'all') return Math.max(1, reviewerIds.length)
+  return Number(task.requiredApprovals) || 1
 }
