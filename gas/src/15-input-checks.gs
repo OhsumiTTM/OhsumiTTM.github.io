@@ -592,6 +592,10 @@ function getNotifyFrequency_(memberId, kind) {
   }
 }
 
+// 通知のキュー(notif_queue_<ID>)の上限。スクリプトプロパティの1つの値の上限(9KB)より小さくする
+var NOTIFY_QUEUE_MAX_BYTES = 8000
+var NOTIFY_QUEUE_BODY_CHARS = 400
+
 // Queues a notification for batch delivery. kind is one of:
 // 'new_task' | 'review' | 'mention' | 'rejected' | 'deadline'
 // templates: { ja: {subject, body}, en: {subject, body} } — 送信時に受信者の
@@ -605,18 +609,52 @@ function queueNotification_(memberId, kind, templates) {
     return
   }
   if (freq !== 'immediate' && !allowRequestNotification_('通知のキュー ' + kind)) return
+  // 1人が複数のアドレスをカンマ区切りで持つ時も、アドレスごとに言語を引けるよう1つずつに分ける
+  var emails = splitEmails_(memberEmailsByIds_([memberId]))
   if (freq === 'immediate') {
-    var emails = memberEmailsByIds_([memberId])
     if (emails.length > 0) {
       sendLocalizedEmail_(emails, templates)
     }
     return
   }
+  // まとめて送る設定(3時間・6時間)は、スクリプトプロパティ notif_queue_<ID> に貯める。
+  // プロパティの1つの値は 9KB までなので、受け取る人の言語の文だけを、本文を短くして入れ、
+  // 全体を NOTIFY_QUEUE_MAX_BYTES までにする(入りきらない分は件数だけ数え、まとめのメールに「ほか N 件」と書く)
+  var locales = emails.length ? localesByEmails_(emails) : {}
+  var loc = (emails.length && locales[emails[0]] === 'en' && templates.en) ? 'en' : 'ja'
+  var tpl = templates[loc] || templates.ja || templates.en || {}
+  var body = String(tpl.body || '')
+  if (body.length > NOTIFY_QUEUE_BODY_CHARS) body = body.slice(0, NOTIFY_QUEUE_BODY_CHARS) + '…'
+  var stored = {}
+  stored[loc] = { subject: String(tpl.subject || '').slice(0, 200), body: body }
   var key = 'notif_queue_' + memberId
   var props = PropertiesService.getScriptProperties()
   var existing = props.getProperty(key)
-  var queue = existing ? JSON.parse(existing) : []
-  queue.push({ kind: kind, templates: templates, ts: new Date().toISOString() })
+  var queue = []
+  try { queue = existing ? JSON.parse(existing) : [] } catch (e) { queue = [] }
+  if (!Array.isArray(queue)) queue = []
+  var item = { kind: kind, templates: stored, ts: new Date().toISOString() }
+  queue.push(item)
+  if (queue.length > 1 && utf8Bytes_(JSON.stringify(queue)) > NOTIFY_QUEUE_MAX_BYTES) {
+    // 入りきらない: この1件は入れず、前の1件に件数だけ足す(まとめのメールで「ほか N 件」と書く)
+    queue.pop()
+    var last = queue[queue.length - 1]
+    last.more = (Number(last.more) || 0) + 1
+  }
   props.setProperty(key, JSON.stringify(queue))
+}
+
+// 通知を1人分キューに入れる(または送る)。1人の失敗で、同じコメントのほかの宛先への通知を止めない
+// (失敗した時は、画面に「通知の一部を送れなかった」と出すため notifyLimited を立てる)
+function queueNotificationEach_(memberIds, kind, templates) {
+  ;(memberIds || []).forEach(function (mid) {
+    var tpl = typeof templates === 'function' ? templates(mid) : templates
+    try {
+      queueNotification_(mid, kind, tpl)
+    } catch (err) {
+      _notifyLimited = true
+      console.error('通知(' + kind + ')を入れられませんでした: memberId=' + mid + ' ' + maskEmailsIn_(String(err)))
+    }
+  })
 }
 

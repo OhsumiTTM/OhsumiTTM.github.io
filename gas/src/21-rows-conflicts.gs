@@ -181,11 +181,13 @@ function loadSheetGrid_(sheetName) {
   return grid
 }
 
-// 行番号(見つからなければ、一度だけ読み直して探す)
+// 行番号(見つからなければ読み直して探す)。覚えた後に行が足された時(appendRow。createTasks で2件目からの
+// タスクの予定の ID を書く時など)は、覚えた表に無いので読み直す。読み直した後に行が増えていなければ、読み直さない
+// (無い ID を何度も探しても、シートを何度も読まない)
 function sheetGridRow_(sheetName, rowId) {
   var grid = _sheetGrids[sheetName] || loadSheetGrid_(sheetName)
   var r = grid.rowOf[String(rowId)]
-  if (!r && grid.loadedFresh !== true) {
+  if (!r && (grid.loadedFresh !== true || grid.sheet.getLastRow() !== grid.values.length)) {
     grid = loadSheetGrid_(sheetName)
     grid.loadedFresh = true
     r = grid.rowOf[String(rowId)]

@@ -287,8 +287,12 @@ function removeMember_(memberId, actorId, nowMs) {
           return id && id !== String(memberId)
         })
       if (remaining.length !== String(assignees[j][0] || '').split(',').filter(Boolean).length) {
-        tasks.getRange(j + 2, assigneeCol).setValue(remaining.join(','))
-        if (taskIds[j]) unassigned.push(String(taskIds[j][0]))
+        var tid = taskIds[j] ? String(taskIds[j][0] || '') : ''
+        // 書き込みの共通の処理で書く(行の版を新しくし、カレンダーの予定のゲストを合わせる。担当が居なくなれば予定を消す)
+        var value = remaining.join(',')
+        var rowNo = j + 2
+        withdrawWriteRow_(SHEET_TASKS, tid, { assignee_id: value }, function () { tasks.getRange(rowNo, assigneeCol).setValue(value) })
+        if (tid) unassigned.push(tid)
       }
     }
   }
@@ -321,13 +325,17 @@ function withdrawCleanupRoles_(memberId) {
     for (var i = 1; i < tv.length; i++) {
       var row = tv[i]
       if (normalizeCode_('status', row[c('status')]) === 'done') continue
-      var changed = false
+      var fields = {}
       if (c('reviewer_ids') >= 0) {
         var next = dropId(row[c('reviewer_ids')])
-        if (next !== null) { ts.getRange(i + 1, c('reviewer_ids') + 1).setValue(next); changed = true; row[c('reviewer_ids')] = next }
+        if (next !== null) { fields.reviewer_ids = next; row[c('reviewer_ids')] = next }
       }
-      if (c('reviewer_id') >= 0 && String(row[c('reviewer_id')] || '') === memberId) { ts.getRange(i + 1, c('reviewer_id') + 1).setValue(''); changed = true; row[c('reviewer_id')] = '' }
-      if (!changed) continue
+      if (c('reviewer_id') >= 0 && String(row[c('reviewer_id')] || '') === memberId) { fields.reviewer_id = ''; row[c('reviewer_id')] = '' }
+      if (!Object.keys(fields).length) continue
+      // 書き込みの共通の処理で書く(行の版を新しくする)
+      withdrawWriteRow_(SHEET_TASKS, row[c('id')], fields, function () {
+        Object.keys(fields).forEach(function (k) { ts.getRange(i + 1, c(k) + 1).setValue(fields[k]) })
+      })
       var title = String(row[c('title')] || '')
       out.reviewerTasks.push(title)
       // 確認待ちで、残りの確認者が必要な承認の数に届かない
@@ -343,11 +351,17 @@ function withdrawCleanupRoles_(memberId) {
     var ms = getSheet_(SHEET_MEMBERS), mh = headerRow_(ms), mv = ms.getDataRange().getValues()
     var name = function (r) { return String(r[mh.indexOf('display_name')] || r[mh.indexOf('name')] || '') }
     for (var j = 1; j < mv.length; j++) {
+      var mf = {}
       if (mh.indexOf('reports_to_id') >= 0 && String(mv[j][mh.indexOf('reports_to_id')] || '') === memberId) {
-        ms.getRange(j + 1, mh.indexOf('reports_to_id') + 1).setValue(''); out.reportsTo.push(name(mv[j]))
+        mf.reports_to_id = ''; out.reportsTo.push(name(mv[j]))
       }
       if (mh.indexOf('mentor_id') >= 0 && String(mv[j][mh.indexOf('mentor_id')] || '') === memberId) {
-        ms.getRange(j + 1, mh.indexOf('mentor_id') + 1).setValue(''); out.mentees.push(name(mv[j]))
+        mf.mentor_id = ''; out.mentees.push(name(mv[j]))
+      }
+      if (Object.keys(mf).length) {
+        withdrawWriteRow_(SHEET_MEMBERS, mv[j][mh.indexOf('id')], mf, function () {
+          Object.keys(mf).forEach(function (key) { ms.getRange(j + 1, mh.indexOf(key) + 1).setValue(mf[key]) })
+        })
       }
     }
   } catch (e) { console.error('退会: 報告先・メンターを外せませんでした: ' + e) }
@@ -356,16 +370,37 @@ function withdrawCleanupRoles_(memberId) {
     var ps = getSheet_(SHEET_PROJECTS), ph = headerRow_(ps), pv = ps.getDataRange().getValues()
     for (var k = 1; k < pv.length; k++) {
       var pname = String(pv[k][ph.indexOf('name')] || '')
+      var pf = {}
       if (ph.indexOf('owner_id') >= 0 && String(pv[k][ph.indexOf('owner_id')] || '') === memberId) {
-        ps.getRange(k + 1, ph.indexOf('owner_id') + 1).setValue(''); out.ownerProjects.push(pname)
+        pf.owner_id = ''; out.ownerProjects.push(pname)
       }
       if (ph.indexOf('member_ids') >= 0) {
         var nm = dropId(pv[k][ph.indexOf('member_ids')])
-        if (nm !== null) { ps.getRange(k + 1, ph.indexOf('member_ids') + 1).setValue(nm); out.memberProjects.push(pname) }
+        if (nm !== null) { pf.member_ids = nm; out.memberProjects.push(pname) }
+      }
+      if (Object.keys(pf).length) {
+        withdrawWriteRow_(SHEET_PROJECTS, pv[k][ph.indexOf('id')], pf, function () {
+          Object.keys(pf).forEach(function (key) { ps.getRange(k + 1, ph.indexOf(key) + 1).setValue(pf[key]) })
+        })
       }
     }
   } catch (e) { console.error('退会: プロジェクトから外せませんでした: ' + e) }
   return out
+}
+
+// 退会で外す役割を、書き込みの共通の処理(updateRowFields_)で書く(行の版を新しくし、タスクならカレンダーを合わせる)。
+// ID の無い行・共通の処理で書けなかった時は、これまでどおりセルに直接書く(fallback)
+function withdrawWriteRow_(sheetName, rowId, fields, fallback) {
+  var id = String(rowId === undefined || rowId === null ? '' : rowId)
+  if (id) {
+    try {
+      updateRowFields_(sheetName, id, fields)
+      return
+    } catch (e) {
+      console.error('退会: ' + sheetName + ' の行を書き換えられませんでした: ' + String(e))
+    }
+  }
+  fallback()
 }
 
 // 退会の後に、設定し直しが要るものを代表・管理者に知らせる(1日のまとめのメール)
