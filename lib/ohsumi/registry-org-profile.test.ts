@@ -22,7 +22,7 @@ function ready() {
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
   const keys: Record<string, string> = {}
   ;[ORG, OTHER].forEach((orgId, i) => {
-    const code = t.post({ action: 'issueRegistrationCode', session, orgName: i ? 'ほかの団体' : 'つばさ学生会議', contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
+    const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: i ? 'ほかの団体' : 'つばさ学生会議', contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
     keys[orgId] = String(t.post({ action: 'registerOrg', code, orgId, gasUrl: 'https://script.google.com/macros/s/AKfy' + i + '/exec', registerNonce: 'register-nonce-0000000' + i + '-abcdefghijklmnopqrstuvwxyz0123' }).result.registryKey)
   })
   const report = (orgId: string, period: string, metrics: Record<string, number>) => {

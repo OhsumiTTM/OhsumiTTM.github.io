@@ -34,7 +34,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT, HEALTH_KEY: 'hk' }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
   const key = String(t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: NONCE }).result.registryKey)
   const checkIn = (gasVersion: string) => {
     const ts = checkInTs()
@@ -103,8 +103,8 @@ describe('checkIn と管理画面の一覧', () => {
   it('管理画面で印を付けられる(記録に残る)。新しい版に「更新が要る」を付けると、古い団体は更新が要る', () => {
     const t = ready()
     t.checkIn(CURRENT)
-    // 印を付けられるのは、コードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出した(一覧に足した)ことにする
-    ;(t.gas.KNOWN_GAS_VERSIONS as unknown as object[]).unshift({ version: '2099.01.01-1', security: false, required: false, note: '' })
+    // 印を付けられるのは、コードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出した(サイトに置いて一覧に足した)ことにする
+    ;(t.gas.KNOWN_GAS_VERSIONS as unknown as object[]).unshift({ version: '2099.01.01-1', security: false, required: false, released: true, note: '' })
     ;(t.gas.forgetGasVersions_ as () => void)()
     const res = t.mark('2099.01.01-1', { required: true, note: '大事な修正' })
     expect(res.ok, res.error).toBe(true)
@@ -136,7 +136,7 @@ describe('担当者への更新のお願い', () => {
     expect(res.result).toEqual({ sentTo: 1, queued: false })
     expect(t.mails.at(-1)).toMatchObject({ to: 'yamada@example.org', subject: '[Ohsumi] テスト団体A: 団体の GAS の更新のお願い' })
     expect(t.mails.at(-1)!.body).toContain('今の版: r1e-2')
-    expect(t.mails.at(-1)!.body).toContain('最新の版: ' + CURRENT)
+    expect(t.mails.at(-1)!.body).toContain('このプランで配っている版: ' + CURRENT)
     expect(t.mails.at(-1)!.body).toContain('安全の修正が含まれます')
     const audit = t.sheets.get('AuditLog')!.rows.slice(1).map((r) => [r[2], r[3], r[6]])
     expect(audit).toContainEqual(['requestGasUpdate', ORG_A, '安全の修正'])
@@ -173,7 +173,7 @@ describe('スクリプトプロパティのキャッシュ', () => {
     t.post({ action: 'adminOverview', session: t.session })
     expect(reads).toBe(0)
     // 指紋を覚え直す操作(プランの変更)の後は、捨てて読み直す
-    t.post({ action: 'setOrgPlan', session: t.session, orgId: ORG_A, plan: 'ohsumi' })
+    t.post({ action: 'setOrgPlan', session: t.session, orgId: ORG_A, plan: 'cosmo_base' })
     expect(t.cache.has('registry:props')).toBe(false)
     t.post({ action: 'health', key: 'hk' })
     expect(reads).toBe(1)

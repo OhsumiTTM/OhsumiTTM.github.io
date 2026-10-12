@@ -94,7 +94,7 @@ describe('登録コード', () => {
   it('16文字(4文字ずつ区切り)で、読み間違えやすい文字を使わない。保存するのはハッシュだけ', () => {
     const t = ready()
     const session = t.login('a1').result.session.token
-    const res = t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org', note: '9月契約分' })
+    const res = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org', note: '9月契約分' })
     expect(res.ok).toBe(true)
     const code: string = res.result.code
     expect(code).toMatch(/^[A-HJKMNP-Z2-9]{4}(-[A-HJKMNP-Z2-9]{4}){3}$/)
@@ -119,7 +119,7 @@ describe('登録コード', () => {
   it('有効期限は14日。1回だけ使え、期限を過ぎたら・取り消したら使えない(理由は区別しない)', () => {
     const t = ready()
     const session = t.login('a1').result.session.token
-    const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, orgName }).result
+    const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName }).result
     const now = Date.now()
     // 団体の登録(registerOrg)でコードを使う
     let n = 0
@@ -157,7 +157,7 @@ describe('登録コード', () => {
   it('一覧には状態(未使用・使用済み・期限切れ・取り消し済み)が出て、ハッシュは出ない。未使用のものだけ取り消せる', () => {
     const t = ready()
     const session = t.login('a1').result.session.token
-    const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, orgName }).result
+    const issue = (orgName: string) => t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName }).result
     const now = Date.now()
     const used = issue('使用済みの団体')
     ;(t.gas.registerOrg_ as (b: object, at: number) => unknown)({ code: used.code, orgId: 'org_USEDUSEDUSEDUSEDUSED', gasUrl: 'https://script.google.com/macros/s/USED/exec', registerNonce: 'register-nonce-used-abcdefghijklmnopqrstuvwxyz0123456789' }, now)
@@ -186,8 +186,8 @@ describe('登録コード', () => {
   it('団体名は必須。発行は5分以内に Google でログインしたセッションだけ(古ければログインし直し)', () => {
     const t = ready()
     const session = t.login('a1').result.session.token
-    expect(t.post({ action: 'issueRegistrationCode', session, orgName: '  ' }).error).toMatch(/団体名/)
-    expect(t.post({ action: 'issueRegistrationCode', session, orgName: 'A', contactEmail: 'not-an-email' }).error).toMatch(/メールアドレス/)
+    expect(t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '  ' }).error).toMatch(/団体名/)
+    expect(t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'A', contactEmail: 'not-an-email' }).error).toMatch(/メールアドレス/)
     expect(() => t.gas.issueRegistrationCode_({ session, orgName: 'A' }, Date.now() + 6 * 60 * 1000)).toThrow(/もう一度 Google でログイン/)
     expect(t.codesSheet().rows).toHaveLength(1) // 見出しだけ
   })
@@ -195,7 +195,7 @@ describe('登録コード', () => {
   it('スプレッドシートに書く文字列は、数式として扱われない', () => {
     const t = ready()
     const session = t.login('a1').result.session.token
-    t.post({ action: 'issueRegistrationCode', session, orgName: '=IMPORTXML("x")', note: '+1' })
+    t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '=IMPORTXML("x")', note: '+1' })
     const row = t.codesSheet().rows[1] as string[]
     expect(row).toContain("'=IMPORTXML(\"x\")")
     expect(row).toContain("'+1")

@@ -18,7 +18,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: '団体A' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '団体A' }).result.code
   const key = String(t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: 'https://script.google.com/macros/s/AKfyA/exec', registerNonce: 'register-nonce-00000001-abcdefghijklmnopqrstuvwxyz0123' }).result.registryKey)
   const send = (diagId: string, diag: unknown, opts: { key?: string } = {}) => {
     const ts = Math.floor(Date.now() / 1000)

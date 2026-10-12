@@ -185,3 +185,53 @@ describe('contractDateKey(契約の終了日)', () => {
     expect(contractDateKey('なし')).toBe('')
   })
 })
+
+describe('プランごとに配る版', () => {
+  const releases = {
+    plans: [
+      { plan: 'cosmo_base', setting: '', version: '2026.12.01-1', source: 'default', problem: '', templateUrl: '', note: '', updatedAt: '', updatedBy: '', orgs: 0, outdated: 0, updateRequired: 0 },
+      { plan: 'ohsumi', setting: '2026.12.01-1', version: '2026.12.01-1', source: 'set', problem: '', templateUrl: 'https://docs.google.com/spreadsheets/d/abc/copy', note: '', updatedAt: '', updatedBy: '', orgs: 1, outdated: 0, updateRequired: 0 },
+      { plan: 'paid', setting: '', version: '2026.12.01-1', source: 'default', problem: '', templateUrl: '', note: '', updatedAt: '', updatedBy: '', orgs: 0, outdated: 0, updateRequired: 0 },
+      { plan: 'internal', setting: 'latest', version: '2026.12.02-1', source: 'latest', problem: '', templateUrl: '', note: '', updatedAt: '', updatedBy: '', orgs: 1, outdated: 0, updateRequired: 0 },
+    ],
+    newest: '2026.12.03-1', fallback: '2026.12.01-1', released: ['2026.12.03-1', '2026.12.02-1', '2026.12.01-1'], removable: [], pendingSecurity: [],
+  } as const
+
+  it('団体・プランに配る版(デモは一番新しい版・プランが空は念のための既定)', async () => {
+    const { api } = await load([])
+    const r = releases as unknown as Parameters<typeof api.releaseForOrg>[0]
+    expect(api.releaseForOrg(r, { plan: 'ohsumi', demo: false })).toBe('2026.12.01-1')
+    expect(api.releaseForOrg(r, { plan: 'internal' })).toBe('2026.12.02-1')
+    expect(api.releaseForOrg(r, { plan: 'ohsumi', demo: true })).toBe('2026.12.03-1')
+    expect(api.releaseForOrg(r, { plan: '' })).toBe('2026.12.01-1')
+    expect(api.releaseForPlan(r, 'paid')).toBe('2026.12.01-1')
+    expect(api.releaseForPlan(undefined, 'paid')).toBeNull()
+  })
+
+  it('FSIF に配っている版より新しい版を、ほかのプランに配ろうとしているか', async () => {
+    const { api } = await load([])
+    const r = releases as unknown as Parameters<typeof api.newerThanInternal>[0]
+    expect(api.newerThanInternal(r, '2026.12.03-1')).toBe(true)
+    expect(api.newerThanInternal(r, '2026.12.02-1')).toBe(false)
+    expect(api.newerThanInternal(r, '2026.12.01-1')).toBe(false)
+    expect(api.compareGasVersions('2026.12.01-10', '2026.12.01-9')).toBeGreaterThan(0)
+    expect(api.compareGasVersions('r1e-2', '2026.01.01-1')).toBeLessThan(0)
+  })
+
+  it('配る版を変える(書き込みなので送り直さない)。有償・FSIF には機能停止を入れられない', async () => {
+    const { api, bodies } = await load([JSON.stringify({ ok: true, result: { planReleases: releases } })])
+    await api.setPlanRelease(session, { plan: 'ohsumi', version: '2026.12.02-1', templateUrl: '', note: '' }, 'FSIF で確かめた')
+    expect(bodies).toEqual([{ action: 'setPlanRelease', session: session.token, plan: 'ohsumi', version: '2026.12.02-1', templateUrl: '', note: '', reason: 'FSIF で確かめた' }])
+    expect(api.canRestrictPlan('ohsumi')).toBe(true)
+    expect(api.canRestrictPlan('paid')).toBe(false)
+    expect(api.canRestrictPlan('internal')).toBe(false)
+    expect(api.TEMPLATE_COPY_URL_PATTERN.test('https://docs.google.com/spreadsheets/d/abc_D-1/copy')).toBe(true)
+    expect(api.TEMPLATE_COPY_URL_PATTERN.test('https://docs.google.com/spreadsheets/d/abc/edit')).toBe(false)
+  })
+
+  it('期限を過ぎたアンケートの一覧に、有償・FSIF・デモの団体を出さない', async () => {
+    const { api } = await load([])
+    const s = (plan: string, demo = false) => ({ state: 'overdue', plan, demo }) as unknown as Parameters<typeof api.overdueSurveys>[0][number]
+    expect(api.overdueSurveys([s('ohsumi'), s('paid'), s('internal'), s('cosmo_base', true)]).map((x) => x.plan)).toEqual(['ohsumi'])
+  })
+})

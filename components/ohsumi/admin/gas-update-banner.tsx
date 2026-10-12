@@ -1,8 +1,9 @@
 'use client'
 
 // この団体の GAS の更新(管理画面の上部。代表・全権管理者だけ)。レジストリが checkIn で「更新が要る」と返した時に出す
-// (gas/Code.gs の gasUpdateStatus_。代表には、最新の版ごとに1回メールでも知らせる)。
-// 「コードをコピー」は、このサイトの /gas/Code.gs(ビルドの時に置く)を読み、最新の版と同じ時だけクリップボードに入れる
+// (gas/Code.gs の gasUpdateStatus_。代表には、配っている版ごとに1回メールでも知らせる)。
+// 「コードをコピー」は、このサイトの /gas/<版>/Code.gs(ビルドの時に置く)を読む。版は checkIn の返事の latest
+// (この団体のプランで配っている版)で、その版と同じ時だけクリップボードに入れる
 // (lib/ohsumi/gas-code-copy.ts)。GitHub を開かずに更新できるよう、短い手順も出す
 import { OrgAdminLinks } from './org-admin-links'
 import { useEffect, useState } from 'react'

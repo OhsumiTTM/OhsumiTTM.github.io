@@ -165,18 +165,18 @@ describe('毎日・毎時の処理をレジストリに伝える(PR H)', () => {
 })
 
 describe('この GAS の版の更新(PR E)', () => {
-  // 印を付けられるのは、レジストリのコードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出したこと(一覧に足して
-  // レジストリを更新したこと)にしてから、印を付ける
+  // 印を付けられるのは、レジストリのコードの一覧(KNOWN_GAS_VERSIONS)にある版だけ。新しい版を出したこと(サイトに置いて
+  // 一覧に足し、レジストリを更新したこと。released)にしてから、印を付ける。配る版を決めていないプランは一番新しい版を配る
   const mark = (p: Pair, version: string, marks: Record<string, unknown>) => {
     const known = p.reg.gas.KNOWN_GAS_VERSIONS as unknown as { version: string }[]
     if (!known.some((v) => v.version === version)) {
-      known.unshift({ version, security: false, required: false, note: '' } as never)
+      known.unshift({ version, security: false, required: false, released: true, note: '' } as never)
       ;(p.reg.gas.forgetGasVersions_ as () => void)()
     }
     return p.reg.post({ action: 'setGasVersionMarks', session: p.reg.session, version, ...marks })
   }
 
-  it('レジストリが「更新が要る」と返したら覚え、代表に最新の版ごとに1回だけメールで知らせる', () => {
+  it('レジストリが「更新が要る」と返したら覚え、代表に配っている版ごとに1回だけメールで知らせる', () => {
     const p = pair()
     check(p)
     expect(p.g.gasUpdateStatus_()).toMatchObject({ current: GAS_VERSION, known: true, required: false, latest: GAS_VERSION })
@@ -186,7 +186,8 @@ describe('この GAS の版の更新(PR E)', () => {
     check(p)
     expect(p.g.gasUpdateStatus_()).toMatchObject({ known: true, required: true, outdated: true, latest: '2099.01.01-1', minimum: '2099.01.01-1', security: true })
     expect(p.o.mails.map((m) => m.to)).toEqual(['top@example.com'])
-    expect(p.o.mails[0].subject).toContain('団体の GAS の更新が要ります(最新の版 2099.01.01-1)')
+    expect(p.o.mails[0].subject).toContain('団体の GAS の更新が要ります(このプランで配っている版 2099.01.01-1)')
+    expect(p.o.mails[0].body).toContain('このプランで配っている版: 2099.01.01-1')
     expect(p.o.mails[0].body).toContain('今の版: ' + GAS_VERSION)
     expect(p.o.mails[0].body).toContain('安全の修正が含まれます')
     check(p)
@@ -220,6 +221,24 @@ describe('この GAS の版の更新(PR E)', () => {
     st.gasUpdate.judgedVersion = '2026.01.01-1'
     p.o.props.CONTRACT_STATE = JSON.stringify(st)
     expect(p.g.gasUpdateStatus_()).toMatchObject({ known: false, required: false })
+  })
+
+  it('FSIF の団体(internal)のプランを覚える。更新の知らせの版は、そのプランで配っている版(一番新しい版ではない)', () => {
+    const p = pair()
+    const orgId = p.o.props.ORG_ID
+    expect(p.reg.post({ action: 'setOrgPlan', session: p.reg.session, orgId, plan: 'internal', reason: '' }).ok).toBe(true)
+    check(p)
+    expect(state(p).plan).toBe('internal')
+    // 新しい版(安全の修正)をサイトに置いた。FSIF には配る(一番新しい版)が、Ohsumi はこの版のまま
+    mark(p, '2099.01.01-1', { security: true })
+    const current = (p.reg.gas.KNOWN_GAS_VERSIONS as unknown as { version: string }[]).find((v) => v.version === GAS_VERSION)
+    expect(current, 'この版はレジストリの一覧にある').toBeTruthy()
+    expect(p.reg.post({ action: 'setPlanRelease', session: p.reg.session, plan: 'ohsumi', version: GAS_VERSION, reason: '' }).ok).toBe(true)
+    check(p)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ required: true, latest: '2099.01.01-1' })
+    expect(p.reg.post({ action: 'setOrgPlan', session: p.reg.session, orgId, plan: 'ohsumi', reason: '' }).ok).toBe(true)
+    check(p)
+    expect(p.g.gasUpdateStatus_()).toMatchObject({ required: false, outdated: false, latest: GAS_VERSION })
   })
 
   it('代表・全権管理者は、管理画面で読める(読み取りの操作。機能停止中も使える)', () => {

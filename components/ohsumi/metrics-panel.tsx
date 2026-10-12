@@ -24,6 +24,7 @@ const PLAN_KEYS: Record<MetricsStatus['plan'], TranslationKey> = {
   cosmo_base: 'metrics.plan.cosmo_base',
   ohsumi: 'metrics.plan.ohsumi',
   paid: 'metrics.plan.paid',
+  internal: 'metrics.plan.internal',
 }
 
 export function MetricsPanel() {
@@ -78,7 +79,7 @@ export function MetricsPanel() {
       {status && (
         <div className="mt-3 space-y-3 text-xs">
           <p className="break-words">
-            {t('metrics.planLine', { plan: t(PLAN_KEYS[status.plan]) })}{' '}
+            {t('metrics.planLine', { plan: t(PLAN_KEYS[status.plan] ?? 'metrics.plan.unset') })}{' '}
             {status.mandatory ? t('metrics.mandatory') : status.defaultOn ? t('metrics.defaultOn') : t('metrics.defaultOff')}
           </p>
           <div className="flex flex-wrap items-center gap-2">

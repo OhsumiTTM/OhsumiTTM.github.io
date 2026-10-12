@@ -24,7 +24,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
   const reg = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: NONCE })
   expect(reg.ok, JSON.stringify(reg)).toBe(true)
   const key = String(reg.result.registryKey)
@@ -59,7 +59,7 @@ function ready() {
 describe('1. 担当者のメールアドレスの形', () => {
   it('登録コードの発行は、担当者の画面と同じ形(CONTACT_EMAIL_PATTERN)で確かめ、, ; の入ったアドレスを断る', () => {
     const t = ready()
-    const issue = (contactEmail: string) => t.post({ action: 'issueRegistrationCode', session: t.session, orgName: '団体B', contactName: '佐藤', contactEmail })
+    const issue = (contactEmail: string) => t.post({ action: 'issueRegistrationCode', session: t.session, plan: 'ohsumi', orgName: '団体B', contactName: '佐藤', contactEmail })
     expect(issue('taro@example.co,jp').error).toMatch(/メールアドレスの形が正しくありません/)
     expect(issue('taro@example.co;jp').error).toMatch(/メールアドレスの形が正しくありません/)
     expect(issue('a@example.com,b@example.com').error).toMatch(/メールアドレスの形が正しくありません/)

@@ -21,7 +21,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const issue = (extra: Record<string, unknown> = {}) => t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', ...extra }).result
+  const issue = (extra: Record<string, unknown> = {}) => t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', ...extra }).result
   const resolve = (orgId: string) => t.post({ action: 'resolveOrg', orgId })
   const orgsRow = () => t.sheets.get('Orgs')!.rows.find((r) => r[0] === ORG_A)!
   const header = (name: string) => (t.sheets.get('Orgs')!.rows[0] as string[]).indexOf(name)

@@ -207,3 +207,25 @@ describe('7. 未ログイン・ログアウトの後', () => {
     expect(w.googleLogin(A.org, 'base@a.example').ok).toBe(true)
   })
 })
+
+describe('8. プランと配る版', () => {
+  it('登録コードで選んだプランが団体のプランになり、団体の GAS に届く(FSIF の団体は集計値の送信が必須)', () => {
+    const C = w.launchOrg('FSIF の団体', 'contact@c.example', 'internal')
+    const orgs = w.reg.post({ action: 'adminOverview', session: w.adminSession }).result.orgs as { orgId: string; plan: string }[]
+    expect(orgs.find((o) => o.orgId === C.orgId)!.plan).toBe('internal')
+    expect(orgs.find((o) => o.orgId === A.orgId)!.plan).toBe('ohsumi')
+    ;(C.org.gas.checkContractStatus as () => void)()
+    expect(JSON.parse(String(C.org.props.CONTRACT_STATE)).plan).toBe('internal')
+    expect((C.org.gas.metricsSharing_ as () => { mandatory: boolean })().mandatory).toBe(true)
+  })
+
+  it('団体の GAS の更新の知らせは、そのプランに配る版を基準にする(この版は 2026.10.12-2 から配る最初の版)', () => {
+    ;(A.org.gas.checkContractStatus as () => void)()
+    const st = (A.org.gas.gasUpdateStatus_ as () => { current: string; latest: string; required: boolean; outdated: boolean })()
+    expect(st).toMatchObject({ required: false, outdated: false })
+    expect(st.latest).toBe(st.current)
+    const releases = w.reg.post({ action: 'adminOverview', session: w.adminSession }).result.planReleases as { released: string[]; plans: { plan: string; version: string }[] }
+    expect(releases.released).toContain(st.current)
+    expect(releases.plans.find((p) => p.plan === 'ohsumi')!.version).toBe(st.current)
+  })
+})

@@ -174,9 +174,9 @@ export function createWorld() {
   const adminSession = reg.post({ action: 'adminLogin', idToken: 'hdr.admin.sig', nonceSecret: adminSecret }).result.session.token as string
   const orgs = new Map<string, Org>()
 
-  /** 新しい団体を立ち上げる: 登録コードの発行 → 団体の GAS で登録 → 初期設定コード */
-  const launchOrg = (name: string, contactEmail: string) => {
-    const issued = reg.post({ action: 'issueRegistrationCode', session: adminSession, orgName: name, contactName: '担当', contactEmail })
+  /** 新しい団体を立ち上げる: 登録コードの発行(プランを選ぶ)→ 団体の GAS で登録 → 初期設定コード */
+  const launchOrg = (name: string, contactEmail: string, plan = 'ohsumi') => {
+    const issued = reg.post({ action: 'issueRegistrationCode', session: adminSession, plan, orgName: name, contactName: '担当', contactEmail })
     if (!issued.ok) throw new Error('登録コードを発行できません: ' + issued.error)
     const gasUrl = 'https://script.google.com/macros/s/E2E_' + (orgs.size + 1) + '/exec'
     const org = createOrg(name, gasUrl, (payload) => reg.post(payload))
