@@ -218,6 +218,8 @@ function dailyMaintenanceUnrecorded_() {
   try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   // 完了してから日数がたったタスクを TasksArchive に移す
   try { archiveOldTasksLocked_(Date.now()) } catch (err) { console.error('古いタスクを移せませんでした: ' + String(err)) }
+  // 保存期間を過ぎた承認の記録を消す
+  try { purgeOldApprovalLogLocked_(Date.now()) } catch (err) { console.error('古い承認の記録を消せませんでした: ' + String(err)) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {

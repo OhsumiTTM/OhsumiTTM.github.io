@@ -386,7 +386,7 @@ function toErrorMessage_(err) {
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
-  'getCandidates', 'getFormSubmissions',
+  'getCandidates', 'getFormSubmissions', 'getApprovalLog',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
   'revokeMySessions', 'revokeMemberSessions',
   // 本人あての招待リンクのメール(シートを書き換えない。送った回数は CacheService に数える)

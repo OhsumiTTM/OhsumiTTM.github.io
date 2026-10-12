@@ -33,7 +33,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.11-3'
+var OHSUMI_GAS_VERSION = '2026.10.12-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -365,6 +365,8 @@ var READ_ONLY_ACTIONS = [
   // 団体の保存を読む・移した古いタスクを探す(読み取りだけ)
   'getOrgStorage', 'searchArchivedTasks',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
+  // 承認の履歴(読み取りだけ)
+  'getApprovalLog',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
   'getInviteMailStatus', 'sendInviteLinkToMe',

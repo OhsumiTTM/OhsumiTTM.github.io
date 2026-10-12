@@ -9,6 +9,8 @@ import { useNav } from '@/lib/ohsumi/nav'
 import { AdminDashboard } from './admin-dashboard'
 import { AdminAssignments } from './admin-assignments'
 import { AdminApprovals } from './admin-approvals'
+import { AssignCandidateRulesEditor } from './assign-candidate-rules-editor'
+import { ApprovalHistory } from './approval-history'
 import { AdminProjects } from './admin-projects'
 import { AdminMembers } from './admin-members'
 import { AdminAnalytics } from './admin-analytics'
@@ -96,7 +98,7 @@ function SectionBody({ section }: { section: AdminSection }) {
           ]}
         />
       )
-    case 'approvals': return <Plain><AdminApprovals /></Plain>
+    case 'approvals': return <Plain><AdminApprovals /><ApprovalHistory className="mt-10" /></Plain>
     case 'assignments': return <Plain><AdminAssignments /></Plain>
     case 'projects': return <Plain><AdminProjects part="projects" /></Plain>
     case 'taskSettings': return <AdminProjects part="taskSettings" />
@@ -130,6 +132,7 @@ function SectionBody({ section }: { section: AdminSection }) {
             { id: 'skill-field-composition', title: t('admin.tags.fieldComposition'), content: <FieldCompositionEditor /> },
             { id: 'skill-position', title: t('admin.tags.positionRequirements'), content: <PositionRequirementsEditor /> },
             { id: 'skill-levels', title: t('admin.skillRules.title'), content: <SkillLevelRulesEditor /> },
+            { id: 'skill-assign-candidates', title: t('admin.assignRules.title'), content: <AssignCandidateRulesEditor /> },
             { id: 'skill-radar-axes', title: t('admin.radarAxes.title'), content: <AdminRadarAxes part="axes" /> },
           ]}
         />

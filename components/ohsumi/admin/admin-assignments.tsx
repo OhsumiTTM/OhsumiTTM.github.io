@@ -3,11 +3,14 @@
 import { useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { Avatar, Tag, ProjectTag, DifficultyBadge } from '@/components/ohsumi/primitives'
-import { rankCandidates, matchSkills, formatDeadline, isActiveMember } from '@/lib/ohsumi/utils'
+import { matchSkills, formatDeadline, isActiveMember } from '@/lib/ohsumi/utils'
+import { CANDIDATE_KINDS, classifyCandidates, type AssignCandidate, type CandidateKind } from '@/lib/ohsumi/assign-candidates'
 import { useToast } from '@/components/ohsumi/toast'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, Sparkles, Info } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { Task, Member } from '@/lib/ohsumi/types'
+import type { TranslationKey } from '@/lib/ohsumi/i18n'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { localDate } from '@/lib/ohsumi/multi-org'
 
@@ -89,13 +92,18 @@ function MatchPanel({
 }) {
   const toast = useToast()
   const { t } = useI18n()
-  const { workloadRules } = useOhsumi()
+  const { workloadRules, assignCandidateRules } = useOhsumi()
   // 休止中メンバーはおすすめ候補から除外する(INPUT画面の担当者選択と同じ扱い)。
   // 手動選択用の「その他」一覧は引き続き全メンバーを対象にする(意図的に
   // 休止中メンバーへ手動アサインし直したいケースもあるため)
   const activeMembers = members.filter(isActiveMember)
-  const ranked = rankCandidates(task, activeMembers, allTasks, workloadRules)
+  // 即戦力・成長・支援・メンターに分けた候補(lib/ohsumi/assign-candidates.ts)
+  const ranked = classifyCandidates(task, activeMembers, allTasks, assignCandidateRules, workloadRules)
   const rankedIds = new Set(ranked.map((r) => r.member.id))
+  const nameOf = (id: string) => {
+    const m = members.find((x) => x.id === id)
+    return m ? m.displayName || m.name : ''
+  }
   // 退会したメンバーは手動の一覧にも出さない(休止中は手動で選べるよう残す)
   const others = members.filter((m) => !rankedIds.has(m.id) && !m.withdrawnAt)
   const [showOthers, setShowOthers] = useState(false)
@@ -164,22 +172,37 @@ function MatchPanel({
         {t('admin.assignments.recommended.desc')}
       </p>
 
-      <div className="mt-3 space-y-3">
+      <div className="mt-3 space-y-5">
         {ranked.length === 0 && (
           <div className="rounded-lg border border-dashed border-border bg-card px-4 py-6 text-center text-xs text-muted-foreground">
             {t('admin.assignments.noMatches')}
           </div>
         )}
-        {ranked.map(({ member, matches }) => (
-          <CandidateCard
-            key={member.id}
-            member={member}
-            matches={matches}
-            onAssign={() => handleAssign(member)}
-            recommended
-            weeklyHours={weeklyWorkload(member.id, allTasks)}
-          />
-        ))}
+        {CANDIDATE_KINDS.map((kind) => {
+          const group = ranked.filter((c) => c.kind === kind)
+          if (group.length === 0) return null
+          return (
+            <div key={kind} data-candidate-kind={kind}>
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${KIND_STYLE[kind]}`}>{t(KIND_LABEL[kind])}</span>
+                <span className="text-[11px] text-muted-foreground">{t(KIND_DESC[kind], { level: assignCandidateRules.mentor_min_level })}</span>
+              </div>
+              <div className="mt-2 space-y-3">
+                {group.map((c) => (
+                  <CandidateCard
+                    key={c.member.id}
+                    member={c.member}
+                    matches={c.matches}
+                    onAssign={() => handleAssign(c.member)}
+                    recommended
+                    weeklyHours={weeklyWorkload(c.member.id, allTasks)}
+                    note={candidateNote(c, t, nameOf)}
+                  />
+                ))}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Other members */}
@@ -240,18 +263,59 @@ function weeklyWorkload(memberId: string, tasks: Task[]): number {
     .reduce((sum, t) => sum + (t.estimatedHours ?? 0), 0)
 }
 
+const KIND_LABEL: Record<CandidateKind, TranslationKey> = {
+  ready: 'admin.assignments.kind.ready',
+  growth: 'admin.assignments.kind.growth',
+  support: 'admin.assignments.kind.support',
+  mentor: 'admin.assignments.kind.mentor',
+}
+const KIND_DESC: Record<CandidateKind, TranslationKey> = {
+  ready: 'admin.assignments.kind.ready.desc',
+  growth: 'admin.assignments.kind.growth.desc',
+  support: 'admin.assignments.kind.support.desc',
+  mentor: 'admin.assignments.kind.mentor.desc',
+}
+const KIND_STYLE: Record<CandidateKind, string> = {
+  ready: 'bg-primary/10 text-primary',
+  growth: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  support: 'bg-secondary text-foreground/80',
+  mentor: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
+}
+
+// 種類ごとの補足(成長: 伸ばせるスキル・メンター: 教えられるスキルと、メンターになっている成長の候補の人)
+function candidateNote(
+  c: AssignCandidate,
+  t: ReturnType<typeof useI18n>['t'],
+  nameOf: (id: string) => string,
+): ReactNode {
+  const sep = t('admin.assignments.namesSeparator')
+  if (c.kind === 'growth') return t('admin.assignments.growthSkills', { skills: c.growthSkills.join(sep) })
+  if (c.kind === 'mentor') {
+    const names = c.menteeIds.map(nameOf).filter(Boolean)
+    return (
+      <>
+        {t('admin.assignments.mentorSkills', { skills: c.mentorSkills.join(sep) })}
+        {names.length > 0 && <span className="ml-2 font-medium text-foreground/80" data-mentor-of>{t('admin.assignments.mentorOf', { names: names.join(sep) })}</span>}
+      </>
+    )
+  }
+  return null
+}
+
 function CandidateCard({
   member,
   matches,
   onAssign,
   recommended,
   weeklyHours,
+  note,
 }: {
   member: Member
   matches: string[]
   onAssign: () => void
   recommended?: boolean
   weeklyHours?: number
+  note?: ReactNode
 }) {
   const { t } = useI18n()
   const { isAdminRef } = useOhsumi()
@@ -278,6 +342,8 @@ function CandidateCard({
               </span>
             )}
           </div>
+
+          {note && <div className="mt-1 text-xs text-muted-foreground">{note}</div>}
 
           {/* Matched skills */}
           {matches.length > 0 ? (

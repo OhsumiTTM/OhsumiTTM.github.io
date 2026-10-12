@@ -83,6 +83,8 @@ export const READ_ACTIONS = new Set([
   'getInitialData',
   'getExpenses',
   'getFormSubmissions',
+  // 承認の履歴(代表・管理者)
+  'getApprovalLog',
   'getCandidates',
   'getFiles',
   'getMyEmails',

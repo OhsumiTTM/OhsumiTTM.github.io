@@ -103,6 +103,8 @@ var FORMULA_INJECTION_PROTECTED_COLUMNS = {
   // 等のJSON値も入るが、書式なしテキスト化はJSON文字列の読み書きに影響しない
   // (JSON.parseは文字列の内容だけを見るため)ので列全体を対象にする。
   Settings: ['value'],
+  // 承認の記録(41-approval-log.gs)。タスクの名前・却下の理由
+  ApprovalLog: ['title', 'reason'],
 }
 
 // 指定した行のうち、そのシートで保護対象の列だけを書式なしテキスト(@)にする。

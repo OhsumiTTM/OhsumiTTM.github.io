@@ -239,13 +239,16 @@ var NOTIFY_QUOTED_FIELDS = {
   rejectTask: ['reason'],  // 却下の理由(代表・管理者が書く。500字まで。宛先はシートのタスクの作成者)
 }
 
-function rejectTask_(taskId, reason) {
+function rejectTask_(taskId, reason, actorId) {
   var task = findRow_(SHEET_TASKS, taskId)
   if (!task) throw userError_('タスクが見つかりません。')
   var creatorId = String(task.creator_id || '')
   var title = String(task.title || '')
+  var wasPending = normalizeCode_('approval', task.approval_status) === 'pending'
   var result = removeTask_(taskId)
   var why = String(reason || '').slice(0, REJECT_REASON_MAX_CHARS)
+  // 承認の記録(41-approval-log.gs)。タスクは消えるので、名前・プロジェクトはここに残す
+  if (wasPending) appendApprovalLog_('rejected', task, actorId, why)
   try {
     var emails = creatorId ? memberEmailsByIds_([creatorId]) : []
     if (emails.length > 0) {

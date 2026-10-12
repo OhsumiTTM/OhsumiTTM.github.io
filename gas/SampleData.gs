@@ -19,9 +19,9 @@
 // ■ ログインできるメンバー: スクリプトプロパティ TEST_ACCOUNTS(デモの団体は DEMO_ACCOUNTS でもよい)に、枠ごとの
 //   Google アカウントを書く。例: top=a@gmail.com, admin=b@gmail.com, restricted=c@gmail.com, base=d@gmail.com, base_en=e@gmail.com
 
-var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.11-3'
+var OHSUMI_SAMPLE_DATA_VERSION = '2026.10.12-1'
 // 組になる Code.gs の版。pnpm gas:build が、Code.gs の版に合わせて書き換える(手で直さない)
-var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.11-3'
+var SAMPLE_DATA_FOR_GAS_VERSION = '2026.10.12-1'
 
 // Code.gs と組の版でなければ止める(Code.gs の関数の名前・引数が変わっていると、データを壊すことがあるため)
 function assertSampleDataMatchesCode_() {
@@ -1193,8 +1193,8 @@ function buildShowcaseMembers_(today) {
     { n: 7, name: '村上 大地', role: R.base, dept: 'イベント', joined: -180, will: 'イベント運営', judgment: 'イベント運営', reportsTo: 3, grade: '1' },
     { n: 8, name: '近藤 さくら', role: R.base, dept: '渉外', joined: -160, will: 'ライティング,コミュニケーション', judgment: 'ライティング', reportsTo: 2, grade: '1' },
     { n: 9, name: '坂本 悠', role: R.base, dept: '広報', joined: -120, will: 'ライティング,広報', judgment: 'ライティング', reportsTo: 4, grade: '1' },
-    { n: 10, name: '遠藤 結菜', role: R.base, dept: 'イベント', joined: -40, will: 'デザイン,イベント運営', judgment: '', reportsTo: 3, grade: '1' },
-    { n: 11, name: '青木 蒼', role: R.base, dept: '運営', joined: -20, will: 'リサーチ,企画', judgment: '', grade: '1' },
+    { n: 10, name: '遠藤 結菜', role: R.base, dept: 'イベント', joined: -40, will: 'デザイン,イベント運営', judgment: '', reportsTo: 3, grade: '1', desired: '広報' },
+    { n: 11, name: '青木 蒼', role: R.base, dept: '運営', joined: -20, will: 'リサーチ,企画', judgment: '', grade: '1', desired: 'デザイン', mentor: 5 },
   ]
   var colors = ['#0ea5e9', '#16a34a', '#d97706', '#db2777', '#6366f1', '#059669', '#8b5cf6', '#dc2626']
   return people.map(function (p) {
@@ -1214,7 +1214,9 @@ function buildShowcaseMembers_(today) {
       will_tags: p.will,
       judgment_tags: p.judgment,
       reports_to_id: p.reportsTo ? M(p.reportsTo) : '',
-      mentor_id: '',
+      mentor_id: p.mentor ? M(p.mentor) : '',
+      // 身につけたいスキル(担当を決めるの「成長」の候補になる)
+      desired_skills: p.desired || '',
       joined_at: d(p.joined),
       project_ids: (p.projects || []).map(function (x) { return showcaseId_('p', x) }).join(','),
       department_path: p.dept,
@@ -1316,7 +1318,7 @@ function buildShowcaseTasks_(today) {
     retrospective_json: sampleJson_({ good: '色と文字の決まりができて、投稿が速くなった', bad: '', improve: '' }) })
   t(3, '先月の投稿の振り返り', '完了', 4, -8, { skills: '広報,リサーチ' })
   t(3, '学園祭のプレスリリースを出す', '未着手', 4, 11, { approval_status: '承認待ち', importance: '対外公開', creator_id: M(4), skills: '広報,ライティング' })
-  t(3, 'イベントの写真の整理', '未着手', 0, 16, { difficulty: '誰でも可', description: 'イベントの写真を、使ってよいものとそうでないものに分けます。' })
+  t(3, 'イベントの写真の整理', '未着手', 0, 16, { difficulty: '誰でも可', skills: 'デザイン,広報', description: 'イベントの写真を、使ってよいものとそうでないものに分けます。' })
   t(3, '週2回の投稿', '進行中', [5, 9], 6, { skills: 'SNS', difficulty: '誰でも可' })
 
   // -- 協賛企業との連携 --
@@ -1374,7 +1376,14 @@ function buildShowcaseOtherSheets_(today) {
         done_text: r[1], todo_text: r[2], issues_text: '', created_at: at(day, '22:00') })
     }
   })
-  return { Expenses: Expenses, DailyReports: DailyReports }
+  // 承認の記録(タスクの登録の承認・却下。管理画面の「承認の履歴」)
+  var ApprovalLog = [
+    { id: S + 'al-01', at: at(-6, '10:00'), kind: 'task_registration', action: 'approved', target_id: S + 't-002', title: '新歓用の SNS 投稿の予定を立てる',
+      project_id: showcaseId_('p', 1), creator_id: M(3), by_id: M(2), reason: '' },
+    { id: S + 'al-02', at: at(-3, '19:30'), kind: 'task_registration', action: 'rejected', target_id: S + 't-900', title: '新歓ポスターの印刷を外注する',
+      project_id: showcaseId_('p', 1), creator_id: M(9), by_id: M(2), reason: '今年は部内で作るので外注しません。印刷だけ生協に頼みましょう。' },
+  ]
+  return { Expenses: Expenses, DailyReports: DailyReports, ApprovalLog: ApprovalLog }
 }
 
 function buildShowcaseSettings_() {
@@ -1402,6 +1411,7 @@ function buildShowcaseData_(today) {
       Tasks: buildShowcaseTasks_(today),
       Expenses: other.Expenses,
       DailyReports: other.DailyReports,
+      ApprovalLog: other.ApprovalLog,
     },
     settings: buildShowcaseSettings_(),
   }

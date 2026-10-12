@@ -1,5 +1,6 @@
 'use client'
 
+import { DEFAULT_ASSIGN_CANDIDATE_RULES, parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { migrateAdminSections, sectionsForSave } from './admin-sections'
 import { revertTaskChange } from './optimistic'
 import { currentTaskId, swapTaskIds } from './temp-ids'
@@ -494,6 +495,9 @@ interface OhsumiContextValue extends OhsumiState {
   // 稼働の目安の決め方(Settings の workload_rules)。書いていなければ既定
   workloadRules: WorkloadRules
   updateWorkloadRules: (rules: WorkloadRules) => void
+  // 担当の候補の決め方(Settings の assign_candidate_rules)。書いていなければ既定(メンターはレベル3以上)
+  assignCandidateRules: AssignCandidateRules
+  updateAssignCandidateRules: (rules: AssignCandidateRules) => void
   quizDefinitions: QuizDefinition[]
   radarAxes: RadarAxis[]
   awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
@@ -1090,6 +1094,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [skillLevelThresholds, setSkillLevelThresholds] = useState<SkillLevelThresholds>({})
   const [skillLevelRules, setSkillLevelRules] = useState<SkillLevelRules>({})
   const [workloadRules, setWorkloadRules] = useState<WorkloadRules>(DEFAULT_WORKLOAD_RULES)
+  const [assignCandidateRules, setAssignCandidateRules] = useState<AssignCandidateRules>(DEFAULT_ASSIGN_CANDIDATE_RULES)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
   const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
@@ -1341,6 +1346,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     if (s.skillLevelThresholds) setSkillLevelThresholds(s.skillLevelThresholds)
     if (s.skillLevelRules) setSkillLevelRules(s.skillLevelRules)
     if (s.workloadRules) setWorkloadRules(s.workloadRules)
+    if (s.assignCandidateRules) setAssignCandidateRules(s.assignCandidateRules)
     if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
     if (s.radarAxes) setRadarAxes(s.radarAxes)
     if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
@@ -2058,6 +2064,16 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       setWorkloadRules(next)
       if (isSettingsConfigured)
         runRemote(remoteApi.updateSetting('workload_rules', isDefaultWorkloadRules(next) ? '' : JSON.stringify(next)))
+    },
+    [runRemote],
+  )
+  // 担当の候補の決め方を変える(団体のルールを持つ人)。既定と同じなら設定を消す(空 = 既定)
+  const updateAssignCandidateRules = useCallback(
+    (rules: AssignCandidateRules) => {
+      const next = parseAssignCandidateRules(JSON.stringify(rules))
+      setAssignCandidateRules(next)
+      if (isSettingsConfigured)
+        runRemote(remoteApi.updateSetting('assign_candidate_rules', next.mentor_min_level === DEFAULT_ASSIGN_CANDIDATE_RULES.mentor_min_level ? '' : JSON.stringify(next)))
     },
     [runRemote],
   )
@@ -5716,6 +5732,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateSkillLevelRules,
     workloadRules,
     updateWorkloadRules,
+    assignCandidateRules,
+    updateAssignCandidateRules,
     quizDefinitions,
     radarAxes,
     awardSkillPoints,
