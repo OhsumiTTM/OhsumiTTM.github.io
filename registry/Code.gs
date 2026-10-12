@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.12-2'
+var REGISTRY_VERSION = '2026.10.12-3'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -338,6 +338,8 @@ var REGISTRY_ACTIONS = {
   setOrgProfile: function (body) { return setOrgProfile_(body, Date.now()) },
   setOrgContacts: function (body) { return setOrgContacts_(body, Date.now()) },
   getOrgDetail: function (body) { return getOrgDetail_(body, Date.now()) },
+  getKpiSummary: function (body) { return getKpiSummary_(body, Date.now()) },
+  getKpiOrgs: function (body) { return getKpiOrgs_(body, Date.now()) },
   setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
   setTunables: function (body) { return setTunables_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
@@ -3068,6 +3070,371 @@ function orgKpis_(nowMs) {
     METRIC_KEYS.forEach(function (k) { if (typeof m[k] === 'number' && !/_avg$/.test(k)) totals[k] = (totals[k] || 0) + m[k] })
   })
   return { activeOrgs: active, byPlan: byPlan, demoOrgs: Object.keys(demoIds).length, metrics: { reportingOrgs: reporting, latestPeriod: period, totals: totals } }
+}
+
+// ---- KPI(管理画面の「KPI」タブ。管理者だけが読む。読み取りだけなので、5分以内のログインは要らない・操作の記録にも残さない) ----
+//
+// 2つの操作に分ける(全体のタブは軽く速く出し、プラン別・団体別は選んだ時に読む):
+//   getKpiSummary: 全体用。週ごとの合計(項目ごと)・その週に送ってきた団体の数・団体(A)・運用(C)・FSIF の運営(D)の数・
+//                  登録した週ごとの続き具合(コホート)・分布の元の値(団体を特定する値は付けない)
+//   getKpiOrgs:    プラン別・団体別用。団体の一覧(プラン・状態・属性・版・運用の値)と、期間の中の週ごとの集計値を
+//                  団体×週×項目の数字の配列で返す(キーの名前を繰り返さない)
+// 絞り込み(どちらも同じ): weeks(4・12・26・52・0=全期間。既定26)・plan(空=全部 / none=未設定 / PLANS)・
+//   field・size・affiliation(Attributes。空=全部)・includeInternal(FSIF の団体を含めるか。既定は含める)
+// デモの団体と、デモの時に受け取った集計値(Usage の demo)は、いつも外す(orgKpis_ と同じ)。
+// 連絡先(Contacts)・メールアドレス・個人の情報は返さない。FSIF の運営(D)は団体の絞り込みを使わず、期間だけで数える
+var KPI_WEEK_CHOICES = [4, 12, 26, 52, 0]
+var KPI_DEFAULT_WEEKS = 26
+var KPI_MAX_WEEKS = 260
+var KPI_COHORT_MAX_OFFSET = 12
+// 集計値の版2で足した項目(版1の団体には無い。0 として数えない)
+var KPI_V2_KEYS = METRIC_KEYS.slice(METRIC_KEYS.indexOf('members_logged_in'))
+// 週ごとの合計に足す、組み合わせの元の値: 期限切れの日数の合計(tasks_overdue_days_avg × tasks_overdue。平均の日数を団体をまたいで重み付きで出すため)
+var KPI_SUM_KEYS = METRIC_KEYS.concat(['tasks_overdue_days_sum'])
+
+function kpiFilters_(body) {
+  var weeks = Number(body.weeks)
+  if (body.weeks === undefined || body.weeks === null || body.weeks === '' || KPI_WEEK_CHOICES.indexOf(weeks) < 0) weeks = KPI_DEFAULT_WEEKS
+  var plan = String(body.plan || '')
+  if (plan !== 'none' && PLANS.indexOf(plan) < 0) plan = ''
+  return {
+    weeks: weeks, plan: plan,
+    field: cleanText_(body.field, 100), size: cleanText_(body.size, 100), affiliation: cleanText_(body.affiliation, 100),
+    includeInternal: body.includeInternal !== false,
+  }
+}
+
+// 日本時間の YYYY-MM-DD の、その週の月曜日(Usage の date と同じ決まり)
+function kpiMondayKey_(key) {
+  var dow = new Date(key + 'T00:00:00Z').getUTCDay()
+  return addDaysKey_(key, -((dow + 6) % 7))
+}
+
+// 絞り込んだ団体({ values, attrs })。デモの団体は入れない
+function kpiOrgRows_(f) {
+  var attrs = {}
+  readRows_('Attributes').forEach(function (r) { attrs[String(r.values.org_id || '')] = attributesOf_(r) })
+  return readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') && !isDemoOrg_(r.values) }).map(function (r) {
+    return { values: r.values, attrs: attrs[String(r.values.org_id)] || attributesOf_(null) }
+  }).filter(function (o) {
+    var plan = planOf_(o.values)
+    if (!f.includeInternal && plan === 'internal') return false
+    if (f.plan === 'none' ? plan !== '' : f.plan && plan !== f.plan) return false
+    if (f.field && o.attrs.field !== f.field) return false
+    if (f.size && o.attrs.size !== f.size) return false
+    if (f.affiliation && o.attrs.affiliation !== f.affiliation) return false
+    return true
+  })
+}
+
+// 選べる属性の値(デモの団体を除く)
+function kpiAttributeOptions_() {
+  var demo = {}
+  readRows_('Orgs').forEach(function (r) { if (isDemoOrg_(r.values)) demo[String(r.values.org_id || '')] = true })
+  var out = { field: [], size: [], affiliation: [] }
+  readRows_('Attributes').forEach(function (r) {
+    if (demo[String(r.values.org_id || '')]) return
+    var a = attributesOf_(r)
+    Object.keys(out).forEach(function (k) { if (a[k] && out[k].indexOf(a[k]) < 0) out[k].push(a[k]) })
+  })
+  Object.keys(out).forEach(function (k) { out[k].sort() })
+  return out
+}
+
+// 集計値({ 団体ID: { 週: 項目の値 } })。デモの時に受け取ったもの・今の週より先の週は入れない
+function kpiUsage_(orgIds, nowMs) {
+  var current = kpiMondayKey_(jstDateKey_(nowMs))
+  var out = {}
+  readRows_('Usage').forEach(function (r) {
+    var id = String(r.values.org_id || '')
+    if (!orgIds[id] || boolCell_(r.values.demo)) return
+    var week = usageDateKey_(r.values.date)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(week) || week > current) return
+    var m
+    try { m = JSON.parse(String(r.values.metrics_json || '{}')) } catch (e) { m = null }
+    if (!m || typeof m !== 'object') return
+    var clean = {}
+    METRIC_KEYS.forEach(function (k) { if (typeof m[k] === 'number' && isFinite(m[k])) clean[k] = m[k] })
+    if (typeof clean.tasks_overdue_days_avg === 'number' && typeof clean.tasks_overdue === 'number') {
+      clean.tasks_overdue_days_sum = clean.tasks_overdue_days_avg * clean.tasks_overdue
+    }
+    if (!out[id]) out[id] = {}
+    out[id][kpiMondayKey_(week)] = clean
+  })
+  return out
+}
+
+// 期間の週(古い順。月曜日の YYYY-MM-DD)。全期間は、一番古い集計値の週から(最長 KPI_MAX_WEEKS 週)
+function kpiWeeks_(f, usage, nowMs) {
+  var current = kpiMondayKey_(jstDateKey_(nowMs))
+  var count = f.weeks
+  if (!count) {
+    var earliest = current
+    Object.keys(usage).forEach(function (id) { Object.keys(usage[id]).forEach(function (w) { if (w < earliest) earliest = w }) })
+    count = Math.min(KPI_MAX_WEEKS, Math.floor(daysBetweenKeys_(earliest, current) / 7) + 1)
+  }
+  var weeks = []
+  for (var i = count - 1; i >= 0; i--) weeks.push(addDaysKey_(current, -7 * i))
+  return weeks
+}
+
+// 停止の種類(管理画面の分け方): survey(アンケートの未回答の機能停止)/ contract(契約の終了)/ manual(そのほか。手動)/ ''(停止していない)
+function kpiSuspendCategory_(values, nowMs) {
+  var state = orgDisplayState_(values, nowMs).state
+  if (state !== 'suspended' && state !== 'restricted') return ''
+  if (String(values.suspend_survey_id || '')) return 'survey'
+  if (String(values.contract_status || '') === 'ended') return 'contract'
+  return 'manual'
+}
+
+// 週ごとの集まり(全部の団体 / 版2の項目を送ってきた団体)
+function kpiNewGroup_(weekCount) {
+  var g = { count: [], sums: [], has: [], pos: [], dsum: [], dhas: [] }
+  for (var w = 0; w < weekCount; w++) {
+    g.count.push(0)
+    ;['sums', 'has', 'pos', 'dsum', 'dhas'].forEach(function (k) { g[k].push(KPI_SUM_KEYS.map(function () { return 0 })) })
+  }
+  return g
+}
+
+function kpiAddToGroup_(g, w, m, prev) {
+  g.count[w]++
+  KPI_SUM_KEYS.forEach(function (k, i) {
+    var v = m[k]
+    if (typeof v !== 'number') return
+    g.sums[w][i] += v
+    g.has[w][i]++
+    if (v > 0) g.pos[w][i]++
+    if (prev && typeof prev[k] === 'number') { g.dsum[w][i] += v - prev[k]; g.dhas[w][i]++ }
+  })
+}
+
+// 値の無い項目は null にする(0 と区別する)
+function kpiFinishGroup_(g) {
+  g.sums = g.sums.map(function (row, w) { return row.map(function (v, i) { return g.has[w][i] ? v : null }) })
+  g.dsum = g.dsum.map(function (row, w) { return row.map(function (v, i) { return g.dhas[w][i] ? v : null }) })
+  return g
+}
+
+function kpiStats_(list) {
+  if (!list.length) return { n: 0, mean: null, median: null }
+  var s = list.slice().sort(function (a, b) { return a - b })
+  var mid = Math.floor(s.length / 2)
+  var sum = s.reduce(function (a, b) { return a + b }, 0)
+  return { n: s.length, mean: sum / s.length, median: s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2 }
+}
+
+function kpiInPeriod_(ms, fromMs) { return ms > 0 && ms >= fromMs }
+
+// 管理画面: KPI(全体)。{ session, weeks, plan, field, size, affiliation, includeInternal }
+function getKpiSummary_(body, nowMs) {
+  var props = registryProps_()
+  verifyAdminSession_(body.session, props, nowMs)
+  var f = kpiFilters_(body)
+  var orgs = kpiOrgRows_(f)
+  var ids = {}
+  orgs.forEach(function (o) { ids[String(o.values.org_id)] = true })
+  var usage = kpiUsage_(ids, nowMs)
+  var weeks = kpiWeeks_(f, usage, nowMs)
+  var weekIndex = {}
+  weeks.forEach(function (w, i) { weekIndex[w] = i })
+  var fromMs = jstMidnightMs_(weeks[0])
+  var all = kpiNewGroup_(weeks.length)
+  var v2 = kpiNewGroup_(weeks.length)
+  Object.keys(usage).forEach(function (id) {
+    weeks.forEach(function (w, i) {
+      var m = usage[id][w]
+      if (!m) return
+      var prev = i > 0 ? usage[id][weeks[i - 1]] : usage[id][addDaysKey_(w, -7)]
+      kpiAddToGroup_(all, i, m, prev)
+      if (typeof m.members_logged_in === 'number') kpiAddToGroup_(v2, i, m, prev)
+    })
+  })
+
+  // A. 団体
+  var a = { total: orgs.length, active: 0, suspended: { manual: 0, survey: 0, contract: 0 }, byPlan: { cosmo_base: 0, ohsumi: 0, paid: 0, internal: 0, '': 0 },
+    byContract: { active: 0, ending: 0, ended: 0, '': 0 }, newByWeek: weeks.map(function () { return 0 }), endedByWeek: weeks.map(function () { return 0 }),
+    newByMonth: {}, endedByMonth: {}, byAttr: { field: {}, size: {}, affiliation: {}, started_year: {} } }
+  var ageDays = []
+  orgs.forEach(function (o) {
+    var v = o.values
+    var cat = kpiSuspendCategory_(v, nowMs)
+    if (cat) a.suspended[cat]++
+    if (orgDisplayState_(v, nowMs).state !== 'suspended') a.active++
+    a.byPlan[planOf_(v)]++
+    var cs = String(v.contract_status || '')
+    a.byContract[a.byContract.hasOwnProperty(cs) ? cs : '']++
+    var created = timeOf_(v.created_at)
+    if (created > 0) {
+      ageDays.push(Math.max(0, Math.floor((nowMs - created) / DAY_MS)))
+      var ck = jstDateKey_(created)
+      if (kpiInPeriod_(created, fromMs)) {
+        var wi = weekIndex[kpiMondayKey_(ck)]
+        if (wi !== undefined) a.newByWeek[wi]++
+        a.newByMonth[ck.slice(0, 7)] = (a.newByMonth[ck.slice(0, 7)] || 0) + 1
+      }
+    }
+    var until = String(v.contract_until || '').slice(0, 10)
+    if (cs === 'ended' && /^\d{4}-\d{2}-\d{2}$/.test(until) && until >= weeks[0] && until <= jstDateKey_(nowMs)) {
+      var ei = weekIndex[kpiMondayKey_(until)]
+      if (ei !== undefined) a.endedByWeek[ei]++
+      a.endedByMonth[until.slice(0, 7)] = (a.endedByMonth[until.slice(0, 7)] || 0) + 1
+    }
+    ATTRIBUTE_FIELDS.forEach(function (k) { var val = o.attrs[k] || ''; a.byAttr[k][val] = (a.byAttr[k][val] || 0) + 1 })
+  })
+
+  // C. 運用(配る版を基準にした今の判定と同じ関数)
+  var c = { versions: {}, updateRequired: 0, outdated: 0, noCheck: 0, dailyStale: 0, mailReached: 0, mailLow: 0, featuresDisabled: 0, tunablesChanged: 0, diagnostics: 0, diagnosticsInPeriod: 0 }
+  orgs.forEach(function (o) {
+    var v = o.values
+    var st = orgGasStatus_(v, nowMs)
+    var ver = String(v.gas_version || '') || '不明'
+    c.versions[ver] = (c.versions[ver] || 0) + 1
+    if (st.versionState === 'updateRequired') c.updateRequired++
+    else if (st.versionState === 'outdated') c.outdated++
+    if (st.noCheck) c.noCheck++
+    if (orgJobSummary_(v, nowMs).dailyStale) c.dailyStale++
+    var mail = orgMailSummary_(v).level
+    if (mail === 'reached') c.mailReached++
+    if (mail === 'low') c.mailLow++
+    if (parseFeatureList_(v.disabled_features).length) c.featuresDisabled++
+    if (Object.keys(parseTunableValues_(v.tunables_json)).length) c.tunablesChanged++
+  })
+  if (SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Diagnostics')) {
+    readRows_('Diagnostics').forEach(function (r) {
+      if (!ids[String(r.values.org_id || '')]) return
+      c.diagnostics++
+      if (kpiInPeriod_(timeOf_(r.values.received_at), fromMs)) c.diagnosticsInPeriod++
+    })
+  }
+
+  // D. FSIF の運営(期間だけで数える。団体の絞り込みは使わない)
+  var d = { surveys: { sent: 0, answered: 0, open: 0, overdue: 0, cancelled: 0, restricted: 0, daysToAnswer: null },
+    codes: { issued: 0, used: 0, unused: 0, expired: 0, revoked: 0, daysToUse: null }, announcements: { published: 0 } }
+  var answerDays = []
+  var fromKey = weeks[0]
+  readRows_('Surveys').forEach(function (r) {
+    var send = surveyDateKey_(r.values.send_date)
+    if (!send || send < fromKey) return
+    var s = surveyState_(r.values, nowMs).state
+    if (s === 'scheduled') return
+    d.surveys.sent++
+    if (s === 'answered') {
+      d.surveys.answered++
+      var at = timeOf_(r.values.answered_at)
+      if (at > 0) answerDays.push(Math.max(0, daysBetweenKeys_(send, jstDateKey_(at))))
+    } else if (s === 'cancelled') d.surveys.cancelled++
+    else if (s === 'overdue') d.surveys.overdue++
+    else d.surveys.open++
+  })
+  readRows_('AuditLog').forEach(function (r) {
+    if (String(r.values.action || '') === 'scheduleSurveyRestriction' && kpiInPeriod_(timeOf_(r.values.at), fromMs)) d.surveys.restricted++
+  })
+  d.surveys.daysToAnswer = kpiStats_(answerDays)
+  var useDays = []
+  readRows_('RegistrationCodes').forEach(function (r) {
+    if (!String(r.values.code_hash || '')) return
+    var issued = timeOf_(r.values.issued_at)
+    if (!kpiInPeriod_(issued, fromMs)) return
+    d.codes.issued++
+    var st = registrationCodeState_(r.values, nowMs)
+    d.codes[st] = (d.codes[st] || 0) + 1
+    var used = timeOf_(r.values.used_at)
+    if (st === 'used' && used > 0) useDays.push(Math.max(0, (used - issued) / DAY_MS))
+  })
+  d.codes.daysToUse = kpiStats_(useDays)
+  readRows_('Announcements').forEach(function (r) {
+    if (String(r.values.announcement_id || '') && kpiInPeriod_(timeOf_(r.values.published_at), fromMs)) d.announcements.published++
+  })
+
+  // 登録した週ごとの続き具合: 登録した週(期間の中)ごとに、登録後 N 週目に集計値が届いた・アクティブがいる団体の数
+  var current = weeks[weeks.length - 1]
+  var cohorts = {}
+  orgs.forEach(function (o) {
+    var created = timeOf_(o.values.created_at)
+    if (!kpiInPeriod_(created, fromMs)) return
+    var cw = kpiMondayKey_(jstDateKey_(created))
+    if (!cohorts[cw]) cohorts[cw] = { week: cw, size: 0, reported: [], active: [] }
+    var ch = cohorts[cw]
+    ch.size++
+    var u = usage[String(o.values.org_id)] || {}
+    for (var off = 0; off <= KPI_COHORT_MAX_OFFSET; off++) {
+      var wk = addDaysKey_(cw, 7 * off)
+      if (wk > current) break
+      if (ch.reported.length <= off) { ch.reported.push(0); ch.active.push(0) }
+      var m = u[wk]
+      if (m) { ch.reported[off]++; if (m.active_7d > 0) ch.active[off]++ }
+    }
+  })
+
+  // 分布の元の値(団体ごとの、期間の中で一番新しい週の値。団体を特定する値は付けない)
+  var dist = { members: [], activeRate7d: [], overdueRate: [], ageDays: ageDays }
+  Object.keys(usage).forEach(function (id) {
+    var last = null
+    for (var i = weeks.length - 1; i >= 0 && !last; i--) last = usage[id][weeks[i]] || null
+    if (!last) return
+    if (typeof last.members === 'number') dist.members.push(last.members)
+    if (last.members > 0 && typeof last.active_7d === 'number') dist.activeRate7d.push(last.active_7d / last.members)
+    if (last.tasks_open > 0 && typeof last.tasks_overdue === 'number') dist.overdueRate.push(last.tasks_overdue / last.tasks_open)
+  })
+
+  return {
+    ok: true,
+    result: {
+      generatedAt: new Date(nowMs).toISOString(),
+      filters: f,
+      options: kpiAttributeOptions_(),
+      metricKeys: METRIC_KEYS, sumKeys: KPI_SUM_KEYS, v2Keys: KPI_V2_KEYS,
+      weeks: weeks,
+      groups: { all: kpiFinishGroup_(all), v2: kpiFinishGroup_(v2) },
+      orgs: a, ops: c, fsif: d,
+      cohort: { maxOffset: KPI_COHORT_MAX_OFFSET, rows: Object.keys(cohorts).sort().map(function (k) { return cohorts[k] }) },
+      dist: dist,
+    },
+  }
+}
+
+// 管理画面: KPI(プラン別・団体別)。絞り込みは getKpiSummary と同じ。
+// values[団体][週] は、その週の集計値(METRIC_KEYS の順の数字の配列。項目が無ければ null)か、送ってこなかった週は null
+function getKpiOrgs_(body, nowMs) {
+  var props = registryProps_()
+  verifyAdminSession_(body.session, props, nowMs)
+  var f = kpiFilters_(body)
+  var rows = kpiOrgRows_(f)
+  var ids = {}
+  rows.forEach(function (o) { ids[String(o.values.org_id)] = true })
+  var usage = kpiUsage_(ids, nowMs)
+  var weeks = kpiWeeks_(f, usage, nowMs)
+  var orgs = rows.map(function (o) {
+    var v = o.values
+    var st = orgGasStatus_(v, nowMs)
+    var u = usage[String(v.org_id)] || {}
+    var reported = Object.keys(u).sort()
+    return {
+      orgId: String(v.org_id), name: String(v.display_name || ''), plan: planOf_(v),
+      state: orgDisplayState_(v, nowMs).state, suspendCategory: kpiSuspendCategory_(v, nowMs),
+      contractStatus: String(v.contract_status || ''), createdAt: isoOf_(v.created_at), attrs: o.attrs,
+      gasVersion: String(v.gas_version || ''), versionState: st.versionState, gasJudgement: st.judgement, release: st.latest, noCheck: st.noCheck,
+      dailyStale: orgJobSummary_(v, nowMs).dailyStale, mailLevel: orgMailSummary_(v).level,
+      disabledFeatures: parseFeatureList_(v.disabled_features).length, tunables: Object.keys(parseTunableValues_(v.tunables_json)).length,
+      lastReportWeek: reported.length ? reported[reported.length - 1] : '',
+    }
+  })
+  var values = rows.map(function (o) {
+    var u = usage[String(o.values.org_id)] || {}
+    return weeks.map(function (w) {
+      var m = u[w]
+      return m ? METRIC_KEYS.map(function (k) { return typeof m[k] === 'number' ? m[k] : null }) : null
+    })
+  })
+  // 前の週(期間の1つ前)の値(差を出すため)
+  var before = addDaysKey_(weeks[0], -7)
+  var prev = rows.map(function (o) {
+    var m = (usage[String(o.values.org_id)] || {})[before]
+    return m ? METRIC_KEYS.map(function (k) { return typeof m[k] === 'number' ? m[k] : null }) : null
+  })
+  return { ok: true, result: { generatedAt: new Date(nowMs).toISOString(), filters: f, options: kpiAttributeOptions_(), metricKeys: METRIC_KEYS, v2Keys: KPI_V2_KEYS,
+    weeks: weeks, orgs: orgs, values: values, prev: prev } }
 }
 
 // ---- 団体の GAS の版 ----

@@ -190,6 +190,13 @@ export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken',
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
 // (lib/ohsumi/check-layout.test.ts で確かめる)
 export const REGISTRY_URL = 'https://script.google.com/macros/s/LAYOUT_REGISTRY/exec'
+// レジストリの管理画面の KPI タブ。開くと全体だけを読み、プラン別・団体別は選ぶまで読まない(レジストリの管理画面は明るい表示だけ)
+const KPI_STEPS = (prefix) => [
+  { name: `${prefix}レジストリ管理(KPI・全体)`, do: 'registryKpi', sub: 'overall' },
+  { name: `${prefix}レジストリ管理(KPI・プラン別)`, do: 'registryKpi', sub: 'plans' },
+  { name: `${prefix}レジストリ管理(KPI・団体別・列を増やす)`, do: 'registryKpi', sub: 'orgs' },
+  { name: `${prefix}レジストリ管理(KPI・団体の推移)`, do: 'registryKpi', sub: 'detail' },
+]
 export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(ログイン)', do: 'registryLogin' },
   { name: 'レジストリ管理(団体)', do: 'registry' },
@@ -198,6 +205,7 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(プランを変える)', do: 'registryPlan' },
   { name: 'レジストリ管理(プランごとに配る版を変えた後)', do: 'registryReleases' },
   { name: 'レジストリ管理(団体の情報・担当者・集計値)', do: 'registryProfile' },
+  ...KPI_STEPS(''),
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
   { name: 'レジストリ管理(アンケート)', do: 'click', text: 'アンケート', from: '[role=tab]' },
@@ -222,6 +230,94 @@ function planReleasesFake(versions = {}) {
     newest: GAS_CURRENT, fallback: '2026.10.01-1', released: [GAS_CURRENT, '2026.11.01-1', '2026.10.01-1'], removable: ['2026.11.01-1'],
     pendingSecurity: [{ version: GAS_CURRENT, plans: ['cosmo_base', 'ohsumi', 'paid'] }],
   }
+}
+
+// KPI の偽のデータ(26週・長い団体名・版1の団体・送ってこなかった週)。実在の人や団体の名前は使わない
+const KPI_KEYS = ['members', 'active_7d', 'active_30d', 'logins_7d', 'opens_7d', 'writes_7d', 'tasks', 'tasks_open', 'tasks_done',
+  'tasks_overdue', 'tasks_created_7d', 'tasks_completed_7d', 'projects', 'errors_7d',
+  'members_logged_in', 'comments_7d', 'reviews_approved_7d', 'tasks_overdue_days_avg', 'skill_points_total', 'daily_reports_7d',
+  'one_on_ones_30d', 'expenses_7d', 'form_submissions_7d', 'applications_rejected_30d']
+const KPI_SUM_KEYS = [...KPI_KEYS, 'tasks_overdue_days_sum']
+function kpiFakeWeeks() {
+  return Array.from({ length: 26 }, (_, i) => new Date(Date.UTC(2026, 3, 20 + i * 7)).toISOString().slice(0, 10))
+}
+function kpiFakeOrgs() {
+  const long = 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会'
+  const plans = ['ohsumi', 'cosmo_base', 'paid', 'internal', 'ohsumi', '']
+  return Array.from({ length: 8 }, (_, n) => ({
+    orgId: 'org_kpi' + String(n).padStart(17, '0'), name: n === 0 ? long : `テスト団体${n + 1}`, plan: plans[n % plans.length],
+    state: n === 5 ? 'restricted' : 'active', suspendCategory: n === 5 ? 'survey' : '', contractStatus: 'active', createdAt: new Date(Date.UTC(2026, 3, 20 + n * 21)).toISOString(),
+    attrs: { field: ['宇宙', '環境', '教育'][n % 3], size: ['1〜10名', '11〜30名'][n % 2], affiliation: n === 0 ? long : ['大学', '高校'][n % 2], started_year: String(2020 + (n % 5)) },
+    gasVersion: n === 2 ? '2026.10.11-3' : '2026.10.12-2', versionState: n === 2 ? 'updateRequired' : 'latest', gasJudgement: n === 2 ? 'updateRequired' : 'latest', release: '2026.10.12-2',
+    noCheck: false, dailyStale: n === 3, mailLevel: n === 4 ? 'reached' : 'ok', disabledFeatures: n === 1 ? 2 : 0, tunables: 0, lastReportWeek: '',
+  }))
+}
+function kpiFakeValues(weeks, orgs) {
+  return orgs.map((o, n) => weeks.map((w, i) => {
+    if (n === 6 && i > 20) return null
+    if ((n + i) % 9 === 0) return null
+    const members = 10 + n * 6 + Math.floor(i / 4)
+    const v2 = n !== 1
+    const r = { members, active_7d: Math.max(0, Math.round(members * (0.4 + ((n + i) % 5) * 0.08))), active_30d: Math.round(members * 0.8), logins_7d: members * 3 + i, opens_7d: members * 12, writes_7d: members * 5,
+      tasks: 100 + i * 4 + n * 10, tasks_open: 40 + (i % 7), tasks_done: 60 + i * 4, tasks_overdue: 3 + ((n * i) % 9), tasks_created_7d: 12 + (i % 5), tasks_completed_7d: 10 + (i % 6), projects: 4 + n, errors_7d: (n + i) % 4 }
+    if (v2) Object.assign(r, { members_logged_in: members - 2, comments_7d: (i + n) % 3 ? 20 + i : 0, reviews_approved_7d: 5, tasks_overdue_days_avg: 4.5, skill_points_total: 500 + i * 30 + n * 50, daily_reports_7d: i % 2 ? 8 : 0,
+      one_on_ones_30d: n % 2, expenses_7d: 2, form_submissions_7d: 1, applications_rejected_30d: 0 })
+    return KPI_KEYS.map((k) => (k in r ? r[k] : null))
+  }))
+}
+function kpiFakeSummary() {
+  const weeks = kpiFakeWeeks()
+  const orgs = kpiFakeOrgs()
+  const values = kpiFakeValues(weeks, orgs)
+  const group = (pick) => {
+    const g = { count: [], sums: [], has: [], pos: [], dsum: [], dhas: [] }
+    weeks.forEach((_, w) => {
+      const z = () => KPI_SUM_KEYS.map(() => 0)
+      const sums = z(), has = z(), pos = z(), dsum = z(), dhas = z()
+      let count = 0
+      values.forEach((ov) => {
+        const row = ov[w]
+        if (!row || !pick(row)) return
+        count++
+        const full = [...row, row[17] !== null && row[9] !== null ? row[17] * row[9] : null]
+        const prev = w > 0 ? ov[w - 1] : null
+        full.forEach((v, i) => {
+          if (v === null) return
+          sums[i] += v; has[i]++
+          if (v > 0) pos[i]++
+          if (prev && prev[i] !== null && prev[i] !== undefined && i < KPI_KEYS.length) { dsum[i] += v - prev[i]; dhas[i]++ }
+        })
+      })
+      g.count.push(count); g.sums.push(sums.map((v, i) => (has[i] ? v : null))); g.has.push(has); g.pos.push(pos)
+      g.dsum.push(dsum.map((v, i) => (dhas[i] ? v : null))); g.dhas.push(dhas)
+    })
+    return g
+  }
+  const long = 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会'
+  return {
+    generatedAt: new Date(Date.UTC(2026, 9, 12, 3)).toISOString(),
+    filters: { weeks: 26, plan: '', field: '', size: '', affiliation: '', includeInternal: true },
+    options: { field: ['宇宙', '環境', '教育'], size: ['11〜30名', '1〜10名'], affiliation: [long, '大学', '高校'] },
+    metricKeys: KPI_KEYS, sumKeys: KPI_SUM_KEYS, v2Keys: KPI_KEYS.slice(14), weeks,
+    groups: { all: group(() => true), v2: group((r) => r[14] !== null) },
+    orgs: { total: 8, active: 8, suspended: { manual: 0, survey: 1, contract: 0 }, byPlan: { ohsumi: 3, cosmo_base: 1, paid: 1, internal: 1, '': 2 },
+      byContract: { active: 8, ending: 0, ended: 0, '': 0 }, newByWeek: weeks.map((_, i) => (i % 3 === 0 ? 1 : 0)), endedByWeek: weeks.map((_, i) => (i === 20 ? 1 : 0)),
+      newByMonth: { '2026-04': 1, '2026-05': 2, '2026-06': 1, '2026-07': 2, '2026-08': 1, '2026-09': 1 }, endedByMonth: { '2026-09': 1 },
+      byAttr: { field: { 宇宙: 3, 環境: 3, 教育: 2 }, size: { '1〜10名': 4, '11〜30名': 4 }, affiliation: { [long]: 1, 大学: 4, 高校: 3 }, started_year: { 2020: 2, 2021: 2, 2022: 2, 2023: 1, 2024: 1 } } },
+    ops: { versions: { '2026.10.12-2': 7, '2026.10.11-3': 1 }, updateRequired: 1, outdated: 0, noCheck: 0, dailyStale: 1, mailReached: 1, mailLow: 0, featuresDisabled: 1, tunablesChanged: 0, diagnostics: 3, diagnosticsInPeriod: 2 },
+    fsif: { surveys: { sent: 12, answered: 9, open: 1, overdue: 1, cancelled: 1, restricted: 1, daysToAnswer: { n: 9, mean: 6.2, median: 5 } },
+      codes: { issued: 10, used: 8, unused: 1, expired: 1, revoked: 0, daysToUse: { n: 8, mean: 3.1, median: 2 } }, announcements: { published: 4 } },
+    cohort: { maxOffset: 12, rows: [0, 3, 6, 9].map((c) => ({ week: weeks[c], size: 2, reported: Array.from({ length: Math.min(13, 26 - c) }, (_, i) => (i % 4 === 3 ? 1 : 2)), active: Array.from({ length: Math.min(13, 26 - c) }, (_, i) => (i % 3 === 2 ? 0 : 1)) })) },
+    dist: { members: [10, 16, 22, 28, 34, 40, 46], activeRate7d: [0.4, 0.5, 0.62, 0.71, 0.33, 0.8, 0.55], overdueRate: [0.05, 0.1, 0.2, 0.31, 0.12, 0.08, 0.4], ageDays: [5, 40, 80, 120, 170, 200, 240, 300] },
+  }
+}
+function kpiFakeOrgData() {
+  const weeks = kpiFakeWeeks()
+  const orgs = kpiFakeOrgs()
+  const values = kpiFakeValues(weeks, orgs)
+  orgs.forEach((o, n) => { const i = values[n].map((v, j) => (v ? j : -1)).filter((j) => j >= 0).pop(); o.lastReportWeek = i === undefined ? '' : weeks[i] })
+  const s = kpiFakeSummary()
+  return { generatedAt: s.generatedAt, filters: s.filters, options: s.options, metricKeys: KPI_KEYS, v2Keys: s.v2Keys, weeks, orgs, values, prev: orgs.map(() => null) }
 }
 
 // レジストリの偽の応答(長い団体名・URL・メールで、はみ出しを確かめる)
@@ -299,6 +395,10 @@ export function registryResponse(body) {
         usage: Array.from({ length: 10 }, (_, i) => ({ period: new Date(Date.UTC(2026, 8, 28 - i * 7)).toISOString().slice(0, 10), receivedAt: iso(1), version: 2, demo: i === 9,
           metrics: { members: 50 - i, active_7d: 31, tasks: 1240 - i * 30, tasks_done: 980, tasks_overdue: 12, skill_points_total: 123456 } })),
       }
+    case 'getKpiSummary':
+      return kpiFakeSummary()
+    case 'getKpiOrgs':
+      return kpiFakeOrgData()
     case 'issueRegistrationCode':
       return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName, kind: 'new', plan: body.plan }
     case 'setPlanRelease':
@@ -540,6 +640,8 @@ async function run({ build = true } = {}) {
   }
   // 開いているメンバーと、そのメンバーが受け取るデータ(2回目は代表に切り替える)
   let member = MEMBER
+  // レジストリへの呼び出しの数(操作ごと。KPI のタブが、選ぶまで読まないことを確かめる)
+  const registryCalls = {}
   let view = viewerData(MEMBER)
   let caps = viewerCapabilities(MEMBER)
   const server = await serve(join(ROOT, 'out'))
@@ -726,6 +828,7 @@ async function run({ build = true } = {}) {
       }
       if (url.href.startsWith(REGISTRY_URL)) {
         const body = JSON.parse(request.postData || '{}')
+        registryCalls[body.action] = (registryCalls[body.action] || 0) + 1
         // 接続先の解決: テスト用の団体(ORG)だけを答える。ほかは見つからない(招待リンクの団体が見つからない画面)
         if (body.action === 'resolveOrg') {
           return fulfill('application/json', JSON.stringify(body.orgId === ORG
@@ -1166,6 +1269,54 @@ async function run({ build = true } = {}) {
           await clickText('保存する', '[data-plan-releases] button'); await sleep(800)
           const notice = await evaluate(`document.querySelector('[data-plan-release-template-notice]')?.textContent ?? ''`)
           if (!notice.includes('Ohsumiプランのテンプレートの Code.gs も、版 2026.11.01-1 のコード')) throw new Error('配る版を変えた後に、テンプレートの貼り替えの知らせが出ません: ' + notice)
+        }
+        if (step.do === 'registryKpi') {
+          const calls = (a) => registryCalls[a] || 0
+          const waitFor = async (sel) => {
+            for (let i = 0; i < 50; i++) { if (await evaluate(`!!document.querySelector(${JSON.stringify(sel)})`)) return; await sleep(100) }
+            throw new Error('KPI の「' + sel + '」が出ません')
+          }
+          if (step.sub === 'overall') {
+            for (const k of Object.keys(registryCalls)) delete registryCalls[k]
+            await clickText('KPI', '[role=tab]')
+            await waitFor('[data-kpi-overall]')
+            if (calls('getKpiSummary') !== 1 || calls('getKpiOrgs') !== 0) throw new Error(`KPI を開いた時に、全体の分だけを読んでいません(全体 ${calls('getKpiSummary')}・団体別 ${calls('getKpiOrgs')})`)
+            const text = await evaluate(`document.querySelector('[data-kpi-tab]').textContent`)
+            for (const want of ['登録の累計', '主な数字', 'その週に送ってきた団体', '登録した週ごとの続き具合', '分布', 'GAS の版の分布', 'FSIF の運営', 'すべての指標']) {
+              if (!text.includes(want)) throw new Error('KPI の全体に「' + want + '」が出ません')
+            }
+            if (!(await evaluate(`document.querySelectorAll('[data-kpi-line] svg path').length`))) throw new Error('KPI の推移のグラフが出ません')
+          }
+          if (step.sub === 'plans') {
+            await evaluate(`document.querySelector('[data-kpi-subtab="plans"]').click()`)
+            await waitFor('[data-kpi-plans]')
+            if (calls('getKpiOrgs') !== 1) throw new Error('プラン別を選んだ時に、団体別のデータを1回だけ読んでいません: ' + calls('getKpiOrgs'))
+            if ((await evaluate(`document.querySelectorAll('[data-kpi-plans] [data-kpi-legend] > span').length`)) < 2) throw new Error('プラン別の推移に、プランごとの凡例が出ません')
+          }
+          if (step.sub === 'orgs') {
+            await evaluate(`document.querySelector('[data-kpi-subtab="orgs"]').click()`)
+            await waitFor('[data-kpi-org-table]')
+            await evaluate(`document.querySelector('[data-kpi-subtab="overall"]').click()`)
+            await waitFor('[data-kpi-overall]')
+            await evaluate(`document.querySelector('[data-kpi-subtab="orgs"]').click()`)
+            await waitFor('[data-kpi-org-table]')
+            if (calls('getKpiOrgs') !== 1 || calls('getKpiSummary') !== 1) throw new Error(`タブを切り替えた時に読み直しています(全体 ${calls('getKpiSummary')}・団体別 ${calls('getKpiOrgs')})`)
+            // 列をすべて出しても、表だけが横に送れる(ページははみ出さない)
+            await evaluate(`document.querySelector('[data-kpi-columns-button]').click()`)
+            await sleep(100)
+            await evaluate(`[...document.querySelectorAll('[data-kpi-columns] input[type=checkbox]')].forEach((c) => { if (!c.checked) c.click() }); true`)
+            await sleep(200)
+            const cols = await evaluate(`document.querySelectorAll('[data-kpi-org-table] thead th').length`)
+            if (cols < 30) throw new Error('列を増やせません: ' + cols)
+            const scroll = await evaluate(`(() => { const el = document.querySelector('[data-kpi-org-table]').closest('[data-kpi-table-scroll]'); return el.scrollWidth > el.clientWidth && getComputedStyle(el).overflowX === 'auto' })()`)
+            if (!scroll) throw new Error('列の多い表が、表の中で横に送れません')
+            if (!(await evaluate(`document.querySelector('[data-kpi-flags]')?.textContent ?? ''`)).includes('版が古い')) throw new Error('注意の印が出ません')
+          }
+          if (step.sub === 'detail') {
+            await evaluate(`document.querySelector('[data-kpi-org-row] button').click()`)
+            await waitFor('[data-kpi-section="org-detail"]')
+            if (!(await evaluate(`document.querySelector('[data-kpi-section="org-detail"]').textContent`)).includes('団体の推移')) throw new Error('団体の推移が出ません')
+          }
         }
         if (step.do === 'registryProfile') {
           await clickText('団体の情報・担当者・集計値…'); await sleep(800)
