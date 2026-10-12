@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.12-3'
+var REGISTRY_VERSION = '2026.10.12-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -491,6 +491,30 @@ function readRows_(name) {
     headers.forEach(function (h, c) { values[h] = r[c] })
     return { row: i + 2, values: values }
   })
+}
+
+// シートの下(新しい方)から、BOTTOM_READ_BLOCK 行ずつ読む(上から全部は読まない)。visit(values, 行番号) が false を返したら止める。
+// 戻り値は、visit に渡したデータの行の数(見出しは数えない)。追記だけのシート(AuditLog など)の新しい方だけを読む時に使う
+var BOTTOM_READ_BLOCK = 500
+function readRowsFromBottom_(name, visit, blockSize) {
+  var sheet = registrySheet_(name)
+  var last = sheet.getLastRow()
+  var width = sheet.getLastColumn()
+  if (last < 2 || width < 1) return 0
+  var block = Math.max(1, Math.floor(blockSize || BOTTOM_READ_BLOCK))
+  var headers = sheet.getRange(1, 1, 1, width).getValues()[0].map(String)
+  var read = 0
+  for (var end = last; end >= 2; end -= block) {
+    var start = Math.max(2, end - block + 1)
+    var data = sheet.getRange(start, 1, end - start + 1, width).getValues()
+    for (var i = data.length - 1; i >= 0; i--) {
+      var values = {}
+      for (var c = 0; c < headers.length; c++) values[headers[c]] = data[i][c]
+      read++
+      if (visit(values, start + i) === false) return read
+    }
+  }
+  return read
 }
 
 // シートにその列(見出し)があるか
@@ -814,10 +838,13 @@ function adminOverview_(body, nowMs) {
   var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') }).map(function (r) { return orgSummary_(r.values, nowMs) })
   var codes = readRows_('RegistrationCodes').filter(function (r) { return String(r.values.code_hash || '') }).map(function (r) { return codeSummary_(r.values, nowMs) })
   codes.sort(function (a, b) { return String(b.issuedAt).localeCompare(String(a.issuedAt)) })
-  var audit = readRows_('AuditLog').slice(-AUDIT_SHOW_MAX).reverse().map(function (r) {
-    return { at: isoOf_(r.values.at), actor: String(r.values.actor || ''), action: String(r.values.action || ''), target: String(r.values.target || ''),
-      before: String(r.values.before || ''), after: String(r.values.after || ''), reason: String(r.values.reason || '') }
-  })
+  // 操作の記録は、下(新しい方)から AUDIT_SHOW_MAX 件だけ読む(増え続けるシートを全部読まない)
+  var audit = []
+  readRowsFromBottom_('AuditLog', function (v) {
+    audit.push({ at: isoOf_(v.at), actor: String(v.actor || ''), action: String(v.action || ''), target: String(v.target || ''),
+      before: String(v.before || ''), after: String(v.after || ''), reason: String(v.reason || '') })
+    return audit.length < AUDIT_SHOW_MAX
+  }, AUDIT_SHOW_MAX)
   var so = surveyOverview_(nowMs)
   return {
     ok: true,
@@ -3035,7 +3062,8 @@ function setTunables_(body, nowMs) {
     return { ok: true, result: orgSummary_(merged_(row.values, fields), nowMs) }
   })
 }
-// 管理画面の KPI(デモの団体を除く): 利用中の団体の数・プラン別の数・直近の週の集計値の合計
+// 管理画面の KPI(デモの団体を除く): 利用中の団体の数・プラン別の数・直近の週の集計値の合計。
+// 利用中は、KPI タブ(getKpiSummary_)と同じ決まり: 有効・停止予定の団体(機能停止中・提供停止中は入れない。kpiStateOf_)
 function orgKpis_(nowMs) {
   var orgs = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
   var real = orgs.filter(function (r) { return !isDemoOrg_(r.values) })
@@ -3044,7 +3072,7 @@ function orgKpis_(nowMs) {
   var byPlan = { cosmo_base: 0, ohsumi: 0, paid: 0, internal: 0, '': 0 }
   var active = 0
   real.forEach(function (r) {
-    if (orgDisplayState_(r.values, nowMs).state === 'suspended') return
+    if (kpiStateOf_(r.values, nowMs) !== 'active') return
     active++
     var plan = PLANS.indexOf(String(r.values.plan || '')) >= 0 ? String(r.values.plan) : ''
     byPlan[plan]++
@@ -3178,7 +3206,13 @@ function kpiWeeks_(f, usage, nowMs) {
   return weeks
 }
 
-// 停止の種類(管理画面の分け方): survey(アンケートの未回答の機能停止)/ contract(契約の終了)/ manual(そのほか。手動)/ ''(停止していない)
+// KPI の状態(重ならない3つ): active(利用中。有効・停止予定。停止予定もまだ使える)/ restricted(機能停止中)/ suspended(提供停止中)
+function kpiStateOf_(values, nowMs) {
+  var state = orgDisplayState_(values, nowMs).state
+  return state === 'restricted' || state === 'suspended' ? state : 'active'
+}
+
+// 停止の理由(管理画面の分け方): survey(アンケートの未回答の機能停止)/ contract(契約の終了)/ manual(そのほか。手動)/ ''(停止していない)
 function kpiSuspendCategory_(values, nowMs) {
   var state = orgDisplayState_(values, nowMs).state
   if (state !== 'suspended' && state !== 'restricted') return ''
@@ -3226,6 +3260,25 @@ function kpiStats_(list) {
 
 function kpiInPeriod_(ms, fromMs) { return ms > 0 && ms >= fromMs }
 
+// 未回答で機能停止を入れた数(操作の記録の scheduleSurveyRestriction のうち、fromMs 以降)。
+// 操作の記録は古い順に足していくので、下(新しい方)から読み、期間の始まりより古い行が KPI_AUDIT_STOP_RUN 行続いたら止める
+// (手で行を入れて並びが少し崩れていても、止まりすぎて数が少なくならないように)。日時の読めない行は、続いた数に入れない。
+// fromMs が 0(全期間)の時は全部読む。{ count, read(読んだ行の数) }
+var KPI_AUDIT_STOP_RUN = 50
+function kpiSurveyRestrictionsSince_(fromMs) {
+  var count = 0
+  var oldRun = 0
+  var read = readRowsFromBottom_('AuditLog', function (v) {
+    var at = timeOf_(v.at)
+    var inPeriod = at > 0 && at >= fromMs
+    if (inPeriod && String(v.action || '') === 'scheduleSurveyRestriction') count++
+    if (!fromMs || !(at > 0)) return true
+    oldRun = inPeriod ? 0 : oldRun + 1
+    return oldRun < KPI_AUDIT_STOP_RUN
+  })
+  return { count: count, read: read }
+}
+
 // 管理画面: KPI(全体)。{ session, weeks, plan, field, size, affiliation, includeInternal }
 function getKpiSummary_(body, nowMs) {
   var props = registryProps_()
@@ -3252,15 +3305,16 @@ function getKpiSummary_(body, nowMs) {
   })
 
   // A. 団体
-  var a = { total: orgs.length, active: 0, suspended: { manual: 0, survey: 0, contract: 0 }, byPlan: { cosmo_base: 0, ohsumi: 0, paid: 0, internal: 0, '': 0 },
+  // 状態は重ならない3つ(利用中・機能停止中・提供停止中)。3つの合計は total と同じ。停止は理由(アンケート未回答・契約終了・手動)の内訳つき
+  var a = { total: orgs.length, active: 0, restricted: { total: 0, survey: 0, contract: 0, manual: 0 }, suspended: { total: 0, survey: 0, contract: 0, manual: 0 }, byPlan: { cosmo_base: 0, ohsumi: 0, paid: 0, internal: 0, '': 0 },
     byContract: { active: 0, ending: 0, ended: 0, '': 0 }, newByWeek: weeks.map(function () { return 0 }), endedByWeek: weeks.map(function () { return 0 }),
     newByMonth: {}, endedByMonth: {}, byAttr: { field: {}, size: {}, affiliation: {}, started_year: {} } }
   var ageDays = []
   orgs.forEach(function (o) {
     var v = o.values
-    var cat = kpiSuspendCategory_(v, nowMs)
-    if (cat) a.suspended[cat]++
-    if (orgDisplayState_(v, nowMs).state !== 'suspended') a.active++
+    var ks = kpiStateOf_(v, nowMs)
+    if (ks === 'active') a.active++
+    else { a[ks].total++; a[ks][kpiSuspendCategory_(v, nowMs)]++ }
     a.byPlan[planOf_(v)]++
     var cs = String(v.contract_status || '')
     a.byContract[a.byContract.hasOwnProperty(cs) ? cs : '']++
@@ -3327,9 +3381,7 @@ function getKpiSummary_(body, nowMs) {
     else if (s === 'overdue') d.surveys.overdue++
     else d.surveys.open++
   })
-  readRows_('AuditLog').forEach(function (r) {
-    if (String(r.values.action || '') === 'scheduleSurveyRestriction' && kpiInPeriod_(timeOf_(r.values.at), fromMs)) d.surveys.restricted++
-  })
+  d.surveys.restricted = kpiSurveyRestrictionsSince_(f.weeks ? fromMs : 0).count
   d.surveys.daysToAnswer = kpiStats_(answerDays)
   var useDays = []
   readRows_('RegistrationCodes').forEach(function (r) {
@@ -3412,7 +3464,7 @@ function getKpiOrgs_(body, nowMs) {
     var reported = Object.keys(u).sort()
     return {
       orgId: String(v.org_id), name: String(v.display_name || ''), plan: planOf_(v),
-      state: orgDisplayState_(v, nowMs).state, suspendCategory: kpiSuspendCategory_(v, nowMs),
+      state: orgDisplayState_(v, nowMs).state, kpiState: kpiStateOf_(v, nowMs), suspendCategory: kpiSuspendCategory_(v, nowMs),
       contractStatus: String(v.contract_status || ''), createdAt: isoOf_(v.created_at), attrs: o.attrs,
       gasVersion: String(v.gas_version || ''), versionState: st.versionState, gasJudgement: st.judgement, release: st.latest, noCheck: st.noCheck,
       dailyStale: orgJobSummary_(v, nowMs).dailyStale, mailLevel: orgMailSummary_(v).level,

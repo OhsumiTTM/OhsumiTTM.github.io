@@ -246,7 +246,8 @@ function kpiFakeOrgs() {
   const plans = ['ohsumi', 'cosmo_base', 'paid', 'internal', 'ohsumi', '']
   return Array.from({ length: 8 }, (_, n) => ({
     orgId: 'org_kpi' + String(n).padStart(17, '0'), name: n === 0 ? long : `テスト団体${n + 1}`, plan: plans[n % plans.length],
-    state: n === 5 ? 'restricted' : 'active', suspendCategory: n === 5 ? 'survey' : '', contractStatus: 'active', createdAt: new Date(Date.UTC(2026, 3, 20 + n * 21)).toISOString(),
+    state: n === 5 ? 'restricted' : n === 7 ? 'suspended' : n === 6 ? 'scheduled' : 'active', kpiState: n === 5 ? 'restricted' : n === 7 ? 'suspended' : 'active',
+    suspendCategory: n === 5 ? 'survey' : n === 7 ? 'contract' : '', contractStatus: n === 7 ? 'ended' : 'active', createdAt: new Date(Date.UTC(2026, 3, 20 + n * 21)).toISOString(),
     attrs: { field: ['宇宙', '環境', '教育'][n % 3], size: ['1〜10名', '11〜30名'][n % 2], affiliation: n === 0 ? long : ['大学', '高校'][n % 2], started_year: String(2020 + (n % 5)) },
     gasVersion: n === 2 ? '2026.10.11-3' : '2026.10.12-2', versionState: n === 2 ? 'updateRequired' : 'latest', gasJudgement: n === 2 ? 'updateRequired' : 'latest', release: '2026.10.12-2',
     noCheck: false, dailyStale: n === 3, mailLevel: n === 4 ? 'reached' : 'ok', disabledFeatures: n === 1 ? 2 : 0, tunables: 0, lastReportWeek: '',
@@ -300,7 +301,7 @@ function kpiFakeSummary() {
     options: { field: ['宇宙', '環境', '教育'], size: ['11〜30名', '1〜10名'], affiliation: [long, '大学', '高校'] },
     metricKeys: KPI_KEYS, sumKeys: KPI_SUM_KEYS, v2Keys: KPI_KEYS.slice(14), weeks,
     groups: { all: group(() => true), v2: group((r) => r[14] !== null) },
-    orgs: { total: 8, active: 8, suspended: { manual: 0, survey: 1, contract: 0 }, byPlan: { ohsumi: 3, cosmo_base: 1, paid: 1, internal: 1, '': 2 },
+    orgs: { total: 8, active: 6, restricted: { total: 1, survey: 1, contract: 0, manual: 0 }, suspended: { total: 1, survey: 0, contract: 1, manual: 0 }, byPlan: { ohsumi: 3, cosmo_base: 1, paid: 1, internal: 1, '': 2 },
       byContract: { active: 8, ending: 0, ended: 0, '': 0 }, newByWeek: weeks.map((_, i) => (i % 3 === 0 ? 1 : 0)), endedByWeek: weeks.map((_, i) => (i === 20 ? 1 : 0)),
       newByMonth: { '2026-04': 1, '2026-05': 2, '2026-06': 1, '2026-07': 2, '2026-08': 1, '2026-09': 1 }, endedByMonth: { '2026-09': 1 },
       byAttr: { field: { 宇宙: 3, 環境: 3, 教育: 2 }, size: { '1〜10名': 4, '11〜30名': 4 }, affiliation: { [long]: 1, 大学: 4, 高校: 3 }, started_year: { 2020: 2, 2021: 2, 2022: 2, 2023: 1, 2024: 1 } } },
@@ -1278,7 +1279,7 @@ async function run({ build = true } = {}) {
             await waitFor('[data-kpi-overall]')
             if (calls('getKpiSummary') !== 1 || calls('getKpiOrgs') !== 0) throw new Error(`KPI を開いた時に、全体の分だけを読んでいません(全体 ${calls('getKpiSummary')}・団体別 ${calls('getKpiOrgs')})`)
             const text = await evaluate(`document.querySelector('[data-kpi-tab]').textContent`)
-            for (const want of ['登録の累計', '主な数字', 'その週に送ってきた団体', '登録した週ごとの続き具合', '分布', 'GAS の版の分布', 'FSIF の運営', 'すべての指標']) {
+            for (const want of ['登録の累計', '機能停止中', 'アンケート未回答 1', '提供停止中', '契約終了 1', '有効・停止予定', '主な数字', 'その週に送ってきた団体', '登録した週ごとの続き具合', '分布', 'GAS の版の分布', 'FSIF の運営', 'すべての指標']) {
               if (!text.includes(want)) throw new Error('KPI の全体に「' + want + '」が出ません')
             }
             if (!(await evaluate(`document.querySelectorAll('[data-kpi-line] svg path').length`))) throw new Error('KPI の推移のグラフが出ません')
@@ -1307,6 +1308,10 @@ async function run({ build = true } = {}) {
             const scroll = await evaluate(`(() => { const el = document.querySelector('[data-kpi-org-table]').closest('[data-kpi-table-scroll]'); return el.scrollWidth > el.clientWidth && getComputedStyle(el).overflowX === 'auto' })()`)
             if (!scroll) throw new Error('列の多い表が、表の中で横に送れません')
             if (!(await evaluate(`document.querySelector('[data-kpi-flags]')?.textContent ?? ''`)).includes('版が古い')) throw new Error('注意の印が出ません')
+            const states = await evaluate(`[...document.querySelectorAll('[data-kpi-org-state]')].map((e) => e.textContent).join('|')`)
+            for (const want of ['機能停止中(アンケート未回答)', '提供停止中(契約終了)', '利用中(停止予定)']) {
+              if (!states.includes(want)) throw new Error('団体別の表の状態の列に「' + want + '」が出ません: ' + states)
+            }
           }
           if (step.sub === 'detail') {
             await evaluate(`document.querySelector('[data-kpi-org-row] button').click()`)

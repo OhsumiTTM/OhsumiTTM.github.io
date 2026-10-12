@@ -46,12 +46,14 @@ import {
   type KpiOrgData,
   type KpiSummary,
   type KpiWeeks,
+  type KpiStopCounts,
+  KPI_STOP_REASON_LABELS,
+  kpiStateLabel,
 } from '@/lib/registry/kpi'
 import { BarChart, CohortGrid, HBarList, LineChart, Sparkline } from './kpi-charts'
 
 const PLAN_NAMES: Record<Plan | '', string> = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン', internal: 'FSIF', '': '未設定' }
 const PLAN_ORDER: (Plan | '')[] = ['ohsumi', 'cosmo_base', 'paid', 'internal', '']
-const STATE_NAMES: Record<string, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中', suspended: '提供停止中' }
 const ATTR_NAMES = { field: '分野', size: '規模', affiliation: '所属', started_year: '設立年' } as const
 type AttrKey = keyof typeof ATTR_NAMES
 const SUBTABS = [
@@ -278,9 +280,12 @@ function Overall({ s, d, agg, setAgg }: { s: KpiSummary; d: KpiOrgData | null; a
       <Section title="団体" data="orgs">
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-kpi-cards>
           <Card label="登録の累計" value={formatValue(o.total, 'count')} />
-          <Card label="利用中" value={formatValue(o.active, 'count')} />
-          <Card label="停止中" value={formatValue(o.suspended.manual + o.suspended.survey + o.suspended.contract, 'count')}
-            sub={`手動 ${o.suspended.manual}・アンケート未回答 ${o.suspended.survey}・契約終了 ${o.suspended.contract}`} />
+          <Card label="利用中" value={formatValue(o.active, 'count')} sub="有効・停止予定(まだ使える)の団体" />
+          <Card label="機能停止中" value={formatValue(o.restricted.total, 'count')} sub={stopBreakdown(o.restricted)} />
+          <Card label="提供停止中" value={formatValue(o.suspended.total, 'count')} sub={stopBreakdown(o.suspended)} />
+        </dl>
+        <p className="mt-1 text-xs text-muted-foreground">利用中・機能停止中・提供停止中は重なりません(3つの合計が登録の累計です)。</p>
+        <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Card label="契約" value={`契約中 ${o.byContract.active ?? 0}`} sub={`終了予定 ${o.byContract.ending ?? 0}・終了 ${o.byContract.ended ?? 0}・未設定 ${o.byContract[''] ?? 0}`} />
         </dl>
         <p className="mt-2 text-xs break-words text-muted-foreground">プラン別: {PLAN_ORDER.map((p) => `${PLAN_NAMES[p]} ${o.byPlan[p] ?? 0}`).join('・')}</p>
@@ -402,6 +407,10 @@ function Overall({ s, d, agg, setAgg }: { s: KpiSummary; d: KpiOrgData | null; a
       </Section>
     </div>
   )
+}
+
+function stopBreakdown(c: KpiStopCounts): string {
+  return (['survey', 'contract', 'manual'] as const).map((r) => `${KPI_STOP_REASON_LABELS[r]} ${c[r]}`).join('・')
 }
 
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -538,7 +547,8 @@ function ByPlan({ d, agg, setAgg }: { d: KpiOrgData; agg: KpiAgg; setAgg: (a: Kp
 
 // ---- 団体別 ----
 
-type SortKey = 'name' | 'plan' | 'flags' | string
+type SortKey = 'name' | 'plan' | 'state' | 'flags' | string
+const STATE_ORDER = ['active', 'restricted', 'suspended']
 
 function ByOrg({ d }: { d: KpiOrgData }) {
   const [columns, setColumns] = useState<string[]>(DEFAULT_COLUMNS)
@@ -554,6 +564,7 @@ function ByOrg({ d }: { d: KpiOrgData }) {
     const dir = sort.desc ? -1 : 1
     if (sort.key === 'name') return dir * a.o.name.localeCompare(b.o.name, 'ja')
     if (sort.key === 'plan') return dir * PLAN_ORDER.indexOf(a.o.plan).toString().localeCompare(PLAN_ORDER.indexOf(b.o.plan).toString())
+    if (sort.key === 'state') return dir * (STATE_ORDER.indexOf(a.o.kpiState) - STATE_ORDER.indexOf(b.o.kpiState)) || a.o.name.localeCompare(b.o.name, 'ja')
     if (sort.key === 'flags') return dir * (a.flags.length - b.flags.length) || a.o.name.localeCompare(b.o.name, 'ja')
     const va = a.last[sort.key]
     const vb = b.last[sort.key]
@@ -577,7 +588,7 @@ function ByOrg({ d }: { d: KpiOrgData }) {
         <MetricSelect value={trendId} onChange={setTrendId} label="小さな推移" />
         <CsvButton name="kpi-orgs.csv" make={() => toCsv([
           ['団体', '団体ID', 'プラン', '状態', '注意の印', ...columns.map((c) => KPI_METRIC_BY_ID[c].label)],
-          ...sorted.map((r) => [r.o.name, r.o.orgId, PLAN_NAMES[r.o.plan], STATE_NAMES[r.o.state] ?? r.o.state, r.flags.map((f) => KPI_FLAG_LABELS[f]).join('・'), ...columns.map((c) => r.last[c])]),
+          ...sorted.map((r) => [r.o.name, r.o.orgId, PLAN_NAMES[r.o.plan], kpiStateLabel(r.o), r.flags.map((f) => KPI_FLAG_LABELS[f]).join('・'), ...columns.map((c) => r.last[c])]),
         ])} label="表の CSV" />
       </div>
       {choosing && (
@@ -598,6 +609,7 @@ function ByOrg({ d }: { d: KpiOrgData }) {
             <tr className="text-muted-foreground">
               {header('name', '団体')}
               {header('plan', 'プラン')}
+              {header('state', '状態')}
               {header('flags', '注意')}
               {columns.map((c) => <th key={c} className="py-1 pr-2 text-right font-normal">
                 <button type="button" className="whitespace-nowrap underline-offset-2 hover:underline" onClick={() => setSort({ key: c, desc: sort.key === c ? !sort.desc : true })}>
@@ -614,9 +626,9 @@ function ByOrg({ d }: { d: KpiOrgData }) {
                   <button type="button" className="text-left break-words text-primary underline-offset-2 hover:underline" onClick={() => setOpenOrg(openOrg === r.i ? null : r.i)} aria-expanded={openOrg === r.i}>
                     {r.o.name || r.o.orgId}
                   </button>
-                  {r.o.state !== 'active' && <span className="block text-[11px] text-muted-foreground">{STATE_NAMES[r.o.state]}</span>}
                 </td>
                 <td className="py-1 pr-2 whitespace-nowrap">{PLAN_NAMES[r.o.plan]}</td>
+                <td className="py-1 pr-2 whitespace-nowrap" data-kpi-org-state>{kpiStateLabel(r.o)}</td>
                 <td className="py-1 pr-2">
                   {r.flags.length ? (
                     <ul className="space-y-0.5" data-kpi-flags>
@@ -648,7 +660,7 @@ function OrgDetail({ d, index, onClose }: { d: KpiOrgData; index: number; onClos
         <Button type="button" size="sm" variant="ghost" onClick={onClose}>閉じる</Button>
       </>}>
       <p className="mb-2 text-xs break-words text-muted-foreground">
-        {PLAN_NAMES[o.plan]}・{STATE_NAMES[o.state] ?? o.state}・GAS {o.gasVersion || '不明'}(配る版 {o.release || '—'})・最後に集計値が届いた週 {o.lastReportWeek || 'なし'}
+        {PLAN_NAMES[o.plan]}・{kpiStateLabel(o)}・GAS {o.gasVersion || '不明'}(配る版 {o.release || '—'})・最後に集計値が届いた週 {o.lastReportWeek || 'なし'}
         {o.attrs.field && `・${o.attrs.field}`}{o.attrs.size && `・${o.attrs.size}`}{o.attrs.affiliation && `・${o.attrs.affiliation}`}
       </p>
       <div className="mb-2"><MetricSelect value={metricId} onChange={setMetricId} /></div>
