@@ -320,6 +320,7 @@ export const ja = {
   'metrics.key.projects': 'プロジェクトの数',
   'metrics.key.errors_7d': '直近7日のエラーの件数',
   'usage.title': '利用の状況',
+  'metrics.show': '集計値を表示する',
   'usage.show': '利用の状況を表示する',
   'usage.desc': 'ログイン・画面の読み込み・書き込みの回数(日ごと)と、エラーの件数です。誰の操作かは記録していません。数字は団体のスプレッドシート(UsageDaily・ErrorLog)にだけ残り、団体の外には送りません。同時の読み込みは数え漏れることがあるため、おおよその回数です。',
   'usage.week': '直近7日: ログイン {login} 回・画面の読み込み {open} 回・書き込み {writes} 回',

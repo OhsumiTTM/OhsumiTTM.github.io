@@ -320,6 +320,7 @@ export const en = {
   'metrics.key.projects': 'Projects',
   'metrics.key.errors_7d': 'Errors (7 days)',
   'usage.title': 'Usage',
+  'metrics.show': 'Show metrics',
   'usage.show': 'Show usage',
   'usage.desc': 'Daily counts of sign-ins, page loads and saves, and the number of errors. Who did what is not recorded. The numbers stay only in your organization\'s spreadsheet (UsageDaily and ErrorLog) and are not sent outside. Simultaneous loads may be missed, so the counts are approximate.',
   'usage.week': 'Last 7 days: {login} sign-ins, {open} page loads, {writes} saves',

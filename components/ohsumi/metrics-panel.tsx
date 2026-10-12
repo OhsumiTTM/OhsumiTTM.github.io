@@ -4,7 +4,8 @@
 //   - プランと、送るか(Ohsumiプランは必須。ほかのプランは代表が選ぶ)
 //   - 次に送る時刻と、次に送る内容(プレビュー。個人を特定しない数だけ)
 //   - 送信の履歴(失敗した時は、時間を置いて送り直す)
-import { useCallback, useEffect, useState } from 'react'
+//   - 「集計値を表示する」を押した時に読む(団体設定を開くたびには読まない)
+import { useState } from 'react'
 import { Loader2, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SectionLabel } from '@/components/ohsumi/primitives'
@@ -35,14 +36,15 @@ export function MetricsPanel() {
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
   const fmt = (iso: string) => (iso ? new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ja-JP', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso)) : '—')
 
-  const load = useCallback(async () => {
-    try {
-      setStatus(await remoteApi.getMetricsStatus())
-    } catch (e) {
-      setError(message(e))
-    }
-  }, [])
-  useEffect(() => { void load() }, [load])
+  const [loading, setLoading] = useState(false)
+  const load = () => {
+    setLoading(true)
+    setError(null)
+    remoteApi.getMetricsStatus().then(
+      (st) => setStatus(st),
+      (e: unknown) => setError(message(e)),
+    ).finally(() => setLoading(false))
+  }
 
   const toggle = async (enabled: boolean) => {
     setBusy(true)
@@ -65,7 +67,14 @@ export function MetricsPanel() {
         <SectionLabel>{t('metrics.title')}</SectionLabel>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">{t('metrics.desc')}</p>
-      {!status && !error && <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />{t('backup.loading')}</p>}
+      {!status && (
+        <div className="mt-2">
+          <Button size="sm" variant="ghost" disabled={loading} onClick={load} data-metrics-show>
+            {loading && <Loader2 className="size-3.5 animate-spin" />}
+            {t(loading ? 'backup.loading' : 'metrics.show')}
+          </Button>
+        </div>
+      )}
       {status && (
         <div className="mt-3 space-y-3 text-xs">
           <p className="break-words">
