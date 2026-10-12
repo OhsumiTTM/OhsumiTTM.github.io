@@ -6,3 +6,8 @@
 // 'true' にしてビルドすると有効になる(OAuth クライアントに calendar スコープを
 // 追加し、審査を通過している必要がある)。
 export const isGoogleCalendarReadEnabled = process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_READ === 'true'
+
+// Googleカレンダーとの連携のボタン(予定に追加するリンク・カレンダーの読み込み・空き時間の確認と、
+// その「使えません」の表示)。いったん隠している。NEXT_PUBLIC_GOOGLE_CALENDAR_BUTTONS を
+// 'true' にしてビルドすると出る(予定の表示・空き時間の確認は isGoogleCalendarReadEnabled も要る)
+export const isGoogleCalendarButtonsEnabled = process.env.NEXT_PUBLIC_GOOGLE_CALENDAR_BUTTONS === 'true'

@@ -15,7 +15,7 @@ import {
   isGoogleOAuthConfigured,
 } from '@/lib/ohsumi/google-sheet-sync'
 import { fetchCalendarEvents, type GCalEvent } from '@/lib/ohsumi/google-calendar'
-import { isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
+import { isGoogleCalendarButtonsEnabled, isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 
@@ -209,7 +209,7 @@ function MonthView({
                     >
                       {absentDates.includes(dateKey(d)) ? tr('calendar.absent.badge') : '＋'}
                     </button>
-                    {absentDates.includes(dateKey(d)) && (
+                    {isGoogleCalendarButtonsEnabled && absentDates.includes(dateKey(d)) && (
                       <a
                         href={googleCalendarAllDayUrl(tr('calendar.absent.eventTitle'), dateKey(d))}
                         target="_blank"
@@ -537,13 +537,13 @@ export function CalendarView({
           </div>
 
           {/* Google Calendar connect */}
-          {isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
+          {isGoogleCalendarButtonsEnabled && isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
             <span className="flex items-center gap-1.5 rounded-lg border border-dashed border-border px-2.5 py-1 text-xs text-muted-foreground">
               <Calendar className="size-3" />
               {tr('calendar.gcal.unavailable')}
             </span>
           )}
-          {isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && (
+          {isGoogleCalendarButtonsEnabled && isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && (
             hasToken ? (
               <button onClick={connect} title={tr('calendar.gcal.reload')}
                 className={cn('flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300', gcalLoading && 'animate-pulse')}

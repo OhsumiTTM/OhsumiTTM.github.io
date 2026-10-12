@@ -213,6 +213,13 @@
     min-width: 0;
     text-overflow: ellipsis;
   }
+  /* 暗い表示: 開いた選択肢の一覧は、地が透明の <select> だとブラウザ(Windows の Chrome・Edge、Firefox など)が
+     白い地で描くことがあり、明るい文字(選択肢は <select> の文字色を受け継ぐ)が読めなくなる。地と文字を決めておく */
+  .dark option,
+  .dark optgroup {
+    background-color: var(--popover);
+    color: var(--foreground);
+  }
 }
 
 @layer utilities {
