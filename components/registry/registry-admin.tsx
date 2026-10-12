@@ -12,6 +12,7 @@ import { OhsumiLogo } from '@/components/ohsumi/primitives'
 import { waitForGIS } from '@/lib/ohsumi/google-sheet-sync'
 import { inviteLink } from '@/lib/ohsumi/org-directory'
 import { OrgProfilePanel } from './org-profile-panel'
+import { KpiTab } from './kpi-tab'
 import {
   REGISTRY_CLIENT_ID,
   RegistryError,
@@ -154,6 +155,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 }
 export const TABS = [
   { id: 'orgs', label: '団体' },
+  { id: 'kpi', label: 'KPI' },
   { id: 'codes', label: '登録コード' },
   { id: 'surveys', label: 'アンケート' },
   { id: 'announcements', label: 'お知らせ' },
@@ -299,6 +301,8 @@ export function RegistryAdmin() {
           {overview.planReleases && <PlanReleasesPanel releases={overview.planReleases} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           <OrgList orgs={overview.orgs} features={overview.features} tunables={overview.tunables} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
         </>
+      ) : tab === 'kpi' ? (
+        <KpiTab session={session} onAuthError={endSession} />
       ) : tab === 'codes' ? (
         <CodesPanel
           session={session}

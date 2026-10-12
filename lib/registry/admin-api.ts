@@ -6,6 +6,7 @@
 // - 読み取り(一覧)は、JSON が返らなければ2回まで送り直す。書き込み(登録コードの発行・取り消し)は
 //   送り直さない(二重に発行しないため。失敗した時は一覧を読み直して確かめる)
 import { FETCH_INIT } from '../ohsumi/gas-transport'
+import type { KpiFilters, KpiOrgData, KpiSummary } from './kpi'
 
 export const REGISTRY_URL = process.env.NEXT_PUBLIC_REGISTRY_URL
 export const REGISTRY_CLIENT_ID = process.env.NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID
@@ -811,4 +812,16 @@ export function takeIssueDraft(): IssueInput | null {
   } catch {
     return null
   }
+}
+
+// ---- KPI(管理画面の「KPI」タブ。読み取りだけなので、JSON が返らなければ2回まで送り直す) ----
+
+/** 全体用(週ごとの合計・団体・運用・FSIF の運営の数・コホート・分布) */
+export function getKpiSummary(session: AdminSession, filters: KpiFilters): Promise<KpiSummary> {
+  return callRegistry<KpiSummary>('getKpiSummary', { session: session.token, ...filters }, 2)
+}
+
+/** プラン別・団体別用(団体の一覧と、団体×週×項目の集計値) */
+export function getKpiOrgs(session: AdminSession, filters: KpiFilters): Promise<KpiOrgData> {
+  return callRegistry<KpiOrgData>('getKpiOrgs', { session: session.token, ...filters }, 2)
 }
