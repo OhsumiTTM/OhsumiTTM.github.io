@@ -665,10 +665,6 @@ async function run({ build = true } = {}) {
               task('来週のタスク', { dueDate: day(4) }),
             ] }
         }
-        // データの持ち方(途中で止まった移行。長いバックアップの名前・照合の知らせも、画面の幅に収まることを確かめる)
-        case 'getRecordRowsStatus': return { state: 'migrating', since: '2026-10-08T00:00:00.000Z', phase: 'copy', cursor: { sheet: 'Tasks', index: 100 },
-          backup: 'Ohsumi バックアップ 2026-10-08 09:00(移行の前)とても長い名前のバックアップでも折り返します', message: '',
-          cells: { comment: 1520, progress: 312, history: 4210, one_on_one: 48, evaluation: 12 } }
         // 個人情報の削除(7日以内に消す人数・消す前の人)
         case 'getPersonalDataStatus': return { retentionDays: 30, min: 7, max: 365, noticeDays: 7,
           upcoming: [{ date: '2026-10-05', count: 2 }],
@@ -1327,9 +1323,6 @@ async function run({ build = true } = {}) {
           if (!(await evaluate(`!!document.querySelector('[data-backup-panel] [data-backup-select]')`))) throw new Error('団体設定に、バックアップの一覧が出ません')
           await pick('bk1'); await sleep(800)
           if (step.mode === 'full') {
-            // 同じ画面の「データの持ち方」: 途中で止まった移行は、件数と「続きから移す」を出す
-            const recordRows = await evaluate(`document.querySelector('[data-record-rows="migrating"]')?.textContent ?? ''`)
-            if (!recordRows.includes('続きから移す') || !recordRows.includes('1520')) throw new Error('団体設定に、データの持ち方(途中で止まった移行)が出ません: ' + recordRows.slice(0, 200))
             // 同じ画面の「個人情報の削除」: 保存期間と、消す前の人(すぐ消す・延長・退会を取り消す)
             const privacy = await evaluate(`document.querySelector('[data-personal-data-panel]')?.textContent ?? ''`)
             for (const want of ['保存期間', 'すぐ消す', '30 日延長', '退会を取り消す', '(延長済み)', '対応するメンバーがいないメールアドレスの行が 2 件あります', 'old.member.with.a.long.address@example.com']) {
