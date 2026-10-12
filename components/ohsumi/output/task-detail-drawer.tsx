@@ -4,7 +4,7 @@ import { currentInviteLink } from '@/components/ohsumi/other-device'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useRef, useState } from 'react'
 import { getCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
-import { isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
+import { isGoogleCalendarButtonsEnabled, isGoogleCalendarReadEnabled } from '@/lib/ohsumi/features'
 import { Drawer, Modal } from '../modal'
 import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Button } from '@/components/ui/button'
@@ -1476,7 +1476,7 @@ function DrawerBody({
                 </button>
               )}
             </div>
-            {calendarUrl && (
+            {isGoogleCalendarButtonsEnabled && calendarUrl && (
               <a
                 href={calendarUrl}
                 target="_blank"
@@ -2721,10 +2721,10 @@ function ScheduleSection({
                 <p className="text-xs text-muted-foreground">{t('taskDrawer.schedule.respondHint')}</p>
                 {/* 空き時間の確認は calendar スコープ(機密)が必要なため、既定では停止している
                     (lib/ohsumi/features.ts の isGoogleCalendarReadEnabled で有効にできる) */}
-                {isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
+                {isGoogleCalendarButtonsEnabled && isGoogleOAuthConfigured() && !isGoogleCalendarReadEnabled && (
                   <span className="text-[10px] text-muted-foreground">{t('taskDrawer.schedule.freeBusyUnavailable')}</span>
                 )}
-                {isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && getCalendarToken() && (
+                {isGoogleCalendarButtonsEnabled && isGoogleOAuthConfigured() && isGoogleCalendarReadEnabled && getCalendarToken() && (
                   <button onClick={checkFreeBusy} className="flex items-center gap-1 rounded-md bg-blue-50 px-2 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400">
                     <svg className="size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
                     {t('taskDrawer.schedule.checkFreeBusy')}
@@ -2822,7 +2822,7 @@ function ScheduleSection({
           {task.status === 'done' && (
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-medium text-emerald-700">{t('taskDrawer.allRespondedDone')}</p>
-              <AddToGCalButton task={task} />
+              {isGoogleCalendarButtonsEnabled && <AddToGCalButton task={task} />}
             </div>
           )}
         </div>
