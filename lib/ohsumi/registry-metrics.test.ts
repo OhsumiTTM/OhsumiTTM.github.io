@@ -19,7 +19,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: '団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
   const reg = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: 'register-nonce-00000001-abcdefghijklmnopqrstuvwxyz0123' })
   const key = String(reg.result.registryKey)
   const report = (period: string, metrics: Record<string, unknown>, opts: { key?: string; ts?: number } = {}) => {
@@ -63,8 +63,9 @@ describe('reportMetrics', () => {
       const ts = checkInTs()
       return t.post({ action: 'checkIn', orgId: ORG_A, ts, gasVersion: '2026.10.01-9', sig: createHmac('sha256', t.key).update('checkIn.' + ORG_A + '.' + ts).digest('base64url') })
     }
-    expect(checkIn().result.plan).toBe('')
-    expect(t.post({ action: 'setOrgPlan', session: t.session, orgId: ORG_A, plan: 'ohsumi', reason: 'テスト' }).ok).toBe(true)
+    // 登録コードで選んだプラン
     expect(checkIn().result.plan).toBe('ohsumi')
+    expect(t.post({ action: 'setOrgPlan', session: t.session, orgId: ORG_A, plan: 'internal', reason: 'テスト' }).ok).toBe(true)
+    expect(checkIn().result.plan).toBe('internal')
   })
 })

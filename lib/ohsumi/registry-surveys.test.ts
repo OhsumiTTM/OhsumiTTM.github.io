@@ -25,7 +25,7 @@ function ready() {
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
   const keys: Record<string, string> = {}
   ;[[ORG_A, '団体A', 'a@example.org'], [ORG_B, '団体B', 'b@example.org']].forEach(([orgId, name, email], i) => {
-    const code = t.post({ action: 'issueRegistrationCode', session, orgName: name, contactName: '担当', contactEmail: email }).result.code
+    const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: name, contactName: '担当', contactEmail: email }).result.code
     const reg = t.post({ action: 'registerOrg', code, orgId, gasUrl: 'https://script.google.com/macros/s/AKfy' + i + '/exec', registerNonce: 'register-nonce-0000000' + i + '-abcdefghijklmnopqrstuvwxyz0123' })
     expect(reg.ok, JSON.stringify(reg)).toBe(true)
     keys[orgId] = String(reg.result.registryKey)
@@ -71,9 +71,10 @@ describe('アンケートを送る', () => {
     expect(t.mails).toHaveLength(2)
   })
 
-  it('プラン別・団体を選んで送れる。プランが未設定の団体には送らない', () => {
+  it('プラン別・団体を選んで送れる。プランが未設定の団体(プランを選ぶ前の登録コードで登録した団体)には送らない', () => {
     const t = ready()
     t.plan(ORG_A, 'ohsumi')
+    t.sheetRow('Orgs', 'org_id', ORG_B).set('plan', '')
     expect(t.send({ target: { kind: 'plan', plan: 'cosmo_base' } })).toMatchObject({ ok: false, error: '送る団体がありません。' })
     expect(t.send({ target: { kind: 'plan', plan: 'ohsumi' } }).result.sent).toHaveLength(1)
     const res = t.send({ target: { kind: 'orgs', orgIds: [ORG_B] }, formUrl: 'https://forms.gle/abc123' })

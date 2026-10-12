@@ -18,6 +18,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import vm from 'node:vm'
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..')
+// 今の団体の GAS の版(サイトの /gas/<版>/Code.gs に置かれる。「コードをコピー」が読む)
+const GAS_CURRENT = readFileSync(join(ROOT, 'gas', 'Code.gs'), 'utf8').match(/^var OHSUMI_GAS_VERSION = '([^']*)'$/m)[1]
 export const WIDTH = Number(process.env.LAYOUT_WIDTH || 375)
 const GAS_URL = 'https://script.google.com/macros/s/LAYOUT_CHECK/exec'
 const ORG = 'org_LAYOUTLAYOUTLAYOUT01'
@@ -194,6 +196,7 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(停止の予定を入れる)', do: 'registrySuspend' },
   { name: 'レジストリ管理(当日の提供停止の確認)', do: 'registrySuspendNow' },
   { name: 'レジストリ管理(プランを変える)', do: 'registryPlan' },
+  { name: 'レジストリ管理(プランごとに配る版を変えた後)', do: 'registryReleases' },
   { name: 'レジストリ管理(団体の情報・担当者・集計値)', do: 'registryProfile' },
   { name: 'レジストリ管理(登録コード)', do: 'click', text: '登録コード', from: '[role=tab]' },
   { name: 'レジストリ管理(登録コードを発行した後)', do: 'registryIssue' },
@@ -205,6 +208,21 @@ export const REGISTRY_STEPS = [
   { name: 'レジストリ管理(診断情報の中身)', do: 'registryDiagnostics' },
   { name: 'レジストリ管理(操作の記録)', do: 'click', text: '操作の記録', from: '[role=tab]' },
 ]
+
+// プランごとに配る版の偽物(versions でプランの版を変える)
+function planReleasesFake(versions = {}) {
+  const row = (plan, version, extra = {}) => ({ plan, setting: version, version: versions[plan] ?? version, source: 'set', problem: '', templateUrl: '', note: '', updatedAt: '', updatedBy: '', orgs: 1, outdated: 0, updateRequired: 0, ...extra })
+  return {
+    plans: [
+      row('cosmo_base', '2026.10.01-1', { outdated: 1 }),
+      row('ohsumi', '2026.10.01-1', { templateUrl: 'https://docs.google.com/spreadsheets/d/' + 'T'.repeat(44) + '/copy', note: 'FSIF で1週間確かめてから広げる'.repeat(2), updatedAt: new Date(Date.UTC(2026, 9, 2)).toISOString(), updatedBy: 'registry.admin.with.a.long.address@example.com' }),
+      row('paid', '2026.10.01-1', { orgs: 0 }),
+      row('internal', 'latest', { version: versions.internal ?? GAS_CURRENT, source: 'latest' }),
+    ],
+    newest: GAS_CURRENT, fallback: '2026.10.01-1', released: [GAS_CURRENT, '2026.11.01-1', '2026.10.01-1'], removable: ['2026.11.01-1'],
+    pendingSecurity: [{ version: GAS_CURRENT, plans: ['cosmo_base', 'ohsumi', 'paid'] }],
+  }
+}
 
 // レジストリの偽の応答(長い団体名・URL・メールで、はみ出しを確かめる)
 export function registryResponse(body) {
@@ -234,7 +252,9 @@ export function registryResponse(body) {
           codeId: 'rc_' + i + 'abcdefghij', kind: 'new', orgName: i ? '団体' + i : long, contactName: '担当 太郎', contactEmail: 'contact.person.long.address@example.org', note: i ? '' : 'とても長いメモ'.repeat(8),
           state, expiresAt: iso(14), issuedBy: 'registry.admin.with.a.long.address@example.com', issuedAt: iso(1), usedAt: state === 'used' ? iso(2) : '', usedOrgId: state === 'used' ? 'org_' + 'y'.repeat(40) : '', revokedAt: state === 'revoked' ? iso(3) : '', revokedBy: state === 'revoked' ? 'registry.admin.with.a.long.address@example.com' : '',
         })),
-        kpis: { activeOrgs: 3, byPlan: { ohsumi: 1, cosmo_base: 1, paid: 0, '': 1 }, demoOrgs: 1, metrics: { reportingOrgs: 2, latestPeriod: '2026-09-28', totals: { members: 52, active_7d: 31, tasks: 1240, tasks_done: 980, tasks_overdue: 12 } } },
+        // プランごとに配る版(長いテンプレートのリンク・まだ配っていない安全の修正・外してよい版)
+        planReleases: planReleasesFake(),
+        kpis: { activeOrgs: 3, byPlan: { ohsumi: 1, cosmo_base: 1, paid: 0, internal: 0, '': 1 }, demoOrgs: 1, metrics: { reportingOrgs: 2, latestPeriod: '2026-09-28', totals: { members: 52, active_7d: 31, tasks: 1240, tasks_done: 980, tasks_overdue: 12 } } },
         mailQueue: { pending: 23, recipients: 31, byKind: { reminder: 15, send: 8 }, oldestAt: iso(1), remainingToday: 0 },
         // 機能のスイッチ(全団体で止めている機能・止められる機能の一覧)
         // 上限・しきい値(項目の一覧と、全団体の値)
@@ -280,7 +300,9 @@ export function registryResponse(body) {
           metrics: { members: 50 - i, active_7d: 31, tasks: 1240 - i * 30, tasks_done: 980, tasks_overdue: 12, skill_points_total: 123456 } })),
       }
     case 'issueRegistrationCode':
-      return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName }
+      return { code: 'ABCD-EFGH-JKMN-PQRS', codeId: 'rc_new', expiresAt: new Date(Date.UTC(2026, 9, 15)).toISOString(), orgName: body.orgName, kind: 'new', plan: body.plan }
+    case 'setPlanRelease':
+      return { planReleases: planReleasesFake({ [body.plan]: body.version }) }
     default:
       return {}
   }
@@ -672,7 +694,7 @@ async function run({ build = true } = {}) {
           { id: 't3', title: '同じタスク', currentTitle: '同じタスク', state: 'same', diffs: [] },
         ] }
         // 管理画面の上部に、GAS の更新が要る知らせを出す
-        case 'getGasUpdateStatus': return { current: 'r1e-2', known: true, required: true, outdated: true, latest: '2026.10.01-1', minimum: '2026.10.01-1', security: true, checkedAt: '2026-10-01T03:00:00.000Z' }
+        case 'getGasUpdateStatus': return { current: 'r1e-2', known: true, required: true, outdated: true, latest: GAS_CURRENT, minimum: GAS_CURRENT, security: true, checkedAt: '2026-10-01T03:00:00.000Z' }
         case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
         default: return {}
       }
@@ -1039,17 +1061,17 @@ async function run({ build = true } = {}) {
           if (!privacyBanner.includes('2人分の個人情報を')) throw new Error('管理画面に、個人情報を消す7日前の知らせが出ません: ' + privacyBanner)
           if (!privacyBanner.includes('対応するメンバーがいないメールアドレスの行が 2 件あります')) throw new Error('管理画面に、対応するメンバーがいないメールアドレスの行の知らせが出ません: ' + privacyBanner)
           const gasUpdate = await evaluate(`document.querySelector('[data-gas-update-banner]')?.textContent ?? ''`)
-          if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → 最新の版: 2026.10.01-1)') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
+          if (!gasUpdate.includes('この団体の GAS の更新が要ります(今の版: r1e-2 → このプランで配っている版: ' + GAS_CURRENT + ')') || !gasUpdate.includes('安全の修正')) throw new Error('管理画面に、GAS の更新の知らせが出ません: ' + gasUpdate)
           if (!gasUpdate.includes('「Ohsumi」→「初期設定」') || !gasUpdate.includes('デプロイを管理')) throw new Error('GAS の更新の知らせに、更新の手順が出ません: ' + gasUpdate)
-          // 「コードをコピー」: このサイトの /gas/Code.gs を読む(CSP の connect-src 'self' のまま)。知らせの最新の版(2026.10.01-1)と
-          // サイトのコードの版が違うので、コピーせずに理由を出す
+          // 「コードをコピー」: このサイトの /gas/<配っている版>/Code.gs を読む(CSP の connect-src 'self' のまま)。版を確かめてから
+          // クリップボードに入れる(ヘッドレスの Chrome はクリップボードを断ることがあるので、その時の文も、読めて版が合った印として受け付ける)
           await evaluate(`document.querySelector('[data-gas-copy-code]').click()`)
           let copyResult = ''
           for (let i = 0; i < 50 && !copyResult; i++) {
             await new Promise((r) => setTimeout(r, 100))
             copyResult = await evaluate(`document.querySelector('[data-gas-copy-result]')?.textContent ?? ''`)
           }
-          if (!/このサイトのコードの版\(\d{4}\.\d{2}\.\d{2}-\d+\)が、最新の版\(2026\.10\.01-1\)と違う/.test(copyResult)) throw new Error('「コードをコピー」が、サイトの Code.gs の版を確かめていません: ' + copyResult)
+          if (!copyResult.includes('コピーしました(版 ' + GAS_CURRENT + ')') && !copyResult.includes('クリップボードに入れられませんでした')) throw new Error('「コードをコピー」が、サイトの /gas/' + GAS_CURRENT + '/Code.gs を読めていません: ' + copyResult)
         }
         if (step.do === 'registryLogin') { await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/registry-admin/') }
         if (step.do === 'registry') {
@@ -1072,7 +1094,7 @@ async function run({ build = true } = {}) {
           // デモの団体: 印が出て、停止の予定を入れるボタンが無い。KPI はデモを除く
           const demo = await evaluate(`document.querySelector('[data-org-demo]')?.textContent ?? ''`)
           if (!demo.includes('デモ') || !demo.includes('デモの団体には、停止の予定を入れられません') || demo.includes('停止の予定を入れる…') || !demo.includes('デモの印を外す…')) throw new Error('デモの団体の表示が違います: ' + demo)
-          if (!(await evaluate(`document.querySelector('[data-kpis]')?.textContent ?? ''`)).includes('利用中の団体: 3(プラン別: Ohsumiプラン 1・Cosmo Baseプラン 1・有償プラン 0・未設定 1)。デモの団体: 1')) throw new Error('KPI が出ません')
+          if (!(await evaluate(`document.querySelector('[data-kpis]')?.textContent ?? ''`)).includes('利用中の団体: 3(プラン別: Ohsumiプラン 1・Cosmo Baseプラン 1・有償プラン 0・FSIF 0・未設定 1)。デモの団体: 1')) throw new Error('KPI が出ません')
           for (const want of ['メールの上限に達した団体: 1', 'メールの残りが少ない団体: 1', 'メールの残り 8', 'GAS: 更新が要る', 'GAS: 24時間以上確認が無い', 'GAS: 最新', '担当者に更新のお願いを送る…', '毎日の処理が26時間以上成功していない', '毎日・毎時の処理']) {
             if (!mail.includes(want)) throw new Error('レジストリの管理画面に「' + want + '」が出ません')
           }
@@ -1117,6 +1139,32 @@ async function run({ build = true } = {}) {
         if (step.do === 'registryPlan') {
           await clickText('プランを変える…'); await sleep(500)
           if (!(await evaluate(`[...document.querySelectorAll('select option')].some((o) => o.textContent === '有償プラン')`))) throw new Error('プランを選ぶ欄が出ません')
+          if (!(await evaluate(`[...document.querySelectorAll('select option')].some((o) => o.textContent === 'FSIF')`))) throw new Error('プランを選ぶ欄に FSIF がありません')
+        }
+        if (step.do === 'registryReleases') {
+          // プランごとに配る版: まだ配っていない安全の修正を知らせる。開いて Ohsumi の版を FSIF より新しくしようとすると確かめ、
+          // 保存した後は、そのプランのテンプレートの貼り替えを知らせる
+          const panel = () => evaluate(`document.querySelector('[data-plan-releases]')?.textContent ?? ''`)
+          if (!(await panel()).includes('安全の修正の版(' + GAS_CURRENT + ')を、Cosmo Baseプラン・Ohsumiプラン・有償プランに配っていません')) throw new Error('まだ配っていない安全の修正の知らせが出ません: ' + (await panel()))
+          await evaluate(`document.querySelector('[data-plan-releases] button').click()`)
+          await sleep(200)
+          for (const want of ['FSIF で1週間確かめてから広げる', '一番新しい版に付いていく', 'サイトから外してよい版', '2026.11.01-1', 'TTTT']) {
+            if (!(await panel()).includes(want)) throw new Error('プランごとに配る版に「' + want + '」が出ません')
+          }
+          await evaluate(`[...document.querySelectorAll('[data-plan-release="ohsumi"] button')].find((b) => b.textContent.includes('変える'))?.click()`)
+          await sleep(200)
+          await evaluate(`(() => {
+            const sel = document.querySelector('[data-plan-releases] form select')
+            Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, '2026.11.01-1')
+            sel.dispatchEvent(new Event('change', { bubbles: true }))
+            return true })()`)
+          await sleep(200)
+          // 2026.11.01-1 は FSIF に配っている版より新しいので、1回目は確かめを出す
+          await clickText('保存する', '[data-plan-releases] button'); await sleep(300)
+          if (!(await evaluate(`document.querySelector('[data-plan-release-confirm]')?.textContent ?? ''`)).includes('FSIF に配っている版より新しい版です')) throw new Error('FSIF に配っていない版を配る時の確かめが出ません')
+          await clickText('保存する', '[data-plan-releases] button'); await sleep(800)
+          const notice = await evaluate(`document.querySelector('[data-plan-release-template-notice]')?.textContent ?? ''`)
+          if (!notice.includes('Ohsumiプランのテンプレートの Code.gs も、版 2026.11.01-1 のコード')) throw new Error('配る版を変えた後に、テンプレートの貼り替えの知らせが出ません: ' + notice)
         }
         if (step.do === 'registryProfile') {
           await clickText('団体の情報・担当者・集計値…'); await sleep(800)
@@ -1152,14 +1200,23 @@ async function run({ build = true } = {}) {
           if (!(await evaluate(`document.querySelector('[data-diagnostics-report]')?.textContent ?? ''`)).includes('2026.10.01-13')) throw new Error('受付番号から診断情報の中身が出ません')
         }
         if (step.do === 'registryIssue') {
-          // 団体名を入れて発行する(React の入力は、値を直接変えた後に input を送る)
+          // プランを選ぶ前は、渡すコードの版が決まらない
+          if (!(await evaluate(`document.querySelector('[data-org-handoff]').textContent`)).includes('プラン(再登録なら団体)を選ぶと')) throw new Error('プランを選ぶ前の「新しい団体に渡すもの」の案内が出ません')
+          // 団体名とプランを入れて発行する(React の入力は、値を直接変えた後に input・change を送る)
           await evaluate(`(() => {
             const el = [...document.querySelectorAll('label')].find((l) => l.textContent.startsWith('団体名')).querySelector('input')
             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'とても長い名前の特定非営利活動法人テスト団体ロングネームの会')
             el.dispatchEvent(new Event('input', { bubbles: true }))
+            const sel = document.querySelector('[data-issue-plan]')
+            Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, 'ohsumi')
+            sel.dispatchEvent(new Event('change', { bubbles: true }))
             return true })()`)
-          await sleep(300); await clickText('発行する'); await sleep(1500)
-          const shown = await evaluate(`document.body.textContent.includes('ABCD-EFGH-JKMN-PQRS')`)
+          await sleep(300)
+          // 選んだプランに配る版のコードと、そのプランのテンプレートのリンク
+          const handoff = await evaluate(`document.querySelector('[data-org-handoff]').textContent`)
+          if (!handoff.includes('GAS のコードをコピー(版 2026.10.01-1)') || !handoff.includes('TTTT')) throw new Error('「新しい団体に渡すもの」が、選んだプランのコード・テンプレートになりません: ' + handoff)
+          await clickText('発行する'); await sleep(1500)
+          const shown = await evaluate(`document.body.textContent.includes('ABCD-EFGH-JKMN-PQRS') && document.body.textContent.includes('プラン: Ohsumiプラン')`)
           if (!shown) throw new Error('発行した登録コードが表示されません')
         }
         if (step.do === 'unsaved') {

@@ -2404,7 +2404,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.12-1'
+var OHSUMI_GAS_VERSION = '2026.10.12-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2948,8 +2948,9 @@ function effectiveContract_(state, nowMs) {
 // ---- この GAS の版の更新 ----------------------------------------------------------
 //
 // レジストリは checkIn の返事で、この GAS の版の判定を返す(gasUpdate: { required, outdated, latest, minimum, security })。
+// latest は、この団体のプランで配っている版(一番新しい版とは限らない。レジストリの PlanReleases)。
 // CONTRACT_STATE に覚え、代表・全権管理者の管理画面に出す(getGasUpdateStatus)。更新が要る時は、代表にメールで知らせる
-// (1時間ごとの checkContractStatus から。最新の版ごとに1回だけ。GAS_UPDATE_NOTIFIED に覚える)
+// (1時間ごとの checkContractStatus から。配っている版ごとに1回だけ。GAS_UPDATE_NOTIFIED に覚える)
 var GAS_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}-\d+$/
 
 function parseGasUpdate_(v) {
@@ -3177,10 +3178,10 @@ function gasUpdateStatus_() {
 function gasUpdateNoticeText_(orgName, st) {
   var name = orgName || 'Ohsumi'
   return {
-    subject: '[Ohsumi] ' + name + ': 団体の GAS の更新が要ります(最新の版 ' + st.latest + ')',
+    subject: '[Ohsumi] ' + name + ': 団体の GAS の更新が要ります(このプランで配っている版 ' + st.latest + ')',
     body: name + ' 代表の方へ\n\n' +
       'この団体の Ohsumi の GAS(スプレッドシートの Apps Script)は、更新が要ります。\n\n' +
-      '今の版: ' + st.current + '\n最新の版: ' + st.latest + '\n' +
+      '今の版: ' + st.current + '\nこのプランで配っている版: ' + st.latest + '\n' +
       (st.minimum ? 'この版より古い GAS は、更新が要ります: ' + st.minimum + '\n' : '') +
       (st.security ? '新しい版には、安全の修正が含まれます。お早めに更新してください。\n' : '') +
       '\n更新の手順:\n' +
@@ -3192,7 +3193,7 @@ function gasUpdateNoticeText_(orgName, st) {
   }
 }
 
-// 更新が要る時に、代表にメールで知らせる(最新の版ごとに1回)。送ったら最新の版を返す(送らなければ null)
+// 更新が要る時に、代表にメールで知らせる(配っている版ごとに1回)。送ったら配っている版を返す(送らなければ null)
 function sendGasUpdateNotice_() {
   var st = gasUpdateStatus_()
   if (!st.required || !st.latest) return null
@@ -3268,7 +3269,8 @@ function refreshContractState_(deps) {
     // この GAS の版の更新が要るか(レジストリの版の一覧で判定したもの)
     gasUpdate: parseGasUpdate_(out.gasUpdate),
     // プラン(集計値を送るかの決まりに使う。古いレジストリは返さない)
-    plan: ['cosmo_base', 'ohsumi', 'paid'].indexOf(String(out.plan || '')) >= 0 ? String(out.plan) : '',
+    // internal は FSIF の団体(2026.10.12-2 から)
+    plan: ['cosmo_base', 'ohsumi', 'paid', 'internal'].indexOf(String(out.plan || '')) >= 0 ? String(out.plan) : '',
     // FSIF からの回答待ちのアンケート(代表の管理画面に出す。古いレジストリは返さない)
     surveys: parseSurveys_(out.surveys),
     // 掲載中の緊急のお知らせの ID(代表にメールで1回だけ送る)
@@ -15001,7 +15003,7 @@ function isPermissionError_(err) {
 // ---- 定量データ(個人を特定しない集計値)を週1回 FSIF に送る ----
 //
 // 送るかはプランで決まる(レジストリの checkIn が伝える CONTRACT_STATE.plan):
-//   ohsumi(Ohsumiプラン): 必須(いつも送る) / cosmo_base(Cosmo Baseプラン): 代表が選ぶ(初期値は送る) /
+//   ohsumi(Ohsumiプラン)・internal(FSIF の団体): 必須(いつも送る) / cosmo_base(Cosmo Baseプラン): 代表が選ぶ(初期値は送る) /
 //   paid(有償プラン): 代表が選ぶ(初期値は送らない) / 未設定: 代表が選ぶ(初期値は送らない)
 // 代表の選択はスクリプトプロパティ METRICS_CHOICE(on / off)。送っているかは Settings の metrics_sharing_notice に書き、
 // メンバーにも画面の下に出す。各指標の定義は gas/README.md の「4.18」(定義の版 METRICS_VERSION)
@@ -15022,8 +15024,8 @@ function metricsPlan_() {
 function metricsSharing_() {
   var plan = metricsPlan_()
   var choice = String(PropertiesService.getScriptProperties().getProperty('METRICS_CHOICE') || '')
-  var mandatory = plan === 'ohsumi'
-  var defaultOn = plan === 'ohsumi' || plan === 'cosmo_base'
+  var mandatory = plan === 'ohsumi' || plan === 'internal'
+  var defaultOn = mandatory || plan === 'cosmo_base'
   var enabled = mandatory ? true : choice === 'on' ? true : choice === 'off' ? false : defaultOn
   return { plan: plan, mandatory: mandatory, defaultOn: defaultOn, choice: choice, enabled: enabled }
 }
@@ -15236,7 +15238,7 @@ function metricsStatus_(nowMs) {
 
 function setMetricsSharing_(enabled, actorId, nowMs) {
   var sharing = metricsSharing_()
-  if (sharing.mandatory && !enabled) throw userError_('Ohsumiプランでは、集計値の送信は必須のため止められません。')
+  if (sharing.mandatory && !enabled) throw userError_('このプラン(Ohsumiプラン・FSIF)では、集計値の送信は必須のため止められません。')
   PropertiesService.getScriptProperties().setProperty('METRICS_CHOICE', enabled ? 'on' : 'off')
   syncMetricsNotice_(enabled)
   appendOrgAudit_(actorId, 'setMetricsSharing', '', { before: sharing.enabled, after: enabled })

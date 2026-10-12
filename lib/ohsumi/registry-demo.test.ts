@@ -24,7 +24,7 @@ function ready() {
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
   const keys: Record<string, string> = {}
   ;[REAL, DEMO].forEach((orgId, i) => {
-    const code = t.post({ action: 'issueRegistrationCode', session, orgName: i ? 'デモ団体' : '本番の団体', contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
+    const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: i ? 'デモ団体' : '本番の団体', contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
     keys[orgId] = String(t.post({ action: 'registerOrg', code, orgId, gasUrl: 'https://script.google.com/macros/s/AKfy' + i + '/exec', registerNonce: 'register-nonce-0000000' + i + '-abcdefghijklmnopqrstuvwxyz0123' }).result.registryKey)
     t.post({ action: 'setOrgPlan', session, orgId, plan: 'ohsumi', reason: '' })
   })

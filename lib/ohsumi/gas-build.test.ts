@@ -19,7 +19,7 @@ describe('団体の GAS のまとめ方', () => {
     expect(withVersion).toHaveLength(1)
   })
 
-  it('ビルドの時に、まとめた Code.gs をサイトの /gas/Code.gs に置く', () => {
+  it('ビルドの時に、まとめた Code.gs をサイトの /gas/ に置く(版ごとの置き方は gas-release.test.ts)', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> }
     expect(pkg.scripts.build).toContain('gas-build.mjs --check')
     expect(pkg.scripts.build).toContain('gas-build.mjs --publish out')

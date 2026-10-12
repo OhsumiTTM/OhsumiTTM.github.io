@@ -26,7 +26,7 @@ function ready() {
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secretFor('a1') }).result.session.token
   const issue = (extra: Record<string, unknown> = {}) =>
-    t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org', ...extra })
+    t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org', ...extra })
   type RegisterResult = { ok: boolean; result?: Record<string, unknown>; replayed?: boolean; error?: string }
   const register = (body: Record<string, unknown>, now = Date.now()): RegisterResult => {
     try {

@@ -23,7 +23,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: 'テスト団体A', contactName: '山田', contactEmail: 'yamada@example.org' }).result.code
   const reg = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: URL_A, registerNonce: NONCE })
   expect(reg.ok, JSON.stringify(reg)).toBe(true)
   const key = String(reg.result.registryKey)
@@ -296,9 +296,10 @@ describe('プラン(cosmo_base・ohsumi・paid)', () => {
 
   it('管理画面でプランを記録し、一覧に出す。操作の記録に残り、記録の無い変更には数えない', () => {
     const t = ready()
-    expect(t.org().plan).toBe('')
-    expect(setPlan(t, 'ohsumi').ok).toBe(true)
+    // 登録コードで選んだプラン
     expect(t.org().plan).toBe('ohsumi')
+    expect(setPlan(t, 'cosmo_base').ok).toBe(true)
+    expect(t.org().plan).toBe('cosmo_base')
     expect(setPlan(t, 'paid').ok).toBe(true)
     expect(t.orgsRow().get('plan')).toBe('paid')
     expect(t.audit()).toContainEqual(expect.objectContaining({ actor: 'admin@example.com', action: 'setOrgPlan', target: ORG_A, reason: '契約の更新' }))

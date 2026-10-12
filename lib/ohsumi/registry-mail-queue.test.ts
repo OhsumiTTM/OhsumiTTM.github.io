@@ -22,7 +22,7 @@ function ready() {
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
   ORGS.forEach((orgId, i) => {
-    const code = t.post({ action: 'issueRegistrationCode', session, orgName: '団体' + i, contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
+    const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '団体' + i, contactName: '担当', contactEmail: 'c' + i + '@example.org' }).result.code
     expect(t.post({ action: 'registerOrg', code, orgId, gasUrl: 'https://script.google.com/macros/s/AKfy' + i + '/exec', registerNonce: 'register-nonce-0000000' + i + '-abcdefghijklmnopqrstuvwxyz0123' }).ok).toBe(true)
     t.post({ action: 'setOrgPlan', session, orgId, plan: 'ohsumi', reason: '' })
   })

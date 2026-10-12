@@ -27,8 +27,15 @@ export interface AdminSession {
 export type OrgState = 'active' | 'scheduled' | 'restricted' | 'suspended'
 // 停止の種類(R1-e)。suspend: 提供停止(契約の終了・規約違反など)/ restrict: 機能停止(アンケートの未回答など)
 export type SuspendKind = 'suspend' | 'restrict'
-// プラン(利用契約書の案 第3条)。空は未設定。有償(paid)の団体には、機能停止を入れられない
-export type Plan = 'cosmo_base' | 'ohsumi' | 'paid'
+// プラン(利用契約書の案 第3条)。空は未設定。有償(paid)・FSIF(internal)の団体には、機能停止を入れられない。
+// internal は FSIF の団体(契約のプランではない区分。新しい版を先に配る)
+export type Plan = 'cosmo_base' | 'ohsumi' | 'paid' | 'internal'
+export const PLANS: readonly Plan[] = ['cosmo_base', 'ohsumi', 'paid', 'internal']
+
+/** このプランの団体に機能停止を入れられるか */
+export function canRestrictPlan(plan: Plan | ''): boolean {
+  return plan !== 'paid' && plan !== 'internal'
+}
 export type CheckState = 'ok' | 'stale' | 'never'
 export type CodeState = 'unused' | 'used' | 'expired' | 'revoked'
 
@@ -146,6 +153,8 @@ export interface CodeSummary {
   usedOrgId: string
   revokedAt: string
   revokedBy: string
+  // 新しい団体の登録コードで選んだプラン(再登録コード・プランを選ぶ前に発行したコードは空。古いレジストリでは無い)
+  plan?: Plan | ''
 }
 
 export interface AuditEntry {
@@ -166,9 +175,12 @@ export interface Overview {
   codeTtlDays: number
   // 団体の GAS の版の一覧(新しい順。古いレジストリでは無い)
   gasVersions?: GasVersionEntry[]
+  // プランごとに配る版(古いレジストリでは無い)
+  planReleases?: PlanReleases
   // アンケート(新しい順)・プランごとの上限(直近12か月)(古いレジストリでは無い)
   surveys?: SurveySummary[]
-  surveyLimits?: Record<Plan, number>
+  // FSIF(internal)には上限が無い(値が無い)
+  surveyLimits?: Partial<Record<Plan, number>>
   // 団体ごとの直近12か月の数(送付の予定を含む)
   survey12mCounts?: Record<string, number>
   // お知らせ(新しい順。古いレジストリでは無い)
@@ -189,7 +201,7 @@ export interface Overview {
 export interface OrgKpis {
   // 利用中の団体(提供停止中・デモを除く)とプラン別の数('' は未設定)
   activeOrgs: number
-  byPlan: Record<Plan | '', number>
+  byPlan: Partial<Record<Plan | '', number>>
   demoOrgs: number
   // 団体ごとの一番新しい期間の集計値の合計(デモの団体・デモの時に受け取ったものを除く)
   metrics: { reportingOrgs: number; latestPeriod: string; totals: Record<string, number> }
@@ -432,9 +444,9 @@ export interface SendSurveyResult {
   skipped: { orgId: string; reason: string }[]
 }
 
-/** 期限を過ぎて回答が無い団体の一覧(有償プラン・デモの団体は出さない) */
+/** 期限を過ぎて回答が無い団体の一覧(有償プラン・FSIF・デモの団体は出さない) */
 export function overdueSurveys(surveys: SurveySummary[]): SurveySummary[] {
-  return surveys.filter((s) => s.state === 'overdue' && s.plan !== 'paid' && !s.demo)
+  return surveys.filter((s) => s.state === 'overdue' && canRestrictPlan(s.plan) && !s.demo)
 }
 
 /** 日本時間の今日('YYYY-MM-DD') */
@@ -469,12 +481,15 @@ export interface IssuedCode {
   orgName: string
   kind?: 'new' | 'reissue'
   targetOrgId?: string
+  plan?: Plan | ''
 }
 
 export interface IssueInput {
-  // new: 新しい団体(団体名が必須) / reissue: 登録済みの団体の再登録(targetOrgId が必須。団体名はレジストリが入れる)
+  // new: 新しい団体(団体名・プランが必須) / reissue: 登録済みの団体の再登録(targetOrgId が必須。団体名はレジストリが入れる。
+  // プランは送らない〈今のプランのまま〉)
   kind?: 'new' | 'reissue'
   targetOrgId?: string
+  plan?: Plan | ''
   orgName: string
   contactName: string
   contactEmail: string
@@ -605,6 +620,93 @@ export function setOrgPlan(session: AdminSession, orgId: string, plan: Plan, rea
 export function setGasVersionMarks(session: AdminSession, version: string, marks: { security: boolean; required: boolean; note: string }, reason: string): Promise<{ versions: GasVersionEntry[] }> {
   return callRegistry<{ versions: GasVersionEntry[] }>('setGasVersionMarks', { session: session.token, version, ...marks, reason })
 }
+
+// ---- プランごとに配る版 ----
+// 新しい版は、まず FSIF(internal)に配り、確かめてからほかのプランに広げる。選べる版は、サイトにコードを置いた版(released)だけ。
+// internal だけは latest(いつも一番新しい版)も選べる
+export const PLAN_RELEASE_LATEST = 'latest'
+
+export interface PlanRelease {
+  plan: Plan
+  // 行に書いた値(版・latest・空)
+  setting: string
+  // 配っている版
+  version: string
+  // set: 行の版 / latest: 一番新しい版に付いていく / default: 念のための既定(行が無い・行の版がサイトに無い)
+  source: 'set' | 'latest' | 'default'
+  // unreleased: 行の版がサイトに無い(念のための既定を配っている)
+  problem: '' | 'unreleased'
+  // テンプレートの「コピーを作成」のリンク(空は既定のリンク)
+  templateUrl: string
+  note: string
+  updatedAt: string
+  updatedBy: string
+  // このプランの団体の数(デモを除く)・配る版より古い団体・更新が要る団体
+  orgs: number
+  outdated: number
+  updateRequired: number
+}
+
+export interface PlanReleases {
+  plans: PlanRelease[]
+  // 一番新しい版(デモの団体に配る)
+  newest: string
+  // 念のための既定(プランが空の団体)
+  fallback: string
+  // サイトにコードを置いた版(新しい順)
+  released: string[]
+  // サイトから外してよい版(どのプランの配る版でもなく、一番新しい版でもない)
+  removable: string[]
+  // 安全の修正の版のうち、まだ配っていないプランがあるもの
+  pendingSecurity: { version: string; plans: Plan[] }[]
+}
+
+export interface PlanReleaseInput {
+  plan: Plan
+  version: string
+  templateUrl: string
+  note: string
+}
+
+/** プランに配る版・テンプレートのリンクを変える(5分以内の Google でのログインが必要。記録に残る)。送り直さない */
+export function setPlanRelease(session: AdminSession, input: PlanReleaseInput, reason: string): Promise<{ planReleases: PlanReleases }> {
+  return callRegistry<{ planReleases: PlanReleases }>('setPlanRelease', { session: session.token, ...input, reason })
+}
+
+/** その団体に配る版(レジストリの releaseFor_ と同じ決まり)。分からなければ null */
+export function releaseForOrg(releases: PlanReleases | undefined, org: Pick<OrgSummary, 'plan' | 'demo'>): string | null {
+  if (!releases) return null
+  if (org.demo) return releases.newest || null
+  const p = org.plan ? releases.plans.find((r) => r.plan === org.plan) : undefined
+  return (p ? p.version : releases.fallback) || null
+}
+
+/** プランに配る版(新しい団体に渡すコード)。分からなければ null */
+export function releaseForPlan(releases: PlanReleases | undefined, plan: Plan | ''): string | null {
+  return releaseForOrg(releases, { plan, demo: false })
+}
+
+/** その版が FSIF に配っている版より新しいか(FSIF で確かめる前に、ほかのプランに配ろうとしている) */
+export function newerThanInternal(releases: PlanReleases, version: string): boolean {
+  const internal = releases.plans.find((r) => r.plan === 'internal')?.version ?? ''
+  return !!internal && version !== PLAN_RELEASE_LATEST && compareGasVersions(version, internal) > 0
+}
+
+/** a が b より古ければ負・同じなら 0・新しければ正(日付の形でないものは、どれよりも古い) */
+export function compareGasVersions(a: string, b: string): number {
+  const key = (v: string) => {
+    const m = /^(\d{4})\.(\d{2})\.(\d{2})-(\d+)$/.exec(v)
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])] : null
+  }
+  const ka = key(a)
+  const kb = key(b)
+  if (!ka || !kb) return (ka ? 1 : 0) - (kb ? 1 : 0)
+  for (let i = 0; i < 4; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i]
+  return 0
+}
+
+/** テンプレートの「コピーを作成」のリンクの形 */
+export const TEMPLATE_COPY_URL_PATTERN = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+\/copy$/
 
 /** 団体の担当者に、GAS の更新をお願いするメールを送る(同じ団体には24時間に1回まで)。送り直さない */
 export function requestGasUpdate(session: AdminSession, orgId: string, reason: string): Promise<{ sentTo: number; queued?: boolean }> {

@@ -9,9 +9,13 @@
 //   node scripts/gas-build.mjs            gas/src から gas/Code.gs、gas/sample から gas/SampleData.gs を作る
 //   node scripts/gas-build.mjs --check    gas/Code.gs・gas/SampleData.gs が元のファイルとそろっているか確かめる(そろっていなければ失敗)
 //   node scripts/gas-build.mjs --publish out
-//                                         まとめた Code.gs を、サイトの /gas/Code.gs(out/gas/Code.gs)に置く(SampleData.gs は置かない)。
-//                                         代表の管理画面の「コードをコピー」が、同じサイトから読む
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+//                                         サイトに次を置く。
+//                                           /gas/<版>/Code.gs  gas/releases/<版>/Code.gs のすべて(pnpm gas:release add で足した版)。
+//                                                              代表の管理画面の「コードをコピー」と、レジストリの管理画面の
+//                                                              「新しい団体に渡すもの」が、そのプランで配っている版を同じサイトから読む
+//                                           /gas/Code.gs       一番新しい版(今の gas/Code.gs)
+//                                           /gas/SampleData.gs 一番新しい版(今の gas/SampleData.gs。サンプル・デモの団体が足す。古い版は置かない)
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = join(import.meta.dirname, '..')
@@ -20,6 +24,26 @@ export const GAS_CODE_PATH = 'gas/Code.gs'
 export const PUBLISHED_GAS_PATH = 'gas/Code.gs'
 export const GAS_SAMPLE_DIR = 'gas/sample'
 export const GAS_SAMPLE_PATH = 'gas/SampleData.gs'
+export const PUBLISHED_SAMPLE_PATH = 'gas/SampleData.gs'
+export const GAS_RELEASES_DIR = 'gas/releases'
+
+/** サイトに置くファイル({ path: out からの場所, text })。出した版の中身の食い違いは投げる */
+export function publishedGasFiles(root = ROOT) {
+  const code = readFileSync(join(root, GAS_CODE_PATH), 'utf8')
+  if (code !== buildGasCode(root)) throw new Error('gas/Code.gs が gas/src とそろっていません。pnpm gas:build を実行してください。')
+  const sample = readFileSync(join(root, GAS_SAMPLE_PATH), 'utf8')
+  if (sample !== buildSampleCode(root)) throw new Error('gas/SampleData.gs が gas/sample とそろっていません。pnpm gas:build を実行してください。')
+  const files = [{ path: PUBLISHED_GAS_PATH, text: code }, { path: PUBLISHED_SAMPLE_PATH, text: sample }]
+  const dir = join(root, GAS_RELEASES_DIR)
+  const versions = existsSync(dir) ? readdirSync(dir).filter((f) => /^\d{4}\.\d{2}\.\d{2}-\d+$/.test(f)).sort() : []
+  for (const v of versions) {
+    const text = readFileSync(join(dir, v, 'Code.gs'), 'utf8')
+    const version = (text.match(/^var OHSUMI_GAS_VERSION = '([^']*)'$/m) || [])[1]
+    if (version !== v) throw new Error(`${GAS_RELEASES_DIR}/${v}/Code.gs の版(${version ?? 'なし'})が、フォルダの名前と違います`)
+    files.push({ path: `gas/${v}/Code.gs`, text })
+  }
+  return files
+}
 
 /** gas/src のファイル(名前の順) */
 export function gasSourceFiles(root = ROOT) {
@@ -61,11 +85,14 @@ function main(args) {
     return
   }
   if (args[0] === '--publish') {
-    const out = join(ROOT, args[1] || 'out', PUBLISHED_GAS_PATH)
-    if (readFileSync(target, 'utf8') !== code) throw new Error('gas/Code.gs が gas/src とそろっていません。pnpm gas:build を実行してください。')
-    mkdirSync(join(out, '..'), { recursive: true })
-    writeFileSync(out, code)
-    console.log(`団体の GAS を ${args[1] || 'out'}/${PUBLISHED_GAS_PATH} に置きました`)
+    const outDir = args[1] || 'out'
+    const files = publishedGasFiles()
+    for (const f of files) {
+      const out = join(ROOT, outDir, f.path)
+      mkdirSync(join(out, '..'), { recursive: true })
+      writeFileSync(out, f.text)
+    }
+    console.log(`団体の GAS を ${outDir}/gas/ に置きました: ${files.map((f) => f.path.replace(/^gas\//, '')).join('・')}`)
     return
   }
   writeFileSync(target, code)

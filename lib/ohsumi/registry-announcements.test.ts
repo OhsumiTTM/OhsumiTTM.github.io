@@ -23,7 +23,7 @@ function ready() {
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
   const keys: Record<string, string> = {}
   ;[ORG_A, ORG_B].forEach((orgId, i) => {
-    const code = t.post({ action: 'issueRegistrationCode', session, orgName: '団体' + i }).result.code
+    const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '団体' + i }).result.code
     const reg = t.post({ action: 'registerOrg', code, orgId, gasUrl: 'https://script.google.com/macros/s/AKfy' + i + '/exec', registerNonce: 'register-nonce-0000000' + i + '-abcdefghijklmnopqrstuvwxyz0123' })
     keys[orgId] = String(reg.result.registryKey)
   })

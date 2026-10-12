@@ -4,7 +4,7 @@
 // ログイン(許可リストの管理者だけ)・団体の一覧・停止の予定(提供停止・機能停止)の入力と取り消し・
 // 登録コードの発行と取り消し・操作の記録を表示する。
 // 判定はすべてレジストリの GAS が行い、この画面は表示と入力だけを受け持つ。
-import { copySiteGasCode, newestGasVersion } from '@/lib/ohsumi/gas-code-copy'
+import { copySiteGasCode, newestGasVersion, siteGasCodePath } from '@/lib/ohsumi/gas-code-copy'
 import { ORG_TEMPLATE_COPY_URL } from '@/lib/ohsumi/org-template'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -90,12 +90,22 @@ import {
   parseTunableInput,
   setTunables,
   type Tunables,
+  PLANS,
+  PLAN_RELEASE_LATEST,
+  TEMPLATE_COPY_URL_PATTERN,
+  canRestrictPlan,
+  newerThanInternal,
+  releaseForOrg,
+  releaseForPlan,
+  setPlanRelease,
+  type PlanRelease,
+  type PlanReleases,
 } from '@/lib/registry/admin-api'
 
 export const ORG_STATE_LABELS: Record<OrgState, string> = { active: '有効', scheduled: '停止予定', restricted: '機能停止中(読み取り専用)', suspended: '提供停止中' }
 // 停止の2つの種類(R1-e)。予告(14日前・7日前・1日前)はどちらも同じ
-// プラン(利用契約書の案 第3条)。有償の団体には、機能停止(②)を入れられない
-export const PLAN_LABELS: Record<Plan | '', string> = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン', '': '未設定' }
+// プラン(利用契約書の案 第3条)。有償・FSIF の団体には、機能停止(②)を入れられない。FSIF(internal)は FSIF の団体の区分
+export const PLAN_LABELS: Record<Plan | '', string> = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン', internal: 'FSIF', '': '未設定' }
 export const SUSPEND_KIND_LABELS: Record<SuspendKind, { title: string; description: string }> = {
   suspend: {
     title: '① 提供停止',
@@ -122,6 +132,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   liftSuspension: '停止の解除',
   suspendNow: '当日の提供停止(緊急)',
   setOrgPlan: 'プランの変更',
+  setPlanRelease: 'プランに配る版・テンプレートの変更',
   setOrgDemo: 'デモの印の付け外し',
   setOrgProfile: '団体の情報(団体名・契約・属性)の変更',
   setOrgContacts: '担当者の変更',
@@ -167,7 +178,7 @@ function fmt(iso: string): string {
   return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-const EMPTY_INPUT: IssueInput = { kind: 'new', targetOrgId: '', orgName: '', contactName: '', contactEmail: '', note: '' }
+const EMPTY_INPUT: IssueInput = { kind: 'new', targetOrgId: '', plan: '', orgName: '', contactName: '', contactEmail: '', note: '' }
 
 export function RegistryAdmin() {
   const [session, setSession] = useState<AdminSession | null>(null)
@@ -285,6 +296,7 @@ export function RegistryAdmin() {
           {overview.features && <FeatureSwitchControl features={overview.features} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.tunables && <TunablesControl tunables={overview.tunables} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
+          {overview.planReleases && <PlanReleasesPanel releases={overview.planReleases} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           <OrgList orgs={overview.orgs} features={overview.features} tunables={overview.tunables} session={session} draft={suspendDraft} onChanged={() => void load(session)} onAuthError={endSession} />
         </>
       ) : tab === 'codes' ? (
@@ -297,6 +309,7 @@ export function RegistryAdmin() {
           onChanged={() => void load(session)}
           onAuthError={endSession}
           latestGasVersion={newestGasVersion((overview.gasVersions ?? []).map((v) => v.version))}
+          planReleases={overview.planReleases}
         />
       ) : tab === 'diagnostics' ? (
         <DiagnosticsTab overview={overview} session={session} onAuthError={endSession} />
@@ -470,7 +483,7 @@ function OrgList({
             <Field label="GAS の版">
               <span data-gas-version>
                 {o.gasVersion || '不明'}
-                {o.gasStatus && `(判定: ${GAS_JUDGEMENT_LABELS[o.gasStatus.judgement]}${o.gasStatus.noCheck && o.gasStatus.versionState !== 'latest' ? `・最後の版では${GAS_JUDGEMENT_LABELS[o.gasStatus.versionState]}` : ''}。最新: ${o.gasStatus.latest || '—'}${o.gasStatus.security ? '。安全の修正あり' : ''})`}
+                {o.gasStatus && `(判定: ${GAS_JUDGEMENT_LABELS[o.gasStatus.judgement]}${o.gasStatus.noCheck && o.gasStatus.versionState !== 'latest' ? `・最後の版では${GAS_JUDGEMENT_LABELS[o.gasStatus.versionState]}` : ''}。配る版: ${o.gasStatus.latest || '—'}${o.gasStatus.security ? '。安全の修正あり' : ''})`}
               </span>
             </Field>
             <Field label="登録日">{fmt(o.createdAt)}</Field>
@@ -525,8 +538,9 @@ function SuspensionControl({
 }) {
   const hasPlan = org.state !== 'active'
   const [open, setOpen] = useState(!!draft)
-  const paid = org.plan === 'paid'
-  const [kind, setKind] = useState<SuspendKind>(draft?.kind ?? (paid ? 'suspend' : 'restrict'))
+  // 有償・FSIF の団体には、機能停止を入れられない
+  const noRestrict = !canRestrictPlan(org.plan)
+  const [kind, setKind] = useState<SuspendKind>(draft?.kind ?? (noRestrict ? 'suspend' : 'restrict'))
   // 当日に提供停止にする(緊急)。押すと、確認の画面を挟む
   const [immediate, setImmediate] = useState(!!draft?.immediate)
   const [confirming, setConfirming] = useState(false)
@@ -548,7 +562,7 @@ function SuspensionControl({
     const ms = Date.parse(at)
     if (!now && (!at || !Number.isFinite(ms))) return setMessage('停止の日時を入れてください。')
     if (!reason.trim()) return setMessage('停止の理由を入れてください(団体への予告に書きます)。')
-    if (kind === 'restrict' && paid) return setMessage('有償プランの団体には、機能停止を入れられません。')
+    if (kind === 'restrict' && noRestrict) return setMessage(`${PLAN_LABELS[org.plan]}の団体には、機能停止を入れられません。`)
     const input: SuspensionInput = { orgId: org.orgId, kind, suspendAt: at, reason, immediate: now }
     // 5分以内の Google でのログインが必要。古ければ入力を残して、ログインし直す
     if (needsReauth(session)) {
@@ -659,10 +673,10 @@ function SuspensionControl({
         {(['suspend', 'restrict'] as const).map((k) => (
           <label key={k} className="flex items-start gap-2">
             <input type="radio" name={`suspend-kind-${org.orgId}`} checked={kind === k} onChange={() => setKind(k)} className="mt-0.5"
-              disabled={k === 'restrict' && paid} />
+              disabled={k === 'restrict' && noRestrict} />
             <span className="min-w-0">
               <span className="font-medium">{SUSPEND_KIND_LABELS[k].title}</span>: {SUSPEND_KIND_LABELS[k].description}
-              {k === 'restrict' && paid && <span className="block text-muted-foreground">有償プランの団体には入れられません(回答が無い時は、サポートの停止のみです)。</span>}
+              {k === 'restrict' && noRestrict && <span className="block text-muted-foreground">{org.plan === 'paid' ? '有償プランの団体には入れられません(回答が無い時は、サポートの停止のみです)。' : 'FSIF の団体には入れられません。'}</span>}
             </span>
           </label>
         ))}
@@ -831,6 +845,145 @@ function GasVersionsPanel({ versions, session, onChanged, onAuthError }: { versi
   )
 }
 
+const RELEASE_SOURCE_LABELS: Record<PlanRelease['source'], string> = { set: '', latest: '一番新しい版に付いていく', default: '念のための既定' }
+
+// プランごとに配る団体の GAS の版と、テンプレートのリンク。新しい版は、まず FSIF に配って確かめてから、ほかのプランに広げる。
+// 変えるには5分以内の Google でのログインが要る(操作の記録に残る)。変えた後は、そのプランのテンプレートの貼り替えを知らせる
+function PlanReleasesPanel({ releases, session, onChanged, onAuthError }: { releases: PlanReleases; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<{ plan: Plan; version: string; templateUrl: string; note: string; reason: string } | null>(null)
+  // FSIF に配っていない版を、ほかのプランに配る時の確かめ
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  // 配る版を変えた後の知らせ(そのプランのテンプレートも貼り替える)
+  const [changed, setChanged] = useState<{ plan: Plan; version: string } | null>(null)
+  const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  const label = (p: Plan) => PLAN_LABELS[p]
+  const startEdit = (r: PlanRelease) => {
+    setEditing({ plan: r.plan, version: r.setting && (r.setting === PLAN_RELEASE_LATEST || releases.released.includes(r.setting)) ? r.setting : r.version, templateUrl: r.templateUrl, note: r.note, reason: '' })
+    setConfirming(false)
+    setMessage(null)
+  }
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editing) return
+    if (!editing.version) return setMessage('配る版を選んでください。')
+    if (editing.templateUrl.trim() && !TEMPLATE_COPY_URL_PATTERN.test(editing.templateUrl.trim())) return setMessage('テンプレートのリンクは「https://docs.google.com/spreadsheets/d/…/copy」の形で入れてください(空にすると既定のリンク)。')
+    if (editing.plan !== 'internal' && newerThanInternal(releases, editing.version) && !confirming) {
+      setConfirming(true)
+      return
+    }
+    if (needsReauth(session)) {
+      onAuthError('配る版の変更の前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    const before = releases.plans.find((r) => r.plan === editing.plan)
+    try {
+      const res = await setPlanRelease(session, { plan: editing.plan, version: editing.version, templateUrl: editing.templateUrl.trim(), note: editing.note }, editing.reason)
+      const after = res.planReleases.plans.find((r) => r.plan === editing.plan)
+      if (after && after.version !== before?.version) setChanged({ plan: editing.plan, version: after.version })
+      setEditing(null)
+      setConfirming(false)
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && (err.authError || err.reauthRequired)) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const summary = releases.plans.map((r) => `${label(r.plan)} ${r.version || '—'}`).join('・')
+  return (
+    <section className="mb-4 rounded-lg border border-border p-3" data-plan-releases>
+      <button type="button" className="flex w-full items-center justify-between gap-2 text-left text-sm font-medium" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="min-w-0 break-words">プランごとに配る版({summary})</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{open ? '閉じる' : '開く'}</span>
+      </button>
+      {changed && (
+        <p role="status" data-plan-release-template-notice className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs break-words text-amber-900">
+          {label(changed.plan)}に配る版を {changed.version} にしました。{label(changed.plan)}のテンプレートの Code.gs も、版 {changed.version} のコード(サイトの {siteGasCodePath(changed.version) ?? '—'})に貼り替えてください(新しい団体は、テンプレートの版で始まります)。
+          <button type="button" className="ml-2 underline" onClick={() => setChanged(null)}>閉じる</button>
+        </p>
+      )}
+      {releases.pendingSecurity.length > 0 && (
+        <ul data-plan-release-security className="mt-2 space-y-1 text-xs text-destructive">
+          {releases.pendingSecurity.map((p) => (
+            <li key={p.version} className="break-words">安全の修正の版({p.version})を、{p.plans.map(label).join('・')}に配っていません。確かめたら、配る版を上げてください。</li>
+          ))}
+        </ul>
+      )}
+      {open && (
+        <div className="mt-2 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            団体の GAS の「更新が要る・古い・最新」は、その団体のプランに配る版を基準に判定します(配る版より新しい版があっても「古い」にはしません)。新しい版は、まず FSIF に配って確かめてから、ほかのプランに広げます。デモの団体は、いつも一番新しい版({releases.newest || '—'})です。プランが空の団体は、念のための既定({releases.fallback || '—'}。Cosmo Base・Ohsumi・有償のうち一番古い配る版)です。選べる版は、サイトにコードを置いた版だけです。
+          </p>
+          <ul className="space-y-2">
+            {releases.plans.map((r) => (
+              <li key={r.plan} data-plan-release={r.plan} className="rounded-md border border-border p-2 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{label(r.plan)}</span>
+                  <span className="font-mono">{r.version || '—'}</span>
+                  {RELEASE_SOURCE_LABELS[r.source] && <Badge tone="muted">{RELEASE_SOURCE_LABELS[r.source]}</Badge>}
+                  {r.problem === 'unreleased' && <Badge tone="bad">選んだ版 {r.setting} がサイトにありません</Badge>}
+                </div>
+                <p className="mt-1 break-words text-muted-foreground">
+                  団体 {r.orgs}(配る版より古い {r.outdated}・更新が要る {r.updateRequired})・テンプレート: <span className="break-all">{r.templateUrl || '既定のリンク'}</span>
+                  {r.updatedAt && `・変えた人: ${r.updatedBy}(${fmt(r.updatedAt)})`}
+                </p>
+                {r.note && <p className="mt-0.5 break-words text-muted-foreground">メモ: {r.note}</p>}
+                <Button size="sm" variant="ghost" onClick={() => startEdit(r)}>変える…</Button>
+              </li>
+            ))}
+          </ul>
+          {releases.removable.length > 0 && (
+            <p data-plan-release-removable className="text-xs break-words text-muted-foreground">
+              サイトから外してよい版(どのプランの配る版でもなく、一番新しい版でもない): {releases.removable.join('・')}。外す時は pnpm gas:release remove &lt;版&gt; を使い、レジストリ → サイトの順に入れ替えます。
+            </p>
+          )}
+          {editing && (
+            <form onSubmit={(e) => void save(e)} className="space-y-2 rounded-md bg-muted/50 p-2">
+              <p className="text-xs font-medium">{label(editing.plan)}に配る版</p>
+              <label className="block text-xs">
+                配る版
+                <select className={inputClass} value={editing.version} onChange={(e) => { setEditing({ ...editing, version: e.target.value }); setConfirming(false) }}>
+                  {editing.plan === 'internal' && <option value={PLAN_RELEASE_LATEST}>一番新しい版に付いていく({releases.newest})</option>}
+                  {releases.released.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+              <label className="block text-xs">
+                テンプレートの「コピーを作成」のリンク(空にすると既定のリンク)
+                <input className={inputClass} value={editing.templateUrl} onChange={(e) => setEditing({ ...editing, templateUrl: e.target.value })} maxLength={300} placeholder="https://docs.google.com/spreadsheets/d/…/copy" />
+              </label>
+              <label className="block text-xs">
+                メモ
+                <input className={inputClass} value={editing.note} onChange={(e) => setEditing({ ...editing, note: e.target.value })} maxLength={500} />
+              </label>
+              <label className="block text-xs">
+                理由(操作の記録に残します)
+                <input className={inputClass} value={editing.reason} onChange={(e) => setEditing({ ...editing, reason: e.target.value })} maxLength={500} />
+              </label>
+              {confirming && (
+                <p role="alert" data-plan-release-confirm className="text-xs break-words text-destructive">
+                  版 {editing.version} は、FSIF に配っている版より新しい版です(FSIF でまだ確かめていません)。このまま{label(editing.plan)}に配る時は、もう一度「保存する」を押してください。
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">保存の前に、5分以内の Google でのログインが必要です。配る版を変えたら、このプランのテンプレートも、その版のコードに貼り替えます。</p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" size="sm" disabled={busy}>{busy ? '保存しています…' : '保存する'}</Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setEditing(null); setConfirming(false) }}>やめる</Button>
+              </div>
+            </form>
+          )}
+          {message && <p className="text-sm break-words text-destructive">{message}</p>}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function PlanControl({ org, session, onChanged, onAuthError }: { org: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
   const [open, setOpen] = useState(false)
   const [plan, setPlan] = useState<Plan | ''>(org.plan)
@@ -870,14 +1023,14 @@ function PlanControl({ org, session, onChanged, onAuthError }: { org: OrgSummary
         プラン
         <select className={inputClass} value={plan} onChange={(e) => setPlan(e.target.value as Plan | '')}>
           {!org.plan && <option value="">未設定</option>}
-          {(['cosmo_base', 'ohsumi', 'paid'] as const).map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+          {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
         </select>
       </label>
       <label className="block text-xs">
         理由・メモ(操作の記録に残します)
         <input className={inputClass} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} />
       </label>
-      <p className="text-xs text-muted-foreground">有償プランの団体には、機能停止(②)を入れられません。機能停止の予定が入っている団体は、先に取り消してから有償にします。</p>
+      <p className="text-xs text-muted-foreground">有償プラン・FSIF の団体には、機能停止(②)を入れられません。機能停止の予定が入っている団体は、先に取り消してから有償・FSIF にします。プランを変えると、配る GAS の版(「プランごとに配る版」)も変わります。</p>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" size="sm" disabled={busy}>{busy ? '保存しています…' : '保存する'}</Button>
         <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
@@ -887,23 +1040,26 @@ function PlanControl({ org, session, onChanged, onAuthError }: { org: OrgSummary
   )
 }
 
-// 新しい団体に渡すもの: GAS のコード(サイトの /gas/Code.gs。レジストリの最新の版と同じか確かめてからコピー)と、
-// 団体のスプレッドシートのテンプレートの「コピーを作成」のリンク
-function OrgHandoffPanel({ latestGasVersion }: { latestGasVersion: string | null }) {
+// 新しい団体に渡すもの: GAS のコード(サイトの /gas/<版>/Code.gs。そのプランに配る版のコードか確かめてからコピー)と、
+// 団体のスプレッドシートのテンプレートの「コピーを作成」のリンク(プランごと。決めていなければ既定のリンク)。
+// version が null の時は、needPlan ならプランを選ぶよう出す
+function OrgHandoffPanel({ version, templateUrl, planLabel, needPlan }: { version: string | null; templateUrl: string; planLabel: string | null; needPlan: boolean }) {
   const [codeState, setCodeState] = useState<{ kind: 'idle' | 'busy' } | { kind: 'done'; version: string } | { kind: 'error'; message: string }>({ kind: 'idle' })
   const [linkCopied, setLinkCopied] = useState(false)
+  // 選んだプランが変わったら、前の結果を消す
+  useEffect(() => { setCodeState({ kind: 'idle' }); setLinkCopied(false) }, [version, templateUrl])
   const copyCode = async () => {
-    if (!latestGasVersion) return
+    if (!version) return
     setCodeState({ kind: 'busy' })
-    const r = await copySiteGasCode(latestGasVersion)
+    const r = await copySiteGasCode(version)
     if (r.ok) setCodeState({ kind: 'done', version: r.version })
-    else if (r.reason === 'mismatch') setCodeState({ kind: 'error', message: `サイトのコードの版(${r.version ?? '不明'})が、レジストリの最新の版(${latestGasVersion})と違うため、コピーしませんでした。サイトの更新が終わってから、もう一度押してください。` })
+    else if (r.reason === 'mismatch') setCodeState({ kind: 'error', message: `サイトのコードの版(${r.version ?? '不明'})が、配る版(${version})と違うため、コピーしませんでした。サイトの更新が終わってから、もう一度押してください。` })
     else if (r.reason === 'clipboard') setCodeState({ kind: 'error', message: 'クリップボードに入れられませんでした。ブラウザがコピーを許可しているか確かめてください。' })
-    else setCodeState({ kind: 'error', message: 'サイトからコードを読めませんでした。ページを読み込み直してから、もう一度押してください。' })
+    else setCodeState({ kind: 'error', message: `サイトから版 ${version} のコードを読めませんでした。ページを読み込み直してから、もう一度押してください(続く時は、その版をサイトに置いているか確かめてください)。` })
   }
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(ORG_TEMPLATE_COPY_URL)
+      await navigator.clipboard.writeText(templateUrl)
       setLinkCopied(true)
     } catch {
       setLinkCopied(false)
@@ -911,26 +1067,26 @@ function OrgHandoffPanel({ latestGasVersion }: { latestGasVersion: string | null
   }
   return (
     <section className="rounded-lg border border-border p-3" data-org-handoff>
-      <h2 className="mb-1 text-sm font-medium">新しい団体に渡すもの</h2>
-      <p className="mb-3 text-xs text-muted-foreground">登録コードと一緒に、テンプレートのコピーを作るリンクと、GAS のコードを渡します。</p>
+      <h2 className="mb-1 text-sm font-medium">新しい団体に渡すもの{planLabel ? `(${planLabel})` : ''}</h2>
+      <p className="mb-3 text-xs text-muted-foreground">登録コードと一緒に、テンプレートのコピーを作るリンクと、GAS のコードを渡します。どちらも、選んだプランのもの(プランに配る版のコード)です。</p>
       <div className="space-y-3">
         <div>
           <p className="text-xs font-medium">GAS のコード</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void copyCode()} disabled={!latestGasVersion || codeState.kind === 'busy'} data-registry-copy-gas>
-              GAS のコードをコピー{latestGasVersion ? `(版 ${latestGasVersion})` : ''}
+            <Button size="sm" variant="outline" onClick={() => void copyCode()} disabled={!version || codeState.kind === 'busy'} data-registry-copy-gas>
+              GAS のコードをコピー{version ? `(版 ${version})` : ''}
             </Button>
             {codeState.kind === 'done' && <span className="text-xs" data-registry-copy-gas-result>コピーしました(版 {codeState.version})</span>}
             {codeState.kind === 'error' && <span role="alert" className="text-xs text-destructive" data-registry-copy-gas-result>{codeState.message}</span>}
           </div>
-          {!latestGasVersion && <p className="mt-1 text-xs text-muted-foreground">レジストリの版の一覧を読めないため、コピーできません。</p>}
+          {!version && <p className="mt-1 text-xs text-muted-foreground">{needPlan ? '下の発行のフォームでプラン(再登録なら団体)を選ぶと、そのプランに配る版のコードをコピーできます。' : 'レジストリの版の一覧を読めないため、コピーできません。'}</p>}
         </div>
         <div>
           <p className="text-xs font-medium">テンプレートのコピーを作成</p>
-          <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground" data-registry-template-url>{ORG_TEMPLATE_COPY_URL}</p>
+          <p className="mt-0.5 break-all font-mono text-xs text-muted-foreground" data-registry-template-url>{templateUrl}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <a
-              href={ORG_TEMPLATE_COPY_URL}
+              href={templateUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium hover:bg-secondary"
@@ -954,6 +1110,7 @@ function CodesPanel({
   onChanged,
   onAuthError,
   latestGasVersion,
+  planReleases,
 }: {
   session: AdminSession
   codes: CodeSummary[]
@@ -962,7 +1119,9 @@ function CodesPanel({
   initialInput: IssueInput | null
   onChanged: () => void
   onAuthError: (message?: string) => void
+  // 一番新しい版(プランごとに配る版を返さない古いレジストリの時に使う)
   latestGasVersion: string | null
+  planReleases?: PlanReleases
 }) {
   const [input, setInput] = useState<IssueInput>({ ...EMPTY_INPUT, ...(initialInput ?? {}) })
   const reissue = input.kind === 'reissue'
@@ -987,6 +1146,10 @@ function CodesPanel({
       setMessage('どの団体向けかが分かるよう、団体名(契約先の名前)を入れてください。')
       return
     }
+    if (!reissue && !input.plan) {
+      setMessage('プラン(Cosmo Base・Ohsumi・有償・FSIF)を選んでください。')
+      return
+    }
     if (needsReauth(session)) {
       reauth()
       return
@@ -994,7 +1157,7 @@ function CodesPanel({
     setBusy(true)
     setMessage(null)
     try {
-      const res = await issueRegistrationCode(session, reissue ? { ...input, orgName: '' } : { ...input, targetOrgId: '' })
+      const res = await issueRegistrationCode(session, reissue ? { ...input, orgName: '', plan: '' } : { ...input, targetOrgId: '' })
       setIssued(res)
       setCopied(false)
       setInput(EMPTY_INPUT)
@@ -1020,6 +1183,13 @@ function CodesPanel({
 
   const set = (k: keyof IssueInput) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setInput({ ...input, [k]: e.target.value })
   const inputClass = 'w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm'
+  // 新しい団体に渡すもの: 発行したコード(表示中)か、フォームで選んでいるプラン・団体のもの
+  const targetOrg = reissue ? orgs.find((o) => o.orgId === input.targetOrgId) : undefined
+  const shownOrg = issued ? (issued.kind === 'reissue' ? orgs.find((o) => o.orgId === issued.targetOrgId) : undefined) : targetOrg
+  const shownPlan: Plan | '' = shownOrg ? shownOrg.plan : issued ? (issued.plan ?? '') : reissue ? '' : (input.plan ?? '')
+  const handoffVersion = !planReleases ? latestGasVersion : shownOrg ? releaseForOrg(planReleases, shownOrg) : shownPlan ? releaseForPlan(planReleases, shownPlan) : null
+  const planTemplate = shownPlan ? planReleases?.plans.find((r) => r.plan === shownPlan)?.templateUrl ?? '' : ''
+  const handoffTemplate = TEMPLATE_COPY_URL_PATTERN.test(planTemplate) ? planTemplate : ORG_TEMPLATE_COPY_URL
 
   return (
     <div className="space-y-5">
@@ -1027,6 +1197,7 @@ function CodesPanel({
         <section className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3" aria-live="polite">
           <p className="text-sm font-medium">「{issued.orgName}」向けの{issued.kind === 'reissue' ? '再登録コード' : '登録コード'}</p>
           <p className="my-2 font-mono text-lg tracking-wider break-all select-all">{issued.code}</p>
+          {issued.kind !== 'reissue' && issued.plan && <p className="text-xs">プラン: {PLAN_LABELS[issued.plan]}</p>}
           <p className="text-xs">有効期限: {fmt(issued.expiresAt)}(1回だけ使えます)</p>
           <p className="mt-1 text-xs font-medium text-amber-900">このコードは今だけ表示されます。レジストリには元に戻せない形でしか残りません。担当者へ別の連絡手段で渡してください。</p>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -1035,8 +1206,6 @@ function CodesPanel({
           </div>
         </section>
       )}
-
-      <OrgHandoffPanel latestGasVersion={latestGasVersion} />
 
       <section className="rounded-lg border border-border p-3">
         <h2 className="mb-2 text-sm font-medium">登録コードを発行する</h2>
@@ -1053,20 +1222,32 @@ function CodesPanel({
             </label>
           </fieldset>
           {reissue ? (
-            <label className="block text-xs">
-              再登録する団体(必須)
-              <select className={inputClass} value={input.targetOrgId ?? ''} onChange={(e) => setInput({ ...input, targetOrgId: e.target.value })} required>
-                <option value="">選んでください</option>
-                {orgs.map((o) => (
-                  <option key={o.orgId} value={o.orgId}>{o.displayName || o.orgId}</option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label className="block text-xs">
+                再登録する団体(必須)
+                <select className={inputClass} value={input.targetOrgId ?? ''} onChange={(e) => setInput({ ...input, targetOrgId: e.target.value })} required>
+                  <option value="">選んでください</option>
+                  {orgs.map((o) => (
+                    <option key={o.orgId} value={o.orgId}>{o.displayName || o.orgId}</option>
+                  ))}
+                </select>
+              </label>
+              {targetOrg && <p data-issue-plan-inherited className="text-xs text-muted-foreground">プラン: {PLAN_LABELS[targetOrg.plan]}(再登録しても今のプランのままです。変える時は、団体の「プランを変える…」で変えます)</p>}
+            </>
           ) : (
-            <label className="block text-xs">
-              団体名(契約先の名前・必須)
-              <input className={inputClass} value={input.orgName} onChange={set('orgName')} maxLength={100} required />
-            </label>
+            <>
+              <label className="block text-xs">
+                団体名(契約先の名前・必須)
+                <input className={inputClass} value={input.orgName} onChange={set('orgName')} maxLength={100} required />
+              </label>
+              <label className="block text-xs">
+                プラン(必須。登録した時に団体のプランになります)
+                <select className={inputClass} value={input.plan ?? ''} onChange={(e) => setInput({ ...input, plan: e.target.value as Plan | '' })} required data-issue-plan>
+                  <option value="">選んでください</option>
+                  {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+                </select>
+              </label>
+            </>
           )}
           <label className="block text-xs">
             担当者の名前
@@ -1088,6 +1269,8 @@ function CodesPanel({
           {message && <p className="text-sm break-words text-destructive">{message}</p>}
         </form>
       </section>
+
+      <OrgHandoffPanel version={handoffVersion} templateUrl={handoffTemplate} planLabel={shownPlan ? PLAN_LABELS[shownPlan] : null} needPlan={!!planReleases} />
 
       <section>
         <h2 className="mb-2 text-sm font-medium">発行済みの登録コード</h2>
@@ -1131,6 +1314,7 @@ function CodeItem({ code, session, onChanged, onAuthError }: { code: CodeSummary
         <span className="min-w-0 font-medium break-words">{code.orgName || '(団体名なし)'}</span>
         <Badge tone={tone}>{CODE_STATE_LABELS[code.state]}</Badge>
         {code.kind === 'reissue' && <Badge tone="muted">再登録</Badge>}
+        {code.kind !== 'reissue' && code.plan && <Badge tone="muted">{PLAN_LABELS[code.plan]}</Badge>}
       </div>
       <dl className="space-y-1">
         <Field label="有効期限">{fmt(code.expiresAt)}</Field>
@@ -1191,7 +1375,7 @@ function AuditList({ audit }: { audit: AuditEntry[] }) {
 
 // ---- アンケート(PR O) ----
 //   - 送る: Google フォームの URL・送付日・対象(全団体・プラン・団体を選ぶ)。プランごとの上限(直近12か月)を超える団体には送らない(レジストリが判定)
-//   - 期限を過ぎて回答が無い団体(有償プランを除く): 「28日目に機能停止を入れる」を1回の操作で入れる(自動では入れない)
+//   - 期限を過ぎて回答が無い団体(有償プラン・FSIF を除く): 「28日目に機能停止を入れる」を1回の操作で入れる(自動では入れない)
 //   - 一覧: 状態・送ったメール・「回答済みにする」(リマインドと機能停止を止める)・取り消し
 const SURVEY_STATE_TONES: Record<SurveyState, 'muted' | 'ok' | 'warn' | 'bad'> = { scheduled: 'muted', open: 'warn', overdue: 'bad', answered: 'ok', cancelled: 'muted' }
 
@@ -1234,7 +1418,7 @@ function SurveysPanel({ overview, session, onChanged, onAuthError }: { overview:
       <section data-survey-overdue className="rounded-lg border border-border p-3">
         <h2 className="text-sm font-medium">期限を過ぎて回答が無い団体({overdue.length})</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          回答期限({SURVEY_DUE_DAYS}日目)を過ぎたアンケートです。有償プランの団体は出しません。「{SURVEY_RESTRICT_DAY}日目に機能停止を入れる」で、送付日から{SURVEY_RESTRICT_DAY}日目の0時(過ぎている時は翌日の0時)に機能停止(読み取り専用)の予定を入れ、担当者にメールで知らせます。自動では入れません。回答済みにすると、止まります。
+          回答期限({SURVEY_DUE_DAYS}日目)を過ぎたアンケートです。有償プラン・FSIF の団体は出しません。「{SURVEY_RESTRICT_DAY}日目に機能停止を入れる」で、送付日から{SURVEY_RESTRICT_DAY}日目の0時(過ぎている時は翌日の0時)に機能停止(読み取り専用)の予定を入れ、担当者にメールで知らせます。自動では入れません。回答済みにすると、止まります。
         </p>
         {overdue.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">ありません。</p>
@@ -1335,7 +1519,7 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
       </p>
       {limits && (
         <p data-survey-limits className="text-xs text-muted-foreground">
-          上限(直近12か月。送付日で数え、送付の予定を含みます。取り消したものは数えません): {(['ohsumi', 'cosmo_base', 'paid'] as const).map((p) => `${PLAN_LABELS[p]} ${limits[p]}件`).join('・')}。上限を超える団体・プランが未設定の団体には送りません。
+          上限(直近12か月。送付日で数え、送付の予定を含みます。取り消したものは数えません): {(['ohsumi', 'cosmo_base', 'paid'] as const).map((p) => `${PLAN_LABELS[p]} ${limits[p]}件`).join('・')}・FSIF 上限なし。上限を超える団体・プランが未設定の団体には送りません。
         </p>
       )}
       <label className="block text-xs">
@@ -1360,13 +1544,13 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
         ))}
         {kind === 'plan' && (
           <select className={inputClass} value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
-            {(['cosmo_base', 'ohsumi', 'paid'] as const).map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+            {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
           </select>
         )}
         {kind === 'orgs' && (
           <ul className="max-h-60 space-y-1 overflow-y-auto rounded-md border border-border p-2">
             {overview.orgs.map((o) => {
-              const limit = o.plan && limits ? limits[o.plan] : null
+              const limit = o.plan && limits ? limits[o.plan] ?? null : null
               return (
                 <li key={o.orgId}>
                   <label className="flex min-w-0 items-start gap-1.5">
@@ -1542,7 +1726,7 @@ function AnnouncementsPanel({ overview, session, onChanged, onAuthError }: { ove
           {kind === 'plan' && (
             <>
               <select className={inputClass} value={plan} onChange={(e) => setPlan(e.target.value as Plan)}>
-                {(['cosmo_base', 'ohsumi', 'paid'] as const).map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
+                {PLANS.map((p) => <option key={p} value={p}>{PLAN_LABELS[p]}</option>)}
               </select>
               <p className="text-muted-foreground">団体の今のプランで決めます(出した後にプランを変えた団体も、今のプランで出す・出さないが変わります)。</p>
             </>
@@ -1793,7 +1977,7 @@ const KPI_METRIC_LABELS: Record<string, string> = { members: 'メンバー', act
 
 // KPI(デモの団体を除く)
 function KpiPanel({ kpis }: { kpis: OrgKpis }) {
-  const plans = (['ohsumi', 'cosmo_base', 'paid', ''] as const).map((p) => `${PLAN_LABELS[p]} ${kpis.byPlan[p] ?? 0}`).join('・')
+  const plans = (['ohsumi', 'cosmo_base', 'paid', 'internal', ''] as const).map((p) => `${PLAN_LABELS[p]} ${kpis.byPlan[p] ?? 0}`).join('・')
   const totals = Object.keys(KPI_METRIC_LABELS).filter((k) => kpis.metrics.totals[k] !== undefined).map((k) => `${KPI_METRIC_LABELS[k]} ${kpis.metrics.totals[k].toLocaleString()}`).join('・')
   return (
     <section data-kpis className="mb-4 rounded-lg border border-border p-3 text-xs">

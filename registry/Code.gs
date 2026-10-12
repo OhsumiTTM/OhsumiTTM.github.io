@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.12-1'
+var REGISTRY_VERSION = '2026.10.12-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -249,7 +249,7 @@ var REGISTRY_VERSION = '2026.10.12-1'
 //     suspend_at(停止の予定日時)・suspend_reason・last_check_at(団体の GAS が最後に確認に来た時刻)・gas_version
 //     contract_status(active 契約中 / ending 終了予定 / ended 終了)・contract_until(契約の終了日)・contract_note
 //     suspend_scheduled_by(停止の予定を入れた管理者)・suspend_notices_json(停止の予告を送った記録)・updated_at
-//     suspend_kind(停止の種類)・plan(プラン: cosmo_base / ohsumi / paid。空は未設定)
+//     suspend_kind(停止の種類)・plan(プラン: cosmo_base / ohsumi / paid / internal〈FSIF の団体〉。空は未設定)
 var REGISTRY_SHEETS = {
   Orgs: ['org_id', 'gas_url', 'status', 'channel', 'display_name', 'created_at', 'suspend_at', 'suspend_reason', 'last_check_at', 'gas_version',
     'contract_status', 'contract_until', 'contract_note', 'suspend_scheduled_by', 'suspend_notices_json', 'updated_at', 'suspend_kind', 'plan',
@@ -271,8 +271,9 @@ var REGISTRY_SHEETS = {
   Usage: ['org_id', 'date', 'metrics_json', 'metrics_version', 'received_at',
     // 受け取った時にデモの団体だったか(TRUE。後で印を外しても、その時の集計値はデモのまま集計から外す)
     'demo'],
+  // plan は新しい団体の登録コードで選んだプラン(登録した時に Orgs の plan に入れる。再登録コードは空)
   RegistrationCodes: ['code_hash', 'kind', 'target_org_id', 'org_name', 'contact_name', 'contact_email', 'expires_at', 'issued_by', 'issued_at', 'used_at', 'used_org_id', 'revoked_at',
-    'code_id', 'revoked_by', 'note'],
+    'code_id', 'revoked_by', 'note', 'plan'],
   // registry_key は共有鍵そのもの(団体の GAS との確認に使うため、元の値を持つ。保護したシート・誰とも共有しない)。
   // register_nonce_hash は、最後の登録の送り直しを見分けるための値(団体の GAS が作ってスクリプトプロパティに
   // 保存した乱数 registerNonce)の SHA-256
@@ -291,6 +292,10 @@ var REGISTRY_SHEETS = {
   // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
   // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
   GasVersions: ['version', 'security', 'required', 'note', 'updated_at', 'updated_by'],
+  // プランごとに配る団体の GAS の版(管理画面で決める)。plan は PLANS のどれか1行ずつ。
+  // version: 配る版(サイトにコードを置いた版〈KNOWN_GAS_VERSIONS の released〉だけ。internal だけは latest〈いつも一番新しい版〉も選べる)
+  // template_url: そのプランのテンプレートの「コピーを作成」のリンク(空は画面の既定のリンク)
+  PlanReleases: ['plan', 'version', 'template_url', 'note', 'updated_at', 'updated_by'],
 }
 // 管理者は、スクリプトプロパティ ADMIN_EMAILS(カンマ区切り)の許可リストで決める。
 // R1-a で作った Admins シートは使わない(残っていても読まない)
@@ -336,6 +341,7 @@ var REGISTRY_ACTIONS = {
   setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
   setTunables: function (body) { return setTunables_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
+  setPlanRelease: function (body) { return setPlanRelease_(body, Date.now()) },
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
   sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
   markSurveyAnswered: function (body) { return closeSurvey_(body, Date.now(), 'answered') },
@@ -483,6 +489,12 @@ function readRows_(name) {
     headers.forEach(function (h, c) { values[h] = r[c] })
     return { row: i + 2, values: values }
   })
+}
+
+// シートにその列(見出し)があるか
+function sheetHasColumn_(name, column) {
+  var sheet = registrySheet_(name)
+  return sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0].map(String).indexOf(column) >= 0
 }
 
 // 見出しの順に並べた1行を足す
@@ -734,7 +746,7 @@ function orgSummary_(values, nowMs) {
     gasUrl: String(values.gas_url || ''),
     gasVersion: String(values.gas_version || ''),
     mail: orgMailSummary_(values),
-    gasStatus: gasVersionStatus_(values, gasVersionList_(), nowMs),
+    gasStatus: orgGasStatus_(values, nowMs),
     jobs: orgJobSummary_(values, nowMs),
     demo: isDemoOrg_(values),
     // この団体だけ止めている機能(全団体の分は含めない)
@@ -778,6 +790,8 @@ function codeSummary_(values, nowMs) {
     contactName: String(values.contact_name || ''),
     contactEmail: String(values.contact_email || ''),
     note: String(values.note || ''),
+    // 新しい団体の登録コードで選んだプラン(再登録コード・プランを選ぶ前に発行したコードは空)
+    plan: planOf_(values),
     state: registrationCodeState_(values, nowMs),
     expiresAt: isoOf_(values.expires_at),
     issuedBy: String(values.issued_by || ''),
@@ -812,6 +826,7 @@ function adminOverview_(body, nowMs) {
       audit: audit,
       codeTtlDays: REGISTRATION_CODE_TTL_DAYS,
       gasVersions: gasVersionList_(),
+      planReleases: planReleasesView_(nowMs),
       surveys: so.surveys,
       surveyLimits: so.surveyLimits,
       survey12mCounts: so.survey12mCounts,
@@ -897,6 +912,12 @@ function issueRegistrationCode_(body, nowMs) {
   var kind = String(body.kind || 'new') === 'reissue' ? 'reissue' : 'new'
   var targetOrgId = kind === 'reissue' ? cleanText_(body.targetOrgId, 80) : ''
   var orgName = cleanText_(body.orgName, 100)
+  // プラン: 新しい団体の登録コードでは必須(登録した時に Orgs の plan に入れる。未設定の団体を作らない)。
+  // 再登録コードは受け付けない(再登録では Orgs の plan を変えないので、今のプランのまま)
+  var plan = kind === 'new' ? String(body.plan || '') : ''
+  if (kind === 'new' && PLANS.indexOf(plan) < 0) throw registryError_(PLAN_REQUIRED_ERROR)
+  // 列が無いと、選んだプランが黙って捨てられ、プランが未設定の団体ができる
+  if (kind === 'new' && !sheetHasColumn_('RegistrationCodes', 'plan')) throw new Error('RegistrationCodes に列「plan」がありません。setupRegistry() を実行してください。')
   if (kind === 'reissue') {
     // 再登録コード: 登録済みの団体向け(共有鍵の作り直し・接続先の変更)。団体名は Orgs から
     var target = findOrgRow_(targetOrgId)
@@ -923,13 +944,14 @@ function issueRegistrationCode_(body, nowMs) {
       contact_name: contactName,
       contact_email: contactEmail,
       note: note,
+      plan: plan,
       expires_at: expiresAt,
       issued_by: session.sub,
       issued_at: issuedAt,
     })
     // 記録にはコードもハッシュも残さない
-    appendAudit_({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { kind: kind, targetOrgId: targetOrgId, orgName: orgName, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
-    return { ok: true, result: { code: formatRegistrationCode_(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName, kind: kind, targetOrgId: targetOrgId } }
+    appendAudit_({ actor: session.sub, action: 'issueRegistrationCode', target: codeId, after: { kind: kind, targetOrgId: targetOrgId, orgName: orgName, plan: plan, contactName: contactName, contactEmail: contactEmail, note: note, expiresAt: expiresAt } })
+    return { ok: true, result: { code: formatRegistrationCode_(code), codeId: codeId, expiresAt: expiresAt, orgName: orgName, kind: kind, targetOrgId: targetOrgId, plan: plan } }
   })
 }
 
@@ -1081,9 +1103,11 @@ function registerOrg_(body, nowMs) {
     var key = newRegistryKey_()
     var orgValues
     if (kind === 'new') {
+      // プランは登録コードで選んだもの(プランを選ぶ前に発行したコードでは空。管理画面の「プランを変える…」で付ける)
       orgValues = {
         org_id: orgId, gas_url: gasUrl, status: 'active', channel: 'standard',
         display_name: String(codeRow.values.org_name || ''), created_at: at, gas_version: gasVersion, updated_at: at,
+        plan: planOf_(codeRow.values),
       }
       appendRowByHeaders_('Orgs', orgValues)
       if (String(codeRow.values.contact_name || '') || String(codeRow.values.contact_email || '')) {
@@ -1109,7 +1133,7 @@ function registerOrg_(body, nowMs) {
       action: kind === 'new' ? 'registerOrg' : 'reregisterOrg',
       target: orgId,
       before: kind === 'reissue' ? { gasUrl: String(existing.values.gas_url || ''), keyGen: keyGen - 1 } : undefined,
-      after: { codeId: String(codeRow.values.code_id || ''), displayName: String(orgValues.display_name || ''), gasUrl: gasUrl, gasVersion: gasVersion, keyGen: keyGen },
+      after: { codeId: String(codeRow.values.code_id || ''), displayName: String(orgValues.display_name || ''), plan: kind === 'new' ? String(orgValues.plan || '') : undefined, gasUrl: gasUrl, gasVersion: gasVersion, keyGen: keyGen },
     })
     return { ok: true, result: registerResult_(orgId, secretValues, orgValues, kind) }
   })
@@ -1192,10 +1216,25 @@ function resolveOrg_(body, nowMs) {
 // レジストリに確かめられない時、団体の GAS は最後に確かめた状態のまま使い続ける(最後に届いた停止の予定日時は守る)
 var SUSPEND_KINDS = ['suspend', 'restrict']
 var SUSPEND_MIN_NOTICE_DAYS = 14
-// プラン(利用契約書の案 第3条)。有償(paid)は、アンケートに回答が無くても機能停止にしない(サポートの停止のみ)
-var PLANS = ['cosmo_base', 'ohsumi', 'paid']
-var PLAN_LABELS = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン' }
+// プラン(利用契約書の案 第3条)。有償(paid)は、アンケートに回答が無くても機能停止にしない(サポートの停止のみ)。
+// internal は FSIF の団体(契約のプランではない区分)。デモの印(demo)とは別。アンケートは上限なしで送れ、KPI にも数え、
+// 機能停止は入れない(提供停止は入れられる)。団体の GAS は集計値の送信を必須にする(2026.10.12-2 から)
+var PLANS = ['cosmo_base', 'ohsumi', 'paid', 'internal']
+var PLAN_LABELS = { cosmo_base: 'Cosmo Baseプラン', ohsumi: 'Ohsumiプラン', paid: '有償プラン', internal: 'FSIF' }
 var PAID_RESTRICT_ERROR = '有償プランの団体には、機能停止を入れられません(アンケートに回答が無い時は、サポートの停止のみです)。'
+var INTERNAL_RESTRICT_ERROR = 'FSIF の団体には、機能停止を入れられません。'
+var PLAN_REQUIRED_ERROR = 'プラン(Cosmo Base・Ohsumi・有償・FSIF)を選んでください。'
+
+// このプランの団体に機能停止を入れられない時の理由(入れられる時は '')
+function restrictBlockedReason_(plan) {
+  plan = String(plan || '')
+  return plan === 'paid' ? PAID_RESTRICT_ERROR : plan === 'internal' ? INTERNAL_RESTRICT_ERROR : ''
+}
+
+function planOf_(values) {
+  var plan = String((values && values.plan) || '')
+  return PLANS.indexOf(plan) >= 0 ? plan : ''
+}
 var SUSPEND_NOTICE_DAYS = [14, 7, 1]
 var CHECKIN_MAX_SKEW_SEC = 300
 var CHECKIN_WRITE_INTERVAL_MS = 10 * 60 * 1000
@@ -1500,7 +1539,7 @@ function testSetSuspension_(mode, nowMs) {
   if (SUSPEND_KINDS.indexOf(kind) < 0) throw new Error('TEST_SUSPEND_KIND は suspend(提供停止)か restrict(機能停止)にしてください。')
   if (mode !== 'lift' && kind === 'restrict') {
     var testRow = findOrgRow_(orgId)
-    if (testRow && String(testRow.values.plan || '') === 'paid') throw new Error(PAID_RESTRICT_ERROR)
+    if (testRow && restrictBlockedReason_(testRow.values.plan)) throw new Error(restrictBlockedReason_(testRow.values.plan))
   }
   var days = Number(props.TEST_SUSPEND_DAYS)
   if (mode === 'schedule' && !(days > 0)) throw new Error('TEST_SUSPEND_DAYS に、停止までの日数(例: 13.9・6.9・0.9)を入れてください。')
@@ -1564,7 +1603,7 @@ function scheduleSuspension_(body, nowMs) {
     var row = findOrgRow_(String(body.orgId || ''))
     if (!row) throw registryError_('その団体は見つかりません。')
     if (isDemoOrg_(row.values)) throw registryError_(DEMO_SUSPEND_ERROR)
-    if (kind === 'restrict' && String(row.values.plan || '') === 'paid') throw registryError_(PAID_RESTRICT_ERROR)
+    if (kind === 'restrict' && restrictBlockedReason_(row.values.plan)) throw registryError_(restrictBlockedReason_(row.values.plan))
     if (contractState_(row.values, nowMs).phase === 'inEffect') throw registryError_('この団体は停止中です。先に停止を解除してください。')
     var orgId = String(row.values.org_id)
     var before = contractState_(row.values, nowMs)
@@ -1602,20 +1641,20 @@ function scheduleSuspension_(body, nowMs) {
   })
 }
 
-// 管理画面: 団体のプランを記録する。{ session, orgId, plan: cosmo_base | ohsumi | paid, reason }
-// 有償にする時は、機能停止の予定・機能停止が入っていないこと(有償の団体は機能停止にしない)
+// 管理画面: 団体のプランを記録する。{ session, orgId, plan: cosmo_base | ohsumi | paid | internal, reason }
+// 有償・FSIF にする時は、機能停止の予定・機能停止が入っていないこと(有償・FSIF の団体は機能停止にしない)
 function setOrgPlan_(body, nowMs) {
   var props = registryProps_()
   var session = verifyAdminSession_(body.session, props, nowMs)
   var plan = String(body.plan || '')
-  if (PLANS.indexOf(plan) < 0) throw registryError_('プラン(Cosmo Base・Ohsumi・有償)を選んでください。')
+  if (PLANS.indexOf(plan) < 0) throw registryError_(PLAN_REQUIRED_ERROR)
   var reason = cleanText_(body.reason, 500)
   return withRegistryLock_(function () {
     var row = findOrgRow_(String(body.orgId || ''))
     if (!row) throw registryError_('その団体は見つかりません。')
     var c = contractState_(row.values, nowMs)
-    if (plan === 'paid' && c.phase !== 'none' && c.kind === 'restrict') {
-      throw registryError_('この団体には機能停止の予定(または機能停止)が入っています。有償プランにする前に、取り消す・解除してください。')
+    if (restrictBlockedReason_(plan) && c.phase !== 'none' && c.kind === 'restrict') {
+      throw registryError_('この団体には機能停止の予定(または機能停止)が入っています。' + PLAN_LABELS[plan] + 'にする前に、取り消す・解除してください。')
     }
     var orgId = String(row.values.org_id)
     var beforePlan = String(row.values.plan || '')
@@ -1714,8 +1753,8 @@ function checkIn_(body, nowMs) {
     mailTasks = isDemoOrg_(row.values) ? [] : orgMailTasks_(row.values, orgSurveys, contactEmails_()[orgId] || [], nowMs)
   }
   var c = contractState_(row.values, nowMs)
-  // GAS の版: 更新が要るか(今届いた版で判定する)
-  var vs = gasVersionStatus_(merged_(row.values, { gas_version: gasVersion, last_check_at: new Date(nowMs).toISOString() }), gasVersionList_(), nowMs)
+  // GAS の版: 更新が要るか(今届いた版で、この団体のプランに配る版を基準に判定する。latest は配る版)
+  var vs = orgGasStatus_(merged_(row.values, { gas_version: gasVersion, last_check_at: new Date(nowMs).toISOString() }), nowMs)
   var gasUpdate = { required: vs.versionState === 'updateRequired', outdated: vs.versionState !== 'latest', latest: vs.latest, minimum: vs.minimum, security: vs.security }
   // プラン(団体の GAS が、集計値を送るかの決まりに使う。空は未設定)
   var plan = PLANS.indexOf(String(row.values.plan || '')) >= 0 ? String(row.values.plan) : ''
@@ -1799,9 +1838,9 @@ function reportMetrics_(body, nowMs) {
 //   - 回答期限は送付日から14日目。リマインドは 7・10・14日目、期限の後は 15・21・26・27日目に、毎日の処理(dailyRegistryBackup)から送る
 //     (処理が止まっていた時は、まだ送っていないいちばん新しいものだけを送る)
 //   - プランごとの上限(直近12か月。送付日で数え、どの12か月の間でも超えないようにする。取り消したものは数えない): SURVEY_YEAR_LIMITS。
-//     プランが未設定の団体には送らない
+//     FSIF の団体(internal)には上限が無い。プランが未設定の団体には送らない
 //   - 回答の確認は、当面 FSIF が管理画面で「回答済み」を押す。押すと、リマインドとこのアンケートで入れた機能停止(予定・停止中とも)を止める
-//   - 期限を過ぎても回答が無い団体(有償プランを除く)は、管理画面の一覧から「28日目に機能停止を入れる」を1回の操作で入れられる(自動では入れない)。
+//   - 期限を過ぎても回答が無い団体(有償プラン・FSIF を除く)は、管理画面の一覧から「28日目に機能停止を入れる」を1回の操作で入れられる(自動では入れない)。
 //     28日目(送付日から28日後の0時・日本時間)を過ぎている時は、翌日の0時にする。入れた時に担当者へ知らせ、停止の予告(14・7・1日前)は送らない
 //     (リマインドで知らせるため)
 // 日付は日本時間の 'YYYY-MM-DD'(Utilities.formatDate を使わない。日本時間に夏時間は無い)
@@ -1967,8 +2006,8 @@ function surveySummary_(values, orgValues, nowMs) {
     createdBy: String(values.created_by || ''),
     createdAt: isoOf_(values.created_at),
     restrictAt: restrictAt ? new Date(restrictAt).toISOString() : '',
-    // 「28日目に機能停止を入れる」を出すか: 期限を過ぎて回答が無い・有償プランでない・ほかの停止の予定が無い
-    canRestrict: s.state === 'overdue' && plan !== 'paid' && !!orgValues && !isDemoOrg_(orgValues) && contractState_(orgValues, nowMs).phase === 'none',
+    // 「28日目に機能停止を入れる」を出すか: 期限を過ぎて回答が無い・有償プラン・FSIF でない・ほかの停止の予定が無い
+    canRestrict: s.state === 'overdue' && !restrictBlockedReason_(plan) && !!orgValues && !isDemoOrg_(orgValues) && contractState_(orgValues, nowMs).phase === 'none',
     demo: !!orgValues && isDemoOrg_(orgValues),
   }
 }
@@ -2082,7 +2121,7 @@ function sendSurvey_(body, nowMs) {
       if (isDemoOrg_(r.values)) skip = 'デモの団体です(アンケートは送りません)。'
       else if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
       else if (orgDisplayState_(r.values, nowMs).state === 'suspended') skip = '提供停止中です。'
-      else if (surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
+      else if (SURVEY_YEAR_LIMITS[plan] && surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
       else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
         skip = '同じフォームのアンケートを、回答待ちで送っています。'
       }
@@ -2166,7 +2205,7 @@ function scheduleSurveyRestriction_(body, nowMs) {
       var skip = !row || !org ? 'アンケートか団体が見つかりません。'
         : s.state !== 'overdue' ? '回答期限を過ぎて回答が無いアンケートではありません。'
           : isDemoOrg_(org.values) ? DEMO_SUSPEND_ERROR
-          : String(org.values.plan || '') === 'paid' ? PAID_RESTRICT_ERROR
+          : restrictBlockedReason_(org.values.plan) ? restrictBlockedReason_(org.values.plan)
             : contractState_(org.values, nowMs).phase !== 'none' ? 'この団体には、ほかの停止の予定(または停止)が入っています。' : ''
       if (skip) { skipped.push({ surveyId: surveyId, reason: skip }); return }
       var orgId = String(org.values.org_id)
@@ -3000,7 +3039,7 @@ function orgKpis_(nowMs) {
   var real = orgs.filter(function (r) { return !isDemoOrg_(r.values) })
   var demoIds = {}
   orgs.forEach(function (r) { if (isDemoOrg_(r.values)) demoIds[String(r.values.org_id)] = true })
-  var byPlan = { cosmo_base: 0, ohsumi: 0, paid: 0, '': 0 }
+  var byPlan = { cosmo_base: 0, ohsumi: 0, paid: 0, internal: 0, '': 0 }
   var active = 0
   real.forEach(function (r) {
     if (orgDisplayState_(r.values, nowMs).state === 'suspended') return
@@ -3036,12 +3075,15 @@ function orgKpis_(nowMs) {
 // 版は日付の形「YYYY.MM.DD-N」(gas/Code.gs の OHSUMI_GAS_VERSION。pnpm gas:version で上げる)。
 // 出した版は KNOWN_GAS_VERSIONS に足す(足し忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 印(security: 安全の修正 / required: これより古ければ更新が要る)は、管理画面で付け直せる(GasVersions シート。記録を残す)。
-// 判定(団体ごと):
-//   updateRequired: 印の付いた版(security か required)のうち一番新しいものより古い
-//   outdated: 一覧の一番新しい版より古い / latest: それ以外(一覧より新しい版も含む)
+// released: true は、サイトにその版のコード(/gas/<版>/Code.gs。リポジトリの gas/releases/<版>/)を置いた版。
+// 配る版(プランごと。PlanReleases)に選べるのは、この版だけ(pnpm gas:release add / remove が付け外しする)。
+// 判定(団体ごと。その団体に配る版 R までの版だけを見る。R より新しい版は、まだ配っていないので数えない):
+//   updateRequired: R 以下の、印の付いた版(security か required)のうち一番新しいものより古い
+//   outdated: R より古い / latest: それ以外(R より新しい版も含む)
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.12-2', security: true, required: true, released: true, note: '安全の修正(全団体をこの版にそろえる。2026.10.11-3 の団体は、2026.10.12-1 の分もまとめてこの版に上がる)。2026.10.12-1 の中身: タスクの登録の承認・却下を記録する(管理画面の「承認の履歴」)・担当の候補の決め方(即戦力・成長・支援・メンター。メンターにするレベル)を団体ごとに変えられる。この版で足したもの: プランごとに配る版の始まりの版(サイトの /gas/<版>/Code.gs に置く最初の版)。FSIF の団体(プラン internal)を受け付け、集計値の送信を必須にする。更新の知らせ・メールに、このプランで配っている版を出す' },
   { version: '2026.10.12-1', note: 'タスクの登録の承認・却下を記録する(管理画面の「承認の履歴」)。担当の候補の決め方(メンターにするレベル)を団体ごとに変えられる' },
   { version: '2026.10.11-3', security: true, required: true, note: '安全の修正: 役職の一覧に無い役職(書き間違い・役職の設定が読めない時)を、全権の管理者ではなく一般として扱う。検定の回答の送信を1人1時間10回までにする。最終ログイン日時は本人の分だけ書く。毎日の個人情報の削除を毎日の処理の最後にし、2分半を超えたら残りを翌日に回す(途中で止まった人は消した印を付けない)' },
   { version: '2026.10.11-2', security: true, required: true, note: '安全の修正: メンバーの人事・退会の権限を持つ代表以外の人が、代表・自分より強い人のメールアドレス・担当プロジェクトなどを変えられた穴、班長が送る内容にプロジェクトIDを付けると担当外のタスクを変えられた穴、承認者でない班長が経費・申請を却下・差し戻しできた穴を塞ぐ。退会した代表を代表として数えない。同じメールアドレスを2人に登録させない。承認の不具合(「全員」の承認が終わらない・取り下げ済みを承認できる・同じ人の2回の承認・一般メンバーの承認者・確認者の承認の数え方)、通知・カレンダー・Discord・メールの言語、バックアップから戻す時の個人情報・アーカイブ・記録の行の不具合を直す。自動翻訳: 訳した文を覚え、訳せなかった文を訳として返さない' },
@@ -3111,13 +3153,16 @@ function gasVersionList_() {
 
 function forgetGasVersions_() {
   _gasVersions = null
+  _planReleases = null
   try { CacheService.getScriptCache().remove(GAS_VERSIONS_CACHE_KEY) } catch (e) { /* 次の期限で消える */ }
 }
 
-// 団体の GAS の版の判定(純粋な関数)
-function gasVersionStatus_(values, versions, nowMs) {
+// 団体の GAS の版の判定(純粋な関数)。release はその団体に配る版(省くと一覧の一番新しい版)。
+// latest(画面・checkIn の返事・メールに出す版)は配る版で、R より新しい版があっても「古い」にしない
+function gasVersionStatus_(values, versions, nowMs, release) {
   var current = String(values.gas_version || '')
-  var latest = versions.length ? versions[0].version : ''
+  if (release) versions = versions.filter(function (v) { return compareGasVersions_(v.version, release) <= 0 })
+  var latest = release || (versions.length ? versions[0].version : '')
   var minimum = ''
   var security = false
   versions.forEach(function (v) {
@@ -3138,9 +3183,10 @@ function gasVersionStatus_(values, versions, nowMs) {
 function gasVersionCounts_(nowMs) {
   var versions = gasVersionList_()
   var out = { latest: versions.length ? versions[0].version : '', updateRequired: 0, noCheck: 0, dailyJobStale: 0, orgs: 0 }
+  var pr = planReleases_()
   readRows_('Orgs').forEach(function (r) {
     if (!String(r.values.org_id || '') || String(r.values.status || '') !== 'active') return
-    var st = gasVersionStatus_(r.values, versions, nowMs)
+    var st = gasVersionStatus_(r.values, versions, nowMs, releaseFor_(r.values, pr))
     // 利用中の団体の数(KPI)には、デモの団体を入れない(版・確認・毎日の処理の数は、動かしている団体として数える)
     if (isDemoOrg_(r.values)) out.demo = (out.demo || 0) + 1
     else out.orgs++
@@ -3149,6 +3195,181 @@ function gasVersionCounts_(nowMs) {
     if (orgJobSummary_(r.values, nowMs).dailyStale) out.dailyJobStale++
   })
   return out
+}
+
+// ---- プランごとに配る版(PlanReleases) ----
+//
+// 新しい版は、まず FSIF の団体(internal)に配り、確かめてからほかのプランに広げる。
+// 団体ごとの配る版(releaseFor_):
+//   デモの団体: 一番新しい版(サイトにある版のうち)
+//   プランあり: そのプランの行の版(internal は latest〈いつも一番新しい版〉も選べる。行が無い internal は latest)
+//   それ以外(プランが空・行が無い・行の版がサイトに無い): Cosmo Base・Ohsumi・有償のうち、一番古い配る版(念のための既定)
+// 選べる版は、サイトにコードを置いた版(KNOWN_GAS_VERSIONS の released)だけ。サイトにある版が1つも無い時は、
+// 今までどおり一覧の一番新しい版を配る版とみなす
+var PLAN_RELEASE_LATEST = 'latest'
+var PLAN_RELEASE_SLOW_PLANS = ['cosmo_base', 'ohsumi', 'paid']
+var PLAN_RELEASES_CACHE_KEY = 'registry:planReleases'
+var TEMPLATE_COPY_URL_PATTERN = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+\/copy$/
+var _planReleaseRows = null
+var _planReleases = null
+
+// サイトにコードを置いた版(新しい順)
+function releasedGasVersions_() {
+  return KNOWN_GAS_VERSIONS.filter(function (v) { return v.released === true }).map(function (v) { return v.version })
+    .sort(function (a, b) { return compareGasVersions_(b, a) })
+}
+
+// PlanReleases の行({ plan: { version, templateUrl, note, updatedAt, updatedBy } })。数分キャッシュに置く
+function planReleaseRows_() {
+  if (_planReleaseRows) return _planReleaseRows
+  var cache = CacheService.getScriptCache()
+  try {
+    var raw = cache.get(PLAN_RELEASES_CACHE_KEY)
+    if (raw) { _planReleaseRows = JSON.parse(raw); return _planReleaseRows }
+  } catch (e) { /* 読み直す */ }
+  var rows = {}
+  if (SpreadsheetApp.getActiveSpreadsheet().getSheetByName('PlanReleases')) {
+    readRows_('PlanReleases').forEach(function (r) {
+      var plan = String(r.values.plan || '').trim()
+      if (PLANS.indexOf(plan) < 0) return
+      // テンプレートのリンクは、シートを直接書き換えられても画面のリンクに出せる形(…/copy)だけを使う
+      var templateUrl = String(r.values.template_url || '').trim()
+      rows[plan] = {
+        version: String(r.values.version || '').trim(), templateUrl: TEMPLATE_COPY_URL_PATTERN.test(templateUrl) ? templateUrl : '',
+        note: String(r.values.note || ''), updatedAt: isoOf_(r.values.updated_at), updatedBy: String(r.values.updated_by || ''),
+      }
+    })
+  }
+  try { cache.put(PLAN_RELEASES_CACHE_KEY, JSON.stringify(rows), PROPS_CACHE_SEC) } catch (e) { /* 置けなくても続ける */ }
+  _planReleaseRows = rows
+  return rows
+}
+
+function forgetPlanReleases_() {
+  _planReleaseRows = null
+  _planReleases = null
+  try { CacheService.getScriptCache().remove(PLAN_RELEASES_CACHE_KEY) } catch (e) { /* 次の期限で消える */ }
+}
+
+// 配る版を決める(純粋な関数)。rows: PlanReleases の行 / released: サイトにある版(新しい順) / versions: 版の一覧(新しい順)
+//   byPlan[plan]: { plan, setting(行の値), version(配る版), source: set | latest | default, problem: '' | unreleased }
+//   newest: 一番新しい版(デモの団体に配る) / fallback: 念のための既定
+function resolvePlanReleases_(rows, released, versions) {
+  var newest = released[0] || (versions.length ? versions[0].version : '')
+  var explicit = function (plan) {
+    var raw = rows[plan] ? String(rows[plan].version || '') : ''
+    if (plan === 'internal' && raw === PLAN_RELEASE_LATEST) return newest
+    return raw && released.indexOf(raw) >= 0 ? raw : ''
+  }
+  var slowest = ''
+  PLAN_RELEASE_SLOW_PLANS.forEach(function (p) {
+    var v = explicit(p)
+    if (v && (!slowest || compareGasVersions_(v, slowest) < 0)) slowest = v
+  })
+  var fallback = slowest || newest
+  var byPlan = {}
+  PLANS.forEach(function (p) {
+    var row = rows[p] || {}
+    var setting = String(row.version || '')
+    var v = explicit(p)
+    var source = v ? (setting === PLAN_RELEASE_LATEST ? 'latest' : 'set') : (p === 'internal' && !setting ? 'latest' : 'default')
+    byPlan[p] = {
+      plan: p, setting: setting, version: v || (p === 'internal' && !setting ? newest : fallback), source: source,
+      // 行の版がサイトに無い(消した版・知らない版): 念のための既定を配っている
+      problem: setting && !v ? 'unreleased' : '',
+      templateUrl: String(row.templateUrl || ''), note: String(row.note || ''), updatedAt: String(row.updatedAt || ''), updatedBy: String(row.updatedBy || ''),
+    }
+  })
+  return { byPlan: byPlan, newest: newest, fallback: fallback, released: released }
+}
+
+function planReleases_() {
+  if (!_planReleases) _planReleases = resolvePlanReleases_(planReleaseRows_(), releasedGasVersions_(), gasVersionList_())
+  return _planReleases
+}
+
+// その団体に配る版
+function releaseFor_(values, pr) {
+  if (isDemoOrg_(values)) return pr.newest
+  var plan = planOf_(values)
+  return plan ? pr.byPlan[plan].version : pr.fallback
+}
+
+// 団体の版の判定(その団体に配る版を基準にする)
+function orgGasStatus_(values, nowMs) {
+  return gasVersionStatus_(values, gasVersionList_(), nowMs, releaseFor_(values, planReleases_()))
+}
+
+// 管理画面の「プランごとに配る版」
+//   plans: プランごとの配る版・テンプレートのリンク・団体の数(デモを除く)・古い団体・更新が要る団体の数
+//   pendingSecurity: 安全の修正の版のうち、まだ配っていないプランがあるもの({ version, plans })
+//   removable: サイトから外してよい版(どのプランの配る版でもなく、一番新しい版でもない)
+function planReleasesView_(nowMs) {
+  var pr = planReleases_()
+  var versions = gasVersionList_()
+  var counts = {}
+  PLANS.forEach(function (p) { counts[p] = { orgs: 0, outdated: 0, updateRequired: 0 } })
+  readRows_('Orgs').forEach(function (r) {
+    if (!String(r.values.org_id || '') || isDemoOrg_(r.values)) return
+    var plan = planOf_(r.values)
+    if (!plan) return
+    var st = gasVersionStatus_(r.values, versions, nowMs, pr.byPlan[plan].version)
+    counts[plan].orgs++
+    if (st.versionState !== 'latest') counts[plan].outdated++
+    if (st.versionState === 'updateRequired') counts[plan].updateRequired++
+  })
+  var inUse = {}
+  PLANS.forEach(function (p) { inUse[pr.byPlan[p].version] = true })
+  inUse[pr.fallback] = true
+  inUse[pr.newest] = true
+  var pendingSecurity = []
+  versions.forEach(function (v) {
+    if (!v.security) return
+    var plans = PLANS.filter(function (p) { return compareGasVersions_(pr.byPlan[p].version, v.version) < 0 })
+    if (plans.length) pendingSecurity.push({ version: v.version, plans: plans })
+  })
+  return {
+    plans: PLANS.map(function (p) { return merged_(pr.byPlan[p], counts[p]) }),
+    newest: pr.newest,
+    fallback: pr.fallback,
+    released: pr.released,
+    removable: pr.released.filter(function (v) { return !inUse[v] }),
+    pendingSecurity: pendingSecurity,
+  }
+}
+
+// 管理画面: プランに配る版・テンプレートのリンクを変える。{ session, plan, version, templateUrl, note, reason }
+// 全団体の「更新が要る」の判定と、団体の画面の「コードをコピー」のコードを変えるので、5分以内のログインが要る(記録に残す)
+function setPlanRelease_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, '配る版の変更')
+  var plan = String(body.plan || '')
+  if (PLANS.indexOf(plan) < 0) throw registryError_(PLAN_REQUIRED_ERROR)
+  var version = String(body.version || '').trim()
+  var released = releasedGasVersions_()
+  if (!(plan === 'internal' && version === PLAN_RELEASE_LATEST) && released.indexOf(version) < 0) {
+    throw registryError_('版 ' + (version || '(空)') + ' は、サイトにコードを置いた版(registry/Code.gs の KNOWN_GAS_VERSIONS の released)ではありません。' +
+      '新しい版は、先にサイトに置いて(マージして公開して)から、レジストリを更新してください。')
+  }
+  var templateUrl = String(body.templateUrl === null || body.templateUrl === undefined ? '' : body.templateUrl).trim()
+  if (templateUrl && !TEMPLATE_COPY_URL_PATTERN.test(templateUrl)) {
+    throw registryError_('テンプレートのリンクは「https://docs.google.com/spreadsheets/d/…/copy」の形で入れてください(空にすると既定のリンク)。')
+  }
+  var note = cleanText_(body.note, 500)
+  var reason = cleanText_(body.reason, 500)
+  return withRegistryLock_(function () {
+    var rows = planReleaseRows_()
+    var before = rows[plan] ? { version: rows[plan].version, templateUrl: rows[plan].templateUrl } : null
+    var fields = { plan: plan, version: version, template_url: templateUrl, note: note, updated_at: new Date(nowMs).toISOString(), updated_by: session.sub }
+    var found = null
+    readRows_('PlanReleases').forEach(function (r) { if (String(r.values.plan || '').trim() === plan) found = r })
+    if (found) setRowFields_('PlanReleases', found.row, fields)
+    else appendRowByHeaders_('PlanReleases', fields)
+    forgetPlanReleases_()
+    appendAudit_({ actor: session.sub, action: 'setPlanRelease', target: plan, before: before, after: { version: version, templateUrl: templateUrl }, reason: reason })
+    return { ok: true, result: { planReleases: planReleasesView_(nowMs) } }
+  })
 }
 
 // 管理画面: 版の印を付け直す。{ session, version, security, required, note, reason }
@@ -3200,8 +3421,8 @@ function requestGasUpdate_(body, nowMs) {
   var cache = CacheService.getScriptCache()
   var key = 'gasreq:' + orgId
   if (cache.get(key)) throw registryError_('この団体には、' + GAS_UPDATE_REQUEST_INTERVAL_HOURS + '時間以内に更新のお願いを送っています。')
-  var st = gasVersionStatus_(row.values, gasVersionList_(), nowMs)
-  var text = gasUpdateRequestText_(String(row.values.display_name || orgId), st)
+  var st = orgGasStatus_(row.values, nowMs)
+  var text = gasUpdateRequestText_(String(row.values.display_name || orgId), st, siteOrigins_()[0] || '')
   var m = registryMail_({ to: to, subject: text.subject, body: text.body }, 'other', orgId, nowMs)
   cache.put(key, '1', GAS_UPDATE_REQUEST_INTERVAL_HOURS * 3600)
   appendAudit_({ actor: session.sub, action: 'requestGasUpdate', target: orgId,
@@ -3209,17 +3430,20 @@ function requestGasUpdate_(body, nowMs) {
   return { ok: true, result: { sentTo: to.length, queued: m.queued } }
 }
 
-function gasUpdateRequestText_(name, st) {
+// site はサイトの origin(分からなければ '')。コードは、そのプランで配っている版のもの(/gas/<版>/Code.gs)
+function gasUpdateRequestText_(name, st, site) {
+  var codeUrl = site && GAS_VERSION_PATTERN.test(st.latest) ? site + '/gas/' + st.latest + '/Code.gs' : ''
   return {
     subject: '[Ohsumi] ' + name + ': 団体の GAS の更新のお願い',
     body: name + ' ご担当者さま\n\n' +
       'Ohsumi の団体の GAS(団体のスプレッドシートの Apps Script)を、新しい版に更新してください。\n\n' +
       '今の版: ' + (st.current || '不明') + '\n' +
-      '最新の版: ' + (st.latest || '—') + '\n' +
+      'このプランで配っている版: ' + (st.latest || '—') + '\n' +
       (st.minimum && st.versionState === 'updateRequired' ? 'この版より古い GAS は、更新が要ります: ' + st.minimum + '\n' : '') +
       (st.security ? '新しい版には、安全の修正が含まれます。お早めに更新してください。\n' : '') +
       '\n更新の手順:\n' +
-      '1. Ohsumi のリポジトリの gas/Code.gs の内容を、Apps Script エディタに貼り替えて保存する\n' +
+      (codeUrl ? '1. ' + codeUrl + ' の内容(更新が要る時は、代表の管理画面の上部の「コードをコピー」でもコピーできます)を、Apps Script エディタに貼り替えて保存する\n'
+        : '1. 代表の管理画面の上部の「コードをコピー」でコピーしたコードを、Apps Script エディタに貼り替えて保存する\n') +
       '2. 「デプロイ」→「デプロイを管理」→ ウェブアプリの編集(鉛筆)→「バージョン: 新規」で更新する(URL は変わりません)\n' +
       '3. エディタで setupOhsumi を実行する\n\n' +
       '詳しくは gas/README.md の「2. Apps Script のデプロイ」をご覧ください。ご不明な点は FSIF にお問い合わせください。',

@@ -25,7 +25,7 @@ function ready() {
   const t = setup({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   t.gas.setupRegistry()
   const session = t.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: secret }).result.session.token
-  const code = t.post({ action: 'issueRegistrationCode', session, orgName: '団体A', contactName: '担当', contactEmail: 'a@example.org' }).result.code
+  const code = t.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '団体A', contactName: '担当', contactEmail: 'a@example.org' }).result.code
   const reg = t.post({ action: 'registerOrg', code, orgId: ORG_A, gasUrl: 'https://script.google.com/macros/s/AKfy0/exec', registerNonce: 'register-nonce-00000000-abcdefghijklmnopqrstuvwxyz0123' })
   expect(reg.ok, JSON.stringify(reg)).toBe(true)
   const key = String(reg.result.registryKey)

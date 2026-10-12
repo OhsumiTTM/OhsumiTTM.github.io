@@ -1,7 +1,7 @@
 // ---- 定量データ(個人を特定しない集計値)を週1回 FSIF に送る ----
 //
 // 送るかはプランで決まる(レジストリの checkIn が伝える CONTRACT_STATE.plan):
-//   ohsumi(Ohsumiプラン): 必須(いつも送る) / cosmo_base(Cosmo Baseプラン): 代表が選ぶ(初期値は送る) /
+//   ohsumi(Ohsumiプラン)・internal(FSIF の団体): 必須(いつも送る) / cosmo_base(Cosmo Baseプラン): 代表が選ぶ(初期値は送る) /
 //   paid(有償プラン): 代表が選ぶ(初期値は送らない) / 未設定: 代表が選ぶ(初期値は送らない)
 // 代表の選択はスクリプトプロパティ METRICS_CHOICE(on / off)。送っているかは Settings の metrics_sharing_notice に書き、
 // メンバーにも画面の下に出す。各指標の定義は gas/README.md の「4.18」(定義の版 METRICS_VERSION)
@@ -22,8 +22,8 @@ function metricsPlan_() {
 function metricsSharing_() {
   var plan = metricsPlan_()
   var choice = String(PropertiesService.getScriptProperties().getProperty('METRICS_CHOICE') || '')
-  var mandatory = plan === 'ohsumi'
-  var defaultOn = plan === 'ohsumi' || plan === 'cosmo_base'
+  var mandatory = plan === 'ohsumi' || plan === 'internal'
+  var defaultOn = mandatory || plan === 'cosmo_base'
   var enabled = mandatory ? true : choice === 'on' ? true : choice === 'off' ? false : defaultOn
   return { plan: plan, mandatory: mandatory, defaultOn: defaultOn, choice: choice, enabled: enabled }
 }
@@ -236,7 +236,7 @@ function metricsStatus_(nowMs) {
 
 function setMetricsSharing_(enabled, actorId, nowMs) {
   var sharing = metricsSharing_()
-  if (sharing.mandatory && !enabled) throw userError_('Ohsumiプランでは、集計値の送信は必須のため止められません。')
+  if (sharing.mandatory && !enabled) throw userError_('このプラン(Ohsumiプラン・FSIF)では、集計値の送信は必須のため止められません。')
   PropertiesService.getScriptProperties().setProperty('METRICS_CHOICE', enabled ? 'on' : 'off')
   syncMetricsNotice_(enabled)
   appendOrgAudit_(actorId, 'setMetricsSharing', '', { before: sharing.enabled, after: enabled })

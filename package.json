@@ -11,6 +11,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "gas:build": "node scripts/gas-build.mjs",
     "gas:version": "node scripts/gas-version.mjs",
+    "gas:release": "node scripts/gas-release.mjs",
     "build:demo": "node scripts/build-demo.mjs"
   },
   "dependencies": {

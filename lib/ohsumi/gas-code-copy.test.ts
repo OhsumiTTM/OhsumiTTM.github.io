@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { SITE_GAS_CODE_PATH, checkGasCode, copySiteGasCode, gasCodeVersion, newestGasVersion } from './gas-code-copy'
+import { checkGasCode, copySiteGasCode, gasCodeVersion, newestGasVersion, siteGasCodePath } from './gas-code-copy'
 import { ORG_TEMPLATE_COPY_URL } from './org-template'
 
 const CODE = readFileSync(join(__dirname, '..', '..', 'gas', 'Code.gs'), 'utf8')
@@ -13,12 +13,12 @@ describe('コードをコピー', () => {
     expect(VERSION).toMatch(/^\d{4}\.\d{2}\.\d{2}-\d+$/)
   })
 
-  it('最新の版と同じ時だけ、同じサイトの /gas/Code.gs をクリップボードに入れる', async () => {
+  it('配っている版のコード(同じサイトの /gas/<版>/Code.gs)を読み、その版の時だけクリップボードに入れる', async () => {
     const copied: string[] = []
     const urls: string[] = []
     const fetchFn = ((url: string) => { urls.push(url); return res(CODE) }) as unknown as typeof fetch
     expect(await copySiteGasCode(VERSION, { fetch: fetchFn, writeText: async (t) => { copied.push(t) } })).toEqual({ ok: true, version: VERSION })
-    expect(urls).toEqual([SITE_GAS_CODE_PATH])
+    expect(urls).toEqual([`/gas/${VERSION}/Code.gs`])
     expect(copied).toEqual([CODE])
   })
 
@@ -29,6 +29,12 @@ describe('コードをコピー', () => {
     expect(await copySiteGasCode(VERSION, { fetch: (() => res('<html>not found</html>')) as unknown as typeof fetch, writeText })).toMatchObject({ ok: false, reason: 'notGas' })
     expect(await copySiteGasCode(VERSION, { fetch: (() => res('', false)) as unknown as typeof fetch, writeText })).toMatchObject({ ok: false, reason: 'fetch' })
     expect(await copySiteGasCode(VERSION, { fetch: (() => Promise.reject(new Error('net'))) as unknown as typeof fetch, writeText })).toMatchObject({ ok: false, reason: 'fetch' })
+    // 版の形でない値は、読みに行かない
+    const urls: string[] = []
+    expect(await copySiteGasCode('../x', { fetch: ((u: string) => { urls.push(u); return res(CODE) }) as unknown as typeof fetch, writeText })).toMatchObject({ ok: false, reason: 'fetch' })
+    expect(urls).toEqual([])
+    expect(siteGasCodePath('2026.10.12-2')).toBe('/gas/2026.10.12-2/Code.gs')
+    expect(siteGasCodePath('latest')).toBeNull()
     expect(copied).toEqual([])
     expect(checkGasCode("var OHSUMI_GAS_VERSION = '1'\nfunction doPost(e) {}", '1')).toEqual({ ok: true, version: '1' })
   })

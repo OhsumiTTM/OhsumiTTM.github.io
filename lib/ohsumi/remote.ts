@@ -167,7 +167,7 @@ export interface UsageStatus {
 
 /** FSIF に送る集計値(gas/Code.gs の metricsStatus_。代表だけ) */
 export interface MetricsStatus {
-  plan: '' | 'cosmo_base' | 'ohsumi' | 'paid'
+  plan: '' | 'cosmo_base' | 'ohsumi' | 'paid' | 'internal'
   mandatory: boolean
   defaultOn: boolean
   enabled: boolean

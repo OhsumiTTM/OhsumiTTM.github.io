@@ -43,8 +43,11 @@ function registry(answers: boolean[]) {
 }
 
 describe('送るかの決まり(プラン)', () => {
-  it('Ohsumiプランは必須、Cosmo Baseプランは初期値で送る、有償プラン・未設定は初期値で送らない', () => {
+  it('Ohsumiプラン・FSIF の団体は必須、Cosmo Baseプランは初期値で送る、有償プラン・未設定は初期値で送らない', () => {
     expect(plain(call(org('ohsumi'), 'metricsSharing_'))).toMatchObject({ mandatory: true, enabled: true })
+    expect(plain(call(org('internal'), 'metricsSharing_'))).toMatchObject({ plan: 'internal', mandatory: true, defaultOn: true, enabled: true })
+    // 代表が止める選択をしていても、FSIF の団体は送る
+    expect(plain(call(org('internal', { METRICS_CHOICE: 'off' }), 'metricsSharing_'))).toMatchObject({ enabled: true })
     expect(plain(call(org('cosmo_base'), 'metricsSharing_'))).toMatchObject({ mandatory: false, enabled: true })
     expect(plain(call(org('paid'), 'metricsSharing_'))).toMatchObject({ mandatory: false, enabled: false })
     expect(plain(call(org(''), 'metricsSharing_'))).toMatchObject({ enabled: false })
@@ -57,6 +60,8 @@ describe('送るかの決まり(プラン)', () => {
     expect(paid.post({ action: 'setMetricsSharing', sessionToken: 'm-lead', enabled: false, requestId: 'metrics-off-1' })).toMatchObject({ ok: false, forbidden: true })
     const ohsumi = org('ohsumi')
     expect(ohsumi.post({ action: 'setMetricsSharing', sessionToken: 'm-top', enabled: false, requestId: 'metrics-off-2' }).error).toContain('必須')
+    const internal = org('internal')
+    expect(internal.post({ action: 'setMetricsSharing', sessionToken: 'm-top', enabled: false, requestId: 'metrics-off-3' }).error).toContain('必須')
   })
 })
 
@@ -168,7 +173,7 @@ describe('版 2 の指標(PR Y)', () => {
 
 describe('守る処理を外すと失敗する', () => {
   it('Ohsumiプランの必須を外すと、代表が送信を止められてしまう', () => {
-    const code = CODE_GS.replace("if (sharing.mandatory && !enabled) throw userError_('Ohsumiプランでは、集計値の送信は必須のため止められません。')", '')
+    const code = CODE_GS.replace("if (sharing.mandatory && !enabled) throw userError_('このプラン(Ohsumiプラン・FSIF)では、集計値の送信は必須のため止められません。')", '')
     expect(code).not.toBe(CODE_GS)
     const h = realDates(guardHarness({ code, props: { CONTRACT_STATE: JSON.stringify({ plan: 'ohsumi' }) } }))
     expect(h.post({ action: 'setMetricsSharing', sessionToken: 'm-top', enabled: false, requestId: 'metrics-off-3' }).ok).toBe(true)

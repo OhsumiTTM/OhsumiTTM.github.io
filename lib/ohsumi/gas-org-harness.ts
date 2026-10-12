@@ -40,7 +40,7 @@ export function registry() {
   const r = setupRegistry({ props: { ADMIN_EMAILS: 'admin@example.com', OAUTH_CLIENT_ID: CLIENT }, tokeninfo: tokens })
   r.gas.setupRegistry()
   const session = r.post({ action: 'adminLogin', idToken: 'hdr.a1.sig', nonceSecret: 'nonce-secret-a1-0123456789' }).result.session.token
-  const issue = (extra: Record<string, unknown> = {}) => r.post({ action: 'issueRegistrationCode', session, orgName: '新しい団体', ...extra }).result
+  const issue = (extra: Record<string, unknown> = {}) => r.post({ action: 'issueRegistrationCode', session, plan: 'ohsumi', orgName: '新しい団体', ...extra }).result
   return { ...r, issue, session }
 }
 
