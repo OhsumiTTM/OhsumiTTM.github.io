@@ -30,7 +30,7 @@ import { OrgSettingsScreen } from './org-settings-screen'
 import { SkillGridScreen } from './skill-grid-screen'
 import { LearningContentScreen } from './learning-content-screen'
 import { TaskDetailDrawer } from './output/task-detail-drawer'
-import { OhsumiMark } from './primitives'
+import { OhsumiLoadingMark, OhsumiMark } from './primitives'
 import { themeColorCss } from '@/lib/ohsumi/theme-color'
 import { TriangleAlert } from 'lucide-react'
 import { LegalLinks } from './legal-links'
@@ -40,15 +40,10 @@ import { LegalLinks } from './legal-links'
 function RemoteLoadingScreen() {
   const { t } = useI18n()
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
-      <OhsumiMark size={30} />
-      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <span className="relative flex size-3">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/40" />
-          <span className="relative inline-flex size-3 rounded-full bg-primary" />
-        </span>
-        {t('app.loading')}
-      </div>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-4 text-center" role="status" data-remote-loading>
+      {/* シンボル単体を回す(文字付きのロゴは回さない。ブランドガイドライン v0.9) */}
+      <OhsumiLoadingMark size={44} />
+      <p className="text-sm font-medium text-muted-foreground">{t('app.loading')}</p>
     </main>
   )
 }

@@ -222,6 +222,19 @@
   }
 }
 
+/* 読み込み中のシンボル(components/ohsumi/primitives.tsx の OhsumiLoadingMark)。図の中心 = 輪の中心で回す。
+   1周 1.6 秒・一定の速さ。動きを減らす設定の時は回さない */
+@keyframes ohsumi-spin {
+  to { transform: rotate(360deg); }
+}
+.ohsumi-spin {
+  transform-origin: 50% 50%;
+  animation: ohsumi-spin 1.6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ohsumi-spin { animation: none; }
+}
+
 @layer utilities {
   .ohsumi-scroll::-webkit-scrollbar {
     height: 10px;

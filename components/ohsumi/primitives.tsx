@@ -314,8 +314,9 @@ export function SimilarTaskSummary({ task }: { task: Task }) {
   )
 }
 
-// Ohsumi のロゴ(ブランドガイドライン v0.4)。docs/brand.md
+// Ohsumi のロゴ(ブランドガイドライン v0.9)
 //   - シンボル: 円形(縦横比 1:1)。輪と、右側の点。Ohsumi Blue(--ohsumi-blue)
+//   - 回転: 文字付きロゴ(OhsumiLogo)は常に正位置。シンボル単体は FSIF の制作物に限り回してよい(読み込み中の OhsumiLoadingMark だけ)
 //   - 文字: 「Ohsumi」。Ohsumi Navy(暗い表示では白。--ohsumi-wordmark)
 //   - どの大きさでも縦横比を変えない(width と height を同じにし、縮まないようにする)。回転・影などの効果は付けない
 //   - 団体のテーマの色(--primary の上書き)では変えない(--primary ではなく、ブランドの変数を使う)
@@ -332,6 +333,34 @@ export function OhsumiMark({ size = 22 }: { size?: number }) {
       fill="none"
       aria-hidden
       data-ohsumi-symbol
+      style={{ width: size, height: size, minWidth: size, flexShrink: 0, aspectRatio: '1 / 1', color: 'var(--ohsumi-symbol)' }}
+    >
+      <circle cx={ring.cx} cy={ring.cy} r={ring.r} stroke="currentColor" strokeWidth={ring.strokeWidth} />
+      <circle cx={dot.cx} cy={dot.cy} r={dot.r} fill="currentColor" />
+    </svg>
+  )
+}
+
+/**
+ * 読み込み中のシンボル(シンボル単体だけを回す。ガイドライン v0.9 の「シンボル単体は FSIF の制作物に限り回転可」)。
+ * 形・色は OhsumiMark と同じ。輪の中心(ring.cx, ring.cy)を図の真ん中にして、そこを中心に回す
+ * (OhsumiMark の図の中心で回すと、輪が揺れて見える)。輪は止まって見え、点が周りを回る。
+ * 端末で動きを減らす設定の時は回さない(app/globals.css の .ohsumi-spin)
+ */
+export function OhsumiLoadingMark({ size = 40 }: { size?: number }) {
+  const { ring, dot } = OHSUMI_SYMBOL_PATHS
+  // 輪の中心から、点の外側の端までの長さ(回しても欠けない大きさ)
+  const reach = dot.cx - ring.cx + dot.r
+  const viewBox = `${ring.cx - reach} ${ring.cy - reach} ${reach * 2} ${reach * 2}`
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox={viewBox}
+      fill="none"
+      aria-hidden
+      data-ohsumi-loading-mark
+      className="ohsumi-spin"
       style={{ width: size, height: size, minWidth: size, flexShrink: 0, aspectRatio: '1 / 1', color: 'var(--ohsumi-symbol)' }}
     >
       <circle cx={ring.cx} cy={ring.cy} r={ring.r} stroke="currentColor" strokeWidth={ring.strokeWidth} />
