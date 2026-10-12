@@ -42,7 +42,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks',
+  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getApprovalLog',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)

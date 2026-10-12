@@ -124,6 +124,8 @@ var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id 
 var ORG_STORE_HEADERS = ['id', 'part', 'value', 'updated_at', 'updated_by'] // id は保存のキー(1つのキーに何行もある)
 // 完了してから日数がたったタスクを移すシート(36-task-archive.gs)。Tasks と同じ列 + 移した日時
 var TASKS_ARCHIVE_HEADERS = TASKS_HEADERS.concat(['archived_at'])
+// 承認の記録(41-approval-log.gs)。タスクの登録の承認・却下を1件1行
+var APPROVAL_LOG_HEADERS = ['id', 'at', 'kind', 'action', 'target_id', 'title', 'project_id', 'creator_id', 'by_id', 'reason']
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -137,6 +139,8 @@ var SHEET_HEADERS = {
   PersonalStore: PERSONAL_STORE_HEADERS,
   OrgStore: ORG_STORE_HEADERS,
   TasksArchive: TASKS_ARCHIVE_HEADERS,
+  // 承認の記録(41-approval-log.gs)
+  ApprovalLog: APPROVAL_LOG_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'

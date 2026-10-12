@@ -104,6 +104,8 @@ export const ADMIN_STEPS = [
   ...ADMIN_TAB_TITLES.slice(1).map((text) => ({ name: `管理画面(${text})`, do: 'click', text, from: 'aside nav button' })),
   // スキルのレベルの決め方(PR Z): 団体の既定を変える欄(5つのレベルの点数・条件)を開いた状態
   { name: '管理画面(スキルの決まり・スキルのレベルの決め方の入力欄)', do: 'skillRules' },
+  // 承認の履歴(承認待ちの下。押した時に読む): タスクの登録の却下の理由(長い文)・種類と結果のバッジ
+  { name: '管理画面(承認待ち・承認の履歴)', do: 'approvalHistory' },
   // 稼働の目安(タスクの設定): 入力を変えると、保存の前にその場で人数を出す。範囲の外・大小の関係の誤りは理由を出して保存を止める
   { name: '管理画面(タスクの設定・稼働の目安の入力と人数の見込み)', do: 'workloadRules' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
@@ -180,7 +182,7 @@ export const READ_ONLY_STEPS = [
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getApprovalLog', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -606,6 +608,13 @@ async function run({ build = true } = {}) {
           { announcementId: 'an_1', title: '通常のお知らせ', body: '通常の本文', importance: 'normal', publishedAt: '2026-09-20T00:00:00.000Z', expiresAt: '2026-10-20T00:00:00.000Z' },
           { announcementId: 'an_2', title: '緊急: とても長い題のお知らせ'.repeat(3), body: '1行目\n' + 'とても長い本文の例です。https://example.com/a/very/long/url/that/should/wrap/' + 'x'.repeat(60), importance: 'urgent', publishedAt: '2026-09-30T00:00:00.000Z', expiresAt: '2026-10-30T00:00:00.000Z' },
           { announcementId: 'an_3', title: '重要なお知らせ', body: '重要な本文', importance: 'important', publishedAt: '2026-09-25T00:00:00.000Z', expiresAt: '2026-10-25T00:00:00.000Z' },
+        ] }
+        // 承認の記録(タスクの登録の承認・却下。長い名前と理由で、はみ出しを確かめる)
+        case 'getApprovalLog': return { keepDays: 365, entries: [
+          { id: 'al-2', at: new Date(Date.now() - 2 * 86400000).toISOString(), kind: 'task_registration', action: 'rejected', targetId: 't-gone', title: '却下されたとても長い名前のタスク'.repeat(3),
+            projectId: 'p1', creatorId: 'm-x', byId: 'm-y', reason: '却下の理由の長い文です。https://example.com/a/very/long/url/that/should/wrap/inside/the/row/' + 'x'.repeat(40) },
+          { id: 'al-1', at: new Date(Date.now() - 5 * 86400000).toISOString(), kind: 'task_registration', action: 'approved', targetId: 't-gone-2', title: '承認された登録',
+            projectId: 'p1', creatorId: 'm-x', byId: 'm-y', reason: '' },
         ] }
         // FSIF に送る集計値(プレビューと履歴)
         case 'getMetricsStatus': return { plan: 'cosmo_base', mandatory: false, defaultOn: true, enabled: true, slot: { dow: 3, hour: 14 },
@@ -1423,6 +1432,15 @@ async function run({ build = true } = {}) {
           if (!got.text.includes('とても長い名前の特定非営利活動法人')) throw new Error('ログインし直す団体の名前が出ません')
           if (!got.gsi || !got.nonce.startsWith('org_SECONDSECONDSECOND01.')) throw new Error('その団体の Google のログインが準備されません: ' + got.nonce)
           if (got.current !== ORG || got.state !== 'keep') throw new Error('ログインし直す窓が、今の団体・団体ごとの保存を変えました')
+        }
+        if (step.do === 'approvalHistory') {
+          await clickText('承認待ち', 'aside nav button'); await sleep(1000)
+          await evaluate(`document.querySelector('[data-approval-history-show]').click()`)
+          await sleep(1200)
+          const history = await evaluate(`document.querySelector('[data-approval-history]')?.textContent ?? ''`)
+          for (const want of ['承認の履歴', 'タスクの登録', '却下', '却下の理由の長い文です', '承認された登録']) {
+            if (!history.includes(want)) throw new Error('承認の履歴に「' + want + '」が出ません: ' + history.slice(0, 300))
+          }
         }
         if (step.do === 'skillRules') {
           await clickText('スキルの決まり', 'aside nav button'); await sleep(1200)

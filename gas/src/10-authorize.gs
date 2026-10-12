@@ -29,6 +29,11 @@ function authorizeAction_(acting, action, body) {
     if (isLeader) return
     throw userError_('FSIF からのお知らせは、代表・管理者だけが見られます。')
   }
+  // 承認の記録(タスクの登録の承認・却下)は、代表・管理者が読める。担当プロジェクトでの絞り込みは getApprovalLog_ で行う
+  if (action === 'getApprovalLog') {
+    if (isLeader) return
+    throw userError_('承認の履歴は、代表・管理者だけが見られます。')
+  }
   // 記録の持ち方を移す・戻す(39-record-rows.gs)も代表だけ
   var recordRowsActions = ['getRecordRowsStatus', 'migrateRecordsToRows', 'revertRecordRows']
   if (recordRowsActions.indexOf(action) >= 0) throw userError_('データの持ち方の移行は、代表だけが使えます。')

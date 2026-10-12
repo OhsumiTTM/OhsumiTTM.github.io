@@ -271,6 +271,18 @@ function checkWorkloadRules_(value) {
   if (!(full > available)) throw userError_('「余力なし」の下限は、「余力あり」の上限より大きくしてください。')
 }
 
+// 担当の候補の決め方(Settings の assign_candidate_rules。lib/ohsumi/assign-candidates.ts)
+//   mentor_min_level: メンターの候補にする、そのスキルのレベルの下限(1〜5 の整数。既定は 3)
+function checkAssignCandidateRules_(value) {
+  var obj = parseSettingJson_(value, '担当の候補の決め方')
+  if (!isPlainObject_(obj)) throw userError_('担当の候補の決め方の形が正しくありません。')
+  Object.keys(obj).forEach(function (k) {
+    if (k !== 'mentor_min_level') throw userError_('担当の候補の決め方に、知らない項目があります。')
+    var v = obj[k]
+    if (typeof v !== 'number' || Math.floor(v) !== v || v < 1 || v > 5) throw userError_('メンターにするレベルは 1〜5 の整数にしてください。')
+  })
+}
+
 // updateSetting の値を、キーごとに確かめる(空の値は「設定を消す」なので通す)
 var SETTING_VALUE_CHECKS = {
   custom_form_defs: checkCustomFormDefs_,
@@ -278,6 +290,7 @@ var SETTING_VALUE_CHECKS = {
   recurring_rules: checkRecurringRules_,
   skill_level_rules: checkSkillLevelRules_,
   workload_rules: checkWorkloadRules_,
+  assign_candidate_rules: checkAssignCandidateRules_,
   member_field_visibility: checkMemberFieldVisibility_,
   org_storage_access: checkOrgStorageAccess_,
 }

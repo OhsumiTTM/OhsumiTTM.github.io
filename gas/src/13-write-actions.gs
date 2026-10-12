@@ -137,11 +137,12 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'approveTask':
-      result = updateTaskFields_(body.taskId, { approval_status: sheetCode_('approval', 'approved') })
+      // 承認待ちだったタスクの承認は、承認の記録(ApprovalLog)に残す
+      result = approveTaskLogged_(body.taskId, actingMember.id)
       break
     case 'rejectTask':
-      // タスクを消し、シートのタスクの作成者・名前で作成者に知らせる(理由は承認する人が書いたもの)
-      result = rejectTask_(body.taskId, body.reason)
+      // タスクを消し、シートのタスクの作成者・名前で作成者に知らせる(理由は承認する人が書いたもの)。承認の記録にも残す
+      result = rejectTask_(body.taskId, body.reason, actingMember.id)
       break
     case 'removeTask':
       // 完了・確認待ちのタスクは、団体の経験の記録として残すので消さない
@@ -747,6 +748,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getFormSubmissions':
       result = getFormSubmissions_(actingMember)
+      break
+    case 'getApprovalLog':
+      result = getApprovalLog_(actingMember)
       break
     case 'getFiles':
       result = getFiles_(actingMember, body.fileIds)

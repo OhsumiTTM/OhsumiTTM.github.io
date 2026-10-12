@@ -26,7 +26,8 @@ var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
 var RESTORE_STALE_MS = 30 * 60 * 1000
 var RESTORE_MESSAGE = 'バックアップから戻しています。終わるまで(数分)待ってから、もう一度お試しください。'
 // 戻さないシート(操作の記録は、戻した記録を含めて残す)
-var RESTORE_EXCLUDED_SHEETS = ['AuditLog']
+// 承認の記録(ApprovalLog)も、操作の記録と同じく戻さない(戻したタスクより後の承認・却下も残す)
+var RESTORE_EXCLUDED_SHEETS = ['AuditLog', 'ApprovalLog']
 // 全体を戻す時に、バックアップに無ければ戻せない(戻さずに止める)シート
 var RESTORE_REQUIRED_SHEETS = ['Members', 'Tasks', 'Settings', 'MemberEmails']
 // 一部のタスクを戻す時に、行を置き換えずに合わせるもの(バックアップの後に付いたものも残す)

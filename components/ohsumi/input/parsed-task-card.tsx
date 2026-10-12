@@ -9,7 +9,8 @@ import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { parsedTaskProblems } from '@/lib/ohsumi/input-form'
 import { Card, DifficultyBadge, Tag, Avatar, SimilarTaskSummary } from '../primitives'
 import { cn } from '@/lib/utils'
-import { findSimilarTasks, rankCandidates, suggestSkillsForCategory, suggestCategoriesForTitle, isActiveMember } from '@/lib/ohsumi/utils'
+import { classifyCandidates } from '@/lib/ohsumi/assign-candidates'
+import { findSimilarTasks, suggestSkillsForCategory, suggestCategoriesForTitle, isActiveMember } from '@/lib/ohsumi/utils'
 import { Check, Plus, Sparkles, TriangleAlert, Trash2 } from 'lucide-react'
 
 export function ParsedTaskCard({
@@ -38,6 +39,7 @@ export function ParsedTaskCard({
     can,
     departmentOptions,
     workloadRules,
+    assignCandidateRules,
   } = useOhsumi()
   const { t } = useI18n()
   const deptLabel = useDepartmentLabel()
@@ -52,7 +54,10 @@ export function ParsedTaskCard({
   // 休止中メンバーは新規タスクの担当候補に出さない(admin.membersの一時停止と
   // 同じ扱い — task-detail-drawer.tsx等、他の担当者選択箇所と揃える)
   const activeMembers = members.filter(isActiveMember)
-  const candidates = rankCandidates(task, activeMembers, tasks, workloadRules).slice(0, 3)
+  // 担当の候補(即戦力・成長・支援の順。メンターは管理画面の「担当を決める」だけに出す)
+  const candidates = classifyCandidates(task, activeMembers, tasks, assignCandidateRules, workloadRules)
+    .filter((c) => c.kind !== 'mentor')
+    .slice(0, 3)
 
   // TSK-034: おすすめカテゴリ — タイトルとカテゴリ名/頻出スキル名の文字列
   // 一致 + プロジェクト内使用頻度をsuggestCategoriesForTitleでスコアリング
@@ -527,18 +532,19 @@ export function ParsedTaskCard({
                 <Sparkles className="size-3.5 shrink-0 text-primary" />
                 {t('input.parsedTask.recommended')}
               </span>
-              {candidates.map(({ member, matches }) => (
+              {candidates.map(({ member, matches, kind, growthSkills }) => (
                 <button
                   key={member.id}
                   type="button"
-                  title={t('input.parsedTask.matchTitle', { matches: matches.join(t('input.listSeparator')) })}
+                  data-candidate-kind={kind}
+                  title={t('input.parsedTask.matchTitle', { matches: (kind === 'growth' ? growthSkills : matches).join(t('input.listSeparator')) })}
                   onClick={() => addAssignee(member.id)}
                   className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-1.5 py-0.5 text-xs font-medium text-foreground hover:bg-primary/10"
                 >
                   <Avatar member={member} size={18} />
                   {member.displayName || member.name}
                   <span className="text-[10px] font-normal text-muted-foreground">
-                    {t('input.parsedTask.matchCount', { count: matches.length })}
+                    {kind === 'ready' ? t('admin.assignments.kind.ready') : kind === 'growth' ? t('admin.assignments.kind.growth') : t('input.parsedTask.matchCount', { count: matches.length })}
                   </span>
                   <Plus className="size-3 text-primary" />
                 </button>

@@ -906,6 +906,8 @@ var PERSONAL_STORE_HEADERS = ['id', 'key', 'part', 'value', 'updated_at'] // id 
 var ORG_STORE_HEADERS = ['id', 'part', 'value', 'updated_at', 'updated_by'] // id は保存のキー(1つのキーに何行もある)
 // 完了してから日数がたったタスクを移すシート(36-task-archive.gs)。Tasks と同じ列 + 移した日時
 var TASKS_ARCHIVE_HEADERS = TASKS_HEADERS.concat(['archived_at'])
+// 承認の記録(41-approval-log.gs)。タスクの登録の承認・却下を1件1行
+var APPROVAL_LOG_HEADERS = ['id', 'at', 'kind', 'action', 'target_id', 'title', 'project_id', 'creator_id', 'by_id', 'reason']
 var SHEET_HEADERS = {
   Members: MEMBERS_HEADERS,
   Projects: PROJECTS_HEADERS,
@@ -919,6 +921,8 @@ var SHEET_HEADERS = {
   PersonalStore: PERSONAL_STORE_HEADERS,
   OrgStore: ORG_STORE_HEADERS,
   TasksArchive: TASKS_ARCHIVE_HEADERS,
+  // 承認の記録(41-approval-log.gs)
+  ApprovalLog: APPROVAL_LOG_HEADERS,
 }
 
 var SETTINGS_KEY_RECURRING_RULES = 'recurring_rules'
@@ -1990,7 +1994,7 @@ function getActingMemberById_(memberId) {
 var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
-  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks',
+  'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getApprovalLog',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -2400,7 +2404,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.11-3'
+var OHSUMI_GAS_VERSION = '2026.10.12-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -2732,6 +2736,8 @@ var READ_ONLY_ACTIONS = [
   // 団体の保存を読む・移した古いタスクを探す(読み取りだけ)
   'getOrgStorage', 'searchArchivedTasks',
   'getWebhookStatus', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText',
+  // 承認の履歴(読み取りだけ)
+  'getApprovalLog',
   'revokeMySessions', 'revokeMemberSessions', 'updateLastLogin',
   // ほかの端末で開く: 本人あての招待リンクのメール(データを書き換えない)
   'getInviteMailStatus', 'sendInviteLinkToMe',
@@ -4320,6 +4326,11 @@ function authorizeAction_(acting, action, body) {
     if (isLeader) return
     throw userError_('FSIF からのお知らせは、代表・管理者だけが見られます。')
   }
+  // 承認の記録(タスクの登録の承認・却下)は、代表・管理者が読める。担当プロジェクトでの絞り込みは getApprovalLog_ で行う
+  if (action === 'getApprovalLog') {
+    if (isLeader) return
+    throw userError_('承認の履歴は、代表・管理者だけが見られます。')
+  }
   // 記録の持ち方を移す・戻す(39-record-rows.gs)も代表だけ
   var recordRowsActions = ['getRecordRowsStatus', 'migrateRecordsToRows', 'revertRecordRows']
   if (recordRowsActions.indexOf(action) >= 0) throw userError_('データの持ち方の移行は、代表だけが使えます。')
@@ -5206,7 +5217,7 @@ function toErrorMessage_(err) {
 var LOCK_EXEMPT_ACTIONS = [
   'translateText', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getBackgroundData', 'fetchDailyReports', 'checkAndGenerateRecurringTasks',
   'testDiscordWebhook', 'testSlackWebhook', 'getExpenses', 'getFiles', 'getWebhookStatus',
-  'getCandidates', 'getFormSubmissions',
+  'getCandidates', 'getFormSubmissions', 'getApprovalLog',
   // スクリプトプロパティ(世代番号)だけを書き換える。データの版は変えない
   'revokeMySessions', 'revokeMemberSessions',
   // 本人あての招待リンクのメール(シートを書き換えない。送った回数は CacheService に数える)
@@ -5888,11 +5899,12 @@ function runWriteAction_(body, actingMember) {
       })
       break
     case 'approveTask':
-      result = updateTaskFields_(body.taskId, { approval_status: sheetCode_('approval', 'approved') })
+      // 承認待ちだったタスクの承認は、承認の記録(ApprovalLog)に残す
+      result = approveTaskLogged_(body.taskId, actingMember.id)
       break
     case 'rejectTask':
-      // タスクを消し、シートのタスクの作成者・名前で作成者に知らせる(理由は承認する人が書いたもの)
-      result = rejectTask_(body.taskId, body.reason)
+      // タスクを消し、シートのタスクの作成者・名前で作成者に知らせる(理由は承認する人が書いたもの)。承認の記録にも残す
+      result = rejectTask_(body.taskId, body.reason, actingMember.id)
       break
     case 'removeTask':
       // 完了・確認待ちのタスクは、団体の経験の記録として残すので消さない
@@ -6498,6 +6510,9 @@ function runWriteAction_(body, actingMember) {
       break
     case 'getFormSubmissions':
       result = getFormSubmissions_(actingMember)
+      break
+    case 'getApprovalLog':
+      result = getApprovalLog_(actingMember)
       break
     case 'getFiles':
       result = getFiles_(actingMember, body.fileIds)
@@ -8243,13 +8258,16 @@ var NOTIFY_QUOTED_FIELDS = {
   rejectTask: ['reason'],  // 却下の理由(代表・管理者が書く。500字まで。宛先はシートのタスクの作成者)
 }
 
-function rejectTask_(taskId, reason) {
+function rejectTask_(taskId, reason, actorId) {
   var task = findRow_(SHEET_TASKS, taskId)
   if (!task) throw userError_('タスクが見つかりません。')
   var creatorId = String(task.creator_id || '')
   var title = String(task.title || '')
+  var wasPending = normalizeCode_('approval', task.approval_status) === 'pending'
   var result = removeTask_(taskId)
   var why = String(reason || '').slice(0, REJECT_REASON_MAX_CHARS)
+  // 承認の記録(41-approval-log.gs)。タスクは消えるので、名前・プロジェクトはここに残す
+  if (wasPending) appendApprovalLog_('rejected', task, actorId, why)
   try {
     var emails = creatorId ? memberEmailsByIds_([creatorId]) : []
     if (emails.length > 0) {
@@ -9709,6 +9727,8 @@ var FORMULA_INJECTION_PROTECTED_COLUMNS = {
   // 等のJSON値も入るが、書式なしテキスト化はJSON文字列の読み書きに影響しない
   // (JSON.parseは文字列の内容だけを見るため)ので列全体を対象にする。
   Settings: ['value'],
+  // 承認の記録(41-approval-log.gs)。タスクの名前・却下の理由
+  ApprovalLog: ['title', 'reason'],
 }
 
 // 指定した行のうち、そのシートで保護対象の列だけを書式なしテキスト(@)にする。
@@ -12484,6 +12504,8 @@ var READ_POLICY = {
       skill_level_rules: 'all',
       // 稼働の目安の決め方(37-value-checks.gs の checkWorkloadRules_ で確かめてから保存する)
       workload_rules: 'all',
+      // 担当の候補の決め方(37-value-checks.gs の checkAssignCandidateRules_ で確かめてから保存する)
+      assign_candidate_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',
@@ -13574,7 +13596,8 @@ var RESTORE_STATE_KEY = 'RESTORE_IN_PROGRESS'
 var RESTORE_STALE_MS = 30 * 60 * 1000
 var RESTORE_MESSAGE = 'バックアップから戻しています。終わるまで(数分)待ってから、もう一度お試しください。'
 // 戻さないシート(操作の記録は、戻した記録を含めて残す)
-var RESTORE_EXCLUDED_SHEETS = ['AuditLog']
+// 承認の記録(ApprovalLog)も、操作の記録と同じく戻さない(戻したタスクより後の承認・却下も残す)
+var RESTORE_EXCLUDED_SHEETS = ['AuditLog', 'ApprovalLog']
 // 全体を戻す時に、バックアップに無ければ戻せない(戻さずに止める)シート
 var RESTORE_REQUIRED_SHEETS = ['Members', 'Tasks', 'Settings', 'MemberEmails']
 // 一部のタスクを戻す時に、行を置き換えずに合わせるもの(バックアップの後に付いたものも残す)
@@ -14728,6 +14751,8 @@ function dailyMaintenanceUnrecorded_() {
   try { purgeExpiredTrashLocked_(Date.now()) } catch (err) { console.error('ゴミ箱のタスクを消せませんでした: ' + String(err)) }
   // 完了してから日数がたったタスクを TasksArchive に移す
   try { archiveOldTasksLocked_(Date.now()) } catch (err) { console.error('古いタスクを移せませんでした: ' + String(err)) }
+  // 保存期間を過ぎた承認の記録を消す
+  try { purgeOldApprovalLogLocked_(Date.now()) } catch (err) { console.error('古い承認の記録を消せませんでした: ' + String(err)) }
   try {
     generateRecurringTasksLocked_()
   } catch (err) {
@@ -16114,6 +16139,18 @@ function checkWorkloadRules_(value) {
   if (!(full > available)) throw userError_('「余力なし」の下限は、「余力あり」の上限より大きくしてください。')
 }
 
+// 担当の候補の決め方(Settings の assign_candidate_rules。lib/ohsumi/assign-candidates.ts)
+//   mentor_min_level: メンターの候補にする、そのスキルのレベルの下限(1〜5 の整数。既定は 3)
+function checkAssignCandidateRules_(value) {
+  var obj = parseSettingJson_(value, '担当の候補の決め方')
+  if (!isPlainObject_(obj)) throw userError_('担当の候補の決め方の形が正しくありません。')
+  Object.keys(obj).forEach(function (k) {
+    if (k !== 'mentor_min_level') throw userError_('担当の候補の決め方に、知らない項目があります。')
+    var v = obj[k]
+    if (typeof v !== 'number' || Math.floor(v) !== v || v < 1 || v > 5) throw userError_('メンターにするレベルは 1〜5 の整数にしてください。')
+  })
+}
+
 // updateSetting の値を、キーごとに確かめる(空の値は「設定を消す」なので通す)
 var SETTING_VALUE_CHECKS = {
   custom_form_defs: checkCustomFormDefs_,
@@ -16121,6 +16158,7 @@ var SETTING_VALUE_CHECKS = {
   recurring_rules: checkRecurringRules_,
   skill_level_rules: checkSkillLevelRules_,
   workload_rules: checkWorkloadRules_,
+  assign_candidate_rules: checkAssignCandidateRules_,
   member_field_visibility: checkMemberFieldVisibility_,
   org_storage_access: checkOrgStorageAccess_,
 }
@@ -17301,4 +17339,114 @@ function digestInviteOf_(task, me) {
     if (!done) return { kind: 'form', candidates: null }
   }
   return null
+}
+
+// ---- 承認の記録(ApprovalLog) ----------------------------------------------------
+//
+// タスクの登録の承認・却下を、1件ずつ ApprovalLog シートに残す(管理画面の「承認の履歴」に出す)。
+//   ・承認(approveTask)・却下(rejectTask)の時に、操作した人(ログインの情報から決める)・日時・タスクの名前・
+//     プロジェクト・登録した人・却下の理由を足す。却下するとタスクは消えるので、名前とプロジェクトはここに残す
+//   ・読む(getApprovalLog): 代表・管理者(一般以外の役職)。全権でない管理者は、担当プロジェクトの分だけ(承認待ちの一覧と同じ)
+//   ・保存期間は APPROVAL_LOG_KEEP_DAYS 日。毎日の処理で古い行を消す(却下の理由は自由な文なので、ずっとは残さない)
+//   ・バックアップから戻しても、この記録は戻さない(RESTORE_EXCLUDED_SHEETS。操作の記録 AuditLog と同じ)
+//   ・記録に失敗しても、承認・却下そのものは止めない(エラーの記録に残す)
+// 経費・申請フォームの承認の記録と、タスクの確認(確認者の承認・差し戻し)は、それぞれの記録にあるので、ここには残さない
+var SHEET_APPROVAL_LOG = 'ApprovalLog'
+// 列は 03-sheets-codes.gs の APPROVAL_LOG_HEADERS(SHEET_HEADERS より前に決める)
+var APPROVAL_LOG_KEEP_DAYS = 365
+var APPROVAL_LOG_READ_MAX = 1000
+
+// 承認・却下の時に呼ぶ(task は消す前・承認する前のシートの行)
+function appendApprovalLog_(action, task, actorId, reason) {
+  try {
+    if (!task) return
+    var sheet = getOrCreateSheet_(SHEET_APPROVAL_LOG, APPROVAL_LOG_HEADERS)
+    var headers = headerRow_(sheet)
+    var values = {
+      id: 'al-' + Utilities.getUuid().slice(0, 13),
+      at: new Date().toISOString(),
+      kind: 'task_registration',
+      action: action === 'rejected' ? 'rejected' : 'approved',
+      target_id: String(task.id || ''),
+      title: String(task.title || '').slice(0, 300),
+      project_id: String(task.project_id || ''),
+      creator_id: String(task.creator_id || ''),
+      by_id: String(actorId || ''),
+      reason: String(reason || '').slice(0, REJECT_REASON_MAX_CHARS),
+    }
+    var row = headers.map(function (h) { return values[h] === undefined ? '' : values[h] })
+    var rowNumber = sheet.getLastRow() + 1
+    protectRowFromFormulaInjection_(sheet, headers, rowNumber, SHEET_APPROVAL_LOG)
+    sheet.appendRow(row)
+  } catch (err) {
+    console.error('承認の記録を残せませんでした: ' + maskEmailsIn_(String(err)))
+  }
+}
+
+// 承認待ちのタスクを承認した時だけ残す(承認済みのタスクにもう一度 approveTask が来ても残さない)
+function approveTaskLogged_(taskId, actorId) {
+  var before = findRow_(SHEET_TASKS, String(taskId || ''))
+  var wasPending = !!before && normalizeCode_('approval', before.approval_status) === 'pending'
+  var result = updateTaskFields_(taskId, { approval_status: sheetCode_('approval', 'approved') })
+  if (wasPending) appendApprovalLog_('approved', before, actorId, '')
+  return result
+}
+
+// 承認の記録を読む(新しい順。保存期間の中だけ)
+function getApprovalLog_(acting) {
+  var cutoff = Date.now() - APPROVAL_LOG_KEEP_DAYS * 24 * 3600 * 1000
+  // 承認待ちの一覧(画面の adminPendingTasks)と同じ範囲: 全権管理者はすべて、それ以外の管理者は担当プロジェクトの分だけ
+  var scoped = !isActingFullAdmin_(acting)
+  var projectIds = String(acting.project_ids || '').split(',').map(function (s) { return s.trim() }).filter(Boolean)
+  var rows = sheetRowsAsObjects_(SHEET_APPROVAL_LOG)
+  var out = []
+  for (var i = rows.length - 1; i >= 0 && out.length < APPROVAL_LOG_READ_MAX; i--) {
+    var r = rows[i]
+    var at = timeOfCell_(r.at)
+    if (!(at >= cutoff)) continue
+    if (scoped && projectIds.indexOf(String(r.project_id || '')) < 0) continue
+    out.push({
+      id: String(r.id),
+      at: new Date(at).toISOString(),
+      kind: String(r.kind || 'task_registration'),
+      action: String(r.action) === 'rejected' ? 'rejected' : 'approved',
+      targetId: String(r.target_id || ''),
+      title: String(r.title || ''),
+      projectId: String(r.project_id || ''),
+      creatorId: String(r.creator_id || ''),
+      byId: String(r.by_id || ''),
+      reason: String(r.reason || ''),
+    })
+  }
+  return { entries: out, keepDays: APPROVAL_LOG_KEEP_DAYS }
+}
+
+// 保存期間を過ぎた行を消す(毎日の処理)。消した行の数を返す
+function purgeOldApprovalLogLocked_(nowMs) {
+  var lock = LockService.getScriptLock()
+  lock.waitLock(30000)
+  try {
+    return purgeOldApprovalLog_(nowMs)
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+function purgeOldApprovalLog_(nowMs) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_APPROVAL_LOG)
+  if (!sheet || sheet.getLastRow() < 2) return 0
+  var headers = headerRow_(sheet)
+  var atCol = headers.indexOf('at')
+  if (atCol < 0) return 0
+  var cutoff = (nowMs || Date.now()) - APPROVAL_LOG_KEEP_DAYS * 24 * 3600 * 1000
+  var values = sheet.getRange(2, atCol + 1, sheet.getLastRow() - 1, 1).getValues()
+  // 行は古い順に足していくので、先頭から続く古い行をまとめて消す
+  var count = 0
+  while (count < values.length) {
+    var at = timeOfCell_(values[count][0])
+    if (!(at > 0) || at >= cutoff) break
+    count++
+  }
+  if (count > 0) sheet.deleteRows(2, count)
+  return count
 }

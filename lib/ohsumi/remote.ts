@@ -5,6 +5,7 @@
 // READ_POLICY). See gas/README.md for the sheet schema and deployment steps.
 // All of this is optional — when NEXT_PUBLIC_REGISTRY_URL isn't set (e.g. local
 // dev), the app falls back to the local seed data exactly as before.
+import { parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { normalizeCapabilities, type Capability } from './capabilities'
 import type {
   AdminSection,
@@ -709,6 +710,8 @@ export interface RemoteSettings {
   skillLevelRules: SkillLevelRules
   // 稼働の目安の決め方(Settings の workload_rules。lib/ohsumi/workload-rules.ts)
   workloadRules: WorkloadRules
+  // 担当の候補の決め方(Settings の assign_candidate_rules。lib/ohsumi/assign-candidates.ts)
+  assignCandidateRules: AssignCandidateRules
   // 検定定義リスト — Settings キー "quiz_definitions"
   quizDefinitions: QuizDefinition[]
   // レーダーチャート軸定義 — Settings キー "radar_axes"
@@ -807,6 +810,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     })(),
     skillLevelRules: parseSkillLevelRules(byKey.get('skill_level_rules') ?? ''),
     workloadRules: parseWorkloadRules(byKey.get('workload_rules')),
+    assignCandidateRules: parseAssignCandidateRules(byKey.get('assign_candidate_rules')),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),
@@ -1206,6 +1210,20 @@ function changeListEntry<E>(action: string, id: string, change: (base: E[]) => E
   return postListOps(action, id, change((listBaseOf(action, key) ?? []) as E[]))
 }
 
+/** 承認の記録の1件(gas/src/41-approval-log.gs の getApprovalLog_) */
+export interface ApprovalLogEntry {
+  id: string
+  at: string
+  kind: 'task_registration'
+  action: 'approved' | 'rejected'
+  targetId: string
+  title: string
+  projectId: string
+  creatorId: string
+  byId: string
+  reason: string
+}
+
 export const remoteApi = {
   createTasks: (tasks: CreateTaskPayload[]) => {
     const p = postToGas<{ tempId: string; id: string }[]>('createTasks', { tasks })
@@ -1355,6 +1373,8 @@ export const remoteApi = {
   getCandidates: () => postToGas<import('./types').Candidate[]>('getCandidates', {}),
   // フォームの回答。閲覧できる回答だけが返る(gas/Code.gs の canViewFormSubmission)
   getFormSubmissions: () => postToGas<import('./types').CustomFormSubmission[]>('getFormSubmissions', {}),
+  // 承認の履歴: タスクの登録の承認・却下(代表・管理者。gas/src/41-approval-log.gs)。古い GAS は Unknown action を返す
+  getApprovalLog: () => postToGas<{ entries: ApprovalLogEntry[]; keepDays: number }>('getApprovalLog', {}),
   // アップロードしたファイル(非公開)を権限を確認したうえで取得する
   getFiles: (fileIds: string[]) => postToGas<FetchedFile[]>('getFiles', { fileIds }),
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で
