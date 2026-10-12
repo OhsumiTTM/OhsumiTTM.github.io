@@ -2656,7 +2656,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       lastLoginRecordedRef.current = false
 
       // GAS につながっている時は、画面だけで初期タスクを作らない。画面だけのタスクは GAS に
-      // 保存されず(完了にしても保存できない)、端末ごとに何度も付くため。GAS の側で作る形は v1.1 で入れる
+      // 保存されず(完了にしても保存できない)、端末ごとに何度も付くため。初期タスクは、メンバーを足した時に GAS が作る
+      // (gas/src/19-projects-members.gs の createInitialTasksForMember_)
       if (isRemoteConfigured) return
 
       // 既に初期タスクを付与済みか、タスクが存在する場合はスキップ
