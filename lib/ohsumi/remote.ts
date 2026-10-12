@@ -876,34 +876,6 @@ export interface InitialData {
 export type RecordRowsState = 'none' | 'migrating' | 'done' | 'reverting' | 'failed'
 const RECORD_ROWS_STATES: RecordRowsState[] = ['none', 'migrating', 'done', 'reverting', 'failed']
 
-export interface RecordRowsStatus {
-  state: RecordRowsState
-  since: string
-  phase: string
-  cursor: { sheet: string; index: number } | null
-  backup: string
-  message: string
-  // 行に持っている件数(done の時)・セルに持っている件数(それ以外)。kind → 件数
-  rows?: Record<string, number>
-  cells?: Record<string, number>
-  problems?: { unreadable: string[]; duplicates: string[]; tooLong: string[] }
-}
-
-export interface RecordRowsStep {
-  state: RecordRowsState
-  done?: boolean
-  dryRun?: boolean
-  ok?: boolean
-  phase?: string
-  cursor?: { sheet: string; index: number } | null
-  counts?: Record<string, number>
-  entries?: number
-  backup?: string
-  mismatches?: string[]
-  tooLong?: string[]
-  problems?: { unreadable: string[]; duplicates: string[]; tooLong: string[] }
-}
-
 export interface OrgAdminLinks {
   spreadsheetUrl: string
   scriptEditUrl: string
@@ -1429,9 +1401,6 @@ export const remoteApi = {
   createBackupNow: () => postToGas<{ backup: BackupEntry; status: BackupStatus; backups: BackupEntry[] }>('createBackupNow', {}),
   previewRestore: (backupId: string) => postToGas<RestorePreview>('previewRestore', { backupId }),
   // 記録の持ち方(代表だけ。gas/src/39-record-rows.gs)。移す・戻すは1回ずつ進める(done になるまで呼ぶ)
-  getRecordRowsStatus: () => postToGas<RecordRowsStatus>('getRecordRowsStatus', {}),
-  migrateRecordsToRows: (dryRun = false) => postToGas<RecordRowsStep>('migrateRecordsToRows', { dryRun }),
-  revertRecordRows: (dryRun = false) => postToGas<RecordRowsStep>('revertRecordRows', { dryRun }),
   restoreBackup: (backupId: string) => postToGas<{ restored: string[]; beforeRestore: BackupEntry }>('restoreBackup', { backupId }),
   searchBackupTasks: (backupId: string, query: string) => postToGas<{ backup: BackupEntry; tasks: BackupTaskMatch[] }>('searchBackupTasks', { backupId, query }),
   restoreTasks: (backupId: string, taskIds: string[]) =>
