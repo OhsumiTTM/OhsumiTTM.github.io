@@ -1,7 +1,7 @@
 // レジストリの管理画面の KPI の計算(lib/registry/kpi.ts)
 import { describe, expect, it } from 'vitest'
 import {
-  KPI_METRICS, KPI_METRIC_BY_ID as M, aggregateOrgs, aggregateSeries, formatChange, formatValue, histogram, lastChange, median, metricKeys,
+  KPI_METRICS, KPI_METRIC_BY_ID as M, kpiStateLabel, aggregateOrgs, aggregateSeries, formatChange, formatValue, histogram, lastChange, median, metricKeys,
   orgFlags, orgIndexesOf, orgReporting, orgSeries, seriesCsv, summaryReporting, summarySeries, summaryValue, toCsv, usesV2,
   type KpiGroup, type KpiOrg, type KpiOrgData, type KpiSummary,
 } from './kpi'
@@ -57,7 +57,7 @@ function summaryOf(orgValues: (Rec | null)[][]): KpiSummary {
 }
 
 const org = (orgId: string, extra: Partial<KpiOrg> = {}): KpiOrg => ({
-  orgId, name: orgId, plan: 'ohsumi', state: 'active', suspendCategory: '', contractStatus: 'active', createdAt: '',
+  orgId, name: orgId, plan: 'ohsumi', state: 'active', kpiState: 'active', suspendCategory: '', contractStatus: 'active', createdAt: '',
   attrs: { field: '', size: '', affiliation: '', started_year: '' }, gasVersion: '2026.10.12-2', versionState: 'latest', gasJudgement: 'latest',
   release: '2026.10.12-2', noCheck: false, dailyStale: false, mailLevel: 'ok', disabledFeatures: 0, tunables: 0, lastReportWeek: WEEKS[2], ...extra,
 })
@@ -167,6 +167,16 @@ describe('団体別のデータ', () => {
     // アクティブ率が 20 ポイント以上下がった
     const drop = orgData([org('Y')], [[{ members: 10, active_7d: 8 }, null, { members: 10, active_7d: 5 }]])
     expect(orgFlags(drop, 0)).toEqual(['activeDrop'])
+  })
+})
+
+describe('状態の表示', () => {
+  it('利用中(停止予定もここ)・機能停止中・提供停止中。停止は理由つき', () => {
+    expect(kpiStateLabel({ kpiState: 'active', state: 'active', suspendCategory: '' })).toBe('利用中')
+    expect(kpiStateLabel({ kpiState: 'active', state: 'scheduled', suspendCategory: '' })).toBe('利用中(停止予定)')
+    expect(kpiStateLabel({ kpiState: 'restricted', state: 'restricted', suspendCategory: 'survey' })).toBe('機能停止中(アンケート未回答)')
+    expect(kpiStateLabel({ kpiState: 'suspended', state: 'suspended', suspendCategory: 'contract' })).toBe('提供停止中(契約終了)')
+    expect(kpiStateLabel({ kpiState: 'suspended', state: 'suspended', suspendCategory: 'manual' })).toBe('提供停止中(手動)')
   })
 })
 

@@ -47,8 +47,10 @@ export interface KpiSummary {
   groups: { all: KpiGroup; v2: KpiGroup }
   orgs: {
     total: number
+    // 状態は重ならない3つ(利用中 + 機能停止中 + 提供停止中 = total)。利用中は有効・停止予定
     active: number
-    suspended: { manual: number; survey: number; contract: number }
+    restricted: KpiStopCounts
+    suspended: KpiStopCounts
     byPlan: Partial<Record<Plan | '', number>>
     byContract: Record<string, number>
     newByWeek: number[]
@@ -79,11 +81,26 @@ export interface KpiSummary {
   dist: { members: number[]; activeRate7d: number[]; overdueRate: number[]; ageDays: number[] }
 }
 
+export interface KpiStopCounts { total: number; survey: number; contract: number; manual: number }
+
+// KPI の状態(重ならない3つ)と、停止の理由
+export type KpiState = 'active' | 'restricted' | 'suspended'
+export const KPI_STATE_LABELS: Record<KpiState, string> = { active: '利用中', restricted: '機能停止中', suspended: '提供停止中' }
+export const KPI_STOP_REASON_LABELS: Record<'survey' | 'contract' | 'manual', string> = { survey: 'アンケート未回答', contract: '契約終了', manual: '手動' }
+
+/** 団体の状態の表示(停止は理由つき。停止予定は利用中に入れ、そのことも出す) */
+export function kpiStateLabel(o: Pick<KpiOrg, 'kpiState' | 'state' | 'suspendCategory'>): string {
+  if (o.kpiState === 'active') return o.state === 'scheduled' ? '利用中(停止予定)' : '利用中'
+  return `${KPI_STATE_LABELS[o.kpiState]}(${o.suspendCategory ? KPI_STOP_REASON_LABELS[o.suspendCategory] : '手動'})`
+}
+
 export interface KpiOrg {
   orgId: string
   name: string
   plan: Plan | ''
   state: 'active' | 'scheduled' | 'restricted' | 'suspended'
+  // 重ならない3つの状態(有効・停止予定は active)
+  kpiState: KpiState
   suspendCategory: '' | 'manual' | 'survey' | 'contract'
   contractStatus: string
   createdAt: string

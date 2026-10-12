@@ -167,3 +167,102 @@ describe('KPI(レジストリ)', () => {
     expect(r.dist.ageDays).toHaveLength(4)
   })
 })
+
+describe('KPI の状態(重ならない3つ)', () => {
+  it('利用中(有効・停止予定)・機能停止中・提供停止中に分け、合計は登録の累計。停止は理由の内訳つき。一覧の上の KPI も同じ決まり', () => {
+    const t = ready()
+    // 理由ごとの停止の団体を足す(A・B・F・DEMO は有効のまま)
+    const extra = ['org_R1RRRRRRRRRRRRRRRRRR', 'org_R2RRRRRRRRRRRRRRRRRR', 'org_R3RRRRRRRRRRRRRRRRRR', 'org_S1SSSSSSSSSSSSSSSSSS', 'org_S2SSSSSSSSSSSSSSSSSS', 'org_S3SSSSSSSSSSSSSSSSSS', 'org_PPPPPPPPPPPPPPPPPPPP']
+    const rows = t.sheets.get('Orgs')!.rows
+    const h = rows[0] as string[]
+    // 登録の回数の上限(1分に10回)を超えないよう、Orgs に直接足す
+    extra.forEach((orgId, i) => {
+      const v: Record<string, string> = { org_id: orgId, display_name: '停止の試し' + i, status: 'active', channel: 'standard', plan: 'ohsumi', created_at: new Date().toISOString() }
+      rows.push(h.map((k) => v[k] ?? ''))
+    })
+    const set = (orgId: string, fields: Record<string, unknown>) => {
+      const row = rows.find((r) => r[0] === orgId)!
+      Object.entries(fields).forEach(([k, v]) => { row[h.indexOf(k)] = v })
+    }
+    const past = new Date(Date.now() - DAY).toISOString()
+    const future = new Date(Date.now() + 20 * DAY).toISOString()
+    set(extra[0], { suspend_at: past, suspend_kind: 'restrict', suspend_survey_id: 'sv_x' })
+    set(extra[1], { suspend_at: past, suspend_kind: 'restrict', contract_status: 'ended' })
+    set(extra[2], { suspend_at: past, suspend_kind: 'restrict' })
+    set(extra[3], { suspend_at: past, suspend_kind: 'suspend', suspend_survey_id: 'sv_y' })
+    set(extra[4], { status: 'suspended', contract_status: 'ended' })
+    set(extra[5], { suspend_at: past, suspend_kind: 'suspend' })
+    // 停止予定(まだ使える)は利用中
+    set(extra[6], { suspend_at: future, suspend_kind: 'suspend' })
+    t.post({ action: 'setOrgDemo', session: t.session, orgId: DEMO, demo: true, reason: '' })
+    const o = t.summary().result.orgs
+    expect(o.total).toBe(10)
+    expect(o.active).toBe(4)
+    expect(o.restricted).toEqual({ total: 3, survey: 1, contract: 1, manual: 1 })
+    expect(o.suspended).toEqual({ total: 3, survey: 1, contract: 1, manual: 1 })
+    expect(o.active + o.restricted.total + o.suspended.total).toBe(o.total)
+    for (const c of [o.restricted, o.suspended]) expect(c.survey + c.contract + c.manual).toBe(c.total)
+    // 団体別のデータの状態も同じ分け方
+    const list = t.orgs().result.orgs as { orgId: string; kpiState: string; suspendCategory: string; state: string }[]
+    const by = (id: string) => list.find((x) => x.orgId === id)!
+    expect(by(extra[0])).toMatchObject({ kpiState: 'restricted', suspendCategory: 'survey' })
+    expect(by(extra[4])).toMatchObject({ kpiState: 'suspended', suspendCategory: 'contract' })
+    expect(by(extra[6])).toMatchObject({ kpiState: 'active', state: 'scheduled' })
+    expect(list.filter((x) => x.kpiState === 'active')).toHaveLength(4)
+    // 団体の一覧の上の1行の KPI(orgKpis_)も、利用中を同じ決まりで数える
+    expect(t.post({ action: 'adminOverview', session: t.session }).result.kpis.activeOrgs).toBe(4)
+  })
+})
+
+describe('操作の記録(AuditLog)を新しい方から読む', () => {
+  const at = (iso: string) => iso
+  const push = (t: ReturnType<typeof ready>, rows: [string | Date, string][]) => {
+    const sheet = t.sheets.get('AuditLog')!
+    rows.forEach(([when, action]) => sheet.rows.push([when, 'admin@example.com', action, 'org_x', '', '', '']))
+  }
+  const count = (t: ReturnType<typeof ready>, fromMs: number) => t.gas.kpiSurveyRestrictionsSince_(fromMs) as { count: number; read: number }
+  const FROM = Date.parse('2026-09-01T00:00:00Z')
+
+  it('期間の中の行だけを数え、期間より古い行が続いたら止まる(全部は読まない)', () => {
+    const t = ready()
+    const before = t.sheets.get('AuditLog')!.rows.length - 1
+    const old: [string, string][] = Array.from({ length: 1200 }, (_, i) => [at(new Date(Date.parse('2026-01-01T00:00:00Z') + i * 3600 * 1000).toISOString()), i % 3 ? 'adminLogin' : 'scheduleSurveyRestriction'])
+    push(t, old)
+    push(t, [[at('2026-09-02T00:00:00Z'), 'scheduleSurveyRestriction'], [new Date('2026-09-03T00:00:00Z'), 'adminLogin'], [at('2026-09-04T00:00:00Z'), 'scheduleSurveyRestriction']])
+    const r = count(t, FROM)
+    expect(r.count).toBe(2)
+    expect(r.read).toBeLessThan(100)
+    // 全期間は全部読む
+    const all = count(t, 0)
+    expect(all.read).toBe(before + 1203)
+    expect(all.count).toBe(2 + 400)
+  })
+
+  it('並びが少し崩れていても(期間の中の行が古い行の間にある)、止まりすぎない。日付の型の値も比べられる', () => {
+    const t = ready()
+    push(t, Array.from({ length: 300 }, () => [at('2026-02-01T00:00:00Z'), 'adminLogin'] as [string, string]))
+    push(t, [[new Date('2026-09-05T00:00:00Z'), 'scheduleSurveyRestriction']])
+    push(t, Array.from({ length: 30 }, () => [at('2026-03-01T00:00:00Z'), 'adminLogin'] as [string, string]))
+    push(t, [[at('2026-09-10T00:00:00Z'), 'scheduleSurveyRestriction']])
+    expect(count(t, FROM).count).toBe(2)
+  })
+
+  it('行が少ない時・空の時', () => {
+    const t = ready()
+    const sheet = t.sheets.get('AuditLog')!
+    sheet.rows.splice(1)
+    expect(count(t, FROM)).toEqual({ count: 0, read: 0 })
+    push(t, [[at('2026-09-02T00:00:00Z'), 'scheduleSurveyRestriction']])
+    expect(count(t, FROM)).toEqual({ count: 1, read: 1 })
+  })
+
+  it('管理画面の一覧の操作の記録は、新しい順に200件だけ(下から読む)', () => {
+    const t = ready()
+    push(t, Array.from({ length: 250 }, (_, i) => [new Date(Date.parse('2026-01-01T00:00:00Z') + i * 60000).toISOString(), 'adminLogin'] as [string, string]))
+    push(t, [[at('2026-09-30T00:00:00Z'), 'setOrgPlan']])
+    const audit = t.post({ action: 'adminOverview', session: t.session }).result.audit as { action: string; at: string }[]
+    expect(audit).toHaveLength(200)
+    expect(audit[0]).toMatchObject({ action: 'setOrgPlan', at: '2026-09-30T00:00:00Z' })
+    expect(Date.parse(audit[1].at)).toBeGreaterThan(Date.parse(audit[2].at))
+  })
+})
