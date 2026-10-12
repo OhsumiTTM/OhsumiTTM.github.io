@@ -37,6 +37,23 @@ describe('ブランド', () => {
     expect(read('app/icon.svg')).not.toMatch(/rotate|transform|<rect/)
   })
 
+  it('回してよいのは、読み込み中のシンボル単体だけ(ガイドライン v0.9)。形・色は OhsumiMark と同じで、輪の中心で回す', () => {
+    const src = read('components/ohsumi/primitives.tsx')
+    const loading = src.slice(src.indexOf('export function OhsumiLoadingMark'), src.indexOf('/** シンボル + 「Ohsumi」の文字'))
+    // 文字は付けない(文字付きロゴは常に回転禁止)・ブランドの変数の色・同じ形(OHSUMI_SYMBOL_PATHS)
+    expect(loading).not.toContain('Ohsumi<')
+    expect(loading).toContain("color: 'var(--ohsumi-symbol)'")
+    expect(loading).toContain('OHSUMI_SYMBOL_PATHS')
+    expect(loading).not.toMatch(/text-primary|--primary/)
+    // 図の真ん中 = 輪の中心(回しても輪が揺れない)
+    expect(loading).toContain('${ring.cx - reach} ${ring.cy - reach} ${reach * 2} ${reach * 2}')
+    const css = read('app/globals.css')
+    expect(css).toMatch(/\.ohsumi-spin \{\s*transform-origin: 50% 50%;/)
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{\s*\.ohsumi-spin \{ animation: none; \}/)
+    // 回すクラスを使うのは、読み込み中のシンボルだけ
+    expect(src.match(/ohsumi-spin/g)?.length).toBe(2)
+  })
+
   it('画面(components・app・文言)に旧名(Orbit・Osumi)が無い', () => {
     const targets = [...files('components'), ...files('app'), ...files('lib/ohsumi/i18n')]
     const hits = targets.filter((f) => /orbit|(?<!h)osumi/i.test(read(f).replace(/ohsumi/gi, '')))

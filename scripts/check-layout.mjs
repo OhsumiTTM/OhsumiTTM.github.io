@@ -402,7 +402,8 @@ const MEASURE = `(() => {
     if (wrapped) b.dataset.wrappedText = wrapped.textContent.trim()
     return !!wrapped
   }).map((b) => '「' + b.dataset.wrappedText + '」 in ' + desc(b))
-  // Ohsumi のロゴのシンボル(ブランドガイドライン v0.4): 縦横比 1:1・回転や影などの効果なし・Ohsumi Blue(団体のテーマの色では変わらない)
+  // Ohsumi のロゴのシンボル(ブランドガイドライン v0.9): 縦横比 1:1・回転や影などの効果なし・Ohsumi Blue(団体のテーマの色では変わらない)。
+  // 読み込み中のシンボル単体(data-ohsumi-loading-mark)は回してよいので、ここでは数えない
   const logos = [...document.querySelectorAll('[data-ohsumi-symbol]')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => {
     const r = el.getBoundingClientRect()
     const effects = []
