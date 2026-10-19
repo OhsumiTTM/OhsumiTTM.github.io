@@ -783,6 +783,47 @@ describe.skipIf(!available)('担当者が「完了」を選ぶと、確認待ち
   })
 })
 
+describe.skipIf(!available)('タスクのリンク(?org=&task=): ログインしていない端末で開くと、ログインの後にそのタスクを開く。見られないタスクは開かない', () => {
+  const TITLE = 'リンクのE2Eのタスク'
+  const LEADERS = 'リンクのE2Eの幹部限定のタスク'
+  const idOf = (title: string) => {
+    A.org.cache.clear()
+    const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+    return rows.find((r) => r[head.indexOf('title')] === title)![head.indexOf('id')]
+  }
+  const drawerTitle = () => page.evaluate<string>(`document.getElementById('task-drawer-title')?.textContent ?? ''`)
+  const search = () => page.evaluate<string>('location.search')
+
+  it('リンクを開く → ログイン → そのタスクの詳細が開き、アドレスバーにリンクが残る。閉じると &task= が消える', async () => {
+    const topId = memberIdOf('top@a.example')
+    const made = world.call(A.org, topTokenA, 'createTasks', { tasks: [
+      { tempId: 'l1', title: TITLE, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [topId], creatorId: topId, pendingApproval: false },
+      { tempId: 'l2', title: LEADERS, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [topId], creatorId: topId, pendingApproval: false, visibility: 'leaders' },
+    ] })
+    expect(made.ok, made.error).toBe(true)
+    const id = idOf(TITLE)
+
+    await navigate('/')
+    await clearDevice()
+    await navigate(`/?org=${A.orgId}&task=${id}`)
+    await googleSignIn('base@a.example')
+    await waitFor(loggedIn, 'base@a.example がログインできません')
+    await waitFor(async () => (await drawerTitle()).includes(TITLE), 'ログインの後に、リンクのタスクが開きません')
+    expect(new URLSearchParams(await search()).get('task')).toBe(id)
+    await page.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`)
+    await waitFor(async () => (await search()) === '?org=' + A.orgId, '閉じても &task= が消えません')
+  })
+
+  it('幹部限定のタスクのリンクを一般のメンバーが開くと、開けない知らせを出し、詳細は開かない', async () => {
+    // GAS は幹部限定のタスクを一般のメンバーに渡さない(gas/src/26-read-policy.gs)
+    // 知らせは 3.2 秒で消えるので、navigate の待ち(2.5 秒)を使わずに、すぐ待ち始める
+    await page.send('Page.navigate', { url: base + `/?org=${A.orgId}&task=${idOf(LEADERS)}` })
+    await waitFor(() => page.evaluate<boolean>(`document.body?.textContent.includes('このタスクは開けません') ?? false`).catch(() => false), '開けない知らせが出ません')
+    expect(await drawerTitle()).toBe('')
+    expect(await search()).toBe('?org=' + A.orgId)
+  })
+})
+
 describe.skipIf(!available)('兼部の統合表示: 団体A と団体B の両方にログインしている人は、ホームで「すべての団体」を選べる', () => {
   const day = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
   const TITLE_A = '兼部のE2E(団体Aのタスク)'

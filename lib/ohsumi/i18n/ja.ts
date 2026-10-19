@@ -1018,6 +1018,11 @@ export const ja = {
   // ---- task-detail-drawer（ヘッダー・メタ情報のみ、モーダル詳細は未対応）----
   'taskDrawer.title': 'タスク詳細',
   'taskDrawer.close': '閉じる',
+  'taskDrawer.link.copy': 'リンクをコピー',
+  'taskDrawer.link.share': 'リンクを共有',
+  'taskDrawer.link.copied': 'タスクのリンクをコピーしました。この団体のメンバーが開けます',
+  'taskDrawer.link.copyFailed': 'コピーできませんでした。アドレスバーの URL をコピーしてください',
+  'taskLink.notFound': 'このタスクは開けません(消えたか、見る権限がありません)',
   'taskDrawer.pendingApproval': '承認待ち',
   'taskDrawer.execOnly': '幹部限定',
   'taskDrawer.edit': '編集',

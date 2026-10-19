@@ -1018,6 +1018,11 @@ export const en = {
   // ---- task-detail-drawer (header/meta only, modal detail not yet covered) --
   'taskDrawer.title': 'Task details',
   'taskDrawer.close': 'Close',
+  'taskDrawer.link.copy': 'Copy link',
+  'taskDrawer.link.share': 'Share link',
+  'taskDrawer.link.copied': 'Task link copied. Members of this organization can open it.',
+  'taskDrawer.link.copyFailed': "Couldn't copy. Please copy the URL from the address bar.",
+  'taskLink.notFound': "This task can't be opened (it was removed, or you don't have permission to see it).",
   'taskDrawer.pendingApproval': 'Pending approval',
   'taskDrawer.execOnly': 'Leadership only',
   'taskDrawer.edit': 'Edit',

@@ -98,6 +98,23 @@ describe('招待リンク(?org=)', () => {
     expect(replaceState).not.toHaveBeenCalled()
   })
 
+  it('団体が変わる時・?org= を消す時は、タスクのリンクの &task= も消す(タスクID は団体ごとの番号)。同じ団体なら残す', async () => {
+    setUrl('?org=' + ORG_A + '&task=12')
+    const d = await load()
+    replaceState.mockClear()
+    d.syncOrgParam(ORG_A)
+    expect(replaceState).not.toHaveBeenCalled()
+    d.syncOrgParam(ORG_B)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?org=' + ORG_B)
+    setUrl('?org=' + ORG_A + '&task=12')
+    d.syncOrgParam(null)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/')
+    // ?org= が無いリンク(&task= だけ)は、団体を付ける時に task を消す
+    setUrl('?task=12')
+    d.syncOrgParam(ORG_A)
+    expect(replaceState).toHaveBeenLastCalledWith(null, '', '/?org=' + ORG_A)
+  })
+
   it('招待リンクの形', async () => {
     const d = await load()
     expect(d.inviteLink('https://site.example', '', ORG_A)).toBe('https://site.example/?org=' + ORG_A)

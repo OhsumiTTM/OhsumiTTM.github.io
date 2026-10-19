@@ -1,6 +1,7 @@
 'use client'
 
-import { currentInviteLink } from '@/components/ohsumi/other-device'
+import { canShare, currentInviteLink, currentTaskLink } from '@/components/ohsumi/other-device'
+import { useTaskParam } from '@/lib/ohsumi/task-link'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useRef, useState } from 'react'
 import { getCalendarToken, isGoogleOAuthConfigured } from '@/lib/ohsumi/google-sheet-sync'
@@ -63,6 +64,7 @@ import {
   GitBranch,
   History as HistoryIcon,
   Link2,
+  Share2,
   Pause,
   Pencil,
   Play,
@@ -203,6 +205,8 @@ export function TaskDetailDrawer({
   const { t: tr, locale } = useI18n()
   const task = tasks.find((t) => t.id === taskId) ?? null
   const open = !!taskId
+  // 開いている間、アドレスバーを &task=<ID> にする(そのままコピーしても共有できる。デモでは付けない)
+  useTaskParam(open && task ? task.id : null, currentInviteLink() !== null)
   const sourceInput = getInput(task?.originalInputId)
   const assignees = (task?.assigneeIds ?? [])
     .map((id) => getMember(id))
@@ -1125,6 +1129,42 @@ function ScheduleModal({
 
 const PRIORITY_OPTIONS: Priority[] = PRIORITIES
 
+// タスクのリンクをコピー・共有する(lib/ohsumi/task-link.ts)。データを書き換えないので、機能停止中も使える。デモでは出さない
+function TaskLinkButtons({ taskId }: { taskId: string }) {
+  const { t } = useI18n()
+  const toast = useToast()
+  const [shareable, setShareable] = useState(false)
+  useEffect(() => setShareable(canShare()), [])
+  const link = currentTaskLink(taskId)
+  if (!link) return null
+  const copy = () => {
+    if (!navigator.clipboard) return toast(t('taskDrawer.link.copyFailed'))
+    navigator.clipboard.writeText(link).then(
+      () => toast(t('taskDrawer.link.copied')),
+      () => toast(t('taskDrawer.link.copyFailed')),
+    )
+  }
+  const share = () => {
+    navigator.share({ title: 'Ohsumi', url: link }).catch(() => {
+      /* 共有の画面を閉じた時など。何もしない */
+    })
+  }
+  const cls = 'flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground'
+  return (
+    <>
+      <button type="button" onClick={copy} className={cls} title={t('taskDrawer.link.copy')} data-task-link-copy>
+        <Link2 className="size-3.5" />
+        {t('taskDrawer.link.copy')}
+      </button>
+      {shareable && (
+        <button type="button" onClick={share} className={cls} aria-label={t('taskDrawer.link.share')} title={t('taskDrawer.link.share')} data-task-link-share>
+          <Share2 className="size-3.5" />
+        </button>
+      )}
+    </>
+  )
+}
+
 function DrawerBody({
   task,
   currentUserId,
@@ -1244,7 +1284,7 @@ function DrawerBody({
   const currentUserTz = members.find((m) => m.id === currentUserId)?.timezone ?? DEFAULT_TIMEZONE
   const overdue = isOverdue(task, currentUserTz)
   const calendarUrl = googleCalendarUrl(task, {
-    appLink: currentInviteLink() ?? undefined,
+    appLink: currentTaskLink(task.id) ?? undefined,
     projectName,
     department: departmentNameOf(task.department),
     category: task.category,
@@ -1320,13 +1360,16 @@ function DrawerBody({
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {t('taskDrawer.title')}
         </span>
-        <button
-          onClick={onClose}
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
-          aria-label={t('taskDrawer.close')}
-        >
-          <X className="size-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <TaskLinkButtons taskId={task.id} />
+          <button
+            onClick={onClose}
+            className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
+            aria-label={t('taskDrawer.close')}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto ohsumi-scroll px-5 py-4">
@@ -2598,9 +2641,10 @@ const SCHEDULE_RESPONSE_COLOR: Record<ScheduleResponseValue, string> = {
 // Googleカレンダーの新規予定画面を開くリンクにしている(利用者が内容を確認して保存する)
 function AddToGCalButton({ task }: { task: Task }) {
   const { t } = useI18n()
+  const appLink = currentTaskLink(task.id)
   const href =
-    googleCalendarUrl(task, { appLink: currentInviteLink() ?? undefined }) ??
-    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, todayStr(), [task.description, `Ohsumiから追加${currentInviteLink() ? ': ' + currentInviteLink() : ''}`].filter(Boolean).join('\n'))
+    googleCalendarUrl(task, { appLink: appLink ?? undefined }) ??
+    googleCalendarAllDayUrl(`[Ohsumi] ${task.name}`, todayStr(), [task.description, `Ohsumiから追加${appLink ? ': ' + appLink : ''}`].filter(Boolean).join('\n'))
 
   return (
     <a

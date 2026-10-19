@@ -59,6 +59,8 @@ export const STEPS = [
   { name: '公募', do: 'click', text: '公募' },
   { name: 'タスク詳細(担当者が多い)', do: 'openTask', view: 'リスト', text: '担当者が多いタスク' },
   { name: 'タスク詳細(長い名前・説明)', do: 'openTask', view: 'リスト', text: 'とても長いタスク名の例' },
+  // タスクのリンク(?org=<団体>&task=<タスク>): 詳細を開くとアドレスバーに付き、閉じると消える。コピー・共有・リンクから開く・開けないタスク
+  { name: 'タスク詳細(リンクのコピー・共有)', do: 'taskLink', view: 'リスト', text: '担当者が多いタスク' },
   // コメントへの返信: 「返信」で元のコメントの下に字下げして並べる
   { name: 'タスク詳細(コメントへの返信)', do: 'commentReply', view: 'リスト', text: 'コメントがとても多いタスク' },
   // 自分のページは「概要」から開く(「設定」のタブは無い。個人の設定は別の画面「個人設定」)
@@ -1775,6 +1777,48 @@ async function run({ build = true } = {}) {
         }
         if (step.do === 'openTask') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+          await clickText(step.view); await sleep(800)
+          await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+        }
+        if (step.do === 'taskLink') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
+          await evaluate(`(() => {
+            window.__shared = []; window.__copied = []
+            Object.defineProperty(navigator, 'share', { configurable: true, value: async (d) => { window.__shared.push(d) } })
+            Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (v) => { window.__copied.push(v) } } })
+            return true })()`)
+          await clickText(step.view); await sleep(800)
+          await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+          const params = new URLSearchParams(await evaluate('location.search'))
+          const id = params.get('task')
+          if (params.get('org') !== ORG || !id) throw new Error('詳細を開いても、アドレスバーが ?org=<団体>&task=<タスク> になりません: ' + params.toString())
+          const want = base + '/?org=' + ORG + '&task=' + id
+          await evaluate(`document.querySelector('[data-task-link-copy]').click(); true`); await sleep(300)
+          const copied = await evaluate('window.__copied')
+          if (copied.length !== 1 || copied[0] !== want) throw new Error('コピーしたリンクが違います: ' + JSON.stringify(copied))
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(500)
+          if ((await evaluate('location.search')) !== '?org=' + ORG) throw new Error('詳細を閉じても、アドレスバーから &task= が消えません')
+          await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+          if (!(await evaluate(`!!document.querySelector('[data-task-link-share]')`))) throw new Error('共有の画面が使える端末で、共有のボタンがありません')
+          await evaluate(`document.querySelector('[data-task-link-share]').click(); true`); await sleep(300)
+          const shared = await evaluate('window.__shared')
+          if (shared.length !== 1 || shared[0].url !== want) throw new Error('共有の画面にタスクのリンクが渡りません: ' + JSON.stringify(shared))
+          // リンクから開く: 読み込みが終わったら、そのタスクの詳細が開く
+          await navigate('/?org=' + ORG + '&task=' + id); await sleep(1500)
+          const opened = await evaluate(`document.getElementById('task-drawer-title')?.textContent ?? ''`)
+          if (!opened.includes(step.text)) throw new Error('リンクから開いても、そのタスクの詳細が開きません: ' + opened)
+          // 開けないタスク: 同じ文を出し、&task= を消す
+          // (知らせは 3.2 秒で消えるので、navigate の待ちを使わずに待つ)
+          await send('Page.navigate', { url: base + '/?org=' + ORG + '&task=999999' })
+          let notice = false
+          for (let i = 0; i < 40 && !notice; i++) { await sleep(150); notice = await evaluate(`document.body?.textContent.includes('このタスクは開けません') ?? false`).catch(() => false) }
+          if (!notice) throw new Error('開けないタスクのリンクで、知らせが出ません')
+          if (await evaluate(`!!document.getElementById('task-drawer-title')`)) throw new Error('開けないタスクのリンクで、空の詳細が開きました')
+          if ((await evaluate('location.search')) !== '?org=' + ORG) throw new Error('開けないタスクのリンクの &task= が消えません')
+          // 読み込み直すと OUTPUT が「自分」に戻るので、前の手順と同じ「一覧」に戻してから、詳細を開いた状態にする(375px の確かめと、次の手順のため)
+          await navigate('/?org=' + ORG)
+          await clickText('あとで設定する').catch(() => {}); await sleep(500)
+          await clickText('一覧'); await sleep(800)
           await clickText(step.view); await sleep(800)
           await clickText(step.text, 'td, span, div, button'); await sleep(1200)
         }
