@@ -16,6 +16,7 @@ import { useToast } from './toast'
 import { useI18n } from '@/lib/ohsumi/i18n'
 import { getActiveOrg, inviteLink } from '@/lib/ohsumi/org-directory'
 import { qrMatrix, qrSvgPath } from '@/lib/ohsumi/qr'
+import { taskLink } from '@/lib/ohsumi/task-link'
 import { isRemoteConfigured, remoteApi, type InviteMailStatus } from '@/lib/ohsumi/remote'
 
 // gas/Code.gs の INVITE_MAIL_LIMIT と同じ
@@ -28,7 +29,14 @@ export function currentInviteLink(): string | null {
   return inviteLink(window.location.origin, '', orgId)
 }
 
-function canShare(): boolean {
+/** 今の団体のタスクのリンク(団体が決まっていない・デモの時は null。lib/ohsumi/task-link.ts) */
+export function currentTaskLink(taskId: string): string | null {
+  const orgId = getActiveOrg().orgId
+  if (!isRemoteConfigured || !orgId || typeof window === 'undefined') return null
+  return taskLink(window.location.origin, '', orgId, taskId)
+}
+
+export function canShare(): boolean {
   return typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 }
 
