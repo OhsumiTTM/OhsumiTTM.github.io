@@ -566,6 +566,8 @@ function notifyNewTasks_(tasks) {
         titlesEn.join('\n') +
         '\n\nCheck Ohsumi Admin > Approvals for details.',
     },
+    // 1件だけの時は、そのタスクを開くリンクにする
+    taskId: tasks.length === 1 ? tasks[0].id : undefined,
   }, null, { urgent: true })
 }
 
@@ -590,6 +592,7 @@ function notifyReview_(taskId) {
           subject: '[Ohsumi] Task ready for your review',
           body: '"' + task.title + '" is now awaiting review.\n\nPlease check it in Ohsumi and mark it "Done" if everything looks good.',
         },
+        taskId: String(taskId),
       },
       preferredEmails,
       { urgent: true },
@@ -687,6 +690,7 @@ function queueNotification_(memberId, kind, templates) {
   try { queue = existing ? JSON.parse(existing) : [] } catch (e) { queue = [] }
   if (!Array.isArray(queue)) queue = []
   var item = { kind: kind, templates: stored, ts: new Date().toISOString() }
+  if (templates.taskId && TASK_LINK_ID_PATTERN.test(String(templates.taskId))) item.taskId = String(templates.taskId)
   queue.push(item)
   if (queue.length > 1 && utf8Bytes_(JSON.stringify(queue)) > NOTIFY_QUEUE_MAX_BYTES) {
     // 入りきらない: この1件は入れず、前の1件に件数だけ足す(まとめのメールで「ほか N 件」と書く)

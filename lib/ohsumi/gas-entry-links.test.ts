@@ -16,12 +16,42 @@ describe('通知からサイトを開けるようにする', () => {
   it('通知メールと Discord/Slack に、正式なサイト(一覧の最初)の招待リンクを付ける', () => {
     const h = guardHarness({ props: { CONTRACT_STATE: CHECKED } })
     expect(mention(h).ok).toBe(true)
+    // メンションは1つのタスクについての通知なので、そのタスクを開くリンク(<サイト>/?org=<団体ID>&task=<タスクID>)
     const mail = h.sent.find((s) => s.kind === 'mail')!
-    expect(mail.text).toContain('Ohsumi を開く / Open Ohsumi: ' + LINK)
+    expect(mail.text).toContain('このタスクを開く / Open this task: ' + LINK + '&task=t1')
+    expect(mail.text).not.toContain('Ohsumi を開く')
     expect(mail.text).not.toContain('old.example.com')
-    // 研修の申請(報告先へのメールと Discord)
+    // 研修の申請(報告先へのメールと Discord)。タスクの通知ではないので、団体のリンク
+    const before = h.sent.length
     h.post({ action: 'notifyTrainingRequest', sessionToken: 'm-base', memberId: 'm-base', trainingId: 'tr-pending' })
+    const training = h.sent.slice(before).find((s) => s.kind === 'mail')!
+    expect(training.text).toContain('Ohsumi を開く / Open Ohsumi: ' + LINK)
+    expect(training.text).not.toContain('&task=')
     expect(h.sent.find((s) => s.kind === 'chat')!.text).toContain(LINK)
+  })
+
+  it('タスクのリンク: 形の違うタスクID には付けない(団体のリンクにする)。もう入っている時は足さない', () => {
+    const h = guardHarness({ props: { CONTRACT_STATE: CHECKED } })
+    const link = h.c.canonicalTaskLink_ as (id: unknown) => string
+    expect(link('t1')).toBe(LINK + '&task=t1')
+    for (const bad of ['', 'a/b', 'a b', 'x'.repeat(65), null, undefined]) expect(link(bad), String(bad)).toBe('')
+    const withLink = h.c.withSiteLink_ as (text: string, taskId?: unknown) => string
+    expect(withLink('本文', 'a/b')).toBe('本文\n\nOhsumi を開く / Open Ohsumi: ' + LINK)
+    expect(withLink('本文 ' + LINK + '&task=t1', 't1')).toBe('本文 ' + LINK + '&task=t1')
+    // 本文にタスクのリンクだけがある時も、団体のリンクは足す(団体のリンクは、タスクのリンクの頭と同じ)
+    expect(withLink('本文 ' + LINK + '&task=t1')).toBe('本文 ' + LINK + '&task=t1\n\nOhsumi を開く / Open Ohsumi: ' + LINK)
+  })
+
+  it('毎日のまとめ: 1つのタスクについての1件には、その1件の下にタスクのリンクを付ける。メールの最後は団体のリンク', () => {
+    const h = guardHarness({ props: { CONTRACT_STATE: CHECKED } })
+    const add = h.c.addToDigest_ as (email: string, loc: string, subject: string, body: string, taskId?: string) => void
+    add('member@example.com', 'ja', '日程が変わりました', '「タスク1」の日程が変わりました。', 't1')
+    add('member@example.com', 'ja', '研修の結果', '研修の申請が承認されました。')
+    ;(h.c.flushDailyDigests_ as () => void)()
+    const mail = h.sent.filter((s) => s.kind === 'mail').pop()!
+    expect(mail.text).toContain('「タスク1」の日程が変わりました。\nこのタスクを開く: ' + LINK + '&task=t1')
+    expect(mail.text.split('&task=')).toHaveLength(2)
+    expect(mail.text.trimEnd().endsWith('Ohsumi を開く / Open Ohsumi: ' + LINK)).toBe(true)
   })
 
   it('レジストリに確かめていない団体では、リンクを付けない(通知はそのまま送る)', () => {
@@ -30,6 +60,23 @@ describe('通知からサイトを開けるようにする', () => {
     const mail = h.sent.find((s) => s.kind === 'mail')!
     expect(mail.text).toContain('@班長 見てください')
     expect(mail.text).not.toContain('?org=')
+  })
+
+  it('3時間ごとのまとめ(メンションの頻度を変えた人): キューに入れた1件ごとに、そのタスクのリンクを付ける', () => {
+    const h = guardHarness({ props: { CONTRACT_STATE: CHECKED } })
+    const head = h.sheets.Members.rows[0].map(String)
+    h.sheets.Members.rows.find((r) => String(r[0]) === 'm-lead')![head.indexOf('notify_settings')] = JSON.stringify({ mention: '3h' })
+    expect(mention(h).ok).toBe(true)
+    const queue = JSON.parse(h.props['notif_queue_m-lead'])
+    expect(queue).toHaveLength(1)
+    expect(queue[0].taskId).toBe('t1')
+    queue[0].ts = new Date(Date.now() - 4 * 3600_000).toISOString()
+    h.props['notif_queue_m-lead'] = JSON.stringify(queue)
+    const before = h.sent.length
+    ;(h.c.sendBatchNotificationsUnrecorded_ as () => void)()
+    const mail = h.sent.slice(before).find((x) => x.kind === 'mail')!
+    expect(mail.text).toContain('@班長 見てください')
+    expect(mail.text).toContain('\nこのタスクを開く: ' + LINK + '&task=t1')
   })
 
   it('カレンダーの予定の説明に、招待リンクを付ける', () => {

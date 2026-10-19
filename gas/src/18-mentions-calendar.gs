@@ -91,6 +91,7 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
           subject: '[Ohsumi] You were mentioned in a comment',
           body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       }
       // 1人の失敗で、ほかの宛先(と次のコメント)の通知を止めない
       queueNotificationEach_(ids, 'mention', templates)
@@ -179,6 +180,7 @@ function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
             ? actorName + ' commented on task "' + task.title + '" (this may be a reply to your mention).\n\n' + text + '\n\nPlease check Ohsumi for details.'
             : actorName + ' replied to a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       }
     })
   } catch (err) {
@@ -380,6 +382,7 @@ function notifyScheduleResult_(taskId, actorId) {
     deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] 日程調整の回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
+      taskId: String(taskId),
     })
     console.log('notifyScheduleResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('🗓️ ' + chatTaskLabel_(task) + 'の日程調整で全員の回答が揃いました。')
@@ -447,6 +450,7 @@ function notifyFormResult_(taskId, actorId) {
     deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] フォームの回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
+      taskId: String(taskId),
     })
     console.log('notifyFormResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('📝 ' + chatTaskLabel_(task) + 'のフォームで全員の回答が揃いました。')
@@ -490,6 +494,7 @@ function notifyScheduleChange_(taskId) {
             (task.due_date || 'Not set') +
             '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       },
       reportsToEmails_(assigneeIds),
     )

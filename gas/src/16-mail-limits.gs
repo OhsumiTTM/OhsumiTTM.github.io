@@ -92,10 +92,11 @@ function sendMailChecked_(options) {
     }
   }
   countAction_('mailCount')
-  // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>)
+  // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>。
+  // 1つのタスクについての通知は、そのタスクの <サイト>/?org=<団体ID>&task=<タスクID>)
   var mail = {}
-  Object.keys(options).forEach(function (k) { mail[k] = options[k] })
-  mail.body = withSiteLink_(options.body)
+  Object.keys(options).forEach(function (k) { if (k !== 'taskId') mail[k] = options[k] })
+  mail.body = withSiteLink_(options.body, options.taskId)
   try {
     measureAction_('mailMs', function () { return sendMailUnmeasured_(mail) })
   } catch (e) {
@@ -433,6 +434,7 @@ function localesByEmailsUnmeasured_(emails) {
 
 // 宛先をlocaleごとにグループ化し、localeごとに言語を出し分けたメールを
 // 送信する。templates は { ja: {subject, body}, en: {subject, body} } の形。
+// 1つのタスクについての通知は templates.taskId を付ける(メールのリンクを、そのタスクを開くリンクにする)。
 // localeが判明しない宛先は'ja'扱い（既存の全メール日本語固定という
 // 挙動からの後方互換のため）。
 function sendLocalizedEmail_(emails, templates) {
@@ -450,8 +452,8 @@ function sendLocalizedEmail_(emails, templates) {
     if (list.length === 0) return
     var tpl = templates[loc] || templates.ja
     // メールの1日の上限で送れなかった時は、宛先ごとの毎日のまとめに回す(翌朝のまとめで送る)
-    if (sendMailChecked_({ to: list.join(','), subject: tpl.subject, body: tpl.body }) === 'quota') {
-      list.forEach(function (e) { addToDigest_(e, loc, tpl.subject, tpl.body) })
+    if (sendMailChecked_({ to: list.join(','), subject: tpl.subject, body: tpl.body, taskId: templates.taskId }) === 'quota') {
+      list.forEach(function (e) { addToDigest_(e, loc, tpl.subject, tpl.body, templates.taskId) })
     }
   })
 }
