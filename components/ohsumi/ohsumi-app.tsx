@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { OhsumiProvider, useOhsumi } from '@/lib/ohsumi/store'
 import { NavProvider, useNav } from '@/lib/ohsumi/nav'
 import { ThemeProvider } from '@/lib/ohsumi/theme'
 import { I18nProvider, useI18n, SUPPORTED_LOCALES } from '@/lib/ohsumi/i18n'
 import { TaskDrawerProvider, useTaskDrawer } from '@/lib/ohsumi/task-drawer'
+import { clearTaskParam, readTaskParam } from '@/lib/ohsumi/task-link'
 import { ContractBanner } from './contract-banner'
 import { ReadOnlyInputs, ReadOnlyNotice, SessionExpiryBanner } from './read-only-guard'
 import { LONG_RECORDS_EVENT, NOTIFY_LIMITED_EVENT, isRemoteConfigured, remoteApi } from '@/lib/ohsumi/remote'
@@ -181,6 +182,33 @@ function LocaleSyncWatcher() {
   return null
 }
 
+// タスクのリンク(?org=<団体ID>&task=<タスクID>。lib/ohsumi/task-link.ts)から開いた時は、読み込みが終わったらそのタスクを開く。
+// 開けるのは、団体の GAS が渡したタスクだけ。無い・消えた・幹部限定・ゴミ箱は見分けずに同じ文を出す
+// (あるかどうかを、見る権限の無い人に知らせない)。読み込みに失敗した時は、何も言わずにリンクを残す
+function TaskLinkOpener() {
+  const { dataReady, remoteStatus, tasks } = useOhsumi()
+  const { openTask } = useTaskDrawer()
+  const toast = useToast()
+  const { t } = useI18n()
+  const done = useRef(false)
+  useEffect(() => {
+    if (done.current || !isRemoteConfigured || !dataReady || remoteStatus !== 'ready') return
+    done.current = true
+    const id = readTaskParam(window.location.search)
+    if (!id) {
+      clearTaskParam()
+      return
+    }
+    if (tasks.some((x) => x.id === id)) {
+      openTask(id)
+    } else {
+      clearTaskParam()
+      toast(t('taskLink.notFound'))
+    }
+  }, [dataReady, remoteStatus, tasks, openTask, toast, t])
+  return null
+}
+
 function Router() {
   const { currentUser, currentUserId, needsOnboarding, remoteEnabled, remoteStatus, remoteError, remoteReverted, remoteRestricted, loadError, retryLoad, refreshing, dataReady, sessionResuming, metricsSharingNotice } =
     useOhsumi()
@@ -260,6 +288,7 @@ function Router() {
         <LegalLinks />
       </footer>
       <TaskDetailDrawer taskId={openTaskId} onClose={closeTask} />
+      <TaskLinkOpener />
     </div>
   )
 }

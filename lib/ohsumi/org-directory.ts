@@ -152,10 +152,13 @@ export function syncOrgParam(orgId: string | null): void {
       // ?login=1(ホームページの「ログイン」から開いた印)は、団体が決まったら外して /?org=<団体ID> にする
       if (url.searchParams.get('org') === orgId && !url.searchParams.has('login')) return
       url.searchParams.delete('login')
+      // タスクのリンク(&task=)のタスクID は団体ごとの番号なので、団体が変わる時は消す(lib/ohsumi/task-link.ts)
+      if (url.searchParams.get('org') !== orgId) url.searchParams.delete('task')
       url.searchParams.set('org', orgId)
     } else {
       if (!url.searchParams.has('org')) return
       url.searchParams.delete('org')
+      url.searchParams.delete('task')
     }
     window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
   } catch {
