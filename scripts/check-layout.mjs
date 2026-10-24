@@ -114,11 +114,11 @@ export const ADMIN_STEPS = [
   { name: '管理画面(タスクの設定・稼働の目安の入力と人数の見込み)', do: 'workloadRules' },
   // 項目の公開範囲(人材データベース): 見せる相手を選び、「この人から見ると」で見られる項目を出し、保存する
   { name: '管理画面(人材データベース・項目の公開範囲)', do: 'fieldAudiences' },
+  // 部署長(部署と役職 >「部署を編集」): 部署を選んで部署長を足す(画面を開いたまま確かめる。次のバックアップの手順は開き直す)
+  { name: '管理画面(部署と役職・部署長を決める)', do: 'deptHeads' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
-  // 部署長(部署と役職 >「部署を編集」): 部署を選んで部署長を足す(画面を開いたまま確かめるので、最後に置く)
-  { name: '管理画面(部署と役職・部署長を決める)', do: 'deptHeads' },
 ]
 
 // 暗い表示(端末の設定を「暗い」にして開く)。主な画面で、はみ出しに加えて、文字と背景の明るさの比(4.5:1。大きい文字は 3:1)・
@@ -1748,7 +1748,7 @@ async function run({ build = true } = {}) {
           const cand = await evaluate(`[...document.querySelectorAll('[data-dept-head-add] option')].map((o) => o.value).filter(Boolean)`)
           await pick('[data-dept-head-add]', cand[0]); await sleep(300)
           if (!(await evaluate(`!!document.querySelector('[data-dept-head="${cand[0]}"]')`))) throw new Error('部署長を足せません')
-          // 375px の確かめは、開いた状態で行う(管理画面の手順の最後に置く。次の回は開き直す)
+          // 375px の確かめは、開いた状態で行う(次の手順は開き直す)
           await sleep(200)
         }
 
