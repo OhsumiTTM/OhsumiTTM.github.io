@@ -119,6 +119,10 @@ export const ADMIN_STEPS = [
   { name: '管理画面(承認待ち・承認の履歴)', do: 'approvalHistory' },
   // 稼働の目安(タスクの設定): 入力を変えると、保存の前にその場で人数を出す。範囲の外・大小の関係の誤りは理由を出して保存を止める
   { name: '管理画面(タスクの設定・稼働の目安の入力と人数の見込み)', do: 'workloadRules' },
+  // 項目の公開範囲(人材データベース): 見せる相手を選び、「この人から見ると」で見られる項目を出し、保存する
+  { name: '管理画面(人材データベース・項目の公開範囲)', do: 'fieldAudiences' },
+  // 部署長(部署と役職 >「部署を編集」): 部署を選んで部署長を足す(画面を開いたまま確かめる。次のバックアップの手順は開き直す)
+  { name: '管理画面(部署と役職・部署長を決める)', do: 'deptHeads' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -714,6 +718,8 @@ async function run({ build = true } = {}) {
     let contract = null
     // 画面が送った書き込み(読み取りの一覧に無い操作)
     let sentWrites = []
+    // updateSetting で送った値(項目の公開範囲の確かめ)
+    const settingWrites = []
     // 書き込みに返す失敗(authError・reloadRequired・forbidden)と、初期データを読んだ回数
     let failWrites = ''
     let initialDataCalls = 0
@@ -731,11 +737,12 @@ async function run({ build = true } = {}) {
     const gas = (body) => {
       if (!LAYOUT_READ_ACTIONS.includes(body.action)) {
         sentWrites.push(body.action === 'batch' ? 'batch(' + (body.ops || []).map((o) => o.action).join(',') + ')' : body.action)
+        if (body.action === 'updateSetting') settingWrites.push(body)
       }
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps, recordRows: 'migrating',
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps, recordRows: 'migrating', fieldAudiences: 1,
           // 最上位の役職の人にだけ、団体のスプレッドシート・Apps Script の URL を渡す(団体設定の「GAS とスプレッドシート」)
           ...(member === ADMIN_MEMBER ? { adminLinks: { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/layout-check-sheet/edit', scriptEditUrl: 'https://script.google.com/d/layout-check-script/edit' } } : {}) }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
@@ -1793,6 +1800,43 @@ async function run({ build = true } = {}) {
             if (cols !== 1) throw new Error('スマートフォンの幅で、枠の項目が縦に1列に並びません: ' + cols + ' 列')
           }
         }
+        if (step.do === 'fieldAudiences') {
+          await clickText('人材データベース', 'aside nav button'); await sleep(1200)
+          const box = `document.querySelector('[data-field-audience="university"] [data-field-audience-option="boss"]')`
+          if (!(await evaluate(`!!${box}`))) throw new Error('項目の公開範囲の欄が出ません')
+          if (await evaluate(`${box}.disabled`)) throw new Error('項目の公開範囲を変えられません(代表なのに)')
+          // 狭めるだけの項目には、幹部・全員の選択肢が無い
+          const narrow = await evaluate(`[...document.querySelectorAll('[data-field-audience="career_plan"] [data-field-audience-option]')].map((e) => e.getAttribute('data-field-audience-option'))`)
+          if (narrow.includes('leaders') || narrow.includes('all')) throw new Error('キャリアの計画に、幹部・全員を選べます')
+          await evaluate(`${box}.scrollIntoView({ block: 'center' }); ${box}.click(); true`); await sleep(300)
+          const summary = await evaluate(`document.querySelector('[data-field-audience="university"] [data-field-audience-summary]').textContent`)
+          if (!summary.includes('上長')) throw new Error('選んだ相手が、範囲の説明に出ません: ' + summary)
+          // この人から見ると: 代表 → 一般のメンバー
+          const ids = await evaluate(`[...document.querySelectorAll('[data-field-audience-viewer] option')].map((o) => o.value).filter(Boolean)`)
+          const pick = (sel, v) => evaluate(`(() => { const el = document.querySelector('${sel}'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+          await pick('[data-field-audience-viewer]', ids[0]); await pick('[data-field-audience-subject]', ids[ids.length - 1]); await sleep(300)
+          const result = await evaluate(`document.querySelector('[data-field-audience-preview-result]').textContent`)
+          if (!/見られる項目\(\d+\)|見られる項目はありません/.test(result)) throw new Error('「この人から見ると」の結果が出ません: ' + result)
+          settingWrites.length = 0
+          await evaluate(`document.querySelector('[data-field-audience-save]').click(); true`); await sleep(600)
+          const sent = settingWrites.find((b) => b.key === 'member_field_visibility')
+          if (!sent || !JSON.parse(sent.value).university?.includes('boss')) throw new Error('項目の公開範囲を保存できません: ' + JSON.stringify(settingWrites))
+        }
+        if (step.do === 'deptHeads') {
+          await clickText('部署と役職', 'aside nav button'); await sleep(1200)
+          await clickText('部署を編集'); await sleep(800)
+          if (!(await evaluate(`!!document.querySelector('[data-dept-heads]')`))) throw new Error('部署を編集の画面に、部署長の欄がありません')
+          const paths = await evaluate(`[...document.querySelectorAll('[data-dept-heads-path] option')].map((o) => o.value).filter(Boolean)`)
+          if (!paths.length) throw new Error('部署長を決める部署がありません')
+          const pick = (sel, v) => evaluate(`(() => { const el = document.querySelector('${sel}'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+          await pick('[data-dept-heads-path]', paths[0]); await sleep(300)
+          const cand = await evaluate(`[...document.querySelectorAll('[data-dept-head-add] option')].map((o) => o.value).filter(Boolean)`)
+          await pick('[data-dept-head-add]', cand[0]); await sleep(300)
+          if (!(await evaluate(`!!document.querySelector('[data-dept-head="${cand[0]}"]')`))) throw new Error('部署長を足せません')
+          // 375px の確かめは、開いた状態で行う(次の手順は開き直す)
+          await sleep(200)
+        }
+
         if (step.do === 'workloadRules') {
           await clickText('タスクの設定', 'aside nav button'); await sleep(1200)
           const setRule = (key, value) => evaluate(`(() => {

@@ -5,6 +5,7 @@
 // READ_POLICY). See gas/README.md for the sheet schema and deployment steps.
 // All of this is optional — when NEXT_PUBLIC_REGISTRY_URL isn't set (e.g. local
 // dev), the app falls back to the local seed data exactly as before.
+import { parseFieldAudiences } from './field-audiences'
 import { parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { normalizeCapabilities, type Capability } from './capabilities'
 import type {
@@ -712,6 +713,8 @@ export interface RemoteSettings {
   workloadRules: WorkloadRules
   // 担当の候補の決め方(Settings の assign_candidate_rules。lib/ohsumi/assign-candidates.ts)
   assignCandidateRules: AssignCandidateRules
+  // 項目ごとの公開範囲(Settings の member_field_visibility。lib/ohsumi/field-audiences.ts)
+  memberFieldVisibility: import('./field-audiences').FieldAudienceSetting
   // 検定定義リスト — Settings キー "quiz_definitions"
   quizDefinitions: QuizDefinition[]
   // レーダーチャート軸定義 — Settings キー "radar_axes"
@@ -811,6 +814,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     skillLevelRules: parseSkillLevelRules(byKey.get('skill_level_rules') ?? ''),
     workloadRules: parseWorkloadRules(byKey.get('workload_rules')),
     assignCandidateRules: parseAssignCandidateRules(byKey.get('assign_candidate_rules')),
+    memberFieldVisibility: parseFieldAudiences(byKey.get('member_field_visibility')),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),
@@ -870,6 +874,8 @@ export interface InitialData {
   adminLinks?: OrgAdminLinks
   // コメント・1on1 などの記録の持ち方(gas/src/39-record-rows.gs)。古い GAS では無い
   recordRows?: RecordRowsState
+  // 項目ごとの公開範囲(見せる相手の組み合わせ)に対応している GAS か(v1.2〜。古い GAS では無い)
+  fieldAudiences?: boolean
 }
 
 // none / migrating / failed: セルに持つ。done / reverting: 1件1行のシートに持つ
@@ -899,6 +905,7 @@ interface InitialDataResponse {
   capabilities?: string[]
   adminLinks?: unknown
   recordRows?: string
+  fieldAudiences?: number
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
   background?: BackgroundData
   backgroundError?: string
@@ -932,6 +939,7 @@ function toInitialData(res: InitialDataResponse): InitialData {
     ...(Array.isArray(res.capabilities) ? { capabilities: normalizeCapabilities(res.capabilities) } : {}),
     ...(parseOrgAdminLinks(res.adminLinks) ? { adminLinks: parseOrgAdminLinks(res.adminLinks) } : {}),
     ...(RECORD_ROWS_STATES.includes(res.recordRows as RecordRowsState) ? { recordRows: res.recordRows as RecordRowsState } : {}),
+    ...(res.fieldAudiences === 1 ? { fieldAudiences: true } : {}),
   }
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }

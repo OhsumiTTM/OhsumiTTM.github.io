@@ -171,12 +171,17 @@ function makeViewer_(memberRow, roles) {
     isTop: roleTier_(roles, role) === 'top',
     // 評価・1on1 などを見られる相手(buildViewerData_ が報告先・メンター・プロジェクトの責任者から作る)
     supervisedIds: {},
-    // Members の列ごとの規則の上書き(Settings の member_field_visibility から buildViewerData_ が入れる)
+    // Members の列ごとの規則の上書き(Settings の member_field_visibility から buildViewerData_ が入れる。
+    // 33-member-field-visibility.gs の規則のオブジェクト。custom:<キー> は独自の項目のキーごとの規則)
     memberColumnRules: {},
+    // メンバーとの関係(上長・部署長・メンター・プロジェクトの責任者。viewerRelations_)
+    relations: { boss: {}, deptHead: {}, mentor: {}, projectOwner: {} },
   }
 }
 
 function checkReadRule_(rule, viewer, ownerId) {
+  // 項目ごとの公開範囲(33-member-field-visibility.gs の規則のオブジェクト)
+  if (rule && typeof rule === 'object') return fieldAudienceAllows_(rule, viewer, ownerId)
   switch (rule) {
     case 'all': return true
     case 'self': return !!ownerId && ownerId === viewer.id
@@ -267,7 +272,10 @@ function filterTableForViewer_(sheetName, table, viewer) {
     var overrides = sheetName === 'Members' ? (viewer.memberColumnRules || {}) : {}
     outRows.push(keepCols.map(function (c) {
       var rule = overrides[headers[c]] || policy.columns[headers[c]]
-      return checkReadRule_(rule, viewer, ownerId) ? row[c] : ''
+      var allowed = checkReadRule_(rule, viewer, ownerId)
+      // 独自の項目は、キーごとの範囲でも絞る(列が見えない人にも、範囲を広げたキーだけは返す)
+      if (sheetName === 'Members' && headers[c] === 'custom_fields_json') return filterCustomFieldsForViewer_(row[c], overrides, viewer, ownerId, allowed)
+      return allowed ? row[c] : ''
     }))
   })
   return { headers: keepCols.map(function (c) { return headers[c] }), rows: outRows }
@@ -326,46 +334,8 @@ function findMemberInSnapshot_(data, memberId) {
 function supervisedMemberIds_(data, viewerId) {
   var out = {}
   if (!viewerId) return out
-  var members = data.Members || { headers: [], rows: [] }
-  var mh = members.headers || []
-  var idCol = mh.indexOf('id'), repCol = mh.indexOf('reports_to_id'), mentorCol = mh.indexOf('mentor_id')
-  var reportsTo = {}
-  ;(members.rows || []).forEach(function (r) {
-    var id = String(r[idCol] || '')
-    if (!id) return
-    reportsTo[id] = repCol >= 0 ? String(r[repCol] || '') : ''
-    if (mentorCol >= 0 && String(r[mentorCol] || '') === viewerId) out[id] = true
-  })
-  Object.keys(reportsTo).forEach(function (id) {
-    var cur = reportsTo[id]
-    for (var hop = 0; cur && hop < 20; hop++) {
-      if (cur === viewerId) { out[id] = true; break }
-      cur = reportsTo[cur]
-    }
-  })
-  var projects = data.Projects || { headers: [], rows: [] }
-  var ph = projects.headers || []
-  var pid = ph.indexOf('id'), owner = ph.indexOf('owner_id'), mem = ph.indexOf('member_ids'), parent = ph.indexOf('parent_id')
-  if (pid >= 0 && owner >= 0 && mem >= 0) {
-    var byId = {}, children = {}
-    ;(projects.rows || []).forEach(function (r) {
-      var id = String(r[pid] || '')
-      if (!id) return
-      byId[id] = r
-      var p = parent >= 0 ? String(r[parent] || '') : ''
-      if (p) (children[p] = children[p] || []).push(id)
-    })
-    var stack = Object.keys(byId).filter(function (id) { return String(byId[id][owner] || '') === viewerId })
-    var seen = {}
-    while (stack.length) {
-      var cur = stack.pop()
-      if (seen[cur]) continue
-      seen[cur] = true
-      splitCsvList_(byId[cur][mem]).forEach(function (m) { out[m] = true })
-      ;(children[cur] || []).forEach(function (c) { stack.push(c) })
-    }
-  }
-  delete out[viewerId]
+  var rel = viewerRelations_(data, viewerId)
+  ;[rel.boss, rel.mentor, rel.projectOwner].forEach(function (m) { Object.keys(m).forEach(function (id) { out[id] = true }) })
   return out
 }
 
@@ -375,7 +345,11 @@ function buildViewerData_(data, memberId) {
   var memberRow = findMemberInSnapshot_(data, memberId)
   if (!memberRow) return null
   var viewer = makeViewer_(memberRow, rolesFromSnapshot_(data))
-  viewer.supervisedIds = supervisedMemberIds_(data, viewer.id)
+  viewer.relations = viewerRelations_(data, viewer.id)
+  viewer.supervisedIds = {}
+  ;[viewer.relations.boss, viewer.relations.mentor, viewer.relations.projectOwner].forEach(function (m) {
+    Object.keys(m).forEach(function (id) { viewer.supervisedIds[id] = true })
+  })
   viewer.memberColumnRules = memberColumnRulesFromSnapshot_(data)
   var empty = { headers: [], rows: [] }
   return {
@@ -436,6 +410,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   var out = { memberId: memberId, version: snapshot.version, sheets: sheets, capabilities: capabilities }
   // 記録の持ち方(none / migrating / done。39-record-rows.gs)。古い GAS には無い(画面はこれで見分ける)
   out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
+  // 項目ごとの公開範囲(上長・部署長などの組み合わせ。33-member-field-visibility.gs)に対応している印。古い GAS には無い
+  out.fieldAudiences = 1
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {

@@ -471,6 +471,7 @@ export type SkillLevelThresholds = Record<string, number>
 export interface DepartmentTreeNode {
   path: string        // ">" 区切りのフルパス
   label?: string      // 表示名（省略時は path の末尾ノード名を使う）
+  headIds?: string[]  // 部署長(その部署とその下の部署の人の、公開範囲が「部署長」の項目を見られる。lib/ohsumi/field-audiences.ts)
 }
 
 // ---- アンケート設問 (FRM-006/FRM-007) --------------------------------------

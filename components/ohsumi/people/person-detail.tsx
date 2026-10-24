@@ -1,5 +1,7 @@
 'use client'
 
+import { FieldAudienceSummary, MemberDailyReports, useFieldVisible } from './field-audience-parts'
+import { MEMBER_FIELDS } from '@/lib/ohsumi/field-audiences'
 import { findRole } from '@/lib/ohsumi/roles'
 import { useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -71,7 +73,8 @@ function resizeImageToDataUrl(file: File, t: (key: TranslationKey) => string, si
 }
 
 export function PersonDetail({ id }: { id: string }) {
-  const { roles, isAdminRef, isTopRef,
+  const fieldVisible = useFieldVisible(id)
+  const { roles, isAdminRef, isTopRef, fieldAudiencesSupported,
     getMember,
     visibleTasks: tasks,
     members,
@@ -265,6 +268,10 @@ export function PersonDetail({ id }: { id: string }) {
 
   const isSelf = currentUser?.id === member.id
   const isAdmin = !!currentUser && isAdminRef(currentUser.role)
+  // 項目ごとの公開範囲(v1.2 の GAS)で、上長・部署長などに見せている項目があれば、育成・キャリアのタブも出す
+  // (値を送るかは団体の GAS が決める。ここはタブを出すかだけ)
+  const canSeeGroup = (group: 'growth' | 'career') =>
+    fieldAudiencesSupported && MEMBER_FIELDS.some((f) => f.group === group && fieldVisible(f.key))
   const displayName = member.displayName || member.name
 
   return (
@@ -427,8 +434,8 @@ export function PersonDetail({ id }: { id: string }) {
           [
             ['overview', t('person.tab.overview')],
             ['tasks', t('person.tab.tasks')],
-            ...(isSelf || isAdmin ? [['growth', t('person.tab.growth')]] : []),
-            ...(isSelf || isAdmin ? [['career', t('person.tab.career')]] : []),
+            ...(isSelf || isAdmin || canSeeGroup('growth') ? [['growth', t('person.tab.growth')]] : []),
+            ...(isSelf || isAdmin || canSeeGroup('career') ? [['career', t('person.tab.career')]] : []),
             ['calendar', t('person.tab.calendar')],
           ] as [Tab, string][]
         ).map(([key, label]) => (
@@ -1007,6 +1014,8 @@ export function PersonDetail({ id }: { id: string }) {
 
       {tab === 'overview' && (
         <>
+      {isSelf && <FieldAudienceSummary />}
+      <MemberDailyReports memberId={member.id} />
       {/* ダッシュボードサマリー */}
       {isSelf && (() => {
         // notifications は store で既読を除外済み — そのまま未読として扱う

@@ -298,7 +298,8 @@ describe('日報の一覧', () => {
     const rows = h.sheets.DailyReports.rows
     const d = vm.runInContext('new Date(2026, 9, 1)', h.c as vm.Context)
     rows.push(['dr1', 'm-base', 'daily', d, 'やった', 'やる', '', '2026-10-01T09:00:00Z'])
-    const list = fn(h, 'fetchDailyReports_')() as { date: unknown }[]
+    // 日報を見る権限の人(代表)として読む
+    const list = fn(h, 'fetchDailyReports_')({ id: 'm-top', role: 'top' }) as { date: unknown }[]
     expect(list[0].date).toBe('2026-10-01')
   })
 })

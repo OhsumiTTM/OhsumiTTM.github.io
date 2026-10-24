@@ -1,5 +1,6 @@
 'use client'
 
+import { serializeFieldAudiences } from './field-audiences'
 import { DEFAULT_ASSIGN_CANDIDATE_RULES, parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { migrateAdminSections, sectionsForSave } from './admin-sections'
 import { revertTaskChange } from './optimistic'
@@ -498,6 +499,10 @@ interface OhsumiContextValue extends OhsumiState {
   // 担当の候補の決め方(Settings の assign_candidate_rules)。書いていなければ既定(メンターはレベル3以上)
   assignCandidateRules: AssignCandidateRules
   updateAssignCandidateRules: (rules: AssignCandidateRules) => void
+  // 項目ごとの公開範囲(Settings の member_field_visibility。lib/ohsumi/field-audiences.ts)と、GAS が対応しているか(v1.2〜)
+  memberFieldVisibility: import('./field-audiences').FieldAudienceSetting
+  updateMemberFieldVisibility: (setting: import('./field-audiences').FieldAudienceSetting) => void
+  fieldAudiencesSupported: boolean
   quizDefinitions: QuizDefinition[]
   radarAxes: RadarAxis[]
   awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
@@ -1095,6 +1100,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [skillLevelRules, setSkillLevelRules] = useState<SkillLevelRules>({})
   const [workloadRules, setWorkloadRules] = useState<WorkloadRules>(DEFAULT_WORKLOAD_RULES)
   const [assignCandidateRules, setAssignCandidateRules] = useState<AssignCandidateRules>(DEFAULT_ASSIGN_CANDIDATE_RULES)
+  const [memberFieldVisibility, setMemberFieldVisibility] = useState<import('./field-audiences').FieldAudienceSetting>({})
+  const [fieldAudiencesSupported, setFieldAudiencesSupported] = useState(false)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
   const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
@@ -1347,6 +1354,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     if (s.skillLevelRules) setSkillLevelRules(s.skillLevelRules)
     if (s.workloadRules) setWorkloadRules(s.workloadRules)
     if (s.assignCandidateRules) setAssignCandidateRules(s.assignCandidateRules)
+    if (s.memberFieldVisibility) setMemberFieldVisibility(s.memberFieldVisibility)
     if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
     if (s.radarAxes) setRadarAxes(s.radarAxes)
     if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
@@ -1381,6 +1389,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (res.capabilities) setServerCapabilities(res.capabilities)
       if (res.adminLinks) setAdminLinks(res.adminLinks)
       if (res.recordRows) setRecordRows(res.recordRows)
+      if (res.fieldAudiences) setFieldAudiencesSupported(true)
       if (res.version) dataVersionRef.current = res.version
     },
     [applyLocalApprovalOverrides, applySettings],
@@ -2068,6 +2077,14 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
   // 担当の候補の決め方を変える(団体のルールを持つ人)。既定と同じなら設定を消す(空 = 既定)
+  // 項目ごとの公開範囲を変える(団体のルールを持つ人)。空なら設定を消す(= 今までどおりの範囲)
+  const updateMemberFieldVisibility = useCallback(
+    (setting: import('./field-audiences').FieldAudienceSetting) => {
+      setMemberFieldVisibility(setting)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('member_field_visibility', serializeFieldAudiences(setting)))
+    },
+    [runRemote],
+  )
   const updateAssignCandidateRules = useCallback(
     (rules: AssignCandidateRules) => {
       const next = parseAssignCandidateRules(JSON.stringify(rules))
@@ -5734,6 +5751,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     updateWorkloadRules,
     assignCandidateRules,
     updateAssignCandidateRules,
+    memberFieldVisibility,
+    updateMemberFieldVisibility,
+    fieldAudiencesSupported,
     quizDefinitions,
     radarAxes,
     awardSkillPoints,

@@ -16,6 +16,9 @@ function authorizeAction_(acting, action, body) {
 
   // 代表 can do anything
   if (isDaihyo) return
+  // 日報・週報の読み取りは、ログインしている全員が呼べる。返す範囲は fetchDailyReports_ が閲覧者で絞る
+  // (日報を見る権限の人〈管理者・権限の例外〉はすべて、ほかの人は本人と、公開範囲の daily_reports で見せる相手の分だけ)
+  if (action === 'fetchDailyReports') return
 
   // バックアップ(一覧・戻す)は代表だけ(権限の個別の上書きでも渡さない)
   var backupActions = ['getBackupStatus', 'listBackups', 'previewRestore', 'searchBackupTasks', 'restoreBackup', 'restoreTasks', 'createBackupNow']
@@ -108,7 +111,6 @@ function authorizeAction_(acting, action, body) {
     'updateCompetencies',        // コンピテンシー評価（班長は担当メンバーのみ）
     'triggerOverdueReminders',   // NTF-005: 期限超過リマインドの手動発火
     'uploadSurveyImage',         // FRM-007: アンケート設問の画像は管理者操作
-    'fetchDailyReports',         // REP-005: 日報・週報の閲覧は管理者操作
   ]
   if (daihyoOrLeader.indexOf(action) >= 0) {
     // 経費・申請フォームの承認・却下・差し戻し: 今の承認ステップの担当者(人の指定が本人、または役職が同じ)なら、

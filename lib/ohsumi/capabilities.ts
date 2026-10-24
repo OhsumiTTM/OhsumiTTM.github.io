@@ -132,6 +132,7 @@ export const STORE_ACTION_CAPABILITIES: Record<string, Capability> = {
   updateExpenseCategories: 'org.rules',
   updateJoinedAt: 'members.hr',
   updateLearningContents: 'org.rules',
+  updateMemberFieldVisibility: 'org.rules',
   updateLearningCourses: 'org.rules',
   updateMemberProjects: 'members.hr',
   updateMentor: 'members.hr',

@@ -28,6 +28,7 @@ import { AdminFormBuilder } from './admin-form-builder'
 import { AdminMemberDb } from './admin-member-db'
 import { LeadershipOverview, SuccessorSuggestions } from './admin-leadership'
 import { AdminRecruiting } from './admin-recruiting'
+import { FieldAudienceEditor } from './field-audience-editor'
 import { AdminDailyReports } from './admin-daily-reports'
 import { AdminBlocks, AdminPageHeader } from './admin-page'
 import { SurveyAllResponses } from '../survey-screen'
@@ -120,6 +121,7 @@ function SectionBody({ section }: { section: AdminSection }) {
           blocks={[
             { id: 'memberdb-list', title: t('admin.memberDb.title'), content: <AdminMemberDb /> },
             { id: 'memberdb-columns', title: t('admin.tags.customColumns.title'), content: <CustomMemberColumnsEditor /> },
+            { id: 'memberdb-audiences', title: t('admin.fieldAudience.title'), content: <FieldAudienceEditor /> },
           ]}
         />
       )
