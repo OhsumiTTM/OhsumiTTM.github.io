@@ -235,8 +235,15 @@ function FolderNode({ node, depth, activeId, onOpen }: { node: WikiFolderNode; d
   )
 }
 
+function containsPage(node: WikiFolderNode, id: string): boolean {
+  return node.pages.some((p) => p.id === id) || node.children.some((c) => containsPage(c, id))
+}
+
 function FolderBranch({ node, depth, activeId, onOpen }: { node: WikiFolderNode; depth: number; activeId: string; onOpen: (id: string) => void }) {
   const [open, setOpen] = useState(depth < 1)
+  // 開いたページが入っているフォルダは開く
+  const hasActive = !!activeId && containsPage(node, activeId)
+  useEffect(() => { if (hasActive) setOpen(true) }, [hasActive])
   return (
     <div className="min-w-0" data-knowledge-folder={node.path}>
       <button
@@ -267,7 +274,7 @@ function Recent({ pages, nameOf, onOpen }: { pages: WikiPageSummary[]; nameOf: (
         <ul className="mt-2 divide-y divide-border">
           {recent.map((p) => (
             <li key={p.id}>
-              <button type="button" onClick={() => onOpen(p.id)} className="flex w-full min-w-0 flex-col gap-0.5 py-2 text-left hover:bg-secondary/50">
+              <button type="button" onClick={() => onOpen(p.id)} className="flex w-full min-w-0 flex-col gap-0.5 py-2 text-left hover:bg-secondary/50" data-knowledge-recent-item={p.id}>
                 <span className="truncate text-sm font-medium">{p.title}</span>
                 <span className="truncate text-[11px] text-muted-foreground">
                   {[p.folder, t('knowledge.updatedBy', { name: nameOf(p.updatedBy), at: fmt(p.updatedAt) })].filter(Boolean).join(' ・ ')}

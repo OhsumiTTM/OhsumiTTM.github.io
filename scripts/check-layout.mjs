@@ -874,13 +874,13 @@ async function run({ build = true } = {}) {
           const mine = [{ id: 'wq_1', pageId: 'wp_2', baseVersion: 1, title: 'ようこそ', folder: '新しく入った人へ', byId: member, at: '2026-10-21T03:00:00.000Z', status: 'rejected', decidedBy: ADMIN_MEMBER, decidedAt: '2026-10-22T03:00:00.000Z', reason: '見送りの理由のとても長い文です。'.repeat(4) }]
           return { pages, myProposals: mine, manager, ...(manager ? { pending: [{ id: 'wq_2', pageId: 'wp_1', baseVersion: 3, title: pages[0].title, folder: pages[0].folder, byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '' }] } : {}) }
         }
-        case 'getWikiPage': return { page: { id: body.id, folder: '新しく入った人へ > 手続き', title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), tags: ['経費', '手順'], version: 3,
+        case 'getWikiPage': return { id: body.pageId, folder: '新しく入った人へ > 手続き', title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), tags: ['経費', '手順'], version: 3,
           updatedAt: '2026-10-20T03:00:00.000Z', updatedBy: ADMIN_MEMBER, createdAt: '2026-10-01T03:00:00.000Z', createdBy: ADMIN_MEMBER, audience: { kind: 'all', ids: [] },
           revisions: [{ version: 2, byId: MEMBER, approvedBy: ADMIN_MEMBER, at: '2026-10-15T03:00:00.000Z' }, { version: 1, byId: ADMIN_MEMBER, approvedBy: '', at: '2026-10-01T03:00:00.000Z' }],
-          body: WIKI_LAYOUT_BODY } }
-        case 'getWikiProposal': return { proposal: { id: body.id, pageId: 'wp_1', baseVersion: 3, title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '',
+          body: WIKI_LAYOUT_BODY }
+        case 'getWikiProposal': return { id: body.proposalId, pageId: 'wp_1', baseVersion: 3, title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '',
           tags: ['経費'], audience: { kind: 'leaders', ids: [] }, body: WIKI_LAYOUT_BODY.replace('## 手順', '## 手順(新しい順番)') + '\n- 足した行: ' + 'とても長い行'.repeat(20),
-          current: { title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), folder: '新しく入った人へ > 手続き', body: WIKI_LAYOUT_BODY, version: 3, tags: ['経費', '手順'], audience: { kind: 'all', ids: [] } } } }
+          current: { title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), folder: '新しく入った人へ > 手続き', body: WIKI_LAYOUT_BODY, version: 3, tags: ['経費', '手順'], audience: { kind: 'all', ids: [] } } }
         case 'searchWiki': return { results: [{ id: 'wp_1', title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', snippet: '…レシートを撮って' + 'とても長い抜き出し'.repeat(10) }] }
         case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
         default: return {}
@@ -1972,9 +1972,11 @@ async function run({ build = true } = {}) {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
           await evaluate(`document.querySelector('[data-account-menu]').click(); true`); await sleep(500)
           await clickText('ナレッジ', '[data-menu-item]'); await sleep(1200)
-          if (!(await evaluate(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="wp_1"]')`))) throw new Error('ナレッジのフォルダの木に、ページが出ません')
+          if (!(await evaluate(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="wp_3"]') && !!document.querySelector('[data-knowledge-recent-item="wp_1"]')`))) throw new Error('ナレッジのフォルダの木・最近更新したページに、ページが出ません')
           if (step.do === 'knowledge') {
-            await evaluate(`document.querySelector('[data-knowledge-page="wp_1"]').click(); true`); await sleep(1000)
+            await evaluate(`document.querySelector('[data-knowledge-recent-item="wp_1"]').click(); true`); await sleep(1000)
+            // 開いたページのフォルダは、木でも開く
+            if (!(await evaluate(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="wp_1"]')`))) throw new Error('開いたページのフォルダが、木で開きません')
             const got = JSON.parse(await evaluate(`JSON.stringify({ table: !!document.querySelector('[data-wiki-body] table'), code: !!document.querySelector('[data-wiki-body] pre'),
               bad: [...document.querySelectorAll('[data-wiki-body] a')].some((a) => !/^https?:|^mailto:/.test(a.getAttribute('href') || '')), image: !!document.querySelector('[data-wiki-image]'),
               edit: document.querySelector('[data-knowledge-edit]')?.textContent.trim() ?? '', del: !!document.querySelector('[data-knowledge-delete]') })`))
