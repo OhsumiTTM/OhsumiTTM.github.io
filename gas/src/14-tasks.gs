@@ -83,6 +83,8 @@ function createTasks_(tasks, actingMemberId, opts) {
           return t.importance ? sheetCode_('importance', t.importance) : ''
         case 'related_review_task_id':
           return t.relatedReviewTaskId || ''
+        case 'wiki_page_ids':
+          return (t.wikiPageIds || []).join(',')
         // 日程調整・フォームのクイック追加の中身(prepareCreateTasks_ で確かめたもの)
         case 'schedule_json':
           return t.quickKind === 'schedule' ? JSON.stringify(mapScheduleCodes_(t.schedule, sheetCode_)) : ''

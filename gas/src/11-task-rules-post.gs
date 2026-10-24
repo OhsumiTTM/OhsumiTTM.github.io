@@ -11,6 +11,7 @@ var TASK_OWNER_SCOPED_ACTIONS = [
   'updateEstimatedHours', 'updateActualHours', 'updateRetrospective',
   'updateProgress',   // 進捗のメモ・進捗率・進捗の記録(他人の記録は変えられない: validateProgressHistoryUpdate_)
   'setHoldReason',    // 保留の理由
+  'updateTaskWikiPages', // つなぐナレッジのページ(43-wiki.gs。見られるページだけ)
 ]
 var TASK_ANY_MEMBER_ACTIONS = {
   createTasks: '新しいタスクの登録。一般のメンバーが作るタスクは承認待ち(確認タスク・日程調整/フォームのクイック追加は除く。prepareCreateTasks_)。既存のタスクは書き換えない',

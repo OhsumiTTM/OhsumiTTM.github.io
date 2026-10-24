@@ -449,7 +449,7 @@ var OVERRIDE_SCOPE_BY_ACTION = {
   updateReviewer: 'task', updateReviewers: 'task', removeTask: 'task', updatePriority: 'task',
   updateDifficulty: 'task', updateSchedule: 'task', updateDependsOn: 'task', setBlocker: 'task',
   rejectTask: 'task',
-  updateProjectDetails: 'project', updateProjectOwner: 'project', updateProjectParent: 'project',
+  updateProjectDetails: 'project', updateProjectWikiPages: 'project', updateProjectOwner: 'project', updateProjectParent: 'project',
   updateProjectArchived: 'project', updateProjectMembers: 'project', notifyProjectHealth: 'project',
   updateProjectHealthRecord: 'project', updateProjectHealth: 'project',
   addCandidate: 'recruiting', updateCandidate: 'recruiting', removeCandidate: 'recruiting',

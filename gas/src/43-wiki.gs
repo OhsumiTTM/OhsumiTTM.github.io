@@ -507,3 +507,59 @@ function wikiNotifyProposer_(memberId, title, approved, reason) {
     console.error('ナレッジの提案の結果を知らせられませんでした: ' + maskEmailsIn_(String(e)))
   }
 }
+
+// ---- タスク・プロジェクトからページへのリンク(2026.10.24-6) ----
+//
+// Tasks・Projects の wiki_page_ids 列(カンマ区切りのページID。WIKI_LINKS_MAX まで)。画面は、見る人が見られるページだけを出す
+// (題は listWikiPages の答えから引く。見られないページの題は届かない)。
+// 付け外しできるのは、タスクは担当者・確認者・作成者・全権管理者(TASK_OWNER_SCOPED_ACTIONS)、プロジェクトは責任者・管理者。
+// 見られないページのリンクは、その人には出ないので、その人が直しても残す(知らないうちに消さない)
+var WIKI_LINKS_MAX = 10
+
+// ページIDの並びを確かめる。strict: 無い・見られないページがあれば断る(付け外しの操作)。
+// strict でなければ、それらを黙って除く(テンプレートからタスクを作る時。消えたページで作れなくならないように)
+function checkWikiPageIds_(acting, ids, strict) {
+  if (ids === undefined || ids === null) return []
+  if (!Array.isArray(ids)) throw userError_('ナレッジのページの指定が不正です。')
+  var out = []
+  ids.forEach(function (raw) {
+    var id = String(raw === null || raw === undefined ? '' : raw).trim()
+    if (id && out.indexOf(id) < 0) out.push(id)
+  })
+  if (out.length > WIKI_LINKS_MAX) throw userError_('つなげるナレッジのページは' + WIKI_LINKS_MAX + 'ページまでです。')
+  if (!out.length) return out
+  var viewer = wikiViewer_(acting)
+  var live = {}
+  wikiLivePages_().forEach(function (p) { live[String(p.id)] = p })
+  var ok = out.filter(function (id) { return live[id] && wikiCanView_(viewer, live[id].audience_json) })
+  if (strict && ok.length !== out.length) throw userError_('見つからないか、見る権限のないナレッジのページがあります。')
+  return ok
+}
+
+// タスク・プロジェクトのページのリンクを置き換える(updateTaskWikiPages・updateProjectWikiPages)
+function updateWikiLinks_(acting, kind, targetId, pageIds) {
+  var sheetName = kind === 'task' ? SHEET_TASKS : SHEET_PROJECTS
+  var row = findRow_(sheetName, String(targetId || ''))
+  if (!row) throw userError_(kind === 'task' ? '対象のタスクが見つかりません。' : '対象のプロジェクトが見つかりません。')
+  var ids = checkWikiPageIds_(acting, pageIds, true)
+  // 今つながっていて、この人には見られないページは残す
+  var viewer = wikiViewer_(acting)
+  var live = {}
+  wikiLivePages_().forEach(function (p) { live[String(p.id)] = p })
+  var hidden = splitCsvList_(row.wiki_page_ids).filter(function (id) {
+    return ids.indexOf(id) < 0 && live[id] && !wikiCanView_(viewer, live[id].audience_json)
+  })
+  var merged = ids.concat(hidden)
+  if (merged.length > WIKI_LINKS_MAX) throw userError_('つなげるナレッジのページは' + WIKI_LINKS_MAX + 'ページまでです。')
+  ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), sheetName, ['wiki_page_ids'])
+  var fields = { wiki_page_ids: merged.join(',') }
+  if (kind === 'task') updateTaskFields_(targetId, fields)
+  else updateProjectFields_(targetId, fields)
+  return { wikiPageIds: merged }
+}
+
+// プロジェクトのページのリンクを付け外しできるか(責任者は役職によらずできる。ほかは updateProjectDetails と同じ)
+function isProjectOwner_(projectId, acting) {
+  var p = authFindRow_(SHEET_PROJECTS, String(projectId || ''))
+  return !!p && String(p.owner_id || '') === String(acting.id)
+}

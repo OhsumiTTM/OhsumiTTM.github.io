@@ -85,6 +85,7 @@ var PROJECTS_HEADERS = [
   'last_notified_health',  // item 26: 直近に通知した実効健康状態（重複通知防止）
   'start_date', // PRJ-003: プロジェクトの開始日（任意, YYYY-MM-DD）
   'end_date',   // PRJ-003: プロジェクトの終了予定日（任意, YYYY-MM-DD）
+  'wiki_page_ids', // つないだナレッジのページ(カンマ区切りのページID。43-wiki.gs)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var TASKS_HEADERS = [
@@ -108,6 +109,7 @@ var TASKS_HEADERS = [
   'calendar_event_id', // カレンダーの予定の ID(syncCalendarForTask_ が書く。画面には返さない)
   'deleted_at',        // ゴミ箱に入れた日時(ISO)。空なら使っているタスク。30日後に毎日の処理が行を消す
   'deleted_by',        // ゴミ箱に入れた人(メンバーID)
+  'wiki_page_ids',     // つないだナレッジのページ(カンマ区切りのページID。43-wiki.gs)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
