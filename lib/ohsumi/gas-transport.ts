@@ -87,6 +87,12 @@ export const READ_ACTIONS = new Set([
   'getFormSubmissions',
   // 承認の履歴(代表・管理者)
   'getApprovalLog',
+  // ナレッジの読み取り(見られるページだけ)
+  'listWikiPages',
+  'getWikiPage',
+  'getWikiRevision',
+  'getWikiProposal',
+  'searchWiki',
   'getCandidates',
   'getFiles',
   'getMyEmails',

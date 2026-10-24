@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.24-5'
+var REGISTRY_VERSION = '2026.10.24-6'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -3564,6 +3564,7 @@ function getKpiOrgs_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.24-5', security: false, required: false, released: true, note: 'v1.2(途中): ナレッジ(手順書・Wiki)。ページはフォルダ(5段まで)・タグ・公開範囲(全員・リーダー以上・プロジェクト・部署)を持ち、Markdown と画像で書ける。見られる人は誰でも作成・変更を提案でき、ナレッジの管理の権限(既定は代表だけ)を持つ人が承認すると反映する(管理する人の変更はすぐ反映)。前の版を20まで残し、承認の時に元の版が変わっていれば止める。提案と結果はメールで知らせる' },
   { version: '2026.10.24-4', security: false, required: false, released: true, note: 'v1.2(途中): Discord/Slack の、1つのタスクについての通知(確認待ち・日程調整とフォームの回答がそろった)に、そのタスクのリンクを埋め込む(Discord は [文字](URL)、Slack は <URL|文字>)。幹部限定・承認待ちのタスクも名前は出さずにリンクを付ける' },
   { version: '2026.10.24-3', security: false, required: false, released: true, note: 'v1.2(途中): レジストリからログインを一斉に切れる(checkIn の sessionsRevoke。全団体・1つの団体)。切った時は代表に理由をメールで知らせ、ログイン画面に「セキュリティ保護のため、もう一度ログインしてください」と出す。延長したトークンも、切る前のログインなら無効にする' },
   { version: '2026.10.24-2', security: false, required: false, released: true, note: 'v1.2(途中): 評価にスキルの見立て(スキル・レベル・点数・理由)を付けられる。点数をスキルの点数に足し、レベルの条件「承認」に数える。付けられるのは代表と上長・部署長・メンター・プロジェクトの責任者。1回の点数の上限と、同じスキルに付け直せるまでの日数は団体の設定で変えられる(既定 100点・30日)。評価を消すと点数を引く(レベルは下げない)。スキルのレベルの承認も部署長ができる。管理者の役職でない見る立場の人も評価を書ける(自分が書いた評価だけを変え・消せる)' },

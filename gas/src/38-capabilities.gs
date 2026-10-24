@@ -3,7 +3,7 @@
 // 「代表だけ」「全権管理者だけ」だった操作を、まとまり(capability)ごとに役職へ渡せるようにする。
 // 役職の設定(Settings の roles)の各役職に capabilities: [キー] を持つ。持たない役職は既定:
 //   最上位: すべて(設定に関係なく、いつもすべて)
-//   管理者で制限なし(全権管理者): org.rules・trash(今までの全権管理者と同じ)
+//   管理者で制限なし(全権管理者): org.rules・trash(今までの全権管理者と同じ。ナレッジの管理は、最上位の役職が役職に渡す)
 //   管理者で制限あり・一般: なし
 // 一般の役職には渡せない(設定に書いてあっても使わない)。
 // 画面はこの一覧(memberCapabilities_)だけを見て、ボタン・入力欄を出す。
@@ -25,10 +25,12 @@ var CAPABILITY_ACTIONS = {
     'unarchiveTasks', 'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook',
     'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'updateProjectHealth', 'revokeMemberSessions'],
   'org.logo': ['uploadOrgLogo'],
+  // ナレッジの管理: 提案の承認・却下とページを消す(43-wiki.gs。持つ人は、自分で直すとすぐ反映し、すべてのページを見られる)
+  'knowledge': ['decideWikiProposal', 'deleteWikiPage'],
 }
 // まとまりの順(画面のチェックの並び)
 var CAPABILITY_KEYS = ['members.add', 'members.role', 'members.remove', 'members.hr', 'members.training', 'recruiting',
-  'projects.remove', 'trash', 'org.rules', 'org.logo']
+  'projects.remove', 'trash', 'org.rules', 'org.logo', 'knowledge']
 // 制限なしの管理者の既定
 var FULL_ADMIN_DEFAULT_CAPABILITIES = ['org.rules', 'trash']
 // 最上位だけの操作(どの設定でも渡さない)。人ごとの権限の例外の編集
@@ -53,6 +55,7 @@ var CAPABILITY_LABELS = {
   'trash': 'タスクのゴミ箱',
   'org.rules': '団体のルールの変更',
   'org.logo': '団体のロゴの変更',
+  'knowledge': 'ナレッジの管理(提案の承認・ページを消す)',
 }
 
 // 知っているキーだけを、決まった順で(重複なし)

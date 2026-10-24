@@ -43,6 +43,7 @@ var SNAPSHOT_AUTH_ACTIONS = [
   'getBackgroundData', 'getExpenses', 'getFormSubmissions', 'getCandidates', 'getFiles',
   'getMyEmails', 'getWebhookStatus', 'fetchDailyReports', 'getInviteMailStatus', 'sendInviteLinkToMe',
   'getMailQuotaStatus', 'getGasUpdateStatus', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getApprovalLog',
+  'listWikiPages', 'getWikiPage', 'getWikiRevision', 'getWikiProposal', 'searchWiki',
 ]
 
 // スナップショットの Members からメンバーを探す。見つからなければ null(呼び出し元がシートを読む)
@@ -103,6 +104,8 @@ var SHEET_AUTH_ACTIONS = [
   'updateSetting', 'updateRoles', 'deleteRole', 'updateDepartments', 'deleteDepartment', 'moveDepartmentTasks',
   'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth',
   'revokeMemberSessions', 'restoreTask', 'purgeTask', 'unarchiveTasks',
+  // ナレッジの管理(提案の承認・却下・ページを消す)
+  'decideWikiProposal', 'deleteWikiPage',
   // メンバーの状態・部門・プロジェクトの担当(班長の担当範囲の判定に使う)
   'updateMemberInactive', 'updateMemberDepartmentPath', 'updateProjectMembers',
 ]

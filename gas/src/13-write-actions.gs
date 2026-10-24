@@ -756,6 +756,37 @@ function runWriteAction_(body, actingMember) {
     case 'getApprovalLog':
       result = getApprovalLog_(actingMember)
       break
+    // ナレッジ(43-wiki.gs)
+    case 'listWikiPages':
+      result = listWikiPages_(actingMember)
+      break
+    case 'getWikiPage':
+      result = getWikiPage_(actingMember, body.pageId)
+      break
+    case 'getWikiRevision':
+      result = getWikiRevision_(actingMember, body.pageId, body.version)
+      break
+    case 'getWikiProposal':
+      result = getWikiProposal_(actingMember, body.proposalId)
+      break
+    case 'searchWiki':
+      result = searchWiki_(actingMember, body.query)
+      break
+    case 'proposeWikiEdit':
+      result = proposeWikiEdit_(actingMember, body.page)
+      break
+    case 'decideWikiProposal':
+      result = decideWikiProposal_(actingMember, body.proposalId, body.approve === true, body.reason)
+      break
+    case 'withdrawWikiProposal':
+      result = withdrawWikiProposal_(actingMember, body.proposalId)
+      break
+    case 'deleteWikiPage':
+      result = deleteWikiPage_(actingMember, body.pageId)
+      break
+    case 'uploadWikiImage':
+      result = uploadWikiImage_(body.dataUrl, body.filename)
+      break
     case 'getFiles':
       result = getFiles_(actingMember, body.fileIds)
       break

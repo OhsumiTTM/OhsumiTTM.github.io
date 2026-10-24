@@ -644,6 +644,9 @@ interface OhsumiContextValue extends OhsumiState {
   uploadExpenseReceipt: (dataUrl: string, filename: string) => Promise<string>
   // FRM-007: アンケート設問画像のDriveアップロード
   uploadSurveyImage: (dataUrl: string, filename: string) => Promise<string>
+  // ナレッジの管理(提案の承認・却下・ページを消す。capability: knowledge)
+  decideWikiProposal: (proposalId: string, approve: boolean, reason: string) => Promise<{ approved: boolean; pageId?: string }>
+  deleteWikiPage: (pageId: string) => Promise<void>
   updateCustomFormDefs: (forms: import('./types').CustomFormDef[]) => void
   submitCustomForm: (
     formId: string,
@@ -4958,6 +4961,13 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // FRM-007: アンケート設問の画像をDriveにアップロードし、URLを返す。
   // uploadExpenseReceiptと同じパターン — 呼び出し側(admin-tags.tsxの
   // SurveyQuestionsEditor)がdraft上のimageUrlに反映する。
+  // ナレッジの管理(承認・却下・ページを消す)。結果は呼んだ画面が読み直す
+  const decideWikiProposal = useCallback(
+    (proposalId: string, approve: boolean, reason: string) => remoteApi.decideWikiProposal(proposalId, approve, reason),
+    [],
+  )
+  const deleteWikiPage = useCallback(async (pageId: string) => { await remoteApi.deleteWikiPage(pageId) }, [])
+
   const uploadSurveyImage = useCallback(
     (dataUrl: string, filename: string): Promise<string> => {
       if (!isDriveConfigured) return Promise.reject(new Error('Drive is not configured'))
@@ -5875,6 +5885,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     resubmitExpense,
     uploadExpenseReceipt,
     uploadSurveyImage,
+    decideWikiProposal,
+    deleteWikiPage,
     updateCustomFormDefs,
     submitCustomForm,
     approveFormStep,

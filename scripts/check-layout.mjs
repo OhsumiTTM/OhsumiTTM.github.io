@@ -70,6 +70,9 @@ export const STEPS = [
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
   // 個人設定: アカウントのメニューの「個人設定」から開く。目次とまとまり(通知・メールアドレス・言語とタイムゾーンなど)
   { name: '個人設定', do: 'personalSettings' },
+  // ナレッジ(v1.2): メニューから開き、フォルダの木・ページ(長い表・長い URL・コード)を読む。提案の欄(承認の上で反映する知らせ)
+  { name: 'ナレッジ(ページを読む)', do: 'knowledge' },
+  { name: 'ナレッジ(変更を提案する)', do: 'knowledgePropose' },
   // ベルの通知の種類ごとのオン・オフ。「メンション・返信」をオフにすると、見落としの注意を1行出す
   { name: '個人設定(ベルの通知)', do: 'bellSettings' },
   // INPUT の「項目を入れて追加」: 空の枠(必須の理由・登録の止め方)・「＋ もう1件」の引き継ぎ・離れる時の確かめ・
@@ -127,6 +130,8 @@ export const ADMIN_STEPS = [
   { name: '管理画面(スキルの決まり・評価に付けるスキルの上限)', do: 'evalSkillRules' },
   // 評価にスキルの見立てを付ける(ほかの人のページ > 経歴・キャリア > 評価履歴): 上限を超える点数は理由を出して追加を止める
   { name: '個人ページ(評価にスキルの見立てを付ける)', do: 'evalSkills' },
+  // ナレッジの承認待ち(管理の権限を持つ人): 提案と今のページの違い・見送る理由の欄
+  { name: 'ナレッジ(提案を確かめる・違い)', do: 'knowledgeReview' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -200,8 +205,12 @@ export const READ_ONLY_STEPS = [
 ]
 
 // 読み取り(GAS の READ_ONLY_ACTIONS と同じ)。これ以外を画面が送ったら、書き込みとして数える
+// ナレッジのページの本文(表・長い URL・コード・画像・危ないリンク)
+const WIKI_LAYOUT_BODY = ['# 経費精算', 'レシートを撮って、**その日のうちに**送ります。  ', '詳しくは [規程](https://example.com/a/very/long/url/that/should/wrap/' + 'x'.repeat(60) + ') を見てください。[危ないリンク](javascript:alert(1))',
+  '## 手順', '1. 申請する', '2. 承認を待つ', '', '| 項目 | 説明 | とても長い列の名前の例 |', '| --- | --- | --- |', '| 交通費 | ' + 'とても長い説明'.repeat(10) + ' | 3 |', '',
+  '```', 'const veryLongLineOfCode = "' + 'x'.repeat(120) + '"', '```', '> 引用の文', '---', '![レシートの例](wiki:layoutcheckimage01)'].join('\n')
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
-  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getApprovalLog', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
+  'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getApprovalLog', 'listWikiPages', 'getWikiPage', 'getWikiRevision', 'getWikiProposal', 'searchWiki', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
 
 // レジストリの管理画面(/registry-admin/)。ラベルは components/registry/registry-admin.tsx の TABS と同じ文字にする
@@ -854,6 +863,25 @@ async function run({ build = true } = {}) {
         ] }
         // 管理画面の上部に、GAS の更新が要る知らせを出す
         case 'getGasUpdateStatus': return { current: 'r1e-2', known: true, required: true, outdated: true, latest: GAS_CURRENT, minimum: GAS_CURRENT, security: true, checkedAt: '2026-10-01T03:00:00.000Z' }
+        // ナレッジ(長いタイトル・深いフォルダ・長い表と URL で、はみ出しを確かめる)
+        case 'listWikiPages': {
+          const manager = member === ADMIN_MEMBER
+          const pages = [
+            { id: 'wp_1', folder: '新しく入った人へ > 手続き > とても長い名前のフォルダでも折り返すことを確かめる', title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), tags: ['経費', '手順'], version: 3, updatedAt: '2026-10-20T03:00:00.000Z', updatedBy: ADMIN_MEMBER },
+            { id: 'wp_2', folder: '新しく入った人へ', title: 'ようこそ', tags: [], version: 1, updatedAt: '2026-10-18T03:00:00.000Z', updatedBy: ADMIN_MEMBER },
+            { id: 'wp_3', folder: '', title: 'よくある質問', tags: ['FAQ'], version: 2, updatedAt: '2026-10-10T03:00:00.000Z', updatedBy: member },
+          ]
+          const mine = [{ id: 'wq_1', pageId: 'wp_2', baseVersion: 1, title: 'ようこそ', folder: '新しく入った人へ', byId: member, at: '2026-10-21T03:00:00.000Z', status: 'rejected', decidedBy: ADMIN_MEMBER, decidedAt: '2026-10-22T03:00:00.000Z', reason: '見送りの理由のとても長い文です。'.repeat(4) }]
+          return { pages, myProposals: mine, manager, ...(manager ? { pending: [{ id: 'wq_2', pageId: 'wp_1', baseVersion: 3, title: pages[0].title, folder: pages[0].folder, byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '' }] } : {}) }
+        }
+        case 'getWikiPage': return { page: { id: body.id, folder: '新しく入った人へ > 手続き', title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), tags: ['経費', '手順'], version: 3,
+          updatedAt: '2026-10-20T03:00:00.000Z', updatedBy: ADMIN_MEMBER, createdAt: '2026-10-01T03:00:00.000Z', createdBy: ADMIN_MEMBER, audience: { kind: 'all', ids: [] },
+          revisions: [{ version: 2, byId: MEMBER, approvedBy: ADMIN_MEMBER, at: '2026-10-15T03:00:00.000Z' }, { version: 1, byId: ADMIN_MEMBER, approvedBy: '', at: '2026-10-01T03:00:00.000Z' }],
+          body: WIKI_LAYOUT_BODY } }
+        case 'getWikiProposal': return { proposal: { id: body.id, pageId: 'wp_1', baseVersion: 3, title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '',
+          tags: ['経費'], audience: { kind: 'leaders', ids: [] }, body: WIKI_LAYOUT_BODY.replace('## 手順', '## 手順(新しい順番)') + '\n- 足した行: ' + 'とても長い行'.repeat(20),
+          current: { title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), folder: '新しく入った人へ > 手続き', body: WIKI_LAYOUT_BODY, version: 3, tags: ['経費', '手順'], audience: { kind: 'all', ids: [] } } } }
+        case 'searchWiki': return { results: [{ id: 'wp_1', title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', snippet: '…レシートを撮って' + 'とても長い抜き出し'.repeat(10) }] }
         case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
         default: return {}
       }
@@ -1939,6 +1967,34 @@ async function run({ build = true } = {}) {
           const sections = await evaluate(`[...document.querySelectorAll('[data-personal-settings] section[id]')].map((e) => e.id).join(',')`)
           for (const id of ['settings-notify', 'settings-email', 'settings-language']) if (!sections.includes(id)) throw new Error('個人設定に「' + id + '」のまとまりがありません: ' + sections)
           if (!(await evaluate(`!!document.querySelector('[data-personal-settings] [data-admin-toc]')`))) throw new Error('個人設定の上に目次がありません')
+        }
+        if (step.do === 'knowledge' || step.do === 'knowledgeReview') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
+          await evaluate(`document.querySelector('[data-account-menu]').click(); true`); await sleep(500)
+          await clickText('ナレッジ', '[data-menu-item]'); await sleep(1200)
+          if (!(await evaluate(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="wp_1"]')`))) throw new Error('ナレッジのフォルダの木に、ページが出ません')
+          if (step.do === 'knowledge') {
+            await evaluate(`document.querySelector('[data-knowledge-page="wp_1"]').click(); true`); await sleep(1000)
+            const got = JSON.parse(await evaluate(`JSON.stringify({ table: !!document.querySelector('[data-wiki-body] table'), code: !!document.querySelector('[data-wiki-body] pre'),
+              bad: [...document.querySelectorAll('[data-wiki-body] a')].some((a) => !/^https?:|^mailto:/.test(a.getAttribute('href') || '')), image: !!document.querySelector('[data-wiki-image]'),
+              edit: document.querySelector('[data-knowledge-edit]')?.textContent.trim() ?? '', del: !!document.querySelector('[data-knowledge-delete]') })`))
+            if (!got.table || !got.code || !got.image) throw new Error('ナレッジのページの本文(表・コード・画像)が出ません: ' + JSON.stringify(got))
+            if (got.bad) throw new Error('ナレッジのページに、http・https・mailto 以外のリンクがあります')
+            if (got.edit !== '変更を提案' || got.del) throw new Error('一般のメンバーに、直す・消すのボタンが出ています: ' + JSON.stringify(got))
+          } else {
+            await clickText('承認待ち'); await sleep(800)
+            await evaluate(`document.querySelector('[data-knowledge-pending-item="wq_2"]').click(); true`); await sleep(1000)
+            const got = JSON.parse(await evaluate(`JSON.stringify({ diff: document.querySelector('[data-knowledge-diff]')?.textContent ?? '', changes: document.querySelector('[data-knowledge-meta-changes]')?.textContent ?? '', approve: !!document.querySelector('[data-knowledge-approve]'), reason: !!document.querySelector('[data-knowledge-reason]') })`))
+            if (!got.diff.includes('新しい順番') || !got.changes.includes('公開範囲') || !got.approve || !got.reason) throw new Error('ナレッジの提案の違い・承認の欄が出ません: ' + JSON.stringify(got))
+          }
+        }
+        if (step.do === 'knowledgePropose') {
+          await evaluate(`document.querySelector('[data-knowledge-edit]').click(); true`); await sleep(1000)
+          if (!(await evaluate(`!!document.querySelector('[data-knowledge-editor] [data-knowledge-approval-note]')`))) throw new Error('提案の欄に、承認の上で反映する知らせが出ません')
+          const setTitle = (v) => evaluate(`(() => { const el = document.querySelector('[data-knowledge-field="title"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+          await setTitle(''); await sleep(300)
+          if (!(await evaluate(`!!document.querySelector('[data-knowledge-problem]') && !!document.querySelector('[data-knowledge-save]')?.disabled`))) throw new Error('タイトルが空でも提案できます')
+          await setTitle('はじめての経費精算の手順'); await sleep(300)
         }
         if (step.do === 'bellSettings') {
           await evaluate(`document.querySelector('[data-bell-settings]').scrollIntoView({ block: 'center' })`); await sleep(300)
