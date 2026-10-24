@@ -176,6 +176,9 @@ export const ORG_SWITCH_STEPS = [
   { name: '団体の切り替え(ほかの団体が無い)', do: 'orgSwitcherSingle' },
   // 兼部の統合表示(ホームの「すべての団体」)。ほかの団体はログインが切れている
   { name: 'すべての団体(兼部の統合表示・ログインが切れた団体)', do: 'allOrgs' },
+  // 兼部の統合表示の第3段階: 「すべての団体」の「カレンダー」(月の表示。団体ごとに出す・出さない)と、週の表示
+  { name: 'すべての団体(カレンダー・月)', do: 'allOrgsCalendar', view: 'month' },
+  { name: 'すべての団体(カレンダー・週)', do: 'allOrgsCalendar', view: 'week' },
   // その団体に切り替えずにログインし直す小さい窓
   { name: 'ログインし直す窓(団体を切り替えない)', do: 'reloginWindow' },
 ]
@@ -1692,6 +1695,22 @@ async function run({ build = true } = {}) {
             // 開いた状態で、はみ出しを調べる
             await evaluate(`document.querySelector('[data-org-switcher]').click()`); await sleep(400)
           }
+        }
+        if (step.do === 'allOrgsCalendar') {
+          await signIn()
+          await saveOrgs(true)
+          await evaluate(`localStorage.setItem('ohsumi-home-scope', 'all'); localStorage.setItem('ohsumi-all-orgs-mode', 'calendar')`)
+          await navigate('/'); await clickText('あとで設定する').catch(() => {}); await sleep(2000)
+          if (!(await evaluate(`!!document.querySelector('[data-all-orgs-calendar]')`))) throw new Error('「すべての団体」のカレンダーが出ません')
+          const entries = () => evaluate(`document.querySelectorAll('[data-all-orgs-calendar] [data-calendar-entry][data-calendar-org="${ORG}"]').length`)
+          if ((await entries()) < 1) throw new Error('カレンダーに今の団体の予定が出ません')
+          // 団体ごとに出す・出さない
+          await evaluate(`document.querySelector('[data-calendar-org-toggle="${ORG}"]').click(); true`); await sleep(300)
+          if ((await entries()) !== 0) throw new Error('出さない団体の予定が、カレンダーに残ります')
+          await evaluate(`document.querySelector('[data-calendar-org-toggle="${ORG}"]').click(); true`); await sleep(300)
+          if (step.view === 'week') { await clickText('週', '[data-all-orgs-calendar] button'); await sleep(500) }
+          if (step.view === 'week' && !(await evaluate(`document.querySelector('[data-all-orgs-calendar]')?.getAttribute('data-all-orgs-calendar') === 'week'`))) throw new Error('週の表示に切り替わりません')
+          await evaluate(`localStorage.removeItem('ohsumi-all-orgs-mode'); localStorage.removeItem('ohsumi-home-scope')`)
         }
         if (step.do === 'allOrgs') {
           await signIn()

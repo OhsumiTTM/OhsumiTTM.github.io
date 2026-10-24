@@ -971,6 +971,22 @@ describe.skipIf(!available)('兼部の統合表示: 団体A と団体B の両方
     expect(stored).not.toContain(TITLE_B)
   })
 
+  it('「カレンダー」にすると、両方の団体の予定が日付ごとに出る。団体ごとに出す・出さないを選べる', async () => {
+    const calendarText = () => page.evaluate<string>(`document.querySelector('[data-all-orgs-calendar]')?.textContent ?? ''`)
+    await page.evaluate(`[...document.querySelectorAll('[data-all-orgs-mode] button')].find((b) => b.textContent.trim() === 'カレンダー').click(); true`)
+    await waitFor(async () => (await calendarText()).includes(TITLE_A) && (await calendarText()).includes(TITLE_B), 'カレンダーに両方の団体の予定が出ません')
+    await page.evaluate(`document.querySelector('[data-calendar-org-toggle="${B.orgId}"]').click(); true`)
+    await waitFor(async () => !(await calendarText()).includes(TITLE_B), '出さない団体の予定が消えません')
+    expect(await calendarText()).toContain(TITLE_A)
+    // まとめた内容は端末に保存しない(覚えるのは出し方だけ)
+    const stored = await page.evaluate<string>('JSON.stringify(Object.assign({}, localStorage)) + JSON.stringify(Object.assign({}, sessionStorage))')
+    expect(stored).not.toContain(TITLE_B)
+    expect(await page.evaluate<string | null>(`localStorage.getItem('ohsumi-all-orgs-mode')`)).toBe('calendar')
+    // 一覧に戻す(この後の確かめは一覧で行う)
+    await page.evaluate(`[...document.querySelectorAll('[data-all-orgs-mode] button')].find((b) => b.textContent.trim() === '一覧').click(); true`)
+    await waitFor(async () => (await page.evaluate<string>(`document.querySelector('[data-all-orgs]')?.textContent ?? ''`)).includes(TITLE_B), '一覧に戻せません')
+  })
+
   it('ログインが切れた団体は、その団体に切り替えずにログインし直せる(今の団体・団体ごとの保存は変わらない)', async () => {
     await page.evaluate(`localStorage.removeItem('ohsumi-session-${B.orgId}'); sessionStorage.removeItem('ohsumi-session-${B.orgId}'); true`)
     await navigate('/?org=' + A.orgId)
