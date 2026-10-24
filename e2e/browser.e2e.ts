@@ -1078,8 +1078,10 @@ describe.skipIf(!available)('ナレッジ: 一般のメンバーの提案は、�
     // 提案した人の画面にページが出て、本文が読める
     await openKnowledge('base@a.example')
     const pageId = rows('WikiPages').find((r) => r.title === TITLE)!.id
-    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-page="${pageId}"]')`), 'ページの一覧に、承認されたページが出ません')
-    await page.evaluate(`document.querySelector('[data-knowledge-page="${pageId}"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-recent-item="${pageId}"]')`), '最近更新したページに、承認されたページが出ません')
+    await page.evaluate(`document.querySelector('[data-knowledge-recent-item="${pageId}"]').click(); true`)
+    // 開いたページのフォルダは、木でも開く
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="${pageId}"]')`), 'フォルダの木で、開いたページのフォルダが開きません')
     await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-wiki-body] strong')?.textContent ?? '') === 'その日のうちに'`), 'ページの本文が出ません')
     // 一般のメンバーには、消すボタンが無い
     expect(await page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-delete]')`)).toBe(false)
