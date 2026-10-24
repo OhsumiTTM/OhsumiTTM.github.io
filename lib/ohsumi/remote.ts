@@ -1365,6 +1365,20 @@ export const remoteApi = {
   getFormSubmissions: () => postToGas<import('./types').CustomFormSubmission[]>('getFormSubmissions', {}),
   // 承認の履歴: タスクの登録の承認・却下(代表・管理者。gas/src/41-approval-log.gs)。古い GAS は Unknown action を返す
   getApprovalLog: () => postToGas<{ entries: ApprovalLogEntry[]; keepDays: number }>('getApprovalLog', {}),
+  // ナレッジ(gas/src/43-wiki.gs)。見られるページだけが返る。古い GAS は Unknown action を返す
+  listWikiPages: () => postToGas<import('./wiki').WikiList>('listWikiPages', {}),
+  getWikiPage: (pageId: string) => postToGas<import('./wiki').WikiPage>('getWikiPage', { pageId }),
+  getWikiRevision: (pageId: string, version: number) => postToGas<import('./wiki').WikiRevision>('getWikiRevision', { pageId, version }),
+  getWikiProposal: (proposalId: string) => postToGas<import('./wiki').WikiProposal>('getWikiProposal', { proposalId }),
+  searchWiki: (query: string) => postToGas<{ results: import('./wiki').WikiSearchResult[] }>('searchWiki', { query }),
+  // 提案する(ナレッジの管理の権限を持つ人は、すぐ反映する)
+  proposeWikiEdit: (page: import('./wiki').WikiDraft) =>
+    postToGas<{ applied: boolean; pageId?: string; version?: number; proposalId?: string }>('proposeWikiEdit', { page }),
+  withdrawWikiProposal: (proposalId: string) => postToGas<{ ok: true }>('withdrawWikiProposal', { proposalId }),
+  decideWikiProposal: (proposalId: string, approve: boolean, reason: string) =>
+    postToGas<{ approved: boolean; pageId?: string; version?: number }>('decideWikiProposal', { proposalId, approve, reason }),
+  deleteWikiPage: (pageId: string) => postToGas<{ ok: true }>('deleteWikiPage', { pageId }),
+  uploadWikiImage: (dataUrl: string, filename: string) => postToGas<{ fileId: string }>('uploadWikiImage', { dataUrl, filename }),
   // アップロードしたファイル(非公開)を権限を確認したうえで取得する
   getFiles: (fileIds: string[]) => postToGas<FetchedFile[]>('getFiles', { fileIds }),
   // 自分自身の登録メール(カンマ区切り)を取得する。actingMember基準で

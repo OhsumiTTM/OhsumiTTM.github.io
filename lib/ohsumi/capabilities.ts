@@ -16,6 +16,7 @@ export const CAPABILITY_KEYS = [
   'trash',
   'org.rules',
   'org.logo',
+  'knowledge',
 ] as const
 
 export type Capability = (typeof CAPABILITY_KEYS)[number]
@@ -36,6 +37,8 @@ export const CAPABILITY_ACTIONS: Record<Capability, readonly string[]> = {
     'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'updateProjectHealth', 'revokeMemberSessions',
   ],
   'org.logo': ['uploadOrgLogo'],
+  // ナレッジの管理(提案の承認・却下・ページを消す。持つ人は自分で直すとすぐ反映し、すべてのページを見られる)
+  knowledge: ['decideWikiProposal', 'deleteWikiPage'],
 }
 
 // 制限なしの管理者(全権管理者)の既定。今までの「代表または全権管理者のみ」の操作
@@ -153,4 +156,6 @@ export const STORE_ACTION_CAPABILITIES: Record<string, Capability> = {
   updateTaskSetTemplateItems: 'org.rules',
   updateTrainingPrograms: 'org.rules',
   uploadOrgLogo: 'org.logo',
+  decideWikiProposal: 'knowledge',
+  deleteWikiPage: 'knowledge',
 }

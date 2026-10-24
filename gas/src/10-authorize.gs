@@ -342,6 +342,15 @@ function authorizeAction_(acting, action, body) {
     'getOrgStorage',           // 団体の保存。キーごとに決めた役職だけが読める(getOrgStorage_ で確かめる)
     'setOrgStorage',           // 団体の保存。キーごとに決めた役職だけが書ける(setOrgStorage_ で確かめる)
     'searchArchivedTasks',     // 移したタスクの検索。見てよいタスクだけを返す(canViewTaskRow_ で絞り込む)
+    // ナレッジ(43-wiki.gs): 読み取りは見られるページだけを返す。提案・取り下げ・画像はログイン済み誰でも(反映は管理の権限を持つ人の承認の後)
+    'listWikiPages',
+    'getWikiPage',
+    'getWikiRevision',
+    'getWikiProposal',
+    'searchWiki',
+    'proposeWikiEdit',
+    'withdrawWikiProposal',
+    'uploadWikiImage',
   ]
   if (anyLoggedIn.indexOf(action) >= 0) {
     // updateTaskStatus: 全権管理者は制限なし。それ以外は担当者・確認者だけ。

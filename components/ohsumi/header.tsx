@@ -43,6 +43,7 @@ import {
   MessageSquareReply,
   Settings,
   CalendarCheck,
+  BookMarked,
 } from 'lucide-react'
 import { OtherDeviceModal, currentInviteLink } from './other-device'
 import { getCurrentOrgId, loadSavedOrgs, switchToOrg } from '@/lib/ohsumi/org-directory'
@@ -527,6 +528,10 @@ export function Header() {
                   )}
                 </MenuGroup>
                 <MenuGroup title={t('header.menu.group.org')}>
+                  <MenuItem onClick={() => openMenuItem(() => go({ name: 'knowledge' }))}>
+                    <BookMarked className="size-4" />
+                    {t('header.menu.knowledge')}
+                  </MenuItem>
                   {canOpenOrgSettings && (
                     <MenuItem onClick={() => openMenuItem(() => go({ name: 'org-settings' }))}>
                       <Building2 className="size-4" />

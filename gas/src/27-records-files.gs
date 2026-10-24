@@ -220,6 +220,7 @@ function getFormSubmissions_(acting) {
 // 種類はファイル名の先頭で判断する(アップロード時に付けている名前)。
 //   avatar_ / org_logo_ / survey_image_  ログイン済みの全員
 //   expense_receipt_                     その領収書を持つ経費申請を閲覧できる人(canViewExpense_)
+//   wiki_image_                          そのファイルIDを本文に含むナレッジのページを見られる人(wikiImageIdsFor_)
 
 var GET_FILES_MAX_IDS = 30
 var GET_FILES_MAX_BYTES = 8 * 1024 * 1024
@@ -244,6 +245,7 @@ function uploadKindFromName_(name) {
   if (n.indexOf('avatar_') === 0) return 'avatar'
   if (n.indexOf('org_logo_') === 0) return 'orgLogo'
   if (n.indexOf('survey_image_') === 0) return 'surveyImage'
+  if (n.indexOf('wiki_image_') === 0) return 'wikiImage'
   return ''
 }
 
@@ -314,6 +316,7 @@ function getFiles_(acting, fileIds, options) {
   addTiming_('fileCacheMs', Date.now() - ct)
   var expenseViewer = null
   var expenses = null
+  var wikiImageIds = null
   var totalBytes = 0
   var maxBytes = options.maxBytes || GET_FILES_MAX_BYTES
   var out = []
@@ -332,7 +335,11 @@ function getFiles_(acting, fileIds, options) {
       receiptApps = expenses.filter(function (app) { return String(app.receiptUrl || '').indexOf(id) >= 0 })
       addTiming_('permissionMs', Date.now() - pt)
     }
-    if (!canViewUploadedFile_(kind, expenseViewer, receiptApps)) {
+    if (kind === 'wikiImage') {
+      if (options.cachedOnly) return
+      if (!wikiImageIds) wikiImageIds = wikiImageIdsFor_(acting)
+      if (!wikiImageIds[id]) { out.push({ id: id, ok: false, error: 'forbidden' }); return }
+    } else if (!canViewUploadedFile_(kind, expenseViewer, receiptApps)) {
       out.push({ id: id, ok: false, error: 'forbidden' })
       return
     }

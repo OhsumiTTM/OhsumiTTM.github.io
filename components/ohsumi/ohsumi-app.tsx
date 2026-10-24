@@ -30,6 +30,7 @@ import { SurveyScreen } from './survey-screen'
 import { OrgSettingsScreen } from './org-settings-screen'
 import { SkillGridScreen } from './skill-grid-screen'
 import { LearningContentScreen } from './learning-content-screen'
+import { KnowledgeScreen } from './knowledge/knowledge-screen'
 import { TaskDetailDrawer } from './output/task-detail-drawer'
 import { OhsumiLoadingMark, OhsumiMark } from './primitives'
 import { themeColorCss } from '@/lib/ohsumi/theme-color'
@@ -280,6 +281,7 @@ function Router() {
         {screen.name === 'org-settings' && <OrgSettingsScreen />}
         {screen.name === 'skillgrid' && <SkillGridScreen />}
         {screen.name === 'learning' && <LearningContentScreen />}
+        {screen.name === 'knowledge' && <KnowledgeScreen />}
       </div>
       <footer className="border-t border-border px-4 py-4">
         {metricsSharingNotice && (

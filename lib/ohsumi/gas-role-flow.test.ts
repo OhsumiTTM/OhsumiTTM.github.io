@@ -19,7 +19,7 @@ const ROLES = JSON.stringify([
 
 // 役職ごとのテスト用アカウント(メンバーID = 役職の説明)
 const ACCOUNTS = [
-  { id: 'm-top', role: 'top', label: '代表(top)', capabilities: ['members.add', 'members.role', 'members.remove', 'members.hr', 'members.training', 'recruiting', 'projects.remove', 'trash', 'org.rules', 'org.logo'] },
+  { id: 'm-top', role: 'top', label: '代表(top)', capabilities: ['members.add', 'members.role', 'members.remove', 'members.hr', 'members.training', 'recruiting', 'projects.remove', 'trash', 'org.rules', 'org.logo', 'knowledge'] },
   { id: 'm-admin', role: 'r-admin', label: '全権管理者(admin)', capabilities: ['trash', 'org.rules'] },
   { id: 'm-lead', role: 'r-lead', label: '制限付きの管理者(admin・restricted)', capabilities: [] },
   { id: 'm-base', role: 'base', label: '一般(base)', capabilities: [] },

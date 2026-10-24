@@ -142,7 +142,9 @@ describe.each(['codes', 'legacy'] as const)('既定のままの役職(%s)では�
           // 意図して変えたもの: 担当者が「完了」を選べる(確認待ちに変わる。gas-done-review.test.ts)
           const intended = (action === 'updateTaskStatus' && (body as { status?: string }).status === 'done' && before === 'deny' && after === 'allow' && actor.id === 'm-base') ||
             // 日報・週報の読み取りは全員が呼べる(返す範囲は fetchDailyReports_ が閲覧者で絞る。gas-field-audiences.test.ts)
-            (action === 'fetchDailyReports' && before === 'deny' && after === 'allow')
+            (action === 'fetchDailyReports' && before === 'deny' && after === 'allow') ||
+            // ナレッジ(v1.2。前には無かった操作): 読み取り・提案は全員、承認・ページを消すのはナレッジの管理の権限(gas-wiki.test.ts)
+            WIKI_ACTIONS.includes(action)
           // 意図して変えたもの(gas-fix-approvals.test.ts): 経費・申請フォームの却下・差し戻しは、今の承認ステップの担当者だけ
           // (この表には申請が無いので、代表以外は断る)。確認者の承認は今の確認者だけ(全権管理者でも確認者でなければ断る)。
           // 確認者の承認が足りないタスク(t1)は、確認者でも担当者でもない全権管理者が「完了」にできない
@@ -191,6 +193,9 @@ const tryAuth = (gas: Gas, id: string, action: string, body: object) => {
     return (e as Error).message
   }
 }
+
+// ナレッジの操作(v1.2 で足した。入れる前の authorizeAction_ には無い)
+const WIKI_ACTIONS = ['listWikiPages', 'getWikiPage', 'getWikiRevision', 'getWikiProposal', 'searchWiki', 'proposeWikiEdit', 'withdrawWikiProposal', 'uploadWikiImage', 'decideWikiProposal', 'deleteWikiPage']
 
 describe('昇権の防止(members.role を持つ、最上位でない人)', () => {
   const gas = customGas()

@@ -1666,6 +1666,18 @@ Excel等で開いた場合には効きません（CSVには書式情報が乗ら
 
 担当の候補の決め方は Settings の `assign_candidate_rules`(`{"mentor_min_level": 1〜5}`。空は既定の3)に持ちます。管理画面「スキルの決まり」で変えます。
 
+## 9.6.7. ナレッジのページ(WikiPages・2026.10.24-5 から)
+
+手順書・Wiki のページを `gas/src/43-wiki.gs` で持ちます。シートは初めて書く時に作ります。
+
+- **シート:** `WikiPages`(1ページ1行。`id, folder, title, body, tags, audience_json, version, created_by, created_at, updated_by, updated_at, deleted_at`)・`WikiRevisions`(前の版。1ページ20版まで)・`WikiProposals`(提案。`status` は pending / approved / rejected / withdrawn)
+- **公開範囲(`audience_json`):** `all`(全員)・`leaders`(管理者の役職の人。代表を含む)・`projects`(そのプロジェクトと子プロジェクトのメンバー・責任者)・`departments`(その部署と下の部署の人)。判定は読み取りの時に GAS が行います。管理の権限を持つ人と最上位の役職の人は、承認のためにすべてのページを見られます
+- **提案と承認:** ページを見られる人は誰でも `proposeWikiEdit` で作成・変更を提案できます(1人の承認待ちは20件まで)。ナレッジの管理の権限(capability `knowledge`。既定は最上位の役職だけ)を持つ人が `decideWikiProposal` で承認すると反映し、見送る時は理由を残します。管理の権限を持つ人が自分で直す時は、提案を経ずにすぐ反映します。提案の後にほかの人がページを直していたら(版が違う)、承認せずに断ります。提案は管理する人に、結果は提案した人にメールで知らせます
+- **消す:** `deleteWikiPage`(管理の権限)。行は消さずに `deleted_at` を入れます
+- **画像:** `uploadWikiImage` で `wiki_image_` で始まる名前でアップロード用フォルダに置き、本文には `![説明](wiki:<ファイルID>)` と書きます。`getFiles` は、そのファイルIDを本文に含むページを見られる人(と、自分の提案・管理の権限を持つ人)にだけ渡します
+- **読む:** `listWikiPages`・`getWikiPage`・`getWikiRevision`・`getWikiProposal`・`searchWiki`(タイトル・本文・タグ。50件まで)
+- **上限:** タイトル120文字・本文45000文字・フォルダ5段(1段40文字)・タグ10個(1つ30文字)・見送る理由500文字
+
 ## 9.7. 画面から届いた値の確かめ
 
 画面から届いた値は、GAS で確かめてから保存します(おかしな値は保存せずに断ります)。

@@ -1036,3 +1036,70 @@ describe.skipIf(!available)('レジストリからログインを一斉に切る
     expect(world.call(A.org, topTokenA, 'getInitialData').ok).toBe(true)
   })
 })
+
+describe.skipIf(!available)('ナレッジ: 一般のメンバーの提案は、管理の権限を持つ人が承認すると反映する', () => {
+  const TITLE = 'E2E のナレッジ(経費の出し方)'
+  const setValue = (sel: string, value: string) => page.evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(sel)})
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(value)})
+    el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); return true })()`)
+  const rows = (sheet: string) => {
+    const s = A.org.sheets[sheet]
+    if (!s) return []
+    const [head, ...body] = s.rows.map((r) => r.map(String))
+    return body.map((r) => Object.fromEntries(head.map((h, i) => [h, r[i]])))
+  }
+  const openKnowledge = async (email: string) => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn(email)
+    await waitFor(loggedIn, email + ' がログインできません')
+    await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
+    const item = `[...document.querySelectorAll('[data-menu-item]')].find((e) => e.textContent.trim() === 'ナレッジ')`
+    await waitFor(() => page.evaluate<boolean>(`!!${item}`), 'アカウントのメニューに「ナレッジ」がありません')
+    await page.evaluate(`${item}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-new]')`), 'ナレッジの画面が開きません')
+  }
+
+  it('一般のメンバーが新しいページを提案 → 代表にメール → 代表が承認するとページになり、提案した人にもメールが届く', async () => {
+    await openKnowledge('base@a.example')
+    await page.evaluate(`document.querySelector('[data-knowledge-new]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-editor] [data-knowledge-approval-note]')`), '提案の欄に、承認の上で反映する知らせが出ません')
+    await setValue('[data-knowledge-field="title"]', TITLE)
+    await setValue('[data-knowledge-field="folder"]', '新しく入った人へ > 手続き')
+    await setValue('[data-knowledge-field="body"]', '# 出し方\nレシートを撮って **その日のうちに** 送ります。')
+    const mailsBefore = A.org.mails.length
+    await page.evaluate(`document.querySelector('[data-knowledge-save]').click(); true`)
+    await waitFor(async () => { A.org.cache.clear(); return rows('WikiProposals').some((r) => r.title === TITLE && r.status === 'pending') }, 'GAS に提案が残りません')
+    // ページはまだ無い(承認の前)
+    expect(rows('WikiPages').some((r) => r.title === TITLE)).toBe(false)
+    await waitFor(async () => A.org.mails.slice(mailsBefore).some((m) => m.to.includes('top@a.example') && m.subject.includes(TITLE)), '代表に提案のメールが届きません')
+
+    await openKnowledge('top@a.example')
+    const pendingTab = `[...document.querySelectorAll('button, [role=tab]')].find((b) => b.textContent.trim().startsWith('承認待ち'))`
+    await waitFor(() => page.evaluate<boolean>(`!!${pendingTab}`), '代表に「承認待ち」のタブが出ません')
+    await page.evaluate(`${pendingTab}.click(); true`)
+    const proposalId = rows('WikiProposals').find((r) => r.title === TITLE)!.id
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-pending-item="${proposalId}"]')`), '承認待ちに提案が出ません')
+    await page.evaluate(`document.querySelector('[data-knowledge-pending-item="${proposalId}"]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-approve]')`), '承認のボタンが出ません')
+    const mailsBefore2 = A.org.mails.length
+    await page.evaluate(`document.querySelector('[data-knowledge-approve]').click(); true`)
+    await waitFor(async () => { A.org.cache.clear(); return rows('WikiPages').some((r) => r.title === TITLE && r.folder === '新しく入った人へ > 手続き' && !r.deleted_at) }, '承認してもページになりません')
+    expect(rows('WikiProposals').find((r) => r.id === proposalId)?.status).toBe('approved')
+    await waitFor(async () => A.org.mails.slice(mailsBefore2).some((m) => m.to.includes('base@a.example') && m.subject.includes('承認されました')), '提案した人に承認のメールが届きません')
+
+    // 提案した人の画面にページが出て、本文が読める
+    await openKnowledge('base@a.example')
+    const pageId = rows('WikiPages').find((r) => r.title === TITLE)!.id
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-recent-item="${pageId}"]')`), '最近更新したページに、承認されたページが出ません')
+    await page.evaluate(`document.querySelector('[data-knowledge-recent-item="${pageId}"]').click(); true`)
+    // 開いたページのフォルダは、木でも開く
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-tree] [data-knowledge-page="${pageId}"]')`), 'フォルダの木で、開いたページのフォルダが開きません')
+    await waitFor(() => page.evaluate<boolean>(`(document.querySelector('[data-wiki-body] strong')?.textContent ?? '') === 'その日のうちに'`), 'ページの本文が出ません')
+    // 一般のメンバーには、消すボタンが無い
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-delete]')`)).toBe(false)
+  })
+})
