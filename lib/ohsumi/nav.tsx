@@ -39,7 +39,7 @@ export type Screen =
   // LRN-001: 学習コンテンツ一覧（メンバー向け閲覧画面）
   | { name: 'learning' }
   // v1.2: ナレッジ(手順書・Wiki。提案と承認で直す)
-  | { name: 'knowledge' }
+  | { name: 'knowledge'; pageId?: string }
 
 // 画面を離れる前の確かめ(書きかけの入力がある画面が登録する)。true を返したら移動を止め、
 // 画面が確かめの知らせを出す。続けてよければ proceed() で移動する。target は移動先(戻る時は無し)

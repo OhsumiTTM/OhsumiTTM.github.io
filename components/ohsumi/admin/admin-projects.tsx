@@ -1,5 +1,6 @@
 'use client'
 
+import { WikiLinks } from '../knowledge/wiki-links'
 import { defaultDepartments } from '@/lib/ohsumi/departments'
 import { useDepartmentLabel } from '@/lib/ohsumi/use-department-label'
 import { useEffect, useMemo, useState } from 'react'
@@ -1033,6 +1034,11 @@ function TemplateTypeCard({
                   {tr('admin.projects.taskSets.dependsOnPrefix', { list: t.dependsOn.map(itemName).join('、') })}
                 </div>
               )}
+              {/* 作るタスクに引き継ぐナレッジのページ */}
+              <div className="mt-1" data-template-wiki-links={t.id}>
+                <WikiLinks compact open={false} canEdit ids={t.wikiPageIds}
+                  onChange={(ids) => onChange(tasks.map((x) => (x.id === t.id ? { ...x, wikiPageIds: ids.length ? ids : undefined } : x)))} />
+              </div>
             </div>
             <button
               onClick={() => removeTask(t.id)}
@@ -1282,6 +1288,11 @@ function TaskSetTemplateCard({
                   {tr('admin.projects.taskSets.dependsOnPrefix', { list: item.dependsOn.map(itemName).join('、') })}
                 </div>
               )}
+              {/* 作るタスクに引き継ぐナレッジのページ */}
+              <div className="mt-1" data-task-set-wiki-links={item.id}>
+                <WikiLinks compact open={false} canEdit ids={item.wikiPageIds}
+                  onChange={(ids) => onChangeItems(template.items.map((x) => (x.id === item.id ? { ...x, wikiPageIds: ids.length ? ids : undefined } : x)))} />
+              </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <button

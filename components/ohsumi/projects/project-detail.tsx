@@ -11,6 +11,7 @@ import { DependencyView } from '../output/dependency-view'
 import { GanttView } from '../output/gantt-view'
 import { OpenBidView } from '../output/open-bid-view'
 import { TaskDetailDrawer } from '../output/task-detail-drawer'
+import { WikiLinks } from '../knowledge/wiki-links'
 import { Avatar } from '@/components/ohsumi/primitives'
 import { isOverdue } from '@/lib/ohsumi/utils'
 import { DEFAULT_TIMEZONE } from '@/lib/ohsumi/timezone'
@@ -21,7 +22,7 @@ import { useI18n } from '@/lib/ohsumi/i18n'
 type Tab = 'workflow' | 'list' | 'calendar' | 'difficulty' | 'dependency' | 'gantt' | 'openbid' | 'overview'
 
 export function ProjectDetail({ id }: { id: string }) {
-  const { getProject, visibleTasks: tasks, members, getProjectMembers, currentUser } = useOhsumi()
+  const { getProject, visibleTasks: tasks, members, getProjectMembers, currentUser, isTopRef, isAdminRef, setProjectWikiPages } = useOhsumi()
   const { go } = useNav()
   const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('workflow')
@@ -43,6 +44,13 @@ export function ProjectDetail({ id }: { id: string }) {
   const completion = pt.length ? Math.round((done / pt.length) * 100) : 0
   const projMembers = getProjectMembers(id)
   const owner = members.find((m) => m.id === project.ownerId)
+  // ナレッジのページをつなげるのは、GAS と同じく責任者・代表・管理者(担当プロジェクトが決まっている管理者は、その範囲だけ)
+  const scopedIds = currentUser?.projectIds ?? []
+  const canLinkWiki = !!currentUser && (
+    isTopRef(currentUser.role) ||
+    project.ownerId === currentUser.id ||
+    (isAdminRef(currentUser.role) && (scopedIds.length === 0 || scopedIds.includes(id)))
+  )
 
   return (
     <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
@@ -86,6 +94,9 @@ export function ProjectDetail({ id }: { id: string }) {
                 {owner.displayName || owner.name}
               </button>
             )}
+            <div className="mt-3 max-w-xl empty:hidden" data-project-wiki-links>
+              <WikiLinks ids={project.wikiPageIds} canEdit={canLinkWiki} onChange={(ids) => setProjectWikiPages(id, ids)} />
+            </div>
             <div className="mt-3 flex -space-x-1.5">
               {projMembers.slice(0, 6).map((m) => (
                 <span key={m.id} className="rounded-full ring-2 ring-card">

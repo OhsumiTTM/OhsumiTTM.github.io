@@ -535,6 +535,12 @@ function mapMemberRow(
   }
 }
 
+// つないだナレッジのページ(カンマ区切り)。無ければ undefined
+function csvIds(v: string | undefined): string[] | undefined {
+  const ids = splitTags(v)
+  return ids.length > 0 ? ids : undefined
+}
+
 function mapProjectRow(r: Record<string, string>): Project {
   const memberIds = splitTags(r.member_ids)
   return {
@@ -551,6 +557,7 @@ function mapProjectRow(r: Record<string, string>): Project {
     lastNotifiedHealth: (r.last_notified_health || undefined) as Project['lastNotifiedHealth'],
     startDate: r.start_date || undefined,
     endDate: r.end_date || undefined,
+    wikiPageIds: csvIds(r.wiki_page_ids),
   }
 }
 
@@ -607,6 +614,7 @@ function mapTaskRow(r: Record<string, string>, departments: DepartmentDef[]): Ta
     reviewApprovals: parseJsonArray<{ memberId: string; at: string }>(r.review_approvals_json),
     requiredSkillLevels: parseJsonObject<Partial<Record<string, SkillLevelValue>>>(r.required_skill_levels_json),
     relatedReviewTaskId: r.related_review_task_id || undefined,
+    wikiPageIds: csvIds(r.wiki_page_ids),
     deletedAt: r.deleted_at || undefined,
     deletedById: r.deleted_by || undefined,
   }
@@ -997,6 +1005,8 @@ export interface CreateTaskPayload {
   estimatedHours?: number
   importance?: TaskImportance
   relatedReviewTaskId?: string
+  // テンプレートから付くナレッジのページ(GAS は無い・見られないページを除く)
+  wikiPageIds?: string[]
   // 日程調整・フォームのクイック追加(一般のメンバーでも承認なしで作れる。GAS が中身を確かめて、作る時に保存する)
   quickKind?: 'schedule' | 'form'
   schedule?: import('./types').TaskSchedule
@@ -1495,6 +1505,11 @@ export const remoteApi = {
     postToGas('setBlocker', { taskId, note, since }),
   setHoldReason: (taskId: string, note: string | null, since: string | null) =>
     postToGas('setHoldReason', { taskId, note, since }),
+  // ナレッジのページをつなぐ(見られないページのリンクは GAS が残す)
+  updateTaskWikiPages: (taskId: string, pageIds: string[]) =>
+    postToGas<{ wikiPageIds: string[] }>('updateTaskWikiPages', { taskId, pageIds }),
+  updateProjectWikiPages: (projectId: string, pageIds: string[]) =>
+    postToGas<{ wikiPageIds: string[] }>('updateProjectWikiPages', { projectId, pageIds }),
   updateDeliverables: (taskId: string, deliverables: TaskDeliverable[]) =>
     postListOps('updateDeliverables', taskId, deliverables),
   addDeliverable: (taskId: string, deliverable: TaskDeliverable) =>

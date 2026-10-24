@@ -11,6 +11,7 @@ import { ScheduleCandidateInput } from '../schedule-candidate-input'
 import { Button } from '@/components/ui/button'
 import { useOhsumi } from '@/lib/ohsumi/store'
 import { orgScopedStorageKey } from '@/lib/ohsumi/org-directory'
+import { WikiLinks } from '../knowledge/wiki-links'
 import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
 import { useToast } from '../toast'
 import { EditableTags } from '../editable-tags'
@@ -1277,7 +1278,7 @@ function DrawerBody({
   onRespondForm: (responses: Record<string, FormAnswerValue>) => void
 }) {
   const { t } = useI18n()
-  const { departmentOptions, departmentNameOf, roles } = useOhsumi()
+  const { departmentOptions, departmentNameOf, roles, setTaskWikiPages } = useOhsumi()
   const deptLabel = useDepartmentLabel()
   const { openTask } = useTaskDrawer()
   const toast = useToast()
@@ -2160,6 +2161,9 @@ function DrawerBody({
             </div>
           )}
         </div>
+
+        {/* ナレッジのページ(手順書)。見られるページだけを出し、担当者・確認者・作成者・全権管理者がつなぐ */}
+        <WikiLinksCard ids={task.wikiPageIds} canEdit={canUpdateProgress} onChange={(ids) => setTaskWikiPages(task.id, ids)} />
 
         {/* 点8: 日程調整・フォームを「関連機能」としてまとめる。設定済み
             (または設定可能)な場合のみ見出しごと表示する */}
@@ -3496,6 +3500,15 @@ function RetrospectiveSection({
       ) : (
         <p className="text-sm text-muted-foreground">{t('taskDrawer.retrospective.empty')}</p>
       )}
+    </div>
+  )
+}
+
+// 見られるページが無く、つなげない人には、枠ごと出さない(WikiLinks が何も出さない時)
+function WikiLinksCard({ ids, canEdit, onChange }: { ids: string[] | undefined; canEdit: boolean; onChange: (ids: string[]) => void }) {
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-card p-3.5 empty:hidden" data-task-wiki-links>
+      <WikiLinks ids={ids} canEdit={canEdit} onChange={onChange} />
     </div>
   )
 }

@@ -94,6 +94,9 @@ export interface WikiDraft {
   body: string
 }
 
+// タスク・プロジェクトにつなげるページの数(GAS の WIKI_LINKS_MAX)
+export const WIKI_LINKS_MAX = 10
+
 // GAS と同じ上限(gas/src/43-wiki.gs)
 export const WIKI_LIMITS = { title: 120, body: 45000, folderDepth: 5, folderPart: 40, tags: 10, tag: 30 } as const
 
