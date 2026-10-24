@@ -156,3 +156,24 @@ function applyEvaluationSkills_(memberId, entries, acting) {
   var newLevels = computeAutoLevels_(parseJsonListSafe_(memberRow.skill_levels_json), points, getSkillLevelRules_(), evidence)
   return { skill_points_json: JSON.stringify(points), skill_levels_json: JSON.stringify(newLevels) }
 }
+
+// 管理者の役職(または担当の範囲)で書けない評価を、見る立場の人として書く時(10-authorize.gs)。書けるなら印を付ける
+function evaluationBySupervisor_(acting, action, body) {
+  if (action !== 'updateEvaluationHistory' || !body || !body.memberId) return false
+  // 読めない時は書かせない(安全な側)
+  var related = false
+  try { related = canAssessSkillOf_(acting, String(body.memberId)) } catch (e) { related = false }
+  if (!related) return false
+  body._evaluationSupervisorOnly = true
+  return true
+}
+
+// 見る立場の人として書く時は、ほかの人が書いた評価を変え・消せない(新しい評価の書いた人は本人になる。stampEvaluators_)
+function checkSupervisorEvaluationEntries_(memberId, entries, acting) {
+  var byId = {}
+  entries.forEach(function (e) { if (e && e.id) byId[e.id] = e })
+  memberJsonList_(memberId, 'evaluation_history_json').forEach(function (s) {
+    if (!s || !s.id || String(s.evaluatorId || '') === String(acting.id)) return
+    if (!byId[s.id] || canonicalJson_(byId[s.id]) !== canonicalJson_(s)) throw userError_('ほかの人が書いた評価は、変えたり消したりできません。')
+  })
+}

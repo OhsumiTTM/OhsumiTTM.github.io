@@ -1695,6 +1695,7 @@ export const en = {
   'career.evaluation.performanceRef': 'For reference: {count} completed in the last 90 days, {rate}% on-time completion rate',
   'career.evaluation.performanceRefNoDeadline': 'For reference: {count} completed in the last 90 days (none had a deadline set)',
   'career.evaluation.performanceRefDifficulty': ', average difficulty {difficulty}',
+  'career.evaluation.desc': 'Admins and the people who supervise this member (boss, department head, mentor, project owner) can write evaluations. Supervisors can delete only the evaluations they wrote.',
   'career.evaluation.skillsTitle': 'Skill assessments (optional)',
   'career.evaluation.skillsDesc': 'Pick a skill, a level and points. The points are added to the member’s skill points, and the assessment counts toward the "approval" level condition. Up to {max} points per skill per evaluation.',
   'career.evaluation.skillsCooldownDesc': ' The same skill can be assessed once every {days} days.',

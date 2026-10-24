@@ -1695,6 +1695,7 @@ export const ja = {
   'career.evaluation.performanceRef': '参考: 直近90日で{count}件完了、期限内完了率{rate}%',
   'career.evaluation.performanceRefNoDeadline': '参考: 直近90日で{count}件完了(期限設定済みタスクなし)',
   'career.evaluation.performanceRefDifficulty': '、平均難易度{difficulty}',
+  'career.evaluation.desc': '管理者と、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)が書けます。見る立場の人が消せるのは、自分が書いた評価だけです。',
   'career.evaluation.skillsTitle': 'スキルの見立て(任意)',
   'career.evaluation.skillsDesc': 'スキルとレベルを選び、点数を付けると、この人のスキルの点数に足し、レベルの条件「承認」に数えます。1回にスキルごと{max}点まで。',
   'career.evaluation.skillsCooldownDesc': '同じスキルに付けられるのは{days}日に1回です。',

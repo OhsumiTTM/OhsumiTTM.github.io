@@ -1431,7 +1431,7 @@ function OneOnOnesSection({
 
 function EvaluationHistorySection({
   member,
-  editable,
+  editable: adminEditable,
   onSave,
   rid,
   currentUserId,
@@ -1454,11 +1454,14 @@ function EvaluationHistorySection({
   // ANL-004: 実績ベースの参考スコア — 評価入力欄は自動で埋めない、あくまで
   // 評価者向けの参考表示
   const { visibleTasks, members, projects, departmentTreeConfig, isAdminRef, isTopRef, evaluationSkillRules, evaluationSkillsSupported } = useOhsumi()
-  const perf = editable ? computeTaskPerformanceScore(member.id, visibleTasks) : null
-  // 評価にスキルの見立てを付けられるのは、代表と、上長・部署長・メンター・プロジェクトの責任者(GAS も確かめる)
-  const canAssess = editable && evaluationSkillsSupported && !!currentUserId && canAssessSkill(currentUserId, member.id, {
+  // 評価にスキルの見立てを付けられるのは、代表と、上長・部署長・メンター・プロジェクトの責任者(GAS も確かめる)。
+  // 見る立場の人は、管理者の役職でなくても評価を書ける(自分が書いた評価だけを消せる。GAS 2026.10.24-2 から)
+  const canAssess = evaluationSkillsSupported && !!currentUserId && canAssessSkill(currentUserId, member.id, {
     members, projects, departmentTree: departmentTreeConfig, isAdminRole: (r) => isAdminRef(r), isTopRole: (r) => isTopRef(r),
   })
+  const editable = adminEditable || canAssess
+  const canRemove = (e: EvaluationRecord) => adminEditable || (canAssess && e.evaluatorId === currentUserId)
+  const perf = editable ? computeTaskPerformanceScore(member.id, visibleTasks) : null
   const blockedUntil = (skill: string) => (currentUserId ? cooldownUntil(items, currentUserId, skill, evaluationSkillRules) : null)
   const draftError = (d: AssessmentDraft): string | null => {
     if (!d.skill) return t('career.evaluation.skillPick')
@@ -1493,7 +1496,7 @@ function EvaluationHistorySection({
   const hasAssessments = items.some((e) => e.skillAssessments?.length)
 
   return (
-    <Section title={t('career.evaluation.title')} description={t('career.adminOnlyDesc')}>
+    <Section title={t('career.evaluation.title')} description={t(evaluationSkillsSupported ? 'career.evaluation.desc' : 'career.adminOnlyDesc')}>
       {editable && perf && (
         <p className="mb-3 rounded-md bg-secondary/50 px-2.5 py-1.5 text-xs text-muted-foreground">
           {perf.onTimeRate != null
@@ -1513,7 +1516,7 @@ function EvaluationHistorySection({
           .slice()
           .sort((a, b) => b.date.localeCompare(a.date))
           .map((e) => (
-            <EntryRow key={e.id} editable={editable} onRemove={() => onSave(member.id, items.filter((x) => x.id !== e.id))}>
+            <EntryRow key={e.id} editable={canRemove(e)} onRemove={() => onSave(member.id, items.filter((x) => x.id !== e.id))}>
               <span className="font-medium">{e.rating}</span>
               <span className="ml-2 text-xs text-muted-foreground">{e.date}</span>
               {e.comment && <p className="mt-0.5 text-xs text-muted-foreground">{e.comment}</p>}
@@ -1549,7 +1552,7 @@ function EvaluationHistorySection({
           </button>
         </div>
       )}
-      {canAssess && (
+      {editable && canAssess && (
         <div className="mt-2 rounded-md border border-border p-2" data-eval-skills>
           <p className="text-xs font-medium">{t('career.evaluation.skillsTitle')}</p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">

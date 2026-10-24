@@ -144,6 +144,32 @@ describe('評価をスキルの根拠にする', () => {
     expect(set('{').ok).toBe(false)
   })
 
+  it('管理者の役職でない見る立場の人(メンター)も評価を書ける。ほかの人が書いた評価は変えたり消したりできない', () => {
+    const h = setup()
+    const rows = h.sheets.Members.rows
+    rows.find((r) => r[0] === 'm-victim')![rows[0].indexOf('mentor_id')] = 'm-other'
+    // 代表が先に1件書く
+    expect(save(h, 'm-top', 'm-victim', [entry('e-top', undefined, 'm-top')]).ok).toBe(true)
+    const byTop = evalsOf(h, 'm-victim')
+    // メンター(一般)は、自分の評価を足せる(スキルの見立ても付けられる)
+    const added = save(h, 'm-other', 'm-victim', [...byTop, entry('e-mine', [assessment()], 'm-other')])
+    expect(added.ok, JSON.stringify(added)).toBe(true)
+    expect(evalsOf(h, 'm-victim').find((e) => e.id === 'e-mine')?.evaluatorId).toBe('m-other')
+    expect(pointsOf(h, 'm-victim')).toEqual({ 企画: 60 })
+    const both = evalsOf(h, 'm-victim')
+    // 代表の評価を消す・書き換えるのは断る
+    expect(save(h, 'm-other', 'm-victim', both.filter((e) => e.id !== 'e-top')).error).toMatch(/ほかの人が書いた評価/)
+    expect(save(h, 'm-other', 'm-victim', both.map((e) => (e.id === 'e-top' ? { ...e, rating: 'C' } : e))).error).toMatch(/ほかの人が書いた評価/)
+    // 自分の評価は消せる(点数を引く)
+    expect(save(h, 'm-other', 'm-victim', both.filter((e) => e.id !== 'e-mine')).ok).toBe(true)
+    expect(pointsOf(h, 'm-victim')).toEqual({ 企画: 0 })
+    // 見る立場でない一般のメンバーは書けない
+    expect(save(h, 'm-base', 'm-victim', [...evalsOf(h, 'm-victim'), entry('e-x', undefined, 'm-base')]).ok).toBe(false)
+    // 管理者の役職の範囲で書く人(担当のプロジェクトの班長)は、今までどおりほかの人の評価も直せる
+    expect(save(h, 'm-top', 'm-base', [entry('e-b', undefined, 'm-top')]).ok).toBe(true)
+    expect(save(h, 'm-lead', 'm-base', []).ok).toBe(true)
+  })
+
   it('スキルのレベルの承認(approveSkillLevel)も、部署長ができる', () => {
     const h = setup({ settings: [['department_tree_config', JSON.stringify([{ path: '本部', headIds: ['m-lead'] }])]] })
     const res = h.post({ action: 'approveSkillLevel', sessionToken: 'm-lead', memberId: 'm-other', skill: '企画', level: 2, reason: '企画書' }) as Res
