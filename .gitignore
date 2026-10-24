@@ -6,6 +6,8 @@
 /out/
 /out-demo/
 /out.main-during-demo-build/
+/out.layout-main/
+/out.layout-version/
 
 # typescript
 *.tsbuildinfo
