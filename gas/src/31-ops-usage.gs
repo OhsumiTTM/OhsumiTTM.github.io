@@ -164,7 +164,7 @@ function sendBatchNotificationsUnrecorded_() {
       // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
       if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
         var t = queuedTemplate_(item, loc)
-        emails.forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
+        emails.forEach(function (e) { addToDigest_(e, loc, t.subject, t.body, item.taskId) })
         return
       }
       if (freq === 'immediate') { toSend.push(item); return }
@@ -178,7 +178,7 @@ function sendBatchNotificationsUnrecorded_() {
       var combined = toSend
         .map(function(i) {
           var tpl = queuedTemplate_(i, loc)
-          return '【' + tpl.subject + '】\n' + tpl.body
+          return '【' + tpl.subject + '】\n' + tpl.body + taskLinkLine_(i.taskId, loc === 'en')
         })
         .join('\n\n---\n\n')
       // キューに入りきらなかった分(件数だけ数えたもの)

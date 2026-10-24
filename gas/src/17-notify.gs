@@ -30,8 +30,9 @@ function readDigest_(raw) {
   return d
 }
 
-// 1件をまとめに入れる(文は、受け取る人の言語のもの)
-function addToDigest_(email, loc, subject, body) {
+// 1件をまとめに入れる(文は、受け取る人の言語のもの)。1つのタスクについての通知は taskId を覚え、まとめのメールで、
+// その1件の下にタスクのリンクを付ける
+function addToDigest_(email, loc, subject, body, taskId) {
   email = String(email || '').trim()
   if (!email) return
   var props = PropertiesService.getScriptProperties()
@@ -40,7 +41,9 @@ function addToDigest_(email, loc, subject, body) {
   if (loc) d.loc = loc
   var text = String(body || '')
   if (text.length > DIGEST_BODY_CHARS) text = text.slice(0, DIGEST_BODY_CHARS) + '…'
-  d.items.push({ s: String(subject || '').slice(0, 200), b: text, ts: new Date().toISOString() })
+  var item = { s: String(subject || '').slice(0, 200), b: text, ts: new Date().toISOString() }
+  if (taskId && TASK_LINK_ID_PATTERN.test(String(taskId))) item.t = String(taskId)
+  d.items.push(item)
   while (d.items.length > 1 && utf8Bytes_(JSON.stringify(d)) > DIGEST_MAX_BYTES) {
     d.items.pop()
     d.more = (Number(d.more) || 0) + 1
@@ -70,7 +73,7 @@ function deliverNotification_(emails, templates, urgent) {
   list.forEach(function (e) {
     var loc = templates[locales[e]] ? locales[e] : 'ja'
     var tpl = templates[loc] || templates.ja
-    addToDigest_(e, loc, tpl.subject, tpl.body)
+    addToDigest_(e, loc, tpl.subject, tpl.body, templates.taskId)
   })
 }
 
@@ -112,7 +115,7 @@ function digestMailText_(d) {
   var body = (en
     ? 'Here is your Ohsumi summary. Urgent notices (approval requests, mentions, etc.) are sent separately as they happen.\n\n'
     : 'Ohsumi のお知らせのまとめです。急ぎのもの(承認の依頼・メンションなど)は、その都度お送りしています。\n\n') +
-    d.items.map(function (i) { return '【' + i.s + '】\n' + i.b }).join('\n\n---\n\n')
+    d.items.map(function (i) { return '【' + i.s + '】\n' + i.b + taskLinkLine_(i.t, en) }).join('\n\n---\n\n')
   if (more) {
     body += '\n\n' + (en
       ? '...and ' + more + ' more. Please check them on the Ohsumi screen.'

@@ -51,13 +51,48 @@ function setupInviteLink_() {
   }
 }
 
-// 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)
-function withSiteLink_(text) {
+// タスクのリンク(<SITE_ORIGINS の最初>/?org=<団体ID>&task=<タスクID>。画面の lib/ohsumi/task-link.ts と同じ形)。
+// 開けるかどうかは、今までどおりログインと、GAS が渡すタスクの範囲で決まる。分からない・形の違う ID は ''
+var TASK_LINK_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+function canonicalTaskLink_(taskId) {
+  var id = String(taskId === undefined || taskId === null ? '' : taskId)
+  if (!TASK_LINK_ID_PATTERN.test(id)) return ''
+  var base = ''
+  try { base = canonicalInviteLink_() } catch (e) { base = '' }
+  return base ? base + '&task=' + encodeURIComponent(id) : ''
+}
+
+// 本文に link がそのまま入っているか(団体のリンクは、タスクのリンクの頭と同じなので、続きが & の時は数えない)
+function bodyHasLink_(body, link) {
+  var from = 0
+  while (true) {
+    var i = body.indexOf(link, from)
+    if (i < 0) return false
+    if (body.charAt(i + link.length) !== '&') return true
+    from = i + 1
+  }
+}
+
+// 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)。
+// 1つのタスクについての通知(taskId がある)は、そのタスクを開くリンクにする
+function withSiteLink_(text, taskId) {
+  var body = String(text || '')
+  var taskLink = taskId ? canonicalTaskLink_(taskId) : ''
+  if (taskLink) {
+    if (bodyHasLink_(body, taskLink)) return body
+    return body + '\n\nこのタスクを開く / Open this task: ' + taskLink
+  }
   var link = ''
   try { link = canonicalInviteLink_() } catch (e) { link = '' }
-  var body = String(text || '')
-  if (!link || body.indexOf(link) >= 0) return body
+  if (!link || bodyHasLink_(body, link)) return body
   return body + '\n\nOhsumi を開く / Open Ohsumi: ' + link
+}
+
+// まとめのメールで、1件ごとに付けるタスクのリンクの行(リンクが分からない時は '')
+function taskLinkLine_(taskId, en) {
+  var link = taskId ? canonicalTaskLink_(taskId) : ''
+  return link ? '\n' + (en ? 'Open this task: ' : 'このタスクを開く: ') + link : ''
 }
 
 // 新しいメンバーへの招待メール(メンバーの追加・候補者を正式なメンバーにする時に、選んだ時だけ)。

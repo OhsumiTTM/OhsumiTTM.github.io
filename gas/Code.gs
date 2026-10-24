@@ -2404,7 +2404,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.12-2'
+var OHSUMI_GAS_VERSION = '2026.10.19-1'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -3368,13 +3368,48 @@ function setupInviteLink_() {
   }
 }
 
-// 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)
-function withSiteLink_(text) {
+// タスクのリンク(<SITE_ORIGINS の最初>/?org=<団体ID>&task=<タスクID>。画面の lib/ohsumi/task-link.ts と同じ形)。
+// 開けるかどうかは、今までどおりログインと、GAS が渡すタスクの範囲で決まる。分からない・形の違う ID は ''
+var TASK_LINK_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+function canonicalTaskLink_(taskId) {
+  var id = String(taskId === undefined || taskId === null ? '' : taskId)
+  if (!TASK_LINK_ID_PATTERN.test(id)) return ''
+  var base = ''
+  try { base = canonicalInviteLink_() } catch (e) { base = '' }
+  return base ? base + '&task=' + encodeURIComponent(id) : ''
+}
+
+// 本文に link がそのまま入っているか(団体のリンクは、タスクのリンクの頭と同じなので、続きが & の時は数えない)
+function bodyHasLink_(body, link) {
+  var from = 0
+  while (true) {
+    var i = body.indexOf(link, from)
+    if (i < 0) return false
+    if (body.charAt(i + link.length) !== '&') return true
+    from = i + 1
+  }
+}
+
+// 通知の本文の最後に、サイトを開くリンクを足す(リンクが分からない・もう入っている時はそのまま)。
+// 1つのタスクについての通知(taskId がある)は、そのタスクを開くリンクにする
+function withSiteLink_(text, taskId) {
+  var body = String(text || '')
+  var taskLink = taskId ? canonicalTaskLink_(taskId) : ''
+  if (taskLink) {
+    if (bodyHasLink_(body, taskLink)) return body
+    return body + '\n\nこのタスクを開く / Open this task: ' + taskLink
+  }
   var link = ''
   try { link = canonicalInviteLink_() } catch (e) { link = '' }
-  var body = String(text || '')
-  if (!link || body.indexOf(link) >= 0) return body
+  if (!link || bodyHasLink_(body, link)) return body
   return body + '\n\nOhsumi を開く / Open Ohsumi: ' + link
+}
+
+// まとめのメールで、1件ごとに付けるタスクのリンクの行(リンクが分からない時は '')
+function taskLinkLine_(taskId, en) {
+  var link = taskId ? canonicalTaskLink_(taskId) : ''
+  return link ? '\n' + (en ? 'Open this task: ' : 'このタスクを開く: ') + link : ''
 }
 
 // 新しいメンバーへの招待メール(メンバーの追加・候補者を正式なメンバーにする時に、選んだ時だけ)。
@@ -6667,7 +6702,7 @@ function createTasks_(tasks, actingMemberId, opts) {
   // template tasks (pendingApproval === false) don't need an approval-queue email
   var needsApproval = rows.filter(function (r) {
     return !r.imported && r.t.pendingApproval !== false
-  }).map(function (r) { return r.t })
+  }).map(function (r) { return { title: r.t.title, id: r.id } })
   if (needsApproval.length > 0) notifyNewTasks_(needsApproval)
   return created
 }
@@ -7293,6 +7328,8 @@ function notifyNewTasks_(tasks) {
         titlesEn.join('\n') +
         '\n\nCheck Ohsumi Admin > Approvals for details.',
     },
+    // 1件だけの時は、そのタスクを開くリンクにする
+    taskId: tasks.length === 1 ? tasks[0].id : undefined,
   }, null, { urgent: true })
 }
 
@@ -7317,6 +7354,7 @@ function notifyReview_(taskId) {
           subject: '[Ohsumi] Task ready for your review',
           body: '"' + task.title + '" is now awaiting review.\n\nPlease check it in Ohsumi and mark it "Done" if everything looks good.',
         },
+        taskId: String(taskId),
       },
       preferredEmails,
       { urgent: true },
@@ -7414,6 +7452,7 @@ function queueNotification_(memberId, kind, templates) {
   try { queue = existing ? JSON.parse(existing) : [] } catch (e) { queue = [] }
   if (!Array.isArray(queue)) queue = []
   var item = { kind: kind, templates: stored, ts: new Date().toISOString() }
+  if (templates.taskId && TASK_LINK_ID_PATTERN.test(String(templates.taskId))) item.taskId = String(templates.taskId)
   queue.push(item)
   if (queue.length > 1 && utf8Bytes_(JSON.stringify(queue)) > NOTIFY_QUEUE_MAX_BYTES) {
     // 入りきらない: この1件は入れず、前の1件に件数だけ足す(まとめのメールで「ほか N 件」と書く)
@@ -7532,10 +7571,11 @@ function sendMailChecked_(options) {
     }
   }
   countAction_('mailCount')
-  // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>)
+  // どの通知からも、サイトを開けるようにする(正式なサイトの <サイト>/?org=<団体ID>。
+  // 1つのタスクについての通知は、そのタスクの <サイト>/?org=<団体ID>&task=<タスクID>)
   var mail = {}
-  Object.keys(options).forEach(function (k) { mail[k] = options[k] })
-  mail.body = withSiteLink_(options.body)
+  Object.keys(options).forEach(function (k) { if (k !== 'taskId') mail[k] = options[k] })
+  mail.body = withSiteLink_(options.body, options.taskId)
   try {
     measureAction_('mailMs', function () { return sendMailUnmeasured_(mail) })
   } catch (e) {
@@ -7873,6 +7913,7 @@ function localesByEmailsUnmeasured_(emails) {
 
 // 宛先をlocaleごとにグループ化し、localeごとに言語を出し分けたメールを
 // 送信する。templates は { ja: {subject, body}, en: {subject, body} } の形。
+// 1つのタスクについての通知は templates.taskId を付ける(メールのリンクを、そのタスクを開くリンクにする)。
 // localeが判明しない宛先は'ja'扱い（既存の全メール日本語固定という
 // 挙動からの後方互換のため）。
 function sendLocalizedEmail_(emails, templates) {
@@ -7890,8 +7931,8 @@ function sendLocalizedEmail_(emails, templates) {
     if (list.length === 0) return
     var tpl = templates[loc] || templates.ja
     // メールの1日の上限で送れなかった時は、宛先ごとの毎日のまとめに回す(翌朝のまとめで送る)
-    if (sendMailChecked_({ to: list.join(','), subject: tpl.subject, body: tpl.body }) === 'quota') {
-      list.forEach(function (e) { addToDigest_(e, loc, tpl.subject, tpl.body) })
+    if (sendMailChecked_({ to: list.join(','), subject: tpl.subject, body: tpl.body, taskId: templates.taskId }) === 'quota') {
+      list.forEach(function (e) { addToDigest_(e, loc, tpl.subject, tpl.body, templates.taskId) })
     }
   })
 }
@@ -7928,8 +7969,9 @@ function readDigest_(raw) {
   return d
 }
 
-// 1件をまとめに入れる(文は、受け取る人の言語のもの)
-function addToDigest_(email, loc, subject, body) {
+// 1件をまとめに入れる(文は、受け取る人の言語のもの)。1つのタスクについての通知は taskId を覚え、まとめのメールで、
+// その1件の下にタスクのリンクを付ける
+function addToDigest_(email, loc, subject, body, taskId) {
   email = String(email || '').trim()
   if (!email) return
   var props = PropertiesService.getScriptProperties()
@@ -7938,7 +7980,9 @@ function addToDigest_(email, loc, subject, body) {
   if (loc) d.loc = loc
   var text = String(body || '')
   if (text.length > DIGEST_BODY_CHARS) text = text.slice(0, DIGEST_BODY_CHARS) + '…'
-  d.items.push({ s: String(subject || '').slice(0, 200), b: text, ts: new Date().toISOString() })
+  var item = { s: String(subject || '').slice(0, 200), b: text, ts: new Date().toISOString() }
+  if (taskId && TASK_LINK_ID_PATTERN.test(String(taskId))) item.t = String(taskId)
+  d.items.push(item)
   while (d.items.length > 1 && utf8Bytes_(JSON.stringify(d)) > DIGEST_MAX_BYTES) {
     d.items.pop()
     d.more = (Number(d.more) || 0) + 1
@@ -7968,7 +8012,7 @@ function deliverNotification_(emails, templates, urgent) {
   list.forEach(function (e) {
     var loc = templates[locales[e]] ? locales[e] : 'ja'
     var tpl = templates[loc] || templates.ja
-    addToDigest_(e, loc, tpl.subject, tpl.body)
+    addToDigest_(e, loc, tpl.subject, tpl.body, templates.taskId)
   })
 }
 
@@ -8010,7 +8054,7 @@ function digestMailText_(d) {
   var body = (en
     ? 'Here is your Ohsumi summary. Urgent notices (approval requests, mentions, etc.) are sent separately as they happen.\n\n'
     : 'Ohsumi のお知らせのまとめです。急ぎのもの(承認の依頼・メンションなど)は、その都度お送りしています。\n\n') +
-    d.items.map(function (i) { return '【' + i.s + '】\n' + i.b }).join('\n\n---\n\n')
+    d.items.map(function (i) { return '【' + i.s + '】\n' + i.b + taskLinkLine_(i.t, en) }).join('\n\n---\n\n')
   if (more) {
     body += '\n\n' + (en
       ? '...and ' + more + ' more. Please check them on the Ohsumi screen.'
@@ -8112,6 +8156,7 @@ function notifyNewMentions_(taskId, commentIdsBefore, comments, actorId) {
           subject: '[Ohsumi] You were mentioned in a comment',
           body: 'You were mentioned in a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       }
       // 1人の失敗で、ほかの宛先(と次のコメント)の通知を止めない
       queueNotificationEach_(ids, 'mention', templates)
@@ -8200,6 +8245,7 @@ function notifyNewReplies_(taskId, commentIdsBefore, comments, actorId) {
             ? actorName + ' commented on task "' + task.title + '" (this may be a reply to your mention).\n\n' + text + '\n\nPlease check Ohsumi for details.'
             : actorName + ' replied to a comment on task "' + task.title + '".\n\n' + text + '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       }
     })
   } catch (err) {
@@ -8401,6 +8447,7 @@ function notifyScheduleResult_(taskId, actorId) {
     deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] 日程調整の回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Schedule coordination responses are complete', body: bodyEn },
+      taskId: String(taskId),
     })
     console.log('notifyScheduleResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('🗓️ ' + chatTaskLabel_(task) + 'の日程調整で全員の回答が揃いました。')
@@ -8468,6 +8515,7 @@ function notifyFormResult_(taskId, actorId) {
     deliverNotification_(emails, {
       ja: { subject: '[Ohsumi] フォームの回答が揃いました', body: bodyJa },
       en: { subject: '[Ohsumi] Form responses are complete', body: bodyEn },
+      taskId: String(taskId),
     })
     console.log('notifyFormResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
     notifyChat_('📝 ' + chatTaskLabel_(task) + 'のフォームで全員の回答が揃いました。')
@@ -8511,6 +8559,7 @@ function notifyScheduleChange_(taskId) {
             (task.due_date || 'Not set') +
             '\n\nPlease check Ohsumi for details.',
         },
+        taskId: String(taskId),
       },
       reportsToEmails_(assigneeIds),
     )
@@ -10786,6 +10835,7 @@ function notifyOverdueTasksToAssignees_() {
     var sheet = getSheet_(SHEET_TASKS)
     var headers = headerRow_(sheet)
     var titleCol = headers.indexOf('title')
+    var idCol = headers.indexOf('id')
     var dueCol = headers.indexOf('due_date')
     var statusCol = headers.indexOf('status')
     var assigneeCol = headers.indexOf('assignee_id')
@@ -10813,7 +10863,7 @@ function notifyOverdueTasksToAssignees_() {
         .filter(Boolean)
       assigneeIds.forEach(function (aid) {
         if (!byAssignee[aid]) byAssignee[aid] = []
-        byAssignee[aid].push({ title: title, due: due })
+        byAssignee[aid].push({ title: title, due: due, id: idCol === -1 ? '' : String(r[idCol]) })
       })
     })
 
@@ -10842,6 +10892,8 @@ function notifyOverdueTasksToAssignees_() {
               linesEn.join('\n') +
               '\n\nPlease log in to Ohsumi and update their status.',
           },
+          // 1件だけの時は、そのタスクを開くリンクにする
+          taskId: tasks.length === 1 && tasks[0].id ? tasks[0].id : undefined,
         })
       } catch (err) {
         // メンバー1人の通知失敗は他のメンバーの処理に影響させない
@@ -14699,7 +14751,7 @@ function sendBatchNotificationsUnrecorded_() {
       // 以前の版でキューに入った、急ぎでない種類・「1日ごと」のものは、毎日のまとめに移す
       if (!URGENT_NOTIFY_KINDS[item.kind] || freq === '1d') {
         var t = queuedTemplate_(item, loc)
-        emails.forEach(function (e) { addToDigest_(e, loc, t.subject, t.body) })
+        emails.forEach(function (e) { addToDigest_(e, loc, t.subject, t.body, item.taskId) })
         return
       }
       if (freq === 'immediate') { toSend.push(item); return }
@@ -14713,7 +14765,7 @@ function sendBatchNotificationsUnrecorded_() {
       var combined = toSend
         .map(function(i) {
           var tpl = queuedTemplate_(i, loc)
-          return '【' + tpl.subject + '】\n' + tpl.body
+          return '【' + tpl.subject + '】\n' + tpl.body + taskLinkLine_(i.taskId, loc === 'en')
         })
         .join('\n\n---\n\n')
       // キューに入りきらなかった分(件数だけ数えたもの)

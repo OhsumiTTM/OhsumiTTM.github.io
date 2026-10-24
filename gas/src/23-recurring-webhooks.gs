@@ -205,6 +205,7 @@ function notifyOverdueTasksToAssignees_() {
     var sheet = getSheet_(SHEET_TASKS)
     var headers = headerRow_(sheet)
     var titleCol = headers.indexOf('title')
+    var idCol = headers.indexOf('id')
     var dueCol = headers.indexOf('due_date')
     var statusCol = headers.indexOf('status')
     var assigneeCol = headers.indexOf('assignee_id')
@@ -232,7 +233,7 @@ function notifyOverdueTasksToAssignees_() {
         .filter(Boolean)
       assigneeIds.forEach(function (aid) {
         if (!byAssignee[aid]) byAssignee[aid] = []
-        byAssignee[aid].push({ title: title, due: due })
+        byAssignee[aid].push({ title: title, due: due, id: idCol === -1 ? '' : String(r[idCol]) })
       })
     })
 
@@ -261,6 +262,8 @@ function notifyOverdueTasksToAssignees_() {
               linesEn.join('\n') +
               '\n\nPlease log in to Ohsumi and update their status.',
           },
+          // 1件だけの時は、そのタスクを開くリンクにする
+          taskId: tasks.length === 1 && tasks[0].id ? tasks[0].id : undefined,
         })
       } catch (err) {
         // メンバー1人の通知失敗は他のメンバーの処理に影響させない
