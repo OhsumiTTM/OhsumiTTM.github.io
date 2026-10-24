@@ -15,6 +15,7 @@
 //   団体を切り替える時は、ページを読み込み直す(Google のログインの準備は1ページに1回のため)
 import { FETCH_INIT } from './gas-transport'
 import { CANONICAL_GAS_URL } from './gas-url'
+import { SITE_VERSION, cleanSiteVersion, decideSite, hopUrl, loadManifest, takeHop } from './site-version'
 
 export const REGISTRY_URL = process.env.NEXT_PUBLIC_REGISTRY_URL || ''
 
@@ -37,6 +38,10 @@ export interface SavedOrg {
   source: 'registry'
   checkedAt: number // ミリ秒
   maxAgeSec?: number
+  // その団体のプランに配っている版の画面(lib/ohsumi/site-version.ts)。siteVersion はレジストリの答え('' は main の画面)、
+  // screen は移る先の版(置いてあると確かめた版。app/layout.tsx の最初のスクリプトはこれだけを見る)
+  siteVersion?: string
+  screen?: string
 }
 
 export type LoginNotice = 'orgMoved' | 'orgSuspended' | 'orgNotFound'
@@ -174,7 +179,7 @@ export function inviteLink(origin: string, basePath: string, orgId: string): str
 // ---- レジストリへの問い合わせ ----------------------------------------------------
 
 export type ResolveAnswer =
-  | { kind: 'found'; gasUrl: string; checkedAt: number; maxAgeSec: number }
+  | { kind: 'found'; gasUrl: string; checkedAt: number; maxAgeSec: number; siteVersion: string }
   | { kind: 'suspended' }
   | { kind: 'notFound' }
   | { kind: 'unavailable' }
@@ -196,7 +201,7 @@ async function resolveOnce(orgId: string): Promise<ResolveAnswer | null> {
       notFound?: boolean
       retryLater?: boolean
       getReceived?: boolean
-      result?: { orgId?: string; gasUrl?: string; status?: string; checkedAt?: string; maxAgeSec?: number }
+      result?: { orgId?: string; gasUrl?: string; status?: string; checkedAt?: string; maxAgeSec?: number; siteVersion?: string }
     }
     if (!json || typeof json !== 'object' || json.retryLater || json.getReceived) return null
     if (!json.ok) return json.notFound ? { kind: 'notFound' } : null
@@ -212,6 +217,8 @@ async function resolveOnce(orgId: string): Promise<ResolveAnswer | null> {
       gasUrl: String(r.gasUrl),
       checkedAt: Number.isFinite(checkedAt) ? checkedAt : Date.now(),
       maxAgeSec: Number(r.maxAgeSec) > 0 ? Number(r.maxAgeSec) : DEFAULT_MAX_AGE_SEC,
+      // 以前のレジストリは返さない('' = main の画面)
+      siteVersion: cleanSiteVersion(r.siteVersion),
     }
   } catch {
     return null
@@ -273,7 +280,7 @@ export function decideStartOrg(input: {
 export function compareResolved(org: SavedOrg, answer: ResolveAnswer): { outcome: 'same' | 'moved' | 'suspended' | 'notFound' | 'unavailable'; updated?: SavedOrg } {
   if (answer.kind === 'unavailable') return { outcome: 'unavailable' }
   if (answer.kind === 'suspended' || answer.kind === 'notFound') return { outcome: answer.kind }
-  const updated: SavedOrg = { ...org, gasUrl: answer.gasUrl, checkedAt: answer.checkedAt, maxAgeSec: answer.maxAgeSec, source: 'registry' }
+  const updated: SavedOrg = { ...org, gasUrl: answer.gasUrl, checkedAt: answer.checkedAt, maxAgeSec: answer.maxAgeSec, source: 'registry', siteVersion: answer.siteVersion }
   return { outcome: answer.gasUrl === org.gasUrl ? 'same' : 'moved', updated }
 }
 
@@ -321,6 +328,7 @@ export function startOrg(): StartDecision {
   if (decision.kind === 'invalidInvite') syncOrgParam(null)
   if (decision.kind === 'use') {
     activateOrg(decision.org)
+    void applySiteVersion(decision.org)
     if (decision.refresh) void refreshInBackground(decision.org)
   }
   return decision
@@ -336,9 +344,48 @@ export async function resolveAndActivate(
   const actual = await fetchOrgIdOf(answer.gasUrl)
   if (actual === null) return { status: 'unavailable' }
   if (actual !== orgId) return { status: 'mismatch' }
-  const org: SavedOrg = { orgId, gasUrl: answer.gasUrl, source: 'registry', checkedAt: answer.checkedAt, maxAgeSec: answer.maxAgeSec }
+  const org: SavedOrg = { orgId, gasUrl: answer.gasUrl, source: 'registry', checkedAt: answer.checkedAt, maxAgeSec: answer.maxAgeSec, siteVersion: answer.siteVersion }
   activateOrg(org)
+  void applySiteVersion(org)
   return { status: 'ok', org }
+}
+
+/**
+ * 団体のプランに配っている版の画面を使う(lib/ohsumi/site-version.ts)。今の画面と違えば、置いてある時だけその画面に移る
+ * (置いていない版・main の画面を使う団体で、版の画面にいる時は main に戻る)。移る先は端末に覚え、次からは最初のスクリプトがすぐ移る。
+ * 今使っている団体の時だけ動く(ほかの団体の保存は変えない)
+ */
+export async function applySiteVersion(org: SavedOrg, deps: {
+  current?: string
+  manifest?: () => Promise<string[] | null>
+  go?: (url: string) => void
+} = {}): Promise<'stay' | 'hop' | 'blocked'> {
+  // 画面を移れなくても、今の画面でそのまま使う(呼ぶ側は待たないので、ここで失敗を止める)
+  try {
+    return await applySiteVersionUnsafe(org, deps)
+  } catch {
+    return 'stay'
+  }
+}
+
+async function applySiteVersionUnsafe(org: SavedOrg, deps: {
+  current?: string
+  manifest?: () => Promise<string[] | null>
+  go?: (url: string) => void
+}): Promise<'stay' | 'hop' | 'blocked'> {
+  if (typeof window === 'undefined' || !window.location || activeOrgId !== org.orgId) return 'stay'
+  const current = deps.current ?? SITE_VERSION
+  const wanted = org.siteVersion ?? ''
+  const available = wanted && wanted !== current ? await (deps.manifest ?? loadManifest)() : []
+  const decision = decideSite(wanted, current, available)
+  const screen = decision.kind === 'version' ? decision.version : decision.kind === 'stay' ? decision.screen : ''
+  const saved = loadSavedOrgs().find((o) => o.orgId === org.orgId)
+  if (saved && (saved.screen ?? '') !== screen) writeSavedOrgs(loadSavedOrgs().map((o) => (o.orgId === org.orgId ? { ...o, screen } : o)))
+  const url = hopUrl(decision, window.location.search, window.location.hash)
+  if (!url) return 'stay'
+  if (!takeHop()) return 'blocked'
+  ;(deps.go ?? ((u: string) => window.location.replace(u)))(url)
+  return 'hop'
 }
 
 /** 保存した接続先が古い時、裏で確かめ直す。違っていれば ORG_CHANGED_EVENT を送る */
@@ -347,6 +394,8 @@ export async function refreshInBackground(org: SavedOrg): Promise<void> {
   if (outcome === 'unavailable') return
   if (outcome === 'same') {
     upsertSavedOrg(updated!)
+    // 配る版が変わっていれば、その版の画面に移る
+    void applySiteVersion(updated!)
     return
   }
   if (outcome === 'moved') upsertSavedOrg(updated!)

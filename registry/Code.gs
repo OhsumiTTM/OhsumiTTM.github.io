@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.19-1'
+var REGISTRY_VERSION = '2026.10.24-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -1223,6 +1223,8 @@ function resolveOrg_(body, nowMs) {
       gasUrl: suspended ? '' : String(row.values.gas_url),
       status: suspended ? 'suspended' : shown === 'restricted' ? 'restricted' : 'active',
       channel: String(row.values.channel || 'standard'),
+      // その団体のプランに配っている版の画面('' は main の画面。lib/ohsumi/site-version.ts)
+      siteVersion: suspended ? '' : siteVersionFor_(row.values),
       checkedAt: new Date(nowMs).toISOString(),
       maxAgeSec: RESOLVE_MAX_AGE_SEC,
     }
@@ -3708,6 +3710,23 @@ function planReleases_() {
   return _planReleases
 }
 
+// その団体の画面の版(resolveOrg の siteVersion。画面は /_v/<版>/ にその版の画面があれば使う。lib/ohsumi/site-version.ts)。
+// '' は main の画面: 一番新しい配る版のプラン(その版の画面は main と同じ)・FSIF(internal。先に main で試す)・デモの団体
+function siteVersionFor_(values) {
+  if (isDemoOrg_(values) || planOf_(values) === 'internal') return ''
+  var pr = planReleases_()
+  var v = releaseFor_(values, pr)
+  return v && v !== pr.newest ? v : ''
+}
+
+// 配る版が変わった時: 団体ごとに覚えた resolveOrg の答え(画面の版を含む)を消す
+function forgetResolvedOrgs_() {
+  var keys = readRows_('Orgs').map(function (r) { return String(r.values.org_id || '') }).filter(Boolean).map(resolvedOrgCacheKey_)
+  for (var i = 0; i < keys.length; i += 100) {
+    try { CacheService.getScriptCache().removeAll(keys.slice(i, i + 100)) } catch (e) { /* 次の期限で消える */ }
+  }
+}
+
 // その団体に配る版
 function releaseFor_(values, pr) {
   if (isDemoOrg_(values)) return pr.newest
@@ -3787,6 +3806,7 @@ function setPlanRelease_(body, nowMs) {
     if (found) setRowFields_('PlanReleases', found.row, fields)
     else appendRowByHeaders_('PlanReleases', fields)
     forgetPlanReleases_()
+    forgetResolvedOrgs_()
     appendAudit_({ actor: session.sub, action: 'setPlanRelease', target: plan, before: before, after: { version: version, templateUrl: templateUrl }, reason: reason })
     return { ok: true, result: { planReleases: planReleasesView_(nowMs) } }
   })

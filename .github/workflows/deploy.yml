@@ -20,6 +20,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 版の画面(下の Build screens for plan releases)は、git の履歴から版ごとのコミットを決める
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -61,6 +64,21 @@ jobs:
           # サイトの URL(検索の正しい URL・サイトマップ・SNS の画像に使う)。秘密ではないので Secrets ではなく Variables に入れる
           NEXT_PUBLIC_SITE_URL: ${{ vars.SITE_URL }}
         run: pnpm build
+
+      # プランに配っている団体の GAS の版ごとの画面(out/_v/<版>/。一番新しい版は / と同じなので作らない)。
+      # リンクは /?org=… のまま。画面は、レジストリの答え(resolveOrg の siteVersion)の版があればそこに移る
+      # (lib/ohsumi/site-version.ts・scripts/build-site-versions.mjs)。作れなかった版は飛ばす(その版のプランは / の画面)
+      - name: Build screens for plan releases
+        env:
+          NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          NEXT_PUBLIC_FEEDBACK_FORM_URL: ${{ secrets.FEEDBACK_FORM_URL }}
+          NEXT_PUBLIC_GOOGLE_CALENDAR_READ: ${{ secrets.GOOGLE_CALENDAR_READ }}
+          NEXT_PUBLIC_REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          NEXT_PUBLIC_REGISTRY_OAUTH_CLIENT_ID: ${{ secrets.REGISTRY_OAUTH_CLIENT_ID }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.SITE_URL }}
+        run: node scripts/build-site-versions.mjs out
 
       - name: Add demo
         run: |

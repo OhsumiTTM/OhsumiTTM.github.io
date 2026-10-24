@@ -11,7 +11,7 @@
 // 使い方: node scripts/check-layout.mjs [--no-build]
 // Chrome の場所は CHROME_PATH で指定できる(未指定なら、よくある場所を探す)
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { extname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -95,6 +95,13 @@ export const STEPS = [
   { name: 'ログインの期限が近い時の知らせ', do: 'sessionExpiry' },
   // 右上のアカウントのメニュー(見出し付きのまとまり・団体の切り替え・表示の3択)。低い画面では、メニューの中でスクロールする
   { name: 'アカウントのメニュー(ほかの団体あり・低い画面)', do: 'accountMenu', height: 560 },
+]
+
+// 版の画面(lib/ohsumi/site-version.ts): テスト用の版の画面を out/_v/<版>/ に作り、レジストリの答え(siteVersion)で移ること、
+// リンク(/?org=…&task=…)が変わらないこと、置いていない版・消えた版では main の画面に戻ることを確かめる
+export const LAYOUT_SITE_VERSION = '2099.01.01-1'
+export const SITE_VERSION_STEPS = [
+  { name: '版の画面(移る・リンクを戻す・置いていない版は main)', do: 'siteVersion' },
 ]
 
 // 代表で開く管理画面。ラベルは管理画面の左のメニュー(components/ohsumi/admin/admin-screen.tsx の
@@ -478,7 +485,13 @@ function serve(dir) {
     let file = join(dir, p)
     if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html')
     if (!existsSync(file) && existsSync(file + '.html')) file += '.html'
-    if (!existsSync(file)) { res.writeHead(404); res.end(); return }
+    // GitHub Pages と同じく、無いページは 404.html を返す(版の画面が消えた時に main の画面に戻ることを確かめる)
+    if (!existsSync(file)) {
+      const nf = join(dir, '404.html')
+      res.writeHead(404, existsSync(nf) ? { 'Content-Type': 'text/html; charset=utf-8' } : {})
+      res.end(existsSync(nf) ? readFileSync(nf) : undefined)
+      return
+    }
     res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' })
     res.end(readFileSync(file))
   })
@@ -622,6 +635,34 @@ const MEASURE_CARDS = `JSON.stringify([...document.querySelectorAll('.cursor-gra
   [...c.querySelectorAll('*')].some((k) => (k.textContent || '').trim() && k.getBoundingClientRect().height > 0 && k.scrollHeight > k.clientHeight + 1)
 ).map((c) => (c.textContent || '').trim().slice(0, 30)))`
 
+// テスト用の版の画面を、今のコードで作って out/_v/<版>/ に置く(本番は scripts/build-site-versions.mjs が版ごとのコミットから作る)
+function buildLayoutSiteVersion(env) {
+  console.log('テスト用の版の画面(' + LAYOUT_SITE_VERSION + ')をビルドします…')
+  const out = join(ROOT, 'out')
+  const aside = join(ROOT, 'out.layout-main')
+  const verOut = join(ROOT, 'out.layout-version')
+  rmSync(aside, { recursive: true, force: true })
+  rmSync(verOut, { recursive: true, force: true })
+  renameSync(out, aside)
+  try {
+    const b = spawnSync('pnpm', ['exec', 'next', 'build'], { cwd: ROOT, env: { ...env, NEXT_PUBLIC_SITE_VERSION: LAYOUT_SITE_VERSION }, stdio: 'inherit' })
+    if (b.status !== 0) throw new Error('版の画面のビルドに失敗しました')
+    const c = spawnSync('node', ['scripts/csp.mjs'], { cwd: ROOT, stdio: 'inherit' })
+    if (c.status !== 0) throw new Error('版の画面の CSP の確認に失敗しました')
+    renameSync(out, verOut)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    renameSync(aside, out)
+    // 版の画面の設定のビルドのキャッシュを、次のビルドに使わせない
+    rmSync(join(ROOT, '.next'), { recursive: true, force: true })
+  }
+  const dest = join(out, '_v', LAYOUT_SITE_VERSION)
+  mkdirSync(dest, { recursive: true })
+  for (const name of ['index.html', 'index.txt', '_next']) if (existsSync(join(verOut, name))) cpSync(join(verOut, name), join(dest, name), { recursive: true })
+  rmSync(verOut, { recursive: true, force: true })
+  writeFileSync(join(out, '_v', 'index.json'), JSON.stringify({ versions: [LAYOUT_SITE_VERSION] }) + '\n')
+}
+
 async function run({ build = true } = {}) {
   if (build) {
     console.log('テスト用の設定でビルドします…')
@@ -634,6 +675,7 @@ async function run({ build = true } = {}) {
     // 本番のビルドと同じく、まとめた団体の GAS をサイトの /gas/Code.gs に置く(管理画面の「コードをコピー」が読む)
     const g = spawnSync('node', ['scripts/gas-build.mjs', '--publish', 'out'], { cwd: ROOT, stdio: 'inherit' })
     if (g.status !== 0) throw new Error('団体の GAS をサイトに置けませんでした')
+    buildLayoutSiteVersion(env)
   }
   const chromePath = findChrome()
   if (!chromePath) {
@@ -680,6 +722,8 @@ async function run({ build = true } = {}) {
     // exchangeIdToken に、団体に登録されていないアカウントとして答える
     let notMember = false
     let inviteBodies = []
+    // resolveOrg の答えの siteVersion(版の画面の確かめの時だけ変える)
+    let siteVersionAnswer = ''
     // getLoginConfig の答えを遅らせる時間(ミリ秒)と、送られた回数
     let slowConfigMs = 0
     let configCalls = 0
@@ -831,7 +875,7 @@ async function run({ build = true } = {}) {
         // 接続先の解決: テスト用の団体(ORG)だけを答える。ほかは見つからない(招待リンクの団体が見つからない画面)
         if (body.action === 'resolveOrg') {
           return fulfill('application/json', JSON.stringify(body.orgId === ORG
-            ? { ok: true, result: { orgId: ORG, gasUrl: GAS_URL, status: 'active', channel: 'standard', checkedAt: new Date().toISOString(), maxAgeSec: 86400 } }
+            ? { ok: true, result: { orgId: ORG, gasUrl: GAS_URL, status: 'active', channel: 'standard', siteVersion: siteVersionAnswer, checkedAt: new Date().toISOString(), maxAgeSec: 86400 } }
             : { ok: false, notFound: true, error: '団体が見つかりません。' }))
         }
         return fulfill('application/json', JSON.stringify({ ok: true, result: registryResponse(body) }))
@@ -882,6 +926,7 @@ async function run({ build = true } = {}) {
       // パソコンの幅の管理画面(明るい・暗い)
       { member: ADMIN_MEMBER, steps: WIDE_ADMIN_STEPS, width: WIDE_WIDTH },
       { member: ADMIN_MEMBER, steps: WIDE_DARK_ADMIN_STEPS, width: WIDE_WIDTH, dark: true },
+      { member: MEMBER, steps: SITE_VERSION_STEPS },
     ]
     const registrySession = () => evaluate(`sessionStorage.setItem('ohsumi-registry-admin-session', JSON.stringify({ token: 'ra1.layout.check', exp: Math.floor(Date.now() / 1000) + 1800, email: 'registry.admin.with.a.long.address@example.com', authAt: Math.floor(Date.now() / 1000) }))`)
     // LAYOUT_ONLY=dark: 暗い表示の確認だけを動かす(直す時の確かめ直し用。CI では使わない)
@@ -895,6 +940,46 @@ async function run({ build = true } = {}) {
     caps = viewerCapabilities(pass.member)
     for (const step of pass.steps) {
       try {
+        if (step.do === 'siteVersion') {
+          const V = LAYOUT_SITE_VERSION
+          const LINK = '/?org=' + ORG + '&task=5'
+          const marker = () => evaluate(`document.documentElement?.getAttribute('data-site-version') || ''`).catch(() => null)
+          const screenOf = () => evaluate(`(JSON.parse(localStorage.getItem('ohsumi-orgs') || '[]').find((o) => o.orgId === '${ORG}') || {}).screen ?? null`).catch(() => null)
+          const until = async (fn, what) => {
+            for (let i = 0; i < 60; i++) { if (await fn()) return; await sleep(250) }
+            throw new Error(what)
+          }
+          const here = () => evaluate('location.pathname + location.search').catch(() => '')
+          try {
+            // 1. 初めて開いた時: レジストリが答えた版の画面に移り、アドレスバーはリンクのまま
+            siteVersionAnswer = V
+            await evaluate('localStorage.clear(); sessionStorage.clear()')
+            await navigate(LINK)
+            await until(async () => (await marker()) === V, '初めて開いた時に、版の画面に移りません')
+            if ((await here()) !== LINK) throw new Error('版の画面で、アドレスバーがリンクのままになりません: ' + (await here()))
+            if ((await screenOf()) !== V) throw new Error('移る先を端末に覚えません')
+            // 2. 2回目: 最初のスクリプトが、レジストリに問い合わせずにすぐ移る
+            const before = registryCalls.resolveOrg || 0
+            await evaluate('sessionStorage.clear()')
+            await navigate(LINK)
+            await until(async () => (await marker()) === V, '2回目に、版の画面に移りません')
+            if ((registryCalls.resolveOrg || 0) !== before) throw new Error('2回目にレジストリに問い合わせました')
+            if ((await here()) !== LINK) throw new Error('2回目に、アドレスバーがリンクのままになりません')
+            // 3. 置いていない版になった(確かめ直した答え): main の画面に戻り、移る先を消す
+            siteVersionAnswer = '2099.01.02-1'
+            await evaluate(`(() => { const l = JSON.parse(localStorage.getItem('ohsumi-orgs')); l.forEach((o) => { o.checkedAt = 0 }); localStorage.setItem('ohsumi-orgs', JSON.stringify(l)); sessionStorage.clear(); return true })()`)
+            await navigate(LINK)
+            await until(async () => (await marker()) === '' && (await screenOf()) === '', '置いていない版になっても、main の画面に戻りません')
+            if ((await here()) !== LINK) throw new Error('main に戻った時に、リンクが変わりました: ' + (await here()))
+            // 4. 覚えた移る先の画面が消えていた(404): main の画面に戻り、移る先を消す
+            siteVersionAnswer = ''
+            await evaluate(`(() => { const l = JSON.parse(localStorage.getItem('ohsumi-orgs')); l.forEach((o) => { o.screen = '2099.01.03-1' }); localStorage.setItem('ohsumi-orgs', JSON.stringify(l)); sessionStorage.clear(); return true })()`)
+            await navigate(LINK)
+            await until(async () => (await here()) === LINK && (await screenOf()) === '' && (await marker()) === '', '消えた版の画面から、main の画面に戻りません')
+          } finally {
+            siteVersionAnswer = ''
+          }
+        }
         if (step.do === 'login') {
           await evaluate('localStorage.clear(); sessionStorage.clear()'); await navigate('/?org=' + ORG)
           if (!(await evaluate(`localStorage.getItem('ohsumi-current-org') === '${ORG}'`))) throw new Error('招待リンクの団体が、この端末の団体になりません')
