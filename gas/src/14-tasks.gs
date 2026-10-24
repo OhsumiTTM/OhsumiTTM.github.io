@@ -110,7 +110,7 @@ function createTasks_(tasks, actingMemberId, opts) {
   // template tasks (pendingApproval === false) don't need an approval-queue email
   var needsApproval = rows.filter(function (r) {
     return !r.imported && r.t.pendingApproval !== false
-  }).map(function (r) { return r.t })
+  }).map(function (r) { return { title: r.t.title, id: r.id } })
   if (needsApproval.length > 0) notifyNewTasks_(needsApproval)
   return created
 }
