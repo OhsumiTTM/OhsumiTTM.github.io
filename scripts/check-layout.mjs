@@ -70,6 +70,8 @@ export const STEPS = [
   { name: '個人ページ(タスク)', do: 'click', text: 'タスク' },
   { name: '個人ページ(人材育成)', do: 'click', text: '人材育成' },
   { name: '個人ページ(経歴・キャリア)', do: 'click', text: '経歴・キャリア' },
+  // 団体をまたいだスキルの引き継ぎ(v1.2): 引き継いだ実績(長い団体名・経由)と、作った引き継ぎコード
+  { name: '個人ページ(ほかの団体への引き継ぎ)', do: 'skillTransfer' },
   // 個人設定: アカウントのメニューの「個人設定」から開く。目次とまとまり(通知・メールアドレス・言語とタイムゾーンなど)
   { name: '個人設定', do: 'personalSettings' },
   // ベルの通知の種類ごとのオン・オフ。「メンション・返信」をオフにすると、見落としの注意を1行出す
@@ -214,6 +216,29 @@ export const READ_ONLY_STEPS = [
 const WIKI_LAYOUT_BODY = ['# 経費精算', 'レシートを撮って、**その日のうちに**送ります。  ', '詳しくは [規程](https://example.com/a/very/long/url/that/should/wrap/' + 'x'.repeat(60) + ') を見てください。[危ないリンク](javascript:alert(1))',
   '## 手順', '1. 申請する', '2. 承認を待つ', '', '| 項目 | 説明 | とても長い列の名前の例 |', '| --- | --- | --- |', '| 交通費 | ' + 'とても長い説明'.repeat(10) + ' | 3 |', '',
   '```', 'const veryLongLineOfCode = "' + 'x'.repeat(120) + '"', '```', '> 引用の文', '---', '![レシートの例](wiki:layoutcheckimage01)'].join('\n')
+// 本人(MEMBER)の、ほかの団体から引き継いだ実績と、作った引き継ぎコードの記録
+function withSkillTransfers(v, memberId) {
+  const m = v.Members
+  if (!m) return v
+  const headers = [...m.headers]
+  const rows = m.rows.map((r) => [...r])
+  const col = (name) => { let c = headers.indexOf(name); if (c < 0) { headers.push(name); rows.forEach((r) => r.push('')); c = headers.length - 1 } return c }
+  const ext = col('external_skills_json')
+  const log = col('skill_transfers_json')
+  const id = headers.indexOf('id')
+  const me = rows.find((r) => r[id] === memberId)
+  if (me) {
+    me[ext] = JSON.stringify([
+      { transferId: 'st_1', originOrgName: 'とても長い名前の前の団体(学生団体の連合会)'.repeat(2), via: '', exportedAt: '2026-09-01T00:00:00.000Z', receivedAt: '2026-10-01T00:00:00.000Z',
+        points: { デザイン: 120, Canva: 30, ライティング: 15, リサーチ: 8 }, levels: [], qualifications: [{ name: 'とても長い名前の資格の例'.repeat(3) }] },
+      { transferId: 'st_0', originOrgName: '最初の団体', via: 'とても長い名前の前の団体', exportedAt: '2025-04-01T00:00:00.000Z', receivedAt: '2026-10-01T00:00:00.000Z',
+        points: { 企画: 40 }, levels: [], qualifications: [] },
+    ])
+    me[log] = JSON.stringify([{ transferId: 'st_9', at: '2026-10-20T00:00:00.000Z', expiresAt: '2027-04-18T00:00:00.000Z', status: 'pending' }])
+  }
+  return { ...v, Members: { ...m, headers, rows } }
+}
+
 // ナレッジのページをつないだタスク(担当者が多いタスク)。wp_hidden は見る人の一覧に無いページで、画面には出さない
 function withWikiLinks(v) {
   const t = v.Tasks
@@ -724,7 +749,7 @@ async function run({ build = true } = {}) {
   let member = MEMBER
   // レジストリへの呼び出しの数(操作ごと。KPI のタブが、選ぶまで読まないことを確かめる)
   const registryCalls = {}
-  let view = withWikiLinks(viewerData(MEMBER))
+  let view = withSkillTransfers(withWikiLinks(viewerData(MEMBER)), MEMBER)
   let caps = viewerCapabilities(MEMBER)
   const server = await serve(join(ROOT, 'out'))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -899,6 +924,7 @@ async function run({ build = true } = {}) {
         case 'getWikiProposal': return { id: body.proposalId, pageId: 'wp_1', baseVersion: 3, title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', byId: MEMBER, at: '2026-10-23T03:00:00.000Z', status: 'pending', decidedBy: '', decidedAt: '', reason: '',
           tags: ['経費'], audience: { kind: 'leaders', ids: [] }, body: WIKI_LAYOUT_BODY.replace('## 手順', '## 手順(新しい順番)') + '\n- 足した行: ' + 'とても長い行'.repeat(20),
           current: { title: 'はじめての経費精算の手順(とても長いタイトルの例です)'.repeat(2), folder: '新しく入った人へ > 手続き', body: WIKI_LAYOUT_BODY, version: 3, tags: ['経費', '手順'], audience: { kind: 'all', ids: [] } } }
+        case 'createSkillTransferCode': return { transferId: 'st_new', code: 'ABCD-EFGH-JKMN', expiresAt: '2027-04-22T00:00:00.000Z', mailed: true }
         case 'searchWiki': return { results: [{ id: 'wp_1', title: 'はじめての経費精算の手順', folder: '新しく入った人へ > 手続き', snippet: '…レシートを撮って' + 'とても長い抜き出し'.repeat(10) }] }
         case 'getMailQuotaStatus': return { remaining: 0, date: '2026-10-01', skipped: 12, reachedAt: '2026-10-01T03:00:00.000Z', lastReachedDate: '2026-10-01' }
         default: return {}
@@ -995,7 +1021,7 @@ async function run({ build = true } = {}) {
     const baseWidth = pass.width || WIDTH
     await send('Emulation.setDeviceMetricsOverride', { width: baseWidth, height: 800, deviceScaleFactor: baseWidth < 600 ? 2 : 1, mobile: baseWidth < 600 })
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: pass.dark ? 'dark' : 'light' }] })
-    view = withWikiLinks(viewerData(pass.member))
+    view = withSkillTransfers(withWikiLinks(viewerData(pass.member)), pass.member)
     caps = viewerCapabilities(pass.member)
     for (const step of pass.steps) {
       try {
@@ -2047,6 +2073,12 @@ async function run({ build = true } = {}) {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
           await clickText(step.view); await sleep(800)
           await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+        }
+        if (step.do === 'skillTransfer') {
+          if (!(await evaluate(`!!document.querySelector('[data-skill-transfer-entry="st_1"]') && !!document.querySelector('[data-skill-transfer-entry="st_0"]')`))) throw new Error('経歴・キャリアに、ほかの団体から引き継いだ実績が出ません')
+          await evaluate(`document.querySelector('[data-skill-transfer-create]').scrollIntoView({ block: 'center' }); document.querySelector('[data-skill-transfer-create]').click(); true`); await sleep(800)
+          const code = await evaluate(`document.querySelector('[data-skill-transfer-code] code')?.textContent ?? ''`)
+          if (code !== 'ABCD-EFGH-JKMN') throw new Error('引き継ぎコードを作っても、コードが出ません: ' + code)
         }
         if (step.do === 'taskWiki') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)

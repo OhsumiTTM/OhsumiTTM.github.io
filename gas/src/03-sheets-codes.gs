@@ -54,6 +54,8 @@ var MEMBERS_HEADERS = [
   'department_path',          // 例: "事業本部A>事業部1>グループX"
   'permission_overrides_json',// 例: [{"targetType":"task","targetId":"12","access":"view"}]
   'skill_points_json',        // 例: {"デザイン":120,"プログラミング":340}
+  'external_skills_json',     // ほかの団体から引き継いだ実績(出どころごと。44-skill-transfer.gs)
+  'skill_transfers_json',     // 作った引き継ぎコードの記録(コードそのものは残さない。本人だけ)
   'quiz_passes_json',         // 検定の合格の記録 [{"quizId","skill","level","at"}](スキルのレベルの条件に使う)
   'skill_approvals_json',     // スキルのレベルの承認 [{"id","skill","level","reason","byId","at"}](スキルのレベルの条件に使う)
   'inactive',                 // "TRUE" = 休止中メンバー（一覧から非表示）

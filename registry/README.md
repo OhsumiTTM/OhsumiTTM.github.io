@@ -958,6 +958,17 @@ FSIF が使う団体は、契約のプランではない区分 **「FSIF」**(`i
 - 団体の代表には、1時間ごとの確認で、理由を書いたメールを1回だけ送ります(送れなかった時は次の確認で送り直します)。
 - 古い団体の GAS は `sessionsRevoke` を読まないため、切れません(団体の GAS を更新してもらってください)。
 
+## 1.21. 団体をまたいだスキルの引き継ぎ(v1.2・レジストリ 2026.10.24-8)
+
+本人の共通スキルの実績(点数・レベル・資格)を、団体から団体へ渡します。レジストリは間に入って預かるだけで、名前・メールアドレスは受け取りません。
+
+- **シート `SkillTransfers`:** `id, code_hash, origin_org_id, origin_org_name, created_at, expires_at, status(pending / claimed / cancelled / expired), payload_json, own_fingerprint, claimed_org_id, claimed_at, origin_key`。`setupRegistry()` を実行し直すと作ります
+- **預ける(`createSkillTransfer`):** 共有鍵の署名 `'skillTransfer.create.' + orgId + '.' + ts + '.' + record`。返事は引き継ぎコード(`XXXX-XXXX-XXXX`。コードそのものは残さず SHA-256 だけ)と期限(180日)。元の団体の名前は、レジストリの `Orgs` の表示名を使います
+- **受け取る(`claimSkillTransfer`):** 署名 `'skillTransfer.claim.' + orgId + '.' + ts + '.' + そろえたコード`。1回だけ・作った団体では使えません。受け取ったら `payload_json` を消します。まちがったコードは1団体1時間20回まで
+- **取り消す(`cancelSkillTransfer`):** 署名 `'skillTransfer.cancel.' + orgId + '.' + ts + '.' + transferId`。作った団体だけ
+- **転送(A→B→C):** B が預ける時、A から受け取った分を `carried` に入れます。レジストリは、A の受け渡しの `own_fingerprint`(中身の指紋)と同じ時だけ受け付けます。受け取る側には、出どころの名前・印(`origin_key`。元の団体が本人ごとに団体の鍵で作る仮の印。だれかは分からない)を、レジストリが覚えた値で返します
+- **期限:** 180日を過ぎた待ちのものは、次に預ける・受け取る・取り消す時に `expired` にして中身を消します
+
 ## 2. 安全のための決まり
 
 - **共有鍵:** 団体の登録の時にレジストリが作り、レジストリの Secrets(保護したシート)と、団体の GAS のスクリプトプロパティ

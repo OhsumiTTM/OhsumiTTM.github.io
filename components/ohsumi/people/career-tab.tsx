@@ -1,5 +1,6 @@
 'use client'
 
+import { SkillTransferSection } from './skill-transfer-section'
 import { findRole } from '@/lib/ohsumi/roles'
 import { useRef, useState } from 'react'
 import { useOhsumi } from '@/lib/ohsumi/store'
@@ -203,6 +204,7 @@ export function CareerTab({
       <CareerHistorySection member={member} editable={editable} onSave={updateCareerHistory} rid={rid} />
       <QualificationsSection member={member} editable={editable} skillOptions={skillOptions} onSave={updateQualifications} rid={rid} />
       <PortableRecordSection member={member} editable={editable} onImport={importPortableRecord} />
+      <SkillTransferSection member={member} />
       <TrainingHistorySection
         member={member}
         editable={editable}

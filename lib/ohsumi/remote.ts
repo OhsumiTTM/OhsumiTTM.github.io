@@ -515,6 +515,8 @@ function mapMemberRow(
     departmentPaths: splitTags(r.department_path),
     permissionOverrides: parseJsonArray<PermissionOverride>(r.permission_overrides_json)?.map((ov) => normalizePermissionOverride(ov, departments)),
     skillPoints: parseJsonObject<SkillPoints>(r.skill_points_json),
+    externalSkills: parseJsonArray<import('./types').ExternalSkillEntry>(r.external_skills_json),
+    skillTransfers: parseJsonArray<import('./types').SkillTransferLogEntry>(r.skill_transfers_json),
     inactive: r.inactive === 'TRUE' ? true : undefined,
     withdrawnAt: r.withdrawn_at || undefined,
     personalDataPurgedAt: r.personal_data_purged_at || undefined,
@@ -983,6 +985,19 @@ export interface FetchedFile {
 }
 
 // ---- writes (Google Apps Script Web App) ---------------------------------
+
+// 引き継ぎで変わった本人の実績(GAS が計算し直した値)
+export interface SkillTransferMemberState {
+  skillPoints: SkillPoints
+  skillLevels: import('./types').SkillLevel[]
+  qualifications: import('./types').Qualification[]
+  externalSkills: import('./types').ExternalSkillEntry[]
+}
+export interface SkillTransferClaimResult {
+  added: { transferId: string; originOrgName: string; via: string }[]
+  skipped: number
+  member?: SkillTransferMemberState
+}
 
 export interface CreateTaskPayload {
   tempId: string
@@ -1505,6 +1520,12 @@ export const remoteApi = {
     postToGas('setBlocker', { taskId, note, since }),
   setHoldReason: (taskId: string, note: string | null, since: string | null) =>
     postToGas('setHoldReason', { taskId, note, since }),
+  // 団体をまたいだスキルの引き継ぎ(いつも本人の分。removeTransferredSkills は本人か代表)
+  createSkillTransferCode: () => postToGas<{ transferId: string; code: string; expiresAt: string; mailed: boolean }>('createSkillTransferCode', {}),
+  cancelSkillTransferCode: (transferId: string) => postToGas<{ transferId: string; status: string }>('cancelSkillTransferCode', { transferId }),
+  claimSkillTransferCode: (code: string) => postToGas<SkillTransferClaimResult>('claimSkillTransferCode', { code }),
+  removeTransferredSkills: (memberId: string, transferId: string) =>
+    postToGas<{ removed: string; member: SkillTransferMemberState }>('removeTransferredSkills', { memberId, transferId }),
   // ナレッジのページをつなぐ(見られないページのリンクは GAS が残す)
   updateTaskWikiPages: (taskId: string, pageIds: string[]) =>
     postToGas<{ wikiPageIds: string[] }>('updateTaskWikiPages', { taskId, pageIds }),

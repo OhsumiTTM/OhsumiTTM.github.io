@@ -1154,3 +1154,46 @@ describe.skipIf(!available)('ナレッジ: タスクにページをつなぐと�
     await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-used-task="${taskId}"]')`), 'ページの側に、つないだタスクが出ません')
   })
 })
+
+describe.skipIf(!available)('スキルの引き継ぎ: 団体A で作ったコードを、団体B の自分のページで入れると実績が届く', () => {
+  const openCareer = async () => {
+    await page.evaluate(`document.querySelector('[data-account-menu]').click(); true`)
+    const item = `[...document.querySelectorAll('[data-menu-item]')].find((e) => e.textContent.trim() === 'プロフィール')`
+    await waitFor(() => page.evaluate<boolean>(`!!${item}`), 'アカウントのメニューに「プロフィール」がありません')
+    await page.evaluate(`${item}.click(); true`)
+    const tab = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '経歴・キャリア')`
+    await waitFor(() => page.evaluate<boolean>(`!!${tab}`), '「経歴・キャリア」がありません')
+    await page.evaluate(`${tab}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-skill-transfer]')`), '「ほかの団体への引き継ぎ」が出ません')
+  }
+
+  it('A の代表がコードを作る(メールにも届く) → B の代表が入れると、出どころ付きで B の点数に足される', async () => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('top@a.example')
+    await waitFor(loggedIn, 'top@a.example がログインできません')
+    await openCareer()
+    const mailsBefore = A.org.mails.length
+    await page.evaluate(`document.querySelector('[data-skill-transfer-create]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-skill-transfer-code] code')`), '引き継ぎコードが出ません')
+    const code = await page.evaluate<string>(`document.querySelector('[data-skill-transfer-code] code').textContent.trim()`)
+    expect(code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/)
+    await waitFor(async () => A.org.mails.slice(mailsBefore).some((m) => m.to.includes('top@a.example') && m.body.includes(code)), '本人のメールにコードが届きません')
+
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + B.orgId)
+    await googleSignIn('top@b.example')
+    await waitFor(loggedIn, 'top@b.example がログインできません')
+    await openCareer()
+    await page.evaluate(`(() => { const el = document.querySelector('[data-skill-transfer-input]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(code)}); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+    await page.evaluate(`document.querySelector('[data-skill-transfer-claim]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`[...document.querySelectorAll('[data-skill-transfer-entry]')].some((e) => e.textContent.includes('団体A'))`), '引き継いだ実績が画面に出ません')
+    B.org.cache.clear()
+    const [head, ...rows] = B.org.sheets.Members.rows.map((r) => r.map(String))
+    const topB = rows.find((r) => r[head.indexOf('role')] === 'top')!
+    expect(JSON.parse(topB[head.indexOf('skill_points_json')] || '{}').デザイン).toBe(100)
+    expect(JSON.parse(topB[head.indexOf('external_skills_json')] || '[]')).toEqual([expect.objectContaining({ originOrgName: '団体A', points: { デザイン: 100 } })])
+  })
+})

@@ -239,6 +239,10 @@ export interface Member {
   // レベルアップのベースになる生の累計点を保持する。
   // 例: { "デザイン": 120, "プログラミング": 340 }
   skillPoints?: SkillPoints
+  // ほかの団体から引き継いだ実績(出どころごと。skillPoints の合計に入っている。gas/src/44-skill-transfer.gs)
+  externalSkills?: ExternalSkillEntry[]
+  // 本人が作った引き継ぎコードの記録(コードそのものは無い。本人だけに届く)
+  skillTransfers?: SkillTransferLogEntry[]
 
   // ---- 学歴情報 ------------------------------------------------------------
   // 本人が入力し管理者が確認・修正する（updateEducationInfo, selfOrAdmin）。
@@ -386,6 +390,27 @@ export interface OneOnOneRecord {
 export interface JobTypeSkillRequirement {
   jobType: string
   requiredSkills: { skill: string; level: SkillLevelValue }[]
+}
+
+export interface ExternalSkillEntry {
+  transferId: string
+  originOrgName: string
+  /** 経由した団体(A→B→C の A の分なら B) */
+  via: string
+  exportedAt: string
+  receivedAt: string
+  points: Record<string, number>
+  levels: { skill: string; level: number }[]
+  qualifications: { name: string; acquiredDate?: string; issuer?: string }[]
+}
+
+export interface SkillTransferLogEntry {
+  transferId: string
+  at: string
+  expiresAt: string
+  status: 'pending' | 'cancelled' | 'claimed' | 'expired'
+  /** 退会の時に自動で作ったもの */
+  auto?: boolean
 }
 
 export interface Project {
