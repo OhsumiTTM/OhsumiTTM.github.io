@@ -3947,7 +3947,7 @@ function showMenuResultDialog_(title, intro, sections) {
 //   条件: レベルごとに、スキルごと → 団体の既定 → 組み込み(Lv.4: 関連する資格1件以上・Lv.5: 外部評価の資格3件以上)
 //   条件の種類: qualification(資格 min 件以上。external で外部評価だけ)・quiz(このスキル・このレベル以上の検定に合格)・
 //               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)・
-//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel)
+//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel と、評価に付けたスキルの見立て)
 // 設定は Settings の skill_level_rules(代表・全権管理者が設定の画面で変える)。以前の skill_level_thresholds は使わない。
 // 保存されたレベルは下げない(上がる時だけ書き換える)
 var BUILTIN_LEVEL_POINTS = [50, 150, 350, 550, 750]
@@ -4083,7 +4083,9 @@ function skillEvidenceOf_(memberRow, memberId) {
     qualifications: parseJsonListSafe_(memberRow && memberRow.qualifications_json),
     quizPasses: parseJsonListSafe_(memberRow && memberRow.quiz_passes_json),
     doneTaskCounts: counts,
-    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json),
+    // スキルのレベルの承認と、評価に付けたスキルの見立て(42-evaluation-skills.gs)
+    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json)
+      .concat(evaluationApprovals_(parseJsonListSafe_(memberRow && memberRow.evaluation_history_json))),
   }
 }
 
@@ -6439,11 +6441,14 @@ function runWriteAction_(body, actingMember) {
         qualifications_json: JSON.stringify(checkQualifications_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
-    case 'updateEvaluationHistory':
-      result = updateMemberFields_(body.memberId, {
-        evaluation_history_json: JSON.stringify(stampEvaluators_(String(body.memberId || ''), body.entries || [], actingMember)),
-      })
+    case 'updateEvaluationHistory': {
+      // 評価に付けたスキルの見立ての点数を、スキルの点数に足し引きして、一緒に書く(42-evaluation-skills.gs)
+      var evalEntries = stampEvaluators_(String(body.memberId || ''), body.entries || [], actingMember)
+      var evalFields = applyEvaluationSkills_(String(body.memberId || ''), evalEntries, actingMember)
+      evalFields.evaluation_history_json = JSON.stringify(evalEntries)
+      result = updateMemberFields_(body.memberId, evalFields)
       break
+    }
     case 'updateTransferHistory':
       ;(body.entries || []).forEach(function (e) { if (e) checkDate_(e.date, '異動の日') })
       result = updateMemberFields_(body.memberId, {
@@ -12585,6 +12590,7 @@ var READ_POLICY = {
       workload_rules: 'all',
       // 担当の候補の決め方(37-value-checks.gs の checkAssignCandidateRules_ で確かめてから保存する)
       assign_candidate_rules: 'all',
+      evaluation_skill_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',
@@ -12868,6 +12874,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
   // 項目ごとの公開範囲(上長・部署長などの組み合わせ。33-member-field-visibility.gs)に対応している印。古い GAS には無い
   out.fieldAudiences = 1
+  // 評価にスキルの見立てを付けられる印(42-evaluation-skills.gs)。古い GAS には無い
+  out.evaluationSkills = 1
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {
@@ -15725,19 +15733,17 @@ function checkDepartmentTreeConfig_(value) {
 // ---- スキルのレベルの承認(評価をスキルの証拠にする) -----------------------------
 //
 // approveSkillLevel { memberId, skill, level(1〜5), reason }: 「スキル○○を Lv.○ と認める」を、理由の文と一緒に記録する。
-// 記録できるのは、代表と、その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者。
-// 評価・1on1 を読める人と同じ supervisedMemberIds_)。自分自身には記録できない(代表も)。
+// 記録できるのは、代表と、その人を見る立場の人(報告先をたどった上の人・部署長・メンター・その人が入るプロジェクトの責任者。
+// canAssessSkillOf_)。自分自身には記録できない(代表も)。
 // 記録は Members の skill_approvals_json に {id, skill, level, reason, byId, at} で残す(誰が・いつ・何を)。
 // skill_level_rules の条件 {type:'approval'} は、このスキルをそのレベル以上と認めた記録があれば満たす。
 // 記録した後に、レベルを決め直す(点数と、ほかの条件も要る。保存されたレベルは下げない)
 var SKILL_APPROVAL_REASON_MAX = 500
 var SKILL_APPROVAL_MAX = 200
 
+// 部署長も認められる(v1.2。評価に付けるスキルの見立てと同じ人。42-evaluation-skills.gs の canAssessSkillOf_)
 function canApproveSkillOf_(acting, memberId) {
-  if (String(acting.id) === String(memberId)) return false
-  if (isTopRoleRef_(getRoles_(), acting.role)) return true
-  var data = { Members: snapshotTableOrSheet_(SHEET_MEMBERS), Projects: snapshotTableOrSheet_(SHEET_PROJECTS) }
-  return !!supervisedMemberIds_(data, String(acting.id))[String(memberId)]
+  return canAssessSkillOf_(acting, memberId)
 }
 
 function approveSkillLevel_(acting, memberId, skill, level, reason) {
@@ -15750,7 +15756,7 @@ function approveSkillLevel_(acting, memberId, skill, level, reason) {
   if (typeof level !== 'number' || [1, 2, 3, 4, 5].indexOf(level) < 0) throw userError_('レベルは 1〜5 で指定してください。')
   if (!reason) throw userError_('認める理由を書いてください。')
   if (reason.length > SKILL_APPROVAL_REASON_MAX) throw userError_('理由は' + SKILL_APPROVAL_REASON_MAX + '文字以内にしてください。')
-  if (!canApproveSkillOf_(acting, memberId)) throw userError_('スキルのレベルを認められるのは、代表と、その人を見る立場の人(上長・メンター・プロジェクトの責任者)だけです。')
+  if (!canApproveSkillOf_(acting, memberId)) throw userError_('スキルのレベルを認められるのは、代表と、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)だけです。')
   checkActiveMember_(memberId, '認める相手')
   // 列が無い古いシートには足す(初期設定を実行し直さなくても記録できるように)
   ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_MEMBERS, ['skill_approvals_json'])
@@ -16402,6 +16408,7 @@ var SETTING_VALUE_CHECKS = {
   skill_level_rules: checkSkillLevelRules_,
   workload_rules: checkWorkloadRules_,
   assign_candidate_rules: checkAssignCandidateRules_,
+  evaluation_skill_rules: checkEvaluationSkillRules_,
   member_field_visibility: checkMemberFieldVisibility_,
   department_tree_config: checkDepartmentTreeConfig_,
   org_storage_access: checkOrgStorageAccess_,
@@ -17693,4 +17700,162 @@ function purgeOldApprovalLog_(nowMs) {
   }
   if (count > 0) sheet.deleteRows(2, count)
   return count
+}
+// ---- 評価をスキルの根拠にする(v1.2) -----------------------------------------------------
+//
+// 評価(Members の evaluation_history_json。行に移した後は MemberRecords)の1件に、スキルの見立て
+// skillAssessments: [{ skill, level(1〜5), points(0〜上限の整数), note?, at }] を付けられる。
+//   ・点数: 付けた点数を、その人のスキルの点数(skill_points_json)に足す。評価を消すと、その分を引く(0 より下にしない)
+//   ・根拠: 見立ては、レベルの条件「承認」(skill_level_rules の {type:'approval'})に数える(スキルをそのレベル以上と見た記録)
+//   ・レベル: 点数と条件から決め直す。保存されたレベルは下げない(評価を消しても下げない)
+// 付けられるのは、代表と、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)だけ。自分自身には付けられない。
+// 上限は団体の設定 evaluation_skill_rules({ maxPoints, cooldownDays })で変えられる:
+//   maxPoints    1回の評価で、1つのスキルに付けられる点数の上限(既定 100。0〜1000)
+//   cooldownDays 同じ人が、同じ相手の同じスキルに付けられるのは、この日数に1回(既定 30。0 で制限なし。0〜365)
+// 見立ては、付けた後は変えられない(変える時は、評価を消して付け直す)。at は画面が付けた日時で、
+// 新しく付ける時は GAS の今の時刻と1日以内のずれだけ受け付ける(日数の制限は、保存された at と今の時刻で数える)
+var EVALUATION_SKILL_DEFAULTS = { maxPoints: 100, cooldownDays: 30 }
+var EVALUATION_SKILLS_MAX = 20
+var EVALUATION_SKILL_NOTE_MAX = 500
+var EVALUATION_SKILL_AT_SKEW_MS = 24 * 60 * 60 * 1000
+
+// 設定の値を、使える形にする(壊れた値・範囲の外は既定)
+function parseEvaluationSkillRules_(raw) {
+  var obj = raw
+  if (typeof raw === 'string') {
+    try { obj = raw ? JSON.parse(raw) : {} } catch (e) { obj = {} }
+  }
+  var out = { maxPoints: EVALUATION_SKILL_DEFAULTS.maxPoints, cooldownDays: EVALUATION_SKILL_DEFAULTS.cooldownDays }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out
+  var mp = obj.maxPoints, cd = obj.cooldownDays
+  if (typeof mp === 'number' && Math.floor(mp) === mp && mp >= 0 && mp <= 1000) out.maxPoints = mp
+  if (typeof cd === 'number' && Math.floor(cd) === cd && cd >= 0 && cd <= 365) out.cooldownDays = cd
+  return out
+}
+
+function getEvaluationSkillRules_() {
+  return parseEvaluationSkillRules_(getSettingValue_('evaluation_skill_rules'))
+}
+
+// updateSetting の値の確かめ(37-value-checks.gs の SETTING_VALUE_CHECKS)
+function checkEvaluationSkillRules_(value) {
+  var obj = parseSettingJson_(value, '評価のスキルの上限')
+  if (!isPlainObject_(obj)) throw userError_('評価のスキルの上限の形が正しくありません。')
+  Object.keys(obj).forEach(function (k) {
+    var v = obj[k]
+    if (k === 'maxPoints') {
+      if (typeof v !== 'number' || Math.floor(v) !== v || v < 0 || v > 1000) throw userError_('1回に付けられる点数の上限は 0〜1000 の整数にしてください。')
+    } else if (k === 'cooldownDays') {
+      if (typeof v !== 'number' || Math.floor(v) !== v || v < 0 || v > 365) throw userError_('同じスキルに付け直せるまでの日数は 0〜365 の整数にしてください。')
+    } else {
+      throw userError_('評価のスキルの上限に、知らない項目があります。')
+    }
+  })
+}
+
+// その人のスキルを見立て・認められるか(代表と、上長・部署長・メンター・プロジェクトの責任者。自分自身は不可)
+function canAssessSkillOf_(acting, memberId) {
+  if (String(acting.id) === String(memberId)) return false
+  if (isTopRoleRef_(getRoles_(), acting.role)) return true
+  var data = {
+    Members: snapshotTableOrSheet_(SHEET_MEMBERS),
+    Projects: snapshotTableOrSheet_(SHEET_PROJECTS),
+    Settings: snapshotTableOrSheet_(SHEET_SETTINGS),
+  }
+  var rel = viewerRelations_(data, String(acting.id))
+  var id = String(memberId)
+  return !!(rel.boss[id] || rel.deptHead[id] || rel.mentor[id] || rel.projectOwner[id])
+}
+
+function assessmentsOf_(entry) {
+  return entry && Array.isArray(entry.skillAssessments) ? entry.skillAssessments : []
+}
+
+// 評価の一覧に付いた見立てを、レベルの条件「承認」の形({ skill, level })にする
+function evaluationApprovals_(entries) {
+  var out = []
+  ;(entries || []).forEach(function (e) {
+    assessmentsOf_(e).forEach(function (a) {
+      if (a && typeof a.skill === 'string' && typeof a.level === 'number') out.push({ skill: a.skill, level: a.level, byId: String(e.evaluatorId || ''), at: a.at })
+    })
+  })
+  return out
+}
+
+// 新しい評価に付いた見立てを確かめる(形・点数の上限・付けられる人・日数の制限)
+function checkNewAssessments_(memberId, entry, acting, stored, rules, now) {
+  var list = entry.skillAssessments
+  if (list === undefined || list === null) return
+  if (!Array.isArray(list) || list.length > EVALUATION_SKILLS_MAX) throw userError_('スキルの見立ての形が正しくありません(1件の評価に' + EVALUATION_SKILLS_MAX + 'スキルまで)。')
+  if (!list.length) { delete entry.skillAssessments; return }
+  if (!canAssessSkillOf_(acting, memberId)) throw userError_('評価にスキルを付けられるのは、代表と、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)だけです。')
+  var seen = {}
+  list.forEach(function (a) {
+    if (!isPlainObject_(a)) throw userError_('スキルの見立ての形が正しくありません。')
+    Object.keys(a).forEach(function (k) {
+      if (['skill', 'level', 'points', 'note', 'at'].indexOf(k) < 0) throw userError_('スキルの見立てに、知らない項目があります。')
+    })
+    var skill = typeof a.skill === 'string' ? a.skill.trim() : ''
+    if (!skill || skill.length > 100 || skill !== a.skill) throw userError_('スキルの名前を100文字以内で入れてください。')
+    if (seen[skill]) throw userError_('同じスキルが2回入っています: ' + skill)
+    seen[skill] = true
+    if ([1, 2, 3, 4, 5].indexOf(a.level) < 0) throw userError_('スキルのレベルは 1〜5 で入れてください。')
+    if (typeof a.points !== 'number' || Math.floor(a.points) !== a.points || a.points < 0) throw userError_('スキルの点数は0以上の整数で入れてください。')
+    if (a.points > rules.maxPoints) throw userError_('1回の評価で付けられる点数は、スキルごとに' + rules.maxPoints + '点までです。')
+    if (a.note !== undefined && (typeof a.note !== 'string' || a.note.length > EVALUATION_SKILL_NOTE_MAX)) throw userError_('見立ての理由は' + EVALUATION_SKILL_NOTE_MAX + '文字以内にしてください。')
+    var at = typeof a.at === 'string' ? Date.parse(a.at) : NaN
+    if (!isFinite(at) || Math.abs(at - now) > EVALUATION_SKILL_AT_SKEW_MS) throw userError_('スキルの見立ての日時が正しくありません。端末の時計を確かめて、もう一度保存してください。')
+    if (rules.cooldownDays > 0) {
+      var since = now - rules.cooldownDays * 24 * 60 * 60 * 1000
+      var recent = stored.some(function (e) {
+        if (String(e.evaluatorId || '') !== String(acting.id)) return false
+        return assessmentsOf_(e).some(function (s) { return s && s.skill === skill && Date.parse(s.at) > since })
+      })
+      if (recent) throw userError_('「' + skill + '」には、' + rules.cooldownDays + '日以内にスキルを付けています。同じ相手の同じスキルに付けられるのは、' + rules.cooldownDays + '日に1回です。')
+    }
+  })
+}
+
+/**
+ * updateEvaluationHistory の一覧(差分を当てた後)を確かめ、見立ての点数をスキルの点数に足し引きする。
+ * 返すのは、評価の列と一緒に書く列(点数・レベル。変わらなければ空)
+ */
+function applyEvaluationSkills_(memberId, entries, acting) {
+  var stored = memberJsonList_(memberId, 'evaluation_history_json')
+  var storedById = {}
+  stored.forEach(function (e) { if (e && e.id) storedById[e.id] = e })
+  var rules = getEvaluationSkillRules_()
+  var now = Date.now()
+  var delta = {}
+  var add = function (skill, n) { delta[skill] = (delta[skill] || 0) + n }
+  var keptIds = {}
+  entries.forEach(function (e) {
+    var before = storedById[e.id]
+    if (before) {
+      keptIds[e.id] = true
+      // 付けた見立ては変えられない(消す・足す・書き換えるのは、評価を消して付け直す)
+      if (canonicalJson_(assessmentsOf_(before)) !== canonicalJson_(assessmentsOf_(e))) throw userError_('評価に付けたスキルは変えられません。変える時は、評価を消して付け直してください。')
+      return
+    }
+    checkNewAssessments_(memberId, e, acting, stored, rules, now)
+    assessmentsOf_(e).forEach(function (a) { add(a.skill, a.points) })
+  })
+  stored.forEach(function (e) {
+    if (!e || !e.id || keptIds[e.id]) return
+    assessmentsOf_(e).forEach(function (a) { if (a && typeof a.points === 'number') add(a.skill, -a.points) })
+  })
+  var hadAssessments = entries.some(function (e) { return assessmentsOf_(e).length }) || stored.some(function (e) { return assessmentsOf_(e).length })
+  if (!hadAssessments) return {}
+  var memberRow = findRow_(SHEET_MEMBERS, memberId)
+  if (!memberRow) throw userError_('メンバーが見つかりません。')
+  var points = {}
+  try { points = JSON.parse(memberRow.skill_points_json || '{}') || {} } catch (e) { points = {} }
+  Object.keys(delta).forEach(function (skill) {
+    if (!delta[skill]) return
+    points[skill] = Math.max(0, (Number(points[skill]) || 0) + delta[skill])
+  })
+  var evidence = skillEvidenceOf_(memberRow, memberId)
+  evidence.approvals = parseJsonListSafe_(memberRow.skill_approvals_json).concat(evaluationApprovals_(entries))
+  var newLevels = computeAutoLevels_(parseJsonListSafe_(memberRow.skill_levels_json), points, getSkillLevelRules_(), evidence)
+  return { skill_points_json: JSON.stringify(points), skill_levels_json: JSON.stringify(newLevels) }
 }

@@ -6,7 +6,7 @@
 //   条件: レベルごとに、スキルごと → 団体の既定 → 組み込み(Lv.4: 関連する資格1件以上・Lv.5: 外部評価の資格3件以上)
 //   条件の種類: qualification(資格 min 件以上。external で外部評価だけ)・quiz(このスキル・このレベル以上の検定に合格)・
 //               tasksDone(このスキルを含む、担当して完了したタスクが min 件以上)・
-//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel)
+//               approval(見る立場の人・代表が、このスキルをこのレベル以上と認めている。approveSkillLevel と、評価に付けたスキルの見立て)
 // 設定は Settings の skill_level_rules(代表・全権管理者が設定の画面で変える)。以前の skill_level_thresholds は使わない。
 // 保存されたレベルは下げない(上がる時だけ書き換える)
 var BUILTIN_LEVEL_POINTS = [50, 150, 350, 550, 750]
@@ -142,7 +142,9 @@ function skillEvidenceOf_(memberRow, memberId) {
     qualifications: parseJsonListSafe_(memberRow && memberRow.qualifications_json),
     quizPasses: parseJsonListSafe_(memberRow && memberRow.quiz_passes_json),
     doneTaskCounts: counts,
-    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json),
+    // スキルのレベルの承認と、評価に付けたスキルの見立て(42-evaluation-skills.gs)
+    approvals: parseJsonListSafe_(memberRow && memberRow.skill_approvals_json)
+      .concat(evaluationApprovals_(parseJsonListSafe_(memberRow && memberRow.evaluation_history_json))),
   }
 }
 

@@ -6,6 +6,7 @@
 // All of this is optional — when NEXT_PUBLIC_REGISTRY_URL isn't set (e.g. local
 // dev), the app falls back to the local seed data exactly as before.
 import { parseFieldAudiences } from './field-audiences'
+import { parseEvaluationSkillRules } from './evaluation-skills'
 import { parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { normalizeCapabilities, type Capability } from './capabilities'
 import type {
@@ -500,6 +501,7 @@ function mapMemberRow(
     qualifications: parseJsonArray<Qualification>(r.qualifications_json),
     quizPasses: parseJsonArray<NonNullable<Member['quizPasses']>[number]>(r.quiz_passes_json),
     evaluationHistory: parseJsonArray<EvaluationRecord>(r.evaluation_history_json),
+    skillApprovals: parseJsonArray<NonNullable<Member['skillApprovals']>[number]>(r.skill_approvals_json),
     transferHistory: parseJsonArray<TransferRecord>(r.transfer_history_json),
     skillLevels: parseJsonArray<SkillLevel>(r.skill_levels_json),
     competencies: parseJsonArray<Competency>(r.competencies_json),
@@ -715,6 +717,8 @@ export interface RemoteSettings {
   assignCandidateRules: AssignCandidateRules
   // 項目ごとの公開範囲(Settings の member_field_visibility。lib/ohsumi/field-audiences.ts)
   memberFieldVisibility: import('./field-audiences').FieldAudienceSetting
+  // 評価に付けるスキルの見立ての上限(Settings の evaluation_skill_rules。lib/ohsumi/evaluation-skills.ts)
+  evaluationSkillRules: import('./evaluation-skills').EvaluationSkillRules
   // 検定定義リスト — Settings キー "quiz_definitions"
   quizDefinitions: QuizDefinition[]
   // レーダーチャート軸定義 — Settings キー "radar_axes"
@@ -815,6 +819,7 @@ export function parseSettings(rows: Record<string, string>[]): RemoteSettings {
     workloadRules: parseWorkloadRules(byKey.get('workload_rules')),
     assignCandidateRules: parseAssignCandidateRules(byKey.get('assign_candidate_rules')),
     memberFieldVisibility: parseFieldAudiences(byKey.get('member_field_visibility')),
+    evaluationSkillRules: parseEvaluationSkillRules(byKey.get('evaluation_skill_rules')),
     quizDefinitions: (() => {
       try { const r = byKey.get('quiz_definitions'); return r ? JSON.parse(r) : [] } catch { return [] }
     })(),
@@ -876,6 +881,8 @@ export interface InitialData {
   recordRows?: RecordRowsState
   // 項目ごとの公開範囲(見せる相手の組み合わせ)に対応している GAS か(v1.2〜。古い GAS では無い)
   fieldAudiences?: boolean
+  // 評価にスキルの見立てを付けられる GAS か(v1.2〜。古い GAS では無い)
+  evaluationSkills?: boolean
 }
 
 // none / migrating / failed: セルに持つ。done / reverting: 1件1行のシートに持つ
@@ -906,6 +913,7 @@ interface InitialDataResponse {
   adminLinks?: unknown
   recordRows?: string
   fieldAudiences?: number
+  evaluationSkills?: number
   sheets?: Record<'Members' | 'Projects' | 'Tasks' | 'Settings', SheetTable>
   background?: BackgroundData
   backgroundError?: string
@@ -940,6 +948,7 @@ function toInitialData(res: InitialDataResponse): InitialData {
     ...(parseOrgAdminLinks(res.adminLinks) ? { adminLinks: parseOrgAdminLinks(res.adminLinks) } : {}),
     ...(RECORD_ROWS_STATES.includes(res.recordRows as RecordRowsState) ? { recordRows: res.recordRows as RecordRowsState } : {}),
     ...(res.fieldAudiences === 1 ? { fieldAudiences: true } : {}),
+    ...(res.evaluationSkills === 1 ? { evaluationSkills: true } : {}),
   }
   if (!res.memberId || res.unchanged || !res.sheets) {
     return { memberId: res.memberId, version: res.version, unchanged: res.unchanged, ...extra }

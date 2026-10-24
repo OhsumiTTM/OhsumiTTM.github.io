@@ -129,6 +129,7 @@ var READ_POLICY = {
       workload_rules: 'all',
       // 担当の候補の決め方(37-value-checks.gs の checkAssignCandidateRules_ で確かめてから保存する)
       assign_candidate_rules: 'all',
+      evaluation_skill_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',
@@ -412,6 +413,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
   // 項目ごとの公開範囲(上長・部署長などの組み合わせ。33-member-field-visibility.gs)に対応している印。古い GAS には無い
   out.fieldAudiences = 1
+  // 評価にスキルの見立てを付けられる印(42-evaluation-skills.gs)。古い GAS には無い
+  out.evaluationSkills = 1
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {

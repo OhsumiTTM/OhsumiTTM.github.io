@@ -2,19 +2,17 @@
 // ---- スキルのレベルの承認(評価をスキルの証拠にする) -----------------------------
 //
 // approveSkillLevel { memberId, skill, level(1〜5), reason }: 「スキル○○を Lv.○ と認める」を、理由の文と一緒に記録する。
-// 記録できるのは、代表と、その人を見る立場の人(報告先をたどった上の人・メンター・その人が入るプロジェクトの責任者。
-// 評価・1on1 を読める人と同じ supervisedMemberIds_)。自分自身には記録できない(代表も)。
+// 記録できるのは、代表と、その人を見る立場の人(報告先をたどった上の人・部署長・メンター・その人が入るプロジェクトの責任者。
+// canAssessSkillOf_)。自分自身には記録できない(代表も)。
 // 記録は Members の skill_approvals_json に {id, skill, level, reason, byId, at} で残す(誰が・いつ・何を)。
 // skill_level_rules の条件 {type:'approval'} は、このスキルをそのレベル以上と認めた記録があれば満たす。
 // 記録した後に、レベルを決め直す(点数と、ほかの条件も要る。保存されたレベルは下げない)
 var SKILL_APPROVAL_REASON_MAX = 500
 var SKILL_APPROVAL_MAX = 200
 
+// 部署長も認められる(v1.2。評価に付けるスキルの見立てと同じ人。42-evaluation-skills.gs の canAssessSkillOf_)
 function canApproveSkillOf_(acting, memberId) {
-  if (String(acting.id) === String(memberId)) return false
-  if (isTopRoleRef_(getRoles_(), acting.role)) return true
-  var data = { Members: snapshotTableOrSheet_(SHEET_MEMBERS), Projects: snapshotTableOrSheet_(SHEET_PROJECTS) }
-  return !!supervisedMemberIds_(data, String(acting.id))[String(memberId)]
+  return canAssessSkillOf_(acting, memberId)
 }
 
 function approveSkillLevel_(acting, memberId, skill, level, reason) {
@@ -27,7 +25,7 @@ function approveSkillLevel_(acting, memberId, skill, level, reason) {
   if (typeof level !== 'number' || [1, 2, 3, 4, 5].indexOf(level) < 0) throw userError_('レベルは 1〜5 で指定してください。')
   if (!reason) throw userError_('認める理由を書いてください。')
   if (reason.length > SKILL_APPROVAL_REASON_MAX) throw userError_('理由は' + SKILL_APPROVAL_REASON_MAX + '文字以内にしてください。')
-  if (!canApproveSkillOf_(acting, memberId)) throw userError_('スキルのレベルを認められるのは、代表と、その人を見る立場の人(上長・メンター・プロジェクトの責任者)だけです。')
+  if (!canApproveSkillOf_(acting, memberId)) throw userError_('スキルのレベルを認められるのは、代表と、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)だけです。')
   checkActiveMember_(memberId, '認める相手')
   // 列が無い古いシートには足す(初期設定を実行し直さなくても記録できるように)
   ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_MEMBERS, ['skill_approvals_json'])

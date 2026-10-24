@@ -205,6 +205,8 @@ export interface Member {
   // 検定の合格の記録(スキルのレベルの条件「検定の合格」に使う。lib/ohsumi/skill-levels.ts)
   quizPasses?: { quizId: string; skill: string; level: SkillLevelValue; at: string }[]
   evaluationHistory?: EvaluationRecord[]
+  // スキルのレベルの承認(Members の skill_approvals_json。レベルの条件「承認」に使う)
+  skillApprovals?: import('./skill-levels').SkillApproval[]
   transferHistory?: TransferRecord[]
 
   // スキル管理: per-skill proficiency level and role-relevant competencies,
@@ -307,6 +309,18 @@ export interface EvaluationRecord {
   evaluatorId: string
   rating: string
   comment?: string
+  /** 評価に付けたスキルの見立て(v1.2。lib/ohsumi/evaluation-skills.ts。付けた後は変えない) */
+  skillAssessments?: SkillAssessment[]
+}
+
+/** 評価に付けたスキルの見立て: 点数をスキルの点数に足し、レベルの条件「承認」に数える */
+export interface SkillAssessment {
+  skill: string
+  level: SkillLevelValue
+  points: number
+  note?: string
+  /** 付けた日時(ISO。同じスキルに付け直せるまでの日数を数える) */
+  at: string
 }
 
 export interface TransferRecord {

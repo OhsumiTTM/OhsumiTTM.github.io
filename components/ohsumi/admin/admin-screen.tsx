@@ -10,6 +10,7 @@ import { AdminDashboard } from './admin-dashboard'
 import { AdminAssignments } from './admin-assignments'
 import { AdminApprovals } from './admin-approvals'
 import { AssignCandidateRulesEditor } from './assign-candidate-rules-editor'
+import { EvaluationSkillRulesEditor } from './evaluation-skill-rules-editor'
 import { ApprovalHistory } from './approval-history'
 import { AdminProjects } from './admin-projects'
 import { AdminMembers } from './admin-members'
@@ -135,6 +136,7 @@ function SectionBody({ section }: { section: AdminSection }) {
             { id: 'skill-position', title: t('admin.tags.positionRequirements'), content: <PositionRequirementsEditor /> },
             { id: 'skill-levels', title: t('admin.skillRules.title'), content: <SkillLevelRulesEditor /> },
             { id: 'skill-assign-candidates', title: t('admin.assignRules.title'), content: <AssignCandidateRulesEditor /> },
+            { id: 'skill-evaluations', title: t('admin.evaluationSkills.title'), content: <EvaluationSkillRulesEditor /> },
             { id: 'skill-radar-axes', title: t('admin.radarAxes.title'), content: <AdminRadarAxes part="axes" /> },
           ]}
         />
