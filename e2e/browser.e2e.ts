@@ -877,6 +877,55 @@ describe.skipIf(!available)('項目ごとの公開範囲: 部署長の一般の�
   })
 })
 
+describe.skipIf(!available)('評価をスキルの根拠にする: 代表が評価にスキルの見立てを付けると、GAS がスキルの点数に足す', () => {
+  const setValue = (sel: string, value: string, proto: 'HTMLInputElement' | 'HTMLSelectElement' = 'HTMLInputElement') =>
+    page.evaluate(`(() => { const el = document.querySelector('${sel}'); Object.getOwnPropertyDescriptor(${proto}.prototype, 'value').set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event(${proto === 'HTMLSelectElement' ? "'change'" : "'input'"}, { bubbles: true })); return true })()`)
+  const memberRow = (id: string) => {
+    const [head, ...rows] = A.org.sheets.Members.rows.map((r) => r.map(String))
+    const r = rows.find((x) => x[head.indexOf('id')] === id)!
+    return Object.fromEntries(head.map((k, i) => [k, r[i]]))
+  }
+
+  it('経歴・キャリア > 評価履歴で付けた点数が、スキルの点数に入り、評価に見立てが残る', async () => {
+    const baseId = memberIdOf('base@a.example')
+    const before = JSON.parse(memberRow(baseId).skill_points_json || '{}') as Record<string, number>
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('top@a.example')
+    await waitFor(loggedIn, 'top@a.example がログインできません')
+    await page.evaluate(`[...document.querySelectorAll('button, a')].find((b) => b.textContent.trim() === 'OUTPUT')?.click(); true`)
+    const target = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '個人')`
+    await waitFor(() => page.evaluate<boolean>(`!!${target}`), 'OUTPUT に「個人」がありません')
+    await page.evaluate(`${target}.click(); true`)
+    const card = `[...document.querySelectorAll('button')].find((b) => b.textContent.includes('一般さん'))`
+    await waitFor(() => page.evaluate<boolean>(`!!${card}`), '「個人」に一般さんが出ません')
+    await page.evaluate(`${card}.click(); true`)
+    const career = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '経歴・キャリア')`
+    await waitFor(() => page.evaluate<boolean>(`!!${career}`), '「経歴・キャリア」がありません')
+    await page.evaluate(`${career}.click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-eval-skill-add]')`), '評価履歴に「スキルを足す」が出ません')
+    await setValue('[data-eval-date]', '2026-10-20')
+    await setValue('[data-eval-rating]', 'A')
+    await page.evaluate(`document.querySelector('[data-eval-skill-add]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-eval-skill]')`), 'スキルの欄が出ません')
+    const skill = await page.evaluate<string>(`[...document.querySelectorAll('[data-eval-skill] option')].map((o) => o.value).filter(Boolean)[0] ?? ''`)
+    expect(skill).not.toBe('')
+    await setValue('[data-eval-skill]', skill, 'HTMLSelectElement')
+    await setValue('[data-eval-skill-level]', '2', 'HTMLSelectElement')
+    await setValue('[data-eval-skill-points]', '30')
+    await page.evaluate(`document.querySelector('[data-eval-add]').click(); true`)
+    await waitFor(async () => {
+      A.org.cache.clear()
+      const pts = JSON.parse(memberRow(baseId).skill_points_json || '{}') as Record<string, number>
+      return pts[skill] === (before[skill] ?? 0) + 30
+    }, 'GAS のスキルの点数に、評価で付けた点数が入りません')
+    const evals = JSON.parse(memberRow(baseId).evaluation_history_json || '[]') as { skillAssessments?: { skill: string; level: number; points: number }[] }[]
+    expect(evals.at(-1)?.skillAssessments).toEqual([expect.objectContaining({ skill, level: 2, points: 30 })])
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-eval-assessment]')`), '評価履歴に付けた見立てが出ません')
+  })
+})
+
 describe.skipIf(!available)('兼部の統合表示: 団体A と団体B の両方にログインしている人は、ホームで「すべての団体」を選べる', () => {
   const day = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
   const TITLE_A = '兼部のE2E(団体Aのタスク)'

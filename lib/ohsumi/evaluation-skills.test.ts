@@ -64,15 +64,15 @@ describe('評価のスキルの見立て', () => {
   it('付けられる人: 代表・上長・部署長・メンター・プロジェクトの責任者。自分自身と関係の無い人は不可', () => {
     const ctx: AudienceContext = {
       members: [
-        { id: 'top', role: 'top', reportsToId: null, mentorId: null, departmentPaths: [] },
-        { id: 'boss', role: 'base', reportsToId: null, mentorId: null, departmentPaths: [] },
-        { id: 'mentor', role: 'base', reportsToId: null, mentorId: null, departmentPaths: [] },
-        { id: 'head', role: 'base', reportsToId: null, mentorId: null, departmentPaths: [] },
-        { id: 'owner', role: 'base', reportsToId: null, mentorId: null, departmentPaths: [] },
-        { id: 'lead', role: 'lead', reportsToId: null, mentorId: null, departmentPaths: [] },
+        { id: 'top', role: 'top', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
+        { id: 'boss', role: 'base', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
+        { id: 'mentor', role: 'base', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
+        { id: 'head', role: 'base', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
+        { id: 'owner', role: 'base', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
+        { id: 'lead', role: 'lead', reportsToId: undefined, mentorId: undefined, departmentPaths: [] },
         { id: 'x', role: 'base', reportsToId: 'boss', mentorId: 'mentor', departmentPaths: ['本部>開発'] },
       ],
-      projects: [{ id: 'p1', ownerId: 'owner', memberIds: ['x'], parentId: null }],
+      projects: [{ id: 'p1', ownerId: 'owner', memberIds: ['x'], parentId: undefined }],
       departmentTree: [{ path: '本部', headIds: ['head'] }],
       isAdminRole: (r) => r === 'lead' || r === 'top',
       isTopRole: (r) => r === 'top',

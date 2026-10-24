@@ -1535,8 +1535,8 @@ function EvaluationHistorySection({
       {editable && hasAssessments && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('career.evaluation.removeNote')}</p>}
       {editable && (
         <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} />
-          <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder={t('career.evaluation.ratingPlaceholder')} className={fieldClass} />
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} data-eval-date />
+          <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder={t('career.evaluation.ratingPlaceholder')} className={fieldClass} data-eval-rating />
           <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t('career.evaluation.commentPlaceholder')} className={cn(fieldClass, 'sm:col-span-1')} />
           <button
             onClick={add}

@@ -2404,7 +2404,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.24-1'
+var OHSUMI_GAS_VERSION = '2026.10.24-2'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -12787,18 +12787,6 @@ function findMemberInSnapshot_(data, memberId) {
     if (String(members.rows[i][idCol]) === String(memberId)) return tableRowToObject_(members.headers, members.rows[i])
   }
   return null
-}
-
-// 閲覧者が「見る立場」にあるメンバーの ID(評価・1on1 などの読み取りに使う)。
-//   ・報告先(reports_to_id)をたどって、閲覧者が上にいるメンバー
-//   ・メンター(mentor_id)が閲覧者のメンバー
-//   ・閲覧者が責任者(owner_id)のプロジェクト(その子プロジェクトも含む)に入っているメンバー
-function supervisedMemberIds_(data, viewerId) {
-  var out = {}
-  if (!viewerId) return out
-  var rel = viewerRelations_(data, viewerId)
-  ;[rel.boss, rel.mentor, rel.projectOwner].forEach(function (m) { Object.keys(m).forEach(function (id) { out[id] = true }) })
-  return out
 }
 
 // スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
