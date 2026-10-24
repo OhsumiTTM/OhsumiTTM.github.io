@@ -405,15 +405,32 @@ function chatTaskLabel_(task) {
   return '「' + String((task && task.title) || '') + '」'
 }
 
-function notifyChat_(content) {
-  return measureAction_('chatMs', function () { return notifyChatUnmeasured_(content) })
+// taskId: 1つのタスクについての通知の時に渡す。そのタスクのリンクを、Discord・Slack それぞれの書き方で文字に埋め込む
+// (幹部限定・承認待ちのタスクも付ける。開くにはログインとタスクを見る権限が要る)。無い時は「Ohsumi を開く」のリンク
+function notifyChat_(content, taskId) {
+  return measureAction_('chatMs', function () { return notifyChatUnmeasured_(content, taskId) })
 }
 
-function notifyChatUnmeasured_(content) {
+var CHAT_TASK_LINK_LABEL = 'このタスクを開く / Open this task'
+
+function notifyChatUnmeasured_(content, taskId) {
   if (!allowRequestNotification_('Discord/Slack')) return
-  content = withSiteLink_(content)
-  sendDiscordMessage_(content)
-  sendSlackMessage_(content)
+  var link = taskId ? canonicalTaskLink_(taskId) : ''
+  if (!link) {
+    content = withSiteLink_(content)
+    sendDiscordMessage_(content)
+    sendSlackMessage_(content)
+    return
+  }
+  var body = String(content || '')
+  sendDiscordMessage_(chatTaskLinkText_('discord', body, link))
+  sendSlackMessage_(chatTaskLinkText_('slack', body, link))
+}
+
+// タスクのリンクを埋め込んだ本文。Discord は [文字](URL)、Slack は <URL|文字>(本文の後に1行あけて付ける)
+function chatTaskLinkText_(kind, body, link) {
+  var line = kind === 'slack' ? '<' + link + '|' + CHAT_TASK_LINK_LABEL + '>' : '[' + CHAT_TASK_LINK_LABEL + '](' + link + ')'
+  return body + '\n\n' + line
 }
 
 // ---- Webhook接続テスト ------------------------------------------------------

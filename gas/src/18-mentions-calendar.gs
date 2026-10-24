@@ -385,7 +385,7 @@ function notifyScheduleResult_(taskId, actorId) {
       taskId: String(taskId),
     })
     console.log('notifyScheduleResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
-    notifyChat_('🗓️ ' + chatTaskLabel_(task) + 'の日程調整で全員の回答が揃いました。')
+    notifyChat_('🗓️ ' + chatTaskLabel_(task) + 'の日程調整で全員の回答が揃いました。', String(taskId))
     return true
   } catch (err) {
     console.error('notifyScheduleResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
@@ -453,7 +453,7 @@ function notifyFormResult_(taskId, actorId) {
       taskId: String(taskId),
     })
     console.log('notifyFormResult: 送信先 ' + maskEmailsIn_(emails.join(',')))
-    notifyChat_('📝 ' + chatTaskLabel_(task) + 'のフォームで全員の回答が揃いました。')
+    notifyChat_('📝 ' + chatTaskLabel_(task) + 'のフォームで全員の回答が揃いました。', String(taskId))
     return true
   } catch (err) {
     console.error('notifyFormResultの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
