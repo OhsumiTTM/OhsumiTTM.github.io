@@ -186,6 +186,7 @@ export const ja = {
   'login.orgSuspended': 'この団体は、Ohsumi の利用を停止しています。団体の担当者にお問い合わせください。',
   'login.orgUnavailable': '団体の接続先を確認できません。少し待ってから、もう一度お試しください。',
   'login.orgMismatch': '招待リンクの団体と、接続先の団体が一致しません。団体の担当者に確かめてください。',
+  'login.securityRelogin': 'セキュリティ保護のため、もう一度ログインしてください。',
   'login.orgMoved': '団体の接続先が変わりました。もう一度ログインしてください。',
   'login.noOrg': '団体から届いた招待リンクを開いてください。',
   'login.retry': 'もう一度試す',

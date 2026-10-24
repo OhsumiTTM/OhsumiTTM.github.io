@@ -186,6 +186,7 @@ export const en = {
   'login.orgSuspended': 'This organization has stopped using Ohsumi. Please contact your organization.',
   'login.orgUnavailable': "We couldn't check where your organization is right now. Please wait a moment and try again.",
   'login.orgMismatch': "The organization in the invitation link doesn't match the one we reached. Please check with your organization contact.",
+  'login.securityRelogin': 'For your security, please sign in again.',
   'login.orgMoved': "Your organization's connection has changed. Please sign in again.",
   'login.noOrg': 'Please open the invitation link your organization sent you.',
   'login.retry': 'Try again',

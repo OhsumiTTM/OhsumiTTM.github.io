@@ -323,6 +323,21 @@ describe('セッショントークンの確認', () => {
     expect(Number(t.props.SESSION_NOT_BEFORE)).toBeGreaterThan(Date.UTC(2026, 0, 1) / 1000)
   })
 
+  it('ログインを切った後は、延長で発行し直したトークンも、切る前のログインなら無効にする(理由をログイン画面に出す)', () => {
+    const t = setup()
+    const token = t.login()
+    const loginAt = Math.floor(t.clock.now / 1000)
+    // 期限の半分を過ぎると、延長したトークンが返る(Google でログインした時刻はそのまま)
+    t.clock.now += 8 * 24 * 3600 * 1000
+    const renewed = t.post({ action: 'getMyEmails', sessionToken: token }).session!
+    expect(renewed).toBeTruthy()
+    // ログインの後・延長の前の時刻で切る
+    t.props.SESSION_NOT_BEFORE = String(loginAt + 3600)
+    const res = t.post({ action: 'getMyEmails', sessionToken: renewed.token }) as { ok: boolean; error?: string; securityRelogin?: boolean }
+    expect(res).toMatchObject({ ok: false, securityRelogin: true, error: 'セキュリティ保護のため、もう一度ログインしてください。' })
+    expect(t.post({ action: 'getMyEmails', sessionToken: t.login() }).ok).toBe(true)
+  })
+
   it('全端末でログアウトすると、そのメンバーのトークンだけが無効になる(世代番号の不一致)', () => {
     const t = setup()
     const mine = t.login('member@example.com')
