@@ -202,3 +202,56 @@ describe('切り替えずにログインし直す', () => {
     expect(relogin).not.toMatch(/await|then\(|setTimeout/)
   })
 })
+
+describe('カレンダー(兼部の統合表示の第3段階)', () => {
+  it('月の読み取りの期間: to は月の終わり、from は期間の上限(62日)に収まる日', async () => {
+    const { m } = await load()
+    expect(m.monthDigestRange(2026, 9)).toEqual({ from: '2026-08-31', to: '2026-10-31' })
+    expect(m.monthDigestRange(2026, 1)).toEqual({ from: '2025-12-29', to: '2026-02-28' })
+    const r = m.monthDigestRange(2026, 11)
+    const days = (Date.parse(r.to) - Date.parse(r.from)) / 86400000
+    expect(days).toBeLessThanOrEqual(62)
+  })
+
+  it('月の読み取りは、送る期間を変え、前の月の答えとは分けて覚える', async () => {
+    const { m } = await load()
+    const sent: Record<string, unknown>[] = []
+    m.setDigestSenderForTest(async (_url, body) => { sent.push(body); return { ok: true, result: digest() } as never })
+    login(ORG_A)
+    const org = { orgId: ORG_A, gasUrl: URL_A }
+    await m.fetchOrgDigest(org, new Date(), 1000, m.monthDigestRange(2026, 9))
+    await m.fetchOrgDigest(org, new Date(), 1000, m.monthDigestRange(2026, 10))
+    expect(sent.map((b) => b.to)).toEqual(['2026-10-31', '2026-11-30'])
+    expect(sent[1].knownVersion).toBeUndefined()
+    await m.fetchOrgDigest(org, new Date(), 1000, m.monthDigestRange(2026, 9))
+    expect(sent[2].knownVersion).toBe('v1')
+  })
+
+  it('日付ごとに並べる: 担当の期限・開始日、確認待ち、日程調整の候補、フォームの期限。日付の無いもの・出さない団体は除く', async () => {
+    const { m } = await load()
+    const task = (over: Record<string, unknown>) => ({ id: 't', title: 'タスク', status: 'todo', role: 'assignee', overdue: false, dueDate: '', dueTime: '', startDate: '', priority: '', importance: '', projectName: '', ...over })
+    const orgs = [{ orgId: ORG_A, gasUrl: URL_A, name: '団体A', current: true }, { orgId: ORG_B, gasUrl: URL_B, name: '団体B', current: false }]
+    const states = {
+      [ORG_A]: { kind: 'ok' as const, digest: digest({ tasks: [
+        task({ id: 'a1', title: '期限と開始', dueDate: '2026-10-20', dueTime: '10:00', startDate: '2026-10-15' }),
+        task({ id: 'a2', title: '日付なし' }),
+        task({ id: 'a3', title: '確認', role: 'reviewTarget', dueDate: '2026-10-20' }),
+        task({ id: 'a4', title: '日程', role: 'invitee', inviteKind: 'schedule', candidates: [{ id: 'c1', label: '', date: '2026-10-21', startTime: '18:00', endTime: '' }, { id: 'c2', label: '', date: '2026-10-22', startTime: '', endTime: '' }] }),
+        task({ id: 'a5', title: 'フォーム', role: 'invitee', inviteKind: 'form', dueDate: '2026-10-23' }),
+      ] }) },
+      [ORG_B]: { kind: 'ok' as const, digest: digest({ orgName: '団体B', themeColor: '#abcdef', tasks: [task({ id: 'b1', title: 'B の期限', dueDate: '2026-10-20' })] }) },
+    }
+    const map = m.calendarEntries(orgs, states)
+    expect([...map.keys()].sort()).toEqual(['2026-10-15', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'])
+    expect(map.get('2026-10-15')!.map((e) => [e.kind, e.task.id])).toEqual([['start', 'a1']])
+    // 時刻のあるもの → 種類の順 → 名前の順
+    expect(map.get('2026-10-20')!.map((e) => [e.kind, e.task.id, e.task.orgId])).toEqual([['due', 'a1', ORG_A], ['due', 'b1', ORG_B], ['review', 'a3', ORG_A]])
+    expect(map.get('2026-10-21')![0]).toMatchObject({ kind: 'candidate', time: '18:00' })
+    expect(map.get('2026-10-23')![0]).toMatchObject({ kind: 'form' })
+    expect(map.get('2026-10-20')![1].task).toMatchObject({ orgName: '団体B', themeColor: '#abcdef' })
+    // 団体B を出さない
+    expect(m.calendarEntries(orgs, states, [ORG_B]).get('2026-10-20')!.map((e) => e.task.id)).toEqual(['a1', 'a3'])
+    // 読めていない団体は出さない
+    expect(m.calendarEntries(orgs, { [ORG_A]: { kind: 'loading' } }).size).toBe(0)
+  })
+})

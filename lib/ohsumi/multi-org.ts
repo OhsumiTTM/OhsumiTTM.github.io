@@ -100,6 +100,16 @@ export function localDate(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// カレンダーで見る月の読み取りの期間(兼部の統合表示の第3段階)。GAS は to より後の期限のタスクだけを除くので、
+// to を表示する月の終わりにし、from は期間の上限(62日)に収まる日にする
+export const DIGEST_MAX_DAYS = 62
+export function monthDigestRange(year: number, month: number): { from: string; to: string } {
+  const end = new Date(year, month + 1, 0)
+  const start = new Date(end.getTime())
+  start.setDate(start.getDate() - (DIGEST_MAX_DAYS - 1))
+  return { from: localDate(start), to: localDate(end) }
+}
+
 export function digestRange(now: Date): { from: string; to: string } {
   const to = new Date(now.getTime())
   to.setDate(to.getDate() + DIGEST_DAYS)
@@ -133,11 +143,17 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> {
 }
 
 /** 1つの団体の getMyDigest を読む(ログインが無ければ送らない) */
-export async function fetchOrgDigest(org: Pick<DigestOrg, 'orgId' | 'gasUrl'>, now: Date = new Date(), timeoutMs = DIGEST_TIMEOUT_MS): Promise<OrgDigestState> {
+// range: 読む期間(省くと今日から DIGEST_DAYS 日。カレンダーは monthDigestRange)
+export async function fetchOrgDigest(
+  org: Pick<DigestOrg, 'orgId' | 'gasUrl'>,
+  now: Date = new Date(),
+  timeoutMs = DIGEST_TIMEOUT_MS,
+  range: { from: string; to: string } = digestRange(now),
+): Promise<OrgDigestState> {
   const session = loadSession(org.orgId)
   if (!session) return { kind: 'loginNeeded' }
-  const range = digestRange(now)
-  const prev = memory.get(org.orgId)
+  const memoryKey = org.orgId + '|' + range.to
+  const prev = memory.get(memoryKey)
   const knownVersion = prev && prev.from === range.from ? prev.digest.version : undefined
   let json: GasResponse<unknown> | 'timeout'
   try {
@@ -164,7 +180,7 @@ export async function fetchOrgDigest(org: Pick<DigestOrg, 'orgId' | 'gasUrl'>, n
   if (!result) return { kind: 'error', message: '' }
   if (result.unchanged && prev) return { kind: 'ok', digest: prev.digest }
   if (!Array.isArray(result.tasks)) return { kind: 'error', message: '' }
-  memory.set(org.orgId, { from: range.from, digest: result })
+  memory.set(memoryKey, { from: range.from, digest: result })
   return { kind: 'ok', digest: result }
 }
 
@@ -173,12 +189,13 @@ export async function fetchAllDigests(
   orgs: Pick<DigestOrg, 'orgId' | 'gasUrl'>[],
   onResult: (orgId: string, state: OrgDigestState) => void,
   now: Date = new Date(),
+  range?: { from: string; to: string },
 ): Promise<void> {
   let next = 0
   const worker = async () => {
     while (next < orgs.length) {
       const org = orgs[next++]
-      onResult(org.orgId, await fetchOrgDigest(org, now))
+      onResult(org.orgId, await fetchOrgDigest(org, now, DIGEST_TIMEOUT_MS, range))
     }
   }
   await Promise.all(Array.from({ length: Math.min(DIGEST_CONCURRENCY, orgs.length) }, worker))
@@ -282,4 +299,61 @@ export function parseReloginMessage(e: { origin: string; data: unknown }, origin
   const s = d.session as Partial<StoredSession> | undefined
   if (!s || typeof s.token !== 'string' || typeof s.exp !== 'number') return null
   return { type: RELOGIN_MESSAGE_TYPE, orgId: d.orgId, session: { token: s.token, exp: s.exp, remember: s.remember === true } }
+}
+
+// ---- カレンダー(兼部の統合表示の第3段階) -------------------------------------------------
+//
+// 「すべての団体」の「カレンダー」に出す1件。団体ごとの getMyDigest(本人の分だけ)を、日付ごとに並べる:
+//   due        担当のタスクの期限の日
+//   start      担当のタスクの開始の日(期限と違う日の時だけ)
+//   review     確認待ち(本人が確認する人)のタスクの期限の日
+//   candidate  回答待ちの日程調整の候補の日
+//   form       回答待ちのフォームの期限の日
+// 日付の無いものは出さない(一覧に出る)。hiddenOrgIds の団体は出さない
+export type CalendarEntryKind = 'due' | 'start' | 'review' | 'candidate' | 'form'
+
+export interface CalendarEntry {
+  date: string
+  kind: CalendarEntryKind
+  time: string
+  task: CombinedTask
+}
+
+export function calendarEntries(orgs: DigestOrg[], states: Record<string, OrgDigestState | undefined>, hiddenOrgIds: readonly string[] = []): Map<string, CalendarEntry[]> {
+  const map = new Map<string, CalendarEntry[]>()
+  const add = (e: CalendarEntry) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date)) return
+    const list = map.get(e.date) ?? []
+    list.push(e)
+    map.set(e.date, list)
+  }
+  for (const org of orgs) {
+    if (hiddenOrgIds.includes(org.orgId)) continue
+    const state = states[org.orgId]
+    if (!state || state.kind !== 'ok') continue
+    const orgName = state.digest.orgName || org.name
+    const themeColor = state.digest.themeColor || ''
+    for (const t of state.digest.tasks) {
+      const task: CombinedTask = { ...t, orgId: org.orgId, orgName, themeColor }
+      if (t.role === 'invitee') {
+        if (t.inviteKind === 'form') {
+          if (t.dueDate) add({ date: t.dueDate, kind: 'form', time: t.dueTime || '', task })
+        } else {
+          for (const c of t.candidates ?? []) add({ date: c.date, kind: 'candidate', time: c.startTime || '', task })
+        }
+        continue
+      }
+      if (t.role === 'reviewTarget') {
+        if (t.dueDate) add({ date: t.dueDate, kind: 'review', time: t.dueTime || '', task })
+        continue
+      }
+      if (t.dueDate) add({ date: t.dueDate, kind: 'due', time: t.dueTime || '', task })
+      if (t.startDate && t.startDate !== t.dueDate) add({ date: t.startDate, kind: 'start', time: '', task })
+    }
+  }
+  const order: Record<CalendarEntryKind, number> = { due: 0, review: 1, form: 2, candidate: 3, start: 4 }
+  for (const list of map.values()) {
+    list.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99') || order[a.kind] - order[b.kind] || a.task.title.localeCompare(b.task.title))
+  }
+  return map
 }

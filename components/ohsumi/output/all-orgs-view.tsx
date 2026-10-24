@@ -28,6 +28,7 @@ import {
 import { storeSessionFor } from '@/lib/ohsumi/session'
 import { SegmentedButton, SegmentedControl } from '../segmented'
 import { OutputScreen } from './output-screen'
+import { AllOrgsCalendar } from './all-orgs-calendar'
 
 type Scope = 'org' | 'all'
 const SCOPE_KEY = 'ohsumi-home-scope'
@@ -38,6 +39,18 @@ function loadScope(): Scope {
 
 function saveScope(scope: Scope) {
   try { window.localStorage.setItem(SCOPE_KEY, scope) } catch { /* このページの間だけ */ }
+}
+
+// 「すべての団体」の出し方(一覧 / カレンダー。兼部の統合表示の第3段階)。この端末に覚える
+type Mode = 'list' | 'calendar'
+const MODE_KEY = 'ohsumi-all-orgs-mode'
+
+function loadMode(): Mode {
+  try { return window.localStorage.getItem(MODE_KEY) === 'calendar' ? 'calendar' : 'list' } catch { return 'list' }
+}
+
+function saveMode(mode: Mode) {
+  try { window.localStorage.setItem(MODE_KEY, mode) } catch { /* このページの間だけ */ }
 }
 
 /** ホーム(OUTPUT)。兼部している時だけ、上に「この団体 / すべての団体」を出す */
@@ -87,8 +100,16 @@ function AllOrgsView({ onOpenCurrent, onLeave }: { onOpenCurrent: (taskId: strin
   const [states, setStates] = useState<Record<string, OrgDigestState>>({})
   const [loading, setLoading] = useState(false)
   const today = localDate(new Date())
+  const [mode, setModeState] = useState<Mode>(loadMode)
+  const setMode = (m: Mode) => {
+    setModeState(m)
+    saveMode(m)
+  }
+  // カレンダーも読み直す印(「読み込み直す」・ログインし直した時)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   const loadAll = useCallback(() => {
+    setRefreshKey((k) => k + 1)
     setLoading(true)
     setStates(Object.fromEntries(orgs.map((o) => [o.orgId, { kind: 'loading' } as OrgDigestState])))
     void fetchAllDigests(orgs, (orgId, state) => setStates((prev) => ({ ...prev, [orgId]: state }))).finally(() => setLoading(false))
@@ -108,6 +129,7 @@ function AllOrgsView({ onOpenCurrent, onLeave }: { onOpenCurrent: (taskId: strin
       storeSessionFor(msg.orgId, msg.session)
       const org = orgs.find((o) => o.orgId === msg.orgId)
       if (!org) return
+      setRefreshKey((k) => k + 1)
       setStates((prev) => ({ ...prev, [org.orgId]: { kind: 'loading' } }))
       void fetchOrgDigest(org).then((state) => setStates((prev) => ({ ...prev, [org.orgId]: state })))
     }
@@ -203,54 +225,65 @@ function AllOrgsView({ onOpenCurrent, onLeave }: { onOpenCurrent: (taskId: strin
         })}
       </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {sections.map((s) => (
-          <section key={s.key} className="min-w-0 rounded-xl border border-border bg-card p-3" data-all-orgs-section={s.key}>
-            <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-              <s.icon className="size-4 text-muted-foreground" />
-              {t(s.title)}
-              <span className="text-xs font-normal text-muted-foreground">{s.tasks.length}</span>
-            </h2>
-            {s.tasks.length === 0 ? (
-              <p className="py-2 text-xs text-muted-foreground">{t('multiOrg.empty')}</p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {s.tasks.map((task) => (
-                  <li key={task.orgId + ':' + task.id}>
-                    <button
-                      type="button"
-                      onClick={() => open(task)}
-                      className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-secondary"
-                      data-all-orgs-task={task.id}
-                    >
-                      <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-muted-foreground" title={task.orgName} data-org-badge>
-                        <span className="h-4 w-1 rounded-full" style={{ background: task.themeColor || 'var(--primary)' }} aria-hidden />
-                        {shortOrgName(task.orgName) || '—'}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm">{task.title}</span>
-                        {task.projectName && <span className="block truncate text-[11px] text-muted-foreground">{task.projectName}</span>}
-                        {task.role === 'invitee' && task.candidates && task.candidates.length > 0 && (
-                          <span className="block truncate text-[11px] text-muted-foreground">
-                            {t('multiOrg.candidates', { list: task.candidates.slice(0, 3).map((c) => c.label || c.date).join('・') })}
-                          </span>
-                        )}
-                      </span>
-                      <span className={'shrink-0 text-xs ' + (task.overdue ? 'font-semibold text-destructive' : 'text-muted-foreground')}>
-                        {task.role === 'invitee'
-                          ? t(task.inviteKind === 'form' ? 'multiOrg.invite.form' : 'multiOrg.invite.schedule')
-                          : task.dueDate
-                            ? task.dueDate.slice(5).replace('-', '/') + (task.overdue ? ' ' + t('multiOrg.overdue') : '')
-                            : s.key === 'week' && task.startDate ? t('multiOrg.starts', { date: task.startDate.slice(5).replace('-', '/') }) : ''}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        ))}
+      <div className="mb-3" data-all-orgs-mode={mode}>
+        <SegmentedControl ariaLabel={t('multiOrg.mode.label')}>
+          <SegmentedButton active={mode === 'list'} onClick={() => setMode('list')}>{t('multiOrg.mode.list')}</SegmentedButton>
+          <SegmentedButton active={mode === 'calendar'} onClick={() => setMode('calendar')}>{t('multiOrg.mode.calendar')}</SegmentedButton>
+        </SegmentedControl>
       </div>
+
+      {mode === 'calendar' ? (
+        <AllOrgsCalendar orgs={orgs} onOpen={open} refreshKey={refreshKey} />
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {sections.map((s) => (
+            <section key={s.key} className="min-w-0 rounded-xl border border-border bg-card p-3" data-all-orgs-section={s.key}>
+              <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+                <s.icon className="size-4 text-muted-foreground" />
+                {t(s.title)}
+                <span className="text-xs font-normal text-muted-foreground">{s.tasks.length}</span>
+              </h2>
+              {s.tasks.length === 0 ? (
+                <p className="py-2 text-xs text-muted-foreground">{t('multiOrg.empty')}</p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {s.tasks.map((task) => (
+                    <li key={task.orgId + ':' + task.id}>
+                      <button
+                        type="button"
+                        onClick={() => open(task)}
+                        className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-secondary"
+                        data-all-orgs-task={task.id}
+                      >
+                        <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-muted-foreground" title={task.orgName} data-org-badge>
+                          <span className="h-4 w-1 rounded-full" style={{ background: task.themeColor || 'var(--primary)' }} aria-hidden />
+                          {shortOrgName(task.orgName) || '—'}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm">{task.title}</span>
+                          {task.projectName && <span className="block truncate text-[11px] text-muted-foreground">{task.projectName}</span>}
+                          {task.role === 'invitee' && task.candidates && task.candidates.length > 0 && (
+                            <span className="block truncate text-[11px] text-muted-foreground">
+                              {t('multiOrg.candidates', { list: task.candidates.slice(0, 3).map((c) => c.label || c.date).join('・') })}
+                            </span>
+                          )}
+                        </span>
+                        <span className={'shrink-0 text-xs ' + (task.overdue ? 'font-semibold text-destructive' : 'text-muted-foreground')}>
+                          {task.role === 'invitee'
+                            ? t(task.inviteKind === 'form' ? 'multiOrg.invite.form' : 'multiOrg.invite.schedule')
+                            : task.dueDate
+                              ? task.dueDate.slice(5).replace('-', '/') + (task.overdue ? ' ' + t('multiOrg.overdue') : '')
+                              : s.key === 'week' && task.startDate ? t('multiOrg.starts', { date: task.startDate.slice(5).replace('-', '/') }) : ''}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
       <p className="mt-4 text-xs text-muted-foreground">{t('multiOrg.privacyNote')}</p>
     </div>
   )
