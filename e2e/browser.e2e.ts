@@ -839,6 +839,10 @@ describe.skipIf(!available)('項目ごとの公開範囲: 部署長の一般の�
     const card = `[...document.querySelectorAll('button')].find((b) => b.textContent.includes('部署の人'))`
     await waitFor(() => page.evaluate<boolean>(`!!${card}`), '「個人」に部署の人が出ません')
     await page.evaluate(`${card}.click(); true`)
+    // ほかの人のページは「タスク」から開く。日報は「概要」に出す
+    const overview = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '概要')`
+    await waitFor(() => page.evaluate<boolean>(`!!${overview}`), '個人ページに「概要」がありません')
+    await page.evaluate(`${overview}.click(); true`)
   }
   const reportsShown = () => page.evaluate<string>(`document.querySelector('[data-member-daily-reports]')?.textContent ?? ''`)
 

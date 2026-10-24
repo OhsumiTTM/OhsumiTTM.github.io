@@ -35,12 +35,13 @@ function registered() {
 }
 
 describe('接続先の解決(resolveOrg)', () => {
-  it('団体ID が一致すれば、団体の GAS の URL・状態・チャンネル・確かめた時刻・保存してよい秒数だけを返す', () => {
+  it('団体ID が一致すれば、団体の GAS の URL・状態・チャンネル・画面の版・確かめた時刻・保存してよい秒数だけを返す', () => {
     const t = registered()
     const res = t.resolve(ORG_A)
     expect(res.ok).toBe(true)
-    expect(Object.keys(res.result).sort()).toEqual(['channel', 'checkedAt', 'gasUrl', 'maxAgeSec', 'orgId', 'status'])
-    expect(res.result).toMatchObject({ orgId: ORG_A, gasUrl: URL_A, status: 'active', channel: 'standard', maxAgeSec: 86400 })
+    expect(Object.keys(res.result).sort()).toEqual(['channel', 'checkedAt', 'gasUrl', 'maxAgeSec', 'orgId', 'siteVersion', 'status'])
+    // 画面の版: プランに一番新しい版を配っている(行が無い)時は main の画面('')
+    expect(res.result).toMatchObject({ orgId: ORG_A, gasUrl: URL_A, status: 'active', channel: 'standard', siteVersion: '', maxAgeSec: 86400 })
     expect(Date.parse(res.result.checkedAt)).toBeGreaterThan(0)
     // 団体名・担当者・共有鍵は返さない
     const text = JSON.stringify(res)

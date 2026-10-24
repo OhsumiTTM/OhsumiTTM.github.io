@@ -62,6 +62,25 @@ const BEFORE_PAINT_SCRIPT =
   "document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('meta[name=theme-color]')" +
   ".forEach(function(m){m.setAttribute('content',t==='dark'?'#08111f':'#f6f8fc')})})})()"
 
+// 版の画面(lib/ohsumi/site-version.ts)。ほかの描画より先に動く:
+//   ・版の画面(/_v/<版>/ に置いたビルド)では、アドレスバーを /?org=…&task=… に戻す(リンクは今と同じに見せる)
+//   ・main の画面で /_v/ の下が開いた時は、その版の画面が無い(404)。覚えた移る先を消して / に戻す
+//   ・main の画面で Ohsumi を開いた時(?org= か ?login=)は、その団体の移る先(端末に覚えた screen)があれば、すぐそこに移る
+//     (このタブで1分に3回まで。同じ所を行ったり来たりしないように)
+const SITE_VERSION = process.env.NEXT_PUBLIC_SITE_VERSION || ''
+const SITE_SCRIPT =
+  "(function(){var V=" + JSON.stringify(SITE_VERSION) + ",l=location,P=/^\\d{4}\\.\\d{2}\\.\\d{2}-\\d+$/;" +
+  "if(V){if(l.pathname.indexOf('/_v/'+V+'/')===0)history.replaceState(history.state,'','/'+l.search+l.hash);return}" +
+  "var bad=l.pathname.indexOf('/_v/')===0;if(!bad&&!/[?&](org|login)=/.test(l.search))return;" +
+  "try{var m=/[?&]org=([^&#]*)/.exec(l.search),id=m?decodeURIComponent(m[1]):localStorage.getItem('ohsumi-current-org')," +
+  "list=JSON.parse(localStorage.getItem('ohsumi-orgs')||'[]'),o=null,i;" +
+  "for(i=0;i<list.length;i++)if(list[i]&&list[i].orgId===id)o=list[i];" +
+  "if(bad){if(o){o.screen='';localStorage.setItem('ohsumi-orgs',JSON.stringify(list))}l.replace('/'+l.search+l.hash);return}" +
+  "var s=o&&o.screen;if(typeof s!=='string'||!P.test(s))return;" +
+  "var k='ohsumi-site-hops',now=Date.now(),h=JSON.parse(sessionStorage.getItem(k)||'null'),f=h&&now-h.at<60000,n=f?h.n||0:0;" +
+  "if(n>=3)return;sessionStorage.setItem(k,JSON.stringify({n:n+1,at:f?h.at:now}));" +
+  "l.replace('/_v/'+s+'/'+l.search+l.hash)}catch(e){if(bad)l.replace('/'+l.search+l.hash)}})()"
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -71,9 +90,12 @@ export default function RootLayout({
     <html
       lang="ja"
       suppressHydrationWarning
+      // 版の画面のビルドだけに付ける(どの画面が開いたかを scripts/check-layout.mjs で確かめる)
+      data-site-version={SITE_VERSION || undefined}
       className={`${geistSans.variable} ${geistMono.variable} bg-background`}
     >
       <head>
+        {!IS_DEMO && <script dangerouslySetInnerHTML={{ __html: SITE_SCRIPT }} />}
         <script dangerouslySetInnerHTML={{ __html: BEFORE_PAINT_SCRIPT }} />
       </head>
       <body className="font-sans antialiased">
