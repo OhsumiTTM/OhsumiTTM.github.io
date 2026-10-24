@@ -920,7 +920,15 @@ describe.skipIf(!available)('評価をスキルの根拠にする: 代表が評�
       const pts = JSON.parse(memberRow(baseId).skill_points_json || '{}') as Record<string, number>
       return pts[skill] === (before[skill] ?? 0) + 30
     }, 'GAS のスキルの点数に、評価で付けた点数が入りません')
-    const evals = JSON.parse(memberRow(baseId).evaluation_history_json || '[]') as { skillAssessments?: { skill: string; level: number; points: number }[] }[]
+    // 評価は、記録を行に持った後は MemberRecords にある(セルに持つ間は Members の列)
+    type Ev = { skillAssessments?: { skill: string; level: number; points: number }[] }
+    const records = A.org.sheets.MemberRecords
+    const fromRows = (): Ev[] => {
+      if (!records) return []
+      const [head, ...rows] = records.rows.map((r) => r.map(String))
+      return rows.filter((r) => r[head.indexOf('member_id')] === baseId && r[head.indexOf('kind')] === 'evaluation').map((r) => JSON.parse(r[head.indexOf('body_json')]) as Ev)
+    }
+    const evals = [...(JSON.parse(memberRow(baseId).evaluation_history_json || '[]') as Ev[]), ...fromRows()]
     expect(evals.at(-1)?.skillAssessments).toEqual([expect.objectContaining({ skill, level: 2, points: 30 })])
     await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-eval-assessment]')`), '評価履歴に付けた見立てが出ません')
   })
