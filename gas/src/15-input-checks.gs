@@ -597,7 +597,7 @@ function notifyReview_(taskId) {
       preferredEmails,
       { urgent: true },
     )
-    notifyChat_('🔔 ' + chatTaskLabel_(task) + 'が確認待ちになりました。')
+    notifyChat_('🔔 ' + chatTaskLabel_(task) + 'が確認待ちになりました。', String(taskId))
   } catch (err) {
     console.error('notifyReviewの通知送信に失敗しました: ' + maskEmailsIn_(String(err)))
   }
