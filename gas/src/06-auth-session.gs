@@ -213,6 +213,7 @@ function authFindRow_(sheetName, rowId) {
 //   SESSION_GEN_<メンバーID>  メンバーごとの世代番号(全端末でログアウトで1増える)
 
 var SESSION_TOKEN_VERSION = 'v1'
+var SECURITY_RELOGIN_MESSAGE = 'セキュリティ保護のため、もう一度ログインしてください。'
 // チェックあり(この端末に保存): 1回14日、Googleでのログインから最長30日
 var SESSION_TTL_REMEMBER_SEC = 14 * 24 * 3600
 var SESSION_MAX_REMEMBER_SEC = 30 * 24 * 3600
@@ -355,7 +356,13 @@ function verifySessionToken_(token) {
   var now = nowSec_()
   if (!(Number(payload.exp) > now)) throw userError_('ログインの有効期限が切れました。再ログインしてください。')
   var notBefore = Number(props.SESSION_NOT_BEFORE || 0)
-  if (Number(payload.iat) < notBefore) throw userError_('ログイン情報が無効になりました。再ログインしてください。')
+  // Google でログインした時刻(auth)で比べる(延長で発行し直したトークンも、切る前のログインなら無効にする)
+  if (Number(payload.auth || payload.iat) < notBefore || Number(payload.iat) < notBefore) {
+    // ログインを一斉に切った後(revokeSessionsIssuedBefore・レジストリの指示)。画面はログイン画面に、この理由の知らせを出す
+    var revokedErr = userError_(SECURITY_RELOGIN_MESSAGE)
+    revokedErr.securityRelogin = true
+    throw revokedErr
+  }
   if (!payload.sub) throw userError_('ログイン情報の形式が不正です。再ログインしてください。')
   if (Number(payload.gen) !== sessionGeneration_(payload.sub)) {
     throw userError_('この端末のログインは無効になりました(全端末でログアウト済み)。再ログインしてください。')

@@ -208,6 +208,12 @@ function checkContractStatus() {
       console.error('停止の予告のメールを送れませんでした: ' + e)
     }
   }
+  // ログインを切ったことの知らせは、停止中でも送る(送れなければ次の確認で送り直す)
+  try {
+    sendSessionsRevokeMail_()
+  } catch (e) {
+    console.error('ログインを切ったことを、代表にメールで送れませんでした: ' + maskEmailsIn_(String(e)))
+  }
   // 提供停止中は知らせない(機能停止中は知らせる)
   if (contractSuspendedNow_()) return
   try {

@@ -42,6 +42,8 @@ export interface GasResponse<T = unknown> {
   error?: string
   // セッションが無効・期限切れ(画面はログイン画面に戻す)
   authError?: boolean
+  // ログインを一斉に切った後の無効なセッション(ログイン画面に理由を出す)
+  securityRelogin?: boolean
   // 権限が足りない(セッションは有効。ログイン画面には戻さない)
   forbidden?: boolean
   reloadRequired?: boolean

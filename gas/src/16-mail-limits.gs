@@ -207,7 +207,10 @@ function quotaMessage_(kind, login) {
 function authFailure_(err) {
   var kind = quotaKind_(err)
   if (kind) return { ok: false, error: quotaMessage_(kind, true), quotaExceeded: kind }
-  return { ok: false, error: toErrorMessage_(err), authError: true }
+  var out = { ok: false, error: toErrorMessage_(err), authError: true }
+  // ログインを一斉に切った後は、画面がログイン画面に「セキュリティ保護のため…」を出す(06-auth-session.gs)
+  if (err && err.securityRelogin) out.securityRelogin = true
+  return out
 }
 
 function sendMailUnmeasured_(options) {
