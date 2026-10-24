@@ -312,6 +312,8 @@ function removeMember_(memberId, actorId, nowMs) {
   var member = findRow_(SHEET_MEMBERS, memberId)
   if (!member) throw userError_('メンバーが見つかりません。')
   if (String(member.withdrawn_at || '')) return { removed: String(memberId), withdrawnAt: String(member.withdrawn_at) }
+  // 退会した人はログインできないので、スキルの引き継ぎコードを作って本人に送る(実績が無い・登録していない団体は作らない。失敗しても退会は止めない)
+  try { createSkillTransferCode_(memberId, { auto: true }) } catch (e) { console.warn('退会: スキルの引き継ぎコードを作れませんでした: ' + maskEmailsIn_(String((e && e.message) || e))) }
 
   var tasks = getSheet_(SHEET_TASKS)
   var taskHeaders = headerRow_(tasks)
