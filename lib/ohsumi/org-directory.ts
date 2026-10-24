@@ -360,7 +360,20 @@ export async function applySiteVersion(org: SavedOrg, deps: {
   manifest?: () => Promise<string[] | null>
   go?: (url: string) => void
 } = {}): Promise<'stay' | 'hop' | 'blocked'> {
-  if (typeof window === 'undefined' || activeOrgId !== org.orgId) return 'stay'
+  // 画面を移れなくても、今の画面でそのまま使う(呼ぶ側は待たないので、ここで失敗を止める)
+  try {
+    return await applySiteVersionUnsafe(org, deps)
+  } catch {
+    return 'stay'
+  }
+}
+
+async function applySiteVersionUnsafe(org: SavedOrg, deps: {
+  current?: string
+  manifest?: () => Promise<string[] | null>
+  go?: (url: string) => void
+}): Promise<'stay' | 'hop' | 'blocked'> {
+  if (typeof window === 'undefined' || !window.location || activeOrgId !== org.orgId) return 'stay'
   const current = deps.current ?? SITE_VERSION
   const wanted = org.siteVersion ?? ''
   const available = wanted && wanted !== current ? await (deps.manifest ?? loadManifest)() : []

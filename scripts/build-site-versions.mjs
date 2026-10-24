@@ -9,7 +9,8 @@
 // (lib/ohsumi/site-version.ts)。1つの版を作れなかった時は、その版を飛ばして続ける(その版のプランは main の画面になる)。
 //
 // 使い方: node scripts/build-site-versions.mjs [出力先(既定: out)]
-//   ビルドの設定(Secrets など)は、本番のビルドと同じ環境変数を渡す。git の履歴が要る(actions/checkout の fetch-depth: 0)
+//   ビルドの設定(Secrets など)は、本番のビルドと同じ環境変数を渡す。git の履歴が要る(actions/checkout の fetch-depth: 0)。
+//   main の上で動かす(デプロイ)。ほかのブランチでは、main を取り込んだマージのコミットを「次の版を足したコミット」と数えてしまう
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
