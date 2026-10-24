@@ -18837,7 +18837,8 @@ function claimSkillTransferCode_(memberId, code, deps) {
     qualifications_json: JSON.stringify(quals),
     external_skills_json: JSON.stringify(ledger),
   })
-  return { added: added.map(function (e) { return { transferId: e.transferId, originOrgName: e.originOrgName, via: e.via } }), skipped: skipped }
+  return { added: added.map(function (e) { return { transferId: e.transferId, originOrgName: e.originOrgName, via: e.via } }), skipped: skipped,
+    member: { skillPoints: points, skillLevels: levels, qualifications: quals, externalSkills: ledger } }
 }
 
 // 受け取った分を出どころごとに消す(点数を引き、その出どころの資格を外す。レベルは下げない)
@@ -18853,10 +18854,12 @@ function removeTransferredSkills_(memberId, transferId) {
     points[k] = Math.max(0, (Number(points[k]) || 0) - (Number(hit.points[k]) || 0))
   })
   var quals = (parseJsonCell_(row.qualifications_json, []) || []).filter(function (q) { return !(q && q.transferId === hit.transferId) })
+  var rest = ledger.filter(function (e) { return e !== hit })
   updateMemberFields_(memberId, {
     skill_points_json: JSON.stringify(points),
     qualifications_json: JSON.stringify(quals),
-    external_skills_json: JSON.stringify(ledger.filter(function (e) { return e !== hit })),
+    external_skills_json: JSON.stringify(rest),
   })
-  return { removed: String(hit.transferId) }
+  return { removed: String(hit.transferId),
+    member: { skillPoints: points, skillLevels: parseJsonCell_(row.skill_levels_json, []) || [], qualifications: quals, externalSkills: rest } }
 }
