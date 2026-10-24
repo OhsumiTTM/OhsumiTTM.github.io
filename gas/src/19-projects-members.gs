@@ -1,6 +1,6 @@
 // ---- Projects ---------------------------------------------------------------
 
-function createProject_(name, description, type, parentId) {
+function createProject_(name, description, type, parentId, wikiPageIds) {
   var sheet = getSheet_(SHEET_PROJECTS)
   var headers = headerRow_(sheet)
   var id = String(nextIntId_(sheet, headers))
@@ -10,6 +10,7 @@ function createProject_(name, description, type, parentId) {
     if (h === 'description') return description || ''
     if (h === 'type') return type || ''
     if (h === 'parent_id') return parentId || ''
+    if (h === 'wiki_page_ids') return (wikiPageIds || []).join(',')
     return ''
   })
   assertRowCellLengths_('Projects', headers, row)

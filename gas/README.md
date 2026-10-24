@@ -1677,6 +1677,8 @@ Excel等で開いた場合には効きません（CSVには書式情報が乗ら
 - **画像:** `uploadWikiImage` で `wiki_image_` で始まる名前でアップロード用フォルダに置き、本文には `![説明](wiki:<ファイルID>)` と書きます。`getFiles` は、そのファイルIDを本文に含むページを見られる人(と、自分の提案・管理の権限を持つ人)にだけ渡します
 - **読む:** `listWikiPages`・`getWikiPage`・`getWikiRevision`・`getWikiProposal`・`searchWiki`(タイトル・本文・タグ。50件まで)
 - **上限:** タイトル120文字・本文45000文字・フォルダ5段(1段40文字)・タグ10個(1つ30文字)・見送る理由500文字
+- **タスク・プロジェクトにつなぐ(2026.10.24-6 から):** `Tasks`・`Projects` の `wiki_page_ids` 列(カンマ区切りのページID。10ページまで。列が無いシートには、初めて書く時に足します)。`updateTaskWikiPages` はタスクの担当者・確認者・作成者・全権管理者(`TASK_OWNER_SCOPED_ACTIONS`)、`updateProjectWikiPages` はプロジェクトの責任者(役職によらず)と管理者(`updateProjectDetails` と同じ)ができます。つなげるのは、その人が見られるページだけです。画面は、見る人が見られるページだけを出します(題は `listWikiPages` から引くので、見られないページの題は届きません)。見られないページのリンクは、その人が直しても残します
+- **テンプレート:** プロジェクトのテンプレート・業務テンプレートのタスクに `wikiPageIds` を持たせられ、作ったタスクに引き継ぎます(`createTasks`・`createProject` の `wikiPageIds`。無い・見られないページは黙って除き、作るのは止めません)
 
 ## 9.7. 画面から届いた値の確かめ
 

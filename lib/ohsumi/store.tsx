@@ -576,6 +576,9 @@ interface OhsumiContextValue extends OhsumiState {
   updateReviewer: (id: string, reviewerId: string | null) => void
   setBlocker: (id: string, note: string | null) => void
   setHoldReason: (id: string, note: string | null) => void
+  // ナレッジのページをつなぐ(見られないページのリンクは GAS が残す。答えの並びで置き換える)
+  setTaskWikiPages: (taskId: string, pageIds: string[]) => void
+  setProjectWikiPages: (projectId: string, pageIds: string[]) => void
   updateEstimatedHours: (id: string, hours: number | null) => void
   updateActualHours: (id: string, hours: number | null) => void
   updateRetrospective: (id: string, retrospective: TaskRetrospective | null) => void
@@ -3116,6 +3119,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         skills: item.skills,
         difficulty: item.difficulty,
         priority: item.priority,
+        wikiPageIds: item.wikiPageIds?.length ? item.wikiPageIds : undefined,
         status: 'todo',
         lastActivity: today,
         createdById: currentUserId ?? undefined,
@@ -3143,6 +3147,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
           deadline: null,
           creatorId: currentUserId ?? undefined,
           pendingApproval: true,
+          wikiPageIds: t.wikiPageIds,
         }))
         createTasksRemote(payloads, {
           onCreated: (realId) => {
@@ -3835,6 +3840,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         skills: t.skills,
         difficulty: t.difficulty,
         priority: t.priority,
+        wikiPageIds: t.wikiPageIds?.length ? t.wikiPageIds : undefined,
         status: 'todo',
         lastActivity: today,
         createdById: currentUserId ?? undefined,
@@ -3868,6 +3874,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
                 deadline: null,
                 creatorId: currentUserId ?? undefined,
                 pendingApproval: false,
+                wikiPageIds: t.wikiPageIds,
               }))
               createTasksRemote(payloads, {
                 onCreated: (realId) => {
@@ -4541,6 +4548,35 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
         ),
       )
       if (isRemoteConfigured) runRemote(remoteApi.setHoldReason(id, trimmed, since))
+    },
+    [runRemote],
+  )
+
+  const setTaskWikiPages = useCallback(
+    (taskId: string, pageIds: string[]) => {
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, wikiPageIds: pageIds } : t)))
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.updateTaskWikiPages(taskId, pageIds).then((r) => {
+            setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, wikiPageIds: r.wikiPageIds } : t)))
+            return r
+          }),
+        )
+      }
+    },
+    [runRemote],
+  )
+  const setProjectWikiPages = useCallback(
+    (projectId: string, pageIds: string[]) => {
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, wikiPageIds: pageIds } : p)))
+      if (isRemoteConfigured) {
+        runRemote(
+          remoteApi.updateProjectWikiPages(projectId, pageIds).then((r) => {
+            setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, wikiPageIds: r.wikiPageIds } : p)))
+            return r
+          }),
+        )
+      }
     },
     [runRemote],
   )
@@ -5850,6 +5886,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     approveTaskReview,
     setBlocker,
     setHoldReason,
+    setTaskWikiPages,
+    setProjectWikiPages,
     updateEstimatedHours,
     updateActualHours,
     updateRetrospective,

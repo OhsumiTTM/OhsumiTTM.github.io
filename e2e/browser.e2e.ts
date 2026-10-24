@@ -1103,3 +1103,54 @@ describe.skipIf(!available)('ナレッジ: 一般のメンバーの提案は、�
     expect(await page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-delete]')`)).toBe(false)
   })
 })
+
+describe.skipIf(!available)('ナレッジ: タスクにページをつなぐと、詳細から開け、ページの側にタスクが出る', () => {
+  const TASK = 'ナレッジのE2E(手順のあるタスク)'
+  const OPEN = 'E2E の手順(全員)'
+  const SECRET = 'E2E の手順(管理者だけ)'
+  const cell = (sheet: string, id: string, col: string) => {
+    A.org.cache.clear()
+    const [head, ...rows] = A.org.sheets[sheet].rows.map((r) => r.map(String))
+    const r = rows.find((x) => x[head.indexOf('id')] === id)
+    return r ? r[head.indexOf(col)] ?? '' : ''
+  }
+
+  it('担当者が詳細でページを選んでつなぐ → GAS に残る。見られないページは出さず、外しても残る。押すとページが開く', async () => {
+    const token = String(world.googleLogin(A.org, 'top@a.example').result.session.token)
+    const baseId = memberIdOf('base@a.example')
+    const mk = (title: string, kind: string) => {
+      const res = world.call(A.org, token, 'proposeWikiEdit', { page: { title, folder: '', tags: [], body: '# 手順\n本文', audience: { kind } } })
+      expect(res.ok, res.error).toBe(true)
+      return String((res.result as { pageId: string }).pageId)
+    }
+    const openId = mk(OPEN, 'all')
+    const secretId = mk(SECRET, 'leaders')
+    const made = world.call(A.org, token, 'createTasks', { tasks: [
+      { tempId: 'w1', title: TASK, projectId: '', department: '', category: '', skills: [], difficulty: 'beginner', priority: 'medium', deadline: null, assigneeIds: [baseId], pendingApproval: false },
+    ] })
+    expect(made.ok, made.error).toBe(true)
+    const [head, ...rows] = A.org.sheets.Tasks.rows.map((r) => r.map(String))
+    const taskId = rows.find((r) => r[head.indexOf('title')] === TASK)![head.indexOf('id')]
+    // 代表が、管理者だけのページを先につないでおく
+    expect(world.call(A.org, token, 'updateTaskWikiPages', { taskId, pageIds: [secretId] }).ok).toBe(true)
+
+    await navigate('/')
+    await clearDevice()
+    await navigate(`/?org=${A.orgId}&task=${taskId}`)
+    await googleSignIn('base@a.example')
+    await waitFor(loggedIn, 'base@a.example がログインできません')
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-task-wiki-links] [data-wiki-link-add]')`), 'タスクの詳細に「ページをつなぐ」が出ません')
+    // 管理者だけのページは、一般のメンバーには出ない
+    expect(await page.evaluate<number>(`document.querySelectorAll('[data-task-wiki-links] [data-wiki-link]').length`)).toBe(0)
+    await page.evaluate(`document.querySelector('[data-task-wiki-links] [data-wiki-link-add]').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-wiki-link-candidate="${openId}"]')`), 'つなぐページの候補が出ません')
+    expect(await page.evaluate<boolean>(`!!document.querySelector('[data-wiki-link-candidate="${secretId}"]')`)).toBe(false)
+    await page.evaluate(`document.querySelector('[data-wiki-link-candidate="${openId}"]').click(); true`)
+    await waitFor(async () => cell('Tasks', taskId, 'wiki_page_ids').split(',').sort().join(',') === [openId, secretId].sort().join(','), 'GAS に、つないだページが残りません(見られないページも残す)')
+
+    // 押すとナレッジの画面でページが開き、ページの側にこのタスクが出る
+    await page.evaluate(`document.querySelector('[data-task-wiki-links] [data-wiki-link="${openId}"] button').click(); true`)
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-view="${openId}"]')`), 'つないだページを押しても、ナレッジのページが開きません')
+    await waitFor(() => page.evaluate<boolean>(`!!document.querySelector('[data-knowledge-used-task="${taskId}"]')`), 'ページの側に、つないだタスクが出ません')
+  })
+})

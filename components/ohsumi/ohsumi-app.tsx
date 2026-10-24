@@ -281,7 +281,7 @@ function Router() {
         {screen.name === 'org-settings' && <OrgSettingsScreen />}
         {screen.name === 'skillgrid' && <SkillGridScreen />}
         {screen.name === 'learning' && <LearningContentScreen />}
-        {screen.name === 'knowledge' && <KnowledgeScreen />}
+        {screen.name === 'knowledge' && <KnowledgeScreen pageId={screen.pageId} />}
       </div>
       <footer className="border-t border-border px-4 py-4">
         {metricsSharingNotice && (

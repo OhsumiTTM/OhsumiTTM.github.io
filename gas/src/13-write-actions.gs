@@ -13,6 +13,14 @@ function runWriteAction_(body, actingMember) {
     case 'createTasks':
       // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
       prepareCreateTasks_(body.tasks, actingMember)
+      // テンプレートなどから付いたナレッジのページ。無い・見られないページは除く
+      var withWiki = false
+      ;(body.tasks || []).forEach(function (t) {
+        if (!t) return
+        t.wikiPageIds = checkWikiPageIds_(actingMember, t.wikiPageIds, false)
+        if (t.wikiPageIds.length) withWiki = true
+      })
+      if (withWiki) ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_TASKS, ['wiki_page_ids'])
       result = createTasks_(body.tasks, actingMember.id, { allowImport: isAdminRoleRef_(getRoles_(), actingMember.role) })
       break
     case 'updateTaskStatus':
@@ -161,7 +169,9 @@ function runWriteAction_(body, actingMember) {
       result = purgeTrashedTask_(String(body.taskId || ''))
       break
     case 'createProject':
-      result = createProject_(body.name, body.description, body.type)
+      var projectWiki = checkWikiPageIds_(actingMember, body.wikiPageIds, false)
+      if (projectWiki.length) ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_PROJECTS, ['wiki_page_ids'])
+      result = createProject_(body.name, body.description, body.type, undefined, projectWiki)
       break
     case 'removeProject':
       // タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。終わったものはアーカイブにしてもらう
@@ -357,6 +367,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateProjectParent':
       result = updateProjectFields_(body.projectId, { parent_id: checkProjectParent_(String(body.projectId || ''), body.parentId) })
+      break
+    case 'updateTaskWikiPages':
+      result = updateWikiLinks_(actingMember, 'task', body.taskId, body.pageIds)
+      break
+    case 'updateProjectWikiPages':
+      result = updateWikiLinks_(actingMember, 'project', body.projectId, body.pageIds)
       break
     case 'updateProjectDetails':
       result = updateProjectFields_(body.projectId, {

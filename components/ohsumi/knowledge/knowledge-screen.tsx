@@ -7,6 +7,9 @@
 //   自分の提案: 状態(承認待ち・承認・却下・取り下げ)と理由。承認待ちは取り下げられる
 //   承認待ち(管理の権限を持つ人): 今のページとの違い(行ごと)を見て、承認・却下(理由)
 // 中身は開いた時に団体の GAS から読む(起動時のデータには入れない)。見られないページは GAS が返さない
+import { useTaskDrawer } from '@/lib/ohsumi/task-drawer'
+import { useNav } from '@/lib/ohsumi/nav'
+import { invalidateWikiList } from '@/lib/ohsumi/wiki-list'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, ChevronRight, FileText, Folder, History, ImagePlus, Loader2, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -56,14 +59,16 @@ function readAsDataUrl(file: File): Promise<string> {
   })
 }
 
-export function KnowledgeScreen() {
+export function KnowledgeScreen({ pageId }: { pageId?: string } = {}) {
   const { t } = useI18n()
   const toast = useToast()
   const { can, getMember } = useOhsumi()
   const [list, setList] = useState<WikiList | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('pages')
-  const [pane, setPane] = useState<Pane>({ kind: 'home' })
+  const [pane, setPane] = useState<Pane>(pageId ? { kind: 'page', id: pageId } : { kind: 'home' })
+  // タスク・プロジェクトのリンクから開いた時は、そのページを出す
+  useEffect(() => { if (pageId) { setTab('pages'); setPane({ kind: 'page', id: pageId }) } }, [pageId])
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<WikiSearchResult[] | null>(null)
   const manager = !!list?.manager && can('knowledge')
@@ -71,7 +76,7 @@ export function KnowledgeScreen() {
 
   const load = useCallback(() => {
     remoteApi.listWikiPages().then(
-      (l) => { setList(l); setLoadError(null) },
+      (l) => { setList(l); setLoadError(null); invalidateWikiList() },
       (e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e)
         setLoadError(/Unknown action|listWikiPages/i.test(msg) ? t('knowledge.oldGas') : msg)
@@ -306,7 +311,9 @@ function PageView({ id, manager, nameOf, onEdit, onRevision, onDeleted }: {
 }) {
   const { t } = useI18n()
   const toast = useToast()
-  const { projects, deleteWikiPage, can } = useOhsumi()
+  const { projects, visibleTasks, deleteWikiPage, can } = useOhsumi()
+  const { openTask } = useTaskDrawer()
+  const { go } = useNav()
   const [page, setPage] = useState<WikiPage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -357,7 +364,45 @@ function PageView({ id, manager, nameOf, onEdit, onRevision, onDeleted }: {
         </ul>
       )}
       <div className="mt-4 border-t border-border pt-2"><WikiMarkdown source={page.body} /></div>
+      <UsedBy pageId={page.id} projects={projects} tasks={visibleTasks} onProject={(pid) => go({ name: 'project', id: pid })} onTask={openTask} />
     </article>
+  )
+}
+
+// このページをつないだタスク・プロジェクト(見る人に見えているものだけ。データは画面が既に持っている分)
+function UsedBy({ pageId, projects, tasks, onProject, onTask }: {
+  pageId: string
+  projects: { id: string; name: string; archived?: boolean; wikiPageIds?: string[] }[]
+  tasks: { id: string; name: string; wikiPageIds?: string[] }[]
+  onProject: (id: string) => void
+  onTask: (id: string) => void
+}) {
+  const { t } = useI18n()
+  const ps = projects.filter((p) => !p.archived && p.wikiPageIds?.includes(pageId))
+  const ts = tasks.filter((x) => x.wikiPageIds?.includes(pageId))
+  if (ps.length === 0 && ts.length === 0) return null
+  return (
+    <section className="mt-6 border-t border-border pt-3" data-knowledge-used-by>
+      <h2 className="text-xs font-semibold text-muted-foreground">{t('knowledge.usedBy')}</h2>
+      <ul className="mt-2 flex min-w-0 flex-col gap-1">
+        {ps.map((p) => (
+          <li key={'p' + p.id} className="min-w-0">
+            <button type="button" onClick={() => onProject(p.id)} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm hover:bg-secondary" data-knowledge-used-project={p.id}>
+              <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{t('knowledge.usedBy.project')}</span>
+              <span className="min-w-0 truncate">{p.name}</span>
+            </button>
+          </li>
+        ))}
+        {ts.map((x) => (
+          <li key={'t' + x.id} className="min-w-0">
+            <button type="button" onClick={() => onTask(x.id)} className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm hover:bg-secondary" data-knowledge-used-task={x.id}>
+              <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{t('knowledge.usedBy.task')}</span>
+              <span className="min-w-0 truncate">{x.name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

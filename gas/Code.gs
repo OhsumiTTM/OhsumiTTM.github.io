@@ -873,6 +873,7 @@ var PROJECTS_HEADERS = [
   'last_notified_health',  // item 26: 直近に通知した実効健康状態（重複通知防止）
   'start_date', // PRJ-003: プロジェクトの開始日（任意, YYYY-MM-DD）
   'end_date',   // PRJ-003: プロジェクトの終了予定日（任意, YYYY-MM-DD）
+  'wiki_page_ids', // つないだナレッジのページ(カンマ区切りのページID。43-wiki.gs)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var TASKS_HEADERS = [
@@ -896,6 +897,7 @@ var TASKS_HEADERS = [
   'calendar_event_id', // カレンダーの予定の ID(syncCalendarForTask_ が書く。画面には返さない)
   'deleted_at',        // ゴミ箱に入れた日時(ISO)。空なら使っているタスク。30日後に毎日の処理が行を消す
   'deleted_by',        // ゴミ箱に入れた人(メンバーID)
+  'wiki_page_ids',     // つないだナレッジのページ(カンマ区切りのページID。43-wiki.gs)
   'row_version', 'row_updated_by', // 書き込みの競合チェック(「行の版」)
 ]
 var SETTINGS_HEADERS = ['key', 'value']
@@ -2420,7 +2422,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.24-5'
+var OHSUMI_GAS_VERSION = '2026.10.24-6'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -3830,7 +3832,7 @@ var OVERRIDE_SCOPE_BY_ACTION = {
   updateReviewer: 'task', updateReviewers: 'task', removeTask: 'task', updatePriority: 'task',
   updateDifficulty: 'task', updateSchedule: 'task', updateDependsOn: 'task', setBlocker: 'task',
   rejectTask: 'task',
-  updateProjectDetails: 'project', updateProjectOwner: 'project', updateProjectParent: 'project',
+  updateProjectDetails: 'project', updateProjectWikiPages: 'project', updateProjectOwner: 'project', updateProjectParent: 'project',
   updateProjectArchived: 'project', updateProjectMembers: 'project', notifyProjectHealth: 'project',
   updateProjectHealthRecord: 'project', updateProjectHealth: 'project',
   addCandidate: 'recruiting', updateCandidate: 'recruiting', removeCandidate: 'recruiting',
@@ -4472,6 +4474,9 @@ function authorizeAction_(acting, action, body) {
     throw userError_(capabilityDeniedMessage_(capability))
   }
 
+  // プロジェクトにつなぐナレッジのページは、プロジェクトの責任者なら役職によらず付け外しできる
+  if (action === 'updateProjectWikiPages' && isProjectOwner_(body && body.projectId, acting)) return
+
   // --- 代表 or 班長 (任意の管理者ロール) ---
   var daihyoOrLeader = [
     'approveTask',          // タスク承認
@@ -4484,6 +4489,7 @@ function authorizeAction_(acting, action, body) {
     'removeTask',           // タスク削除
     'createProject',        // プロジェクト作成
     'updateProjectDetails', // プロジェクト詳細編集
+    'updateProjectWikiPages', // プロジェクトにつなぐナレッジのページ(責任者は上で許可済み)
     'updateProjectOwner',   // オーナー変更
     'updateProjectParent',  // 親プロジェクト変更
     'updateProjectArchived',// アーカイブ操作
@@ -4711,6 +4717,7 @@ function authorizeAction_(acting, action, body) {
     'notifyFormResult',
     'updateHistory',
     'updateDeliverables',
+    'updateTaskWikiPages',     // タスクにつなぐナレッジのページ(担当者・確認者・作成者・全権管理者: TASK_OWNER_SCOPED_ACTIONS)
     'setHoldReason',           // 保留理由の設定は担当者(または管理者)が本人操作
     'submitQuizResult',        // 検定の受験はログイン済み誰でも
     'submitExpenseApplication',// 経費申請はログイン済み誰でも
@@ -4961,6 +4968,7 @@ var TASK_OWNER_SCOPED_ACTIONS = [
   'updateEstimatedHours', 'updateActualHours', 'updateRetrospective',
   'updateProgress',   // 進捗のメモ・進捗率・進捗の記録(他人の記録は変えられない: validateProgressHistoryUpdate_)
   'setHoldReason',    // 保留の理由
+  'updateTaskWikiPages', // つなぐナレッジのページ(43-wiki.gs。見られるページだけ)
 ]
 var TASK_ANY_MEMBER_ACTIONS = {
   createTasks: '新しいタスクの登録。一般のメンバーが作るタスクは承認待ち(確認タスク・日程調整/フォームのクイック追加は除く。prepareCreateTasks_)。既存のタスクは書き換えない',
@@ -5896,6 +5904,14 @@ function runWriteAction_(body, actingMember) {
     case 'createTasks':
       // F1: creator_id はクライアントの値ではなく認証済みの本人IDを使う
       prepareCreateTasks_(body.tasks, actingMember)
+      // テンプレートなどから付いたナレッジのページ。無い・見られないページは除く
+      var withWiki = false
+      ;(body.tasks || []).forEach(function (t) {
+        if (!t) return
+        t.wikiPageIds = checkWikiPageIds_(actingMember, t.wikiPageIds, false)
+        if (t.wikiPageIds.length) withWiki = true
+      })
+      if (withWiki) ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_TASKS, ['wiki_page_ids'])
       result = createTasks_(body.tasks, actingMember.id, { allowImport: isAdminRoleRef_(getRoles_(), actingMember.role) })
       break
     case 'updateTaskStatus':
@@ -6044,7 +6060,9 @@ function runWriteAction_(body, actingMember) {
       result = purgeTrashedTask_(String(body.taskId || ''))
       break
     case 'createProject':
-      result = createProject_(body.name, body.description, body.type)
+      var projectWiki = checkWikiPageIds_(actingMember, body.wikiPageIds, false)
+      if (projectWiki.length) ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_PROJECTS, ['wiki_page_ids'])
+      result = createProject_(body.name, body.description, body.type, undefined, projectWiki)
       break
     case 'removeProject':
       // タスク(完了したものも含む)や子プロジェクトがあるプロジェクトは消さない。終わったものはアーカイブにしてもらう
@@ -6240,6 +6258,12 @@ function runWriteAction_(body, actingMember) {
       break
     case 'updateProjectParent':
       result = updateProjectFields_(body.projectId, { parent_id: checkProjectParent_(String(body.projectId || ''), body.parentId) })
+      break
+    case 'updateTaskWikiPages':
+      result = updateWikiLinks_(actingMember, 'task', body.taskId, body.pageIds)
+      break
+    case 'updateProjectWikiPages':
+      result = updateWikiLinks_(actingMember, 'project', body.projectId, body.pageIds)
       break
     case 'updateProjectDetails':
       result = updateProjectFields_(body.projectId, {
@@ -6794,6 +6818,8 @@ function createTasks_(tasks, actingMemberId, opts) {
           return t.importance ? sheetCode_('importance', t.importance) : ''
         case 'related_review_task_id':
           return t.relatedReviewTaskId || ''
+        case 'wiki_page_ids':
+          return (t.wikiPageIds || []).join(',')
         // 日程調整・フォームのクイック追加の中身(prepareCreateTasks_ で確かめたもの)
         case 'schedule_json':
           return t.quickKind === 'schedule' ? JSON.stringify(mapScheduleCodes_(t.schedule, sheetCode_)) : ''
@@ -8846,7 +8872,7 @@ function findTaskCalendarEvent_(cal, taskId, task, dates, titles) {
 var CALENDAR_PREFIX_OHSUMI = '[Ohsumi] '
 // ---- Projects ---------------------------------------------------------------
 
-function createProject_(name, description, type, parentId) {
+function createProject_(name, description, type, parentId, wikiPageIds) {
   var sheet = getSheet_(SHEET_PROJECTS)
   var headers = headerRow_(sheet)
   var id = String(nextIntId_(sheet, headers))
@@ -8856,6 +8882,7 @@ function createProject_(name, description, type, parentId) {
     if (h === 'description') return description || ''
     if (h === 'type') return type || ''
     if (h === 'parent_id') return parentId || ''
+    if (h === 'wiki_page_ids') return (wikiPageIds || []).join(',')
     return ''
   })
   assertRowCellLengths_('Projects', headers, row)
@@ -12673,7 +12700,7 @@ var READ_POLICY = {
     columns: {
       id: 'all', name: 'all', description: 'all', type: 'all', owner_id: 'all',
       member_ids: 'all', archived: 'all', parent_id: 'all', goal: 'all',
-      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all',
+      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all', wiki_page_ids: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },
@@ -12694,7 +12721,7 @@ var READ_POLICY = {
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
       open_bid_applicant_ids: 'all', related_review_task_id: 'all', calendar_event_id: 'none',
-      deleted_at: 'all', deleted_by: 'all',
+      deleted_at: 'all', deleted_by: 'all', wiki_page_ids: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },
@@ -18520,4 +18547,60 @@ function wikiNotifyProposer_(memberId, title, approved, reason) {
   } catch (e) {
     console.error('ナレッジの提案の結果を知らせられませんでした: ' + maskEmailsIn_(String(e)))
   }
+}
+
+// ---- タスク・プロジェクトからページへのリンク(2026.10.24-6) ----
+//
+// Tasks・Projects の wiki_page_ids 列(カンマ区切りのページID。WIKI_LINKS_MAX まで)。画面は、見る人が見られるページだけを出す
+// (題は listWikiPages の答えから引く。見られないページの題は届かない)。
+// 付け外しできるのは、タスクは担当者・確認者・作成者・全権管理者(TASK_OWNER_SCOPED_ACTIONS)、プロジェクトは責任者・管理者。
+// 見られないページのリンクは、その人には出ないので、その人が直しても残す(知らないうちに消さない)
+var WIKI_LINKS_MAX = 10
+
+// ページIDの並びを確かめる。strict: 無い・見られないページがあれば断る(付け外しの操作)。
+// strict でなければ、それらを黙って除く(テンプレートからタスクを作る時。消えたページで作れなくならないように)
+function checkWikiPageIds_(acting, ids, strict) {
+  if (ids === undefined || ids === null) return []
+  if (!Array.isArray(ids)) throw userError_('ナレッジのページの指定が不正です。')
+  var out = []
+  ids.forEach(function (raw) {
+    var id = String(raw === null || raw === undefined ? '' : raw).trim()
+    if (id && out.indexOf(id) < 0) out.push(id)
+  })
+  if (out.length > WIKI_LINKS_MAX) throw userError_('つなげるナレッジのページは' + WIKI_LINKS_MAX + 'ページまでです。')
+  if (!out.length) return out
+  var viewer = wikiViewer_(acting)
+  var live = {}
+  wikiLivePages_().forEach(function (p) { live[String(p.id)] = p })
+  var ok = out.filter(function (id) { return live[id] && wikiCanView_(viewer, live[id].audience_json) })
+  if (strict && ok.length !== out.length) throw userError_('見つからないか、見る権限のないナレッジのページがあります。')
+  return ok
+}
+
+// タスク・プロジェクトのページのリンクを置き換える(updateTaskWikiPages・updateProjectWikiPages)
+function updateWikiLinks_(acting, kind, targetId, pageIds) {
+  var sheetName = kind === 'task' ? SHEET_TASKS : SHEET_PROJECTS
+  var row = findRow_(sheetName, String(targetId || ''))
+  if (!row) throw userError_(kind === 'task' ? '対象のタスクが見つかりません。' : '対象のプロジェクトが見つかりません。')
+  var ids = checkWikiPageIds_(acting, pageIds, true)
+  // 今つながっていて、この人には見られないページは残す
+  var viewer = wikiViewer_(acting)
+  var live = {}
+  wikiLivePages_().forEach(function (p) { live[String(p.id)] = p })
+  var hidden = splitCsvList_(row.wiki_page_ids).filter(function (id) {
+    return ids.indexOf(id) < 0 && live[id] && !wikiCanView_(viewer, live[id].audience_json)
+  })
+  var merged = ids.concat(hidden)
+  if (merged.length > WIKI_LINKS_MAX) throw userError_('つなげるナレッジのページは' + WIKI_LINKS_MAX + 'ページまでです。')
+  ensureSheetHeaders_(SpreadsheetApp.getActiveSpreadsheet(), sheetName, ['wiki_page_ids'])
+  var fields = { wiki_page_ids: merged.join(',') }
+  if (kind === 'task') updateTaskFields_(targetId, fields)
+  else updateProjectFields_(targetId, fields)
+  return { wikiPageIds: merged }
+}
+
+// プロジェクトのページのリンクを付け外しできるか(責任者は役職によらずできる。ほかは updateProjectDetails と同じ)
+function isProjectOwner_(projectId, acting) {
+  var p = authFindRow_(SHEET_PROJECTS, String(projectId || ''))
+  return !!p && String(p.owner_id || '') === String(acting.id)
 }
