@@ -129,6 +129,7 @@ var READ_POLICY = {
       workload_rules: 'all',
       // 担当の候補の決め方(37-value-checks.gs の checkAssignCandidateRules_ で確かめてから保存する)
       assign_candidate_rules: 'all',
+      evaluation_skill_rules: 'all',
       quiz_definitions: filterQuizDefinitions_,
       radar_axes: 'all',
       custom_member_columns_json: 'all',
@@ -327,18 +328,6 @@ function findMemberInSnapshot_(data, memberId) {
   return null
 }
 
-// 閲覧者が「見る立場」にあるメンバーの ID(評価・1on1 などの読み取りに使う)。
-//   ・報告先(reports_to_id)をたどって、閲覧者が上にいるメンバー
-//   ・メンター(mentor_id)が閲覧者のメンバー
-//   ・閲覧者が責任者(owner_id)のプロジェクト(その子プロジェクトも含む)に入っているメンバー
-function supervisedMemberIds_(data, viewerId) {
-  var out = {}
-  if (!viewerId) return out
-  var rel = viewerRelations_(data, viewerId)
-  ;[rel.boss, rel.mentor, rel.projectOwner].forEach(function (m) { Object.keys(m).forEach(function (id) { out[id] = true }) })
-  return out
-}
-
 // スナップショット全体を閲覧者に合わせて絞り込む(getInitialData の本体。
 // Google のサービスを使わない純粋な関数なのでテストから直接呼べる)
 function buildViewerData_(data, memberId) {
@@ -412,6 +401,8 @@ function getInitialDataForMember_(memberId, knownVersion) {
   out.recordRows = recordRowsStateOfSnapshot_(snapshot.data).state
   // 項目ごとの公開範囲(上長・部署長などの組み合わせ。33-member-field-visibility.gs)に対応している印。古い GAS には無い
   out.fieldAudiences = 1
+  // 評価にスキルの見立てを付けられる印(42-evaluation-skills.gs)。古い GAS には無い
+  out.evaluationSkills = 1
   // 最上位の役職の人にだけ、団体のスプレッドシートと Apps Script の編集画面の URL を渡す(GAS の更新・確かめ用)
   var member = findMemberInSnapshot_(snapshot.data, memberId)
   if (member && isTopRoleRef_(rolesFromSnapshot_(snapshot.data), member.role)) {

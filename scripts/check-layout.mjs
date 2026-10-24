@@ -121,8 +121,12 @@ export const ADMIN_STEPS = [
   { name: '管理画面(タスクの設定・稼働の目安の入力と人数の見込み)', do: 'workloadRules' },
   // 項目の公開範囲(人材データベース): 見せる相手を選び、「この人から見ると」で見られる項目を出し、保存する
   { name: '管理画面(人材データベース・項目の公開範囲)', do: 'fieldAudiences' },
-  // 部署長(部署と役職 >「部署を編集」): 部署を選んで部署長を足す(画面を開いたまま確かめる。次のバックアップの手順は開き直す)
+  // 部署長(部署と役職 >「部署を編集」): 部署を選んで部署長を足す(画面を開いたまま確かめる。次の手順で閉じる)
   { name: '管理画面(部署と役職・部署長を決める)', do: 'deptHeads' },
+  // 評価に付けるスキルの上限(スキルの決まり): 範囲の外は理由を出して保存を止める。保存すると設定を書く
+  { name: '管理画面(スキルの決まり・評価に付けるスキルの上限)', do: 'evalSkillRules' },
+  // 評価にスキルの見立てを付ける(ほかの人のページ > 経歴・キャリア > 評価履歴): 上限を超える点数は理由を出して追加を止める
+  { name: '個人ページ(評価にスキルの見立てを付ける)', do: 'evalSkills' },
   // バックアップから戻す(団体設定。代表だけ): 全体を戻す前の件数の差と、一部のタスクだけ戻す時の違い
   { name: '団体設定(バックアップ・全体を戻す)', do: 'backup', mode: 'full' },
   { name: '団体設定(バックアップ・一部のタスクだけ戻す)', do: 'backup', mode: 'tasks' },
@@ -742,7 +746,7 @@ async function run({ build = true } = {}) {
       switch (body.action) {
         case 'getLoginConfig': return { orgId: ORG }
         case 'exchangeIdToken': return notMember ? { memberId: null, email: 'stranger@example.com', orgName: 'サンプル団体' } : {}
-        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps, recordRows: 'migrating', fieldAudiences: 1,
+        case 'getInitialData': return { memberId: member, version: 'layout', sheets: view, capabilities: caps, recordRows: 'migrating', fieldAudiences: 1, evaluationSkills: 1,
           // 最上位の役職の人にだけ、団体のスプレッドシート・Apps Script の URL を渡す(団体設定の「GAS とスプレッドシート」)
           ...(member === ADMIN_MEMBER ? { adminLinks: { spreadsheetUrl: 'https://docs.google.com/spreadsheets/d/layout-check-sheet/edit', scriptEditUrl: 'https://script.google.com/d/layout-check-script/edit' } } : {}) }
         case 'getExpenses': case 'fetchDailyReports': case 'getFiles': case 'getFormSubmissions': case 'getCandidates': return []
@@ -1821,6 +1825,41 @@ async function run({ build = true } = {}) {
           await evaluate(`document.querySelector('[data-field-audience-save]').click(); true`); await sleep(600)
           const sent = settingWrites.find((b) => b.key === 'member_field_visibility')
           if (!sent || !JSON.parse(sent.value).university?.includes('boss')) throw new Error('項目の公開範囲を保存できません: ' + JSON.stringify(settingWrites))
+        }
+        if (step.do === 'evalSkillRules') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
+          await clickText('スキルの決まり', 'aside nav button'); await sleep(1200)
+          const input = (k) => `document.querySelector('[data-evaluation-skill-rule="${k}"]')`
+          if (!(await evaluate(`!!${input('maxPoints')}`))) throw new Error('評価に付けるスキルの上限の欄が出ません')
+          const setNum = (k, v) => evaluate(`(() => { const el = ${input(k)}; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+          const saveDisabled = () => evaluate(`!!document.querySelector('[data-evaluation-skill-rules-save]')?.disabled`)
+          await setNum('maxPoints', '1001'); await sleep(300)
+          if (!(await evaluate(`!!document.querySelector('[data-evaluation-skill-rules-invalid]')`)) || !(await saveDisabled())) throw new Error('評価に付けるスキルの上限が、範囲の外でも保存できます')
+          await setNum('maxPoints', '50'); await sleep(300)
+          settingWrites.length = 0
+          await evaluate(`document.querySelector('[data-evaluation-skill-rules-save]').click(); true`); await sleep(600)
+          const sent = settingWrites.find((b) => b.key === 'evaluation_skill_rules')
+          if (!sent || JSON.parse(sent.value).maxPoints !== 50) throw new Error('評価に付けるスキルの上限を保存できません: ' + JSON.stringify(settingWrites))
+        }
+        if (step.do === 'evalSkills') {
+          const nameCol = view.Members.headers.indexOf('name')
+          const name = String(view.Members.rows.find((r) => r[view.Members.headers.indexOf('id')] === MEMBER)[nameCol])
+          await clickText('OUTPUT'); await sleep(1000)
+          await clickText('個人'); await sleep(1000)
+          await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find((e) => e.textContent.includes(${JSON.stringify(name)})); if (!b) throw new Error('見つかりません: ' + ${JSON.stringify(name)}); b.click(); return true })()`); await sleep(1200)
+          await clickText('経歴・キャリア'); await sleep(1000)
+          if (!(await evaluate(`!!document.querySelector('[data-eval-skill-add]')`))) throw new Error('評価履歴に「スキルを足す」が出ません(代表なのに)')
+          await evaluate(`(() => { const b = document.querySelector('[data-eval-skill-add]'); b.scrollIntoView({ block: 'center' }); b.click(); return true })()`); await sleep(300)
+          const skill = await evaluate(`[...document.querySelectorAll('[data-eval-skill] option')].map((o) => o.value).filter(Boolean)[0] ?? ''`)
+          if (!skill) throw new Error('評価に付けるスキルの選択肢がありません')
+          await evaluate(`(() => { const el = document.querySelector('[data-eval-skill]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(el, ${JSON.stringify(skill)}); el.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+          const setPoints = (v) => evaluate(`(() => { const el = document.querySelector('[data-eval-skill-points]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, ${JSON.stringify(v)}); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+          await setPoints('51'); await sleep(300)
+          const err = await evaluate(`document.querySelector('[data-eval-skill-error]')?.textContent ?? ''`)
+          if (!err.includes('0〜50')) throw new Error('上限を超える点数に、理由が出ません: ' + err)
+          await setPoints('40'); await sleep(300)
+          if (await evaluate(`!!document.querySelector('[data-eval-skill-error]')`)) throw new Error('上限の中の点数でも、理由が出ます')
+          // 375px の確かめは、入力欄を出したまま行う
         }
         if (step.do === 'deptHeads') {
           await clickText('部署と役職', 'aside nav button'); await sleep(1200)

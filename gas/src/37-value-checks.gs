@@ -291,6 +291,7 @@ var SETTING_VALUE_CHECKS = {
   skill_level_rules: checkSkillLevelRules_,
   workload_rules: checkWorkloadRules_,
   assign_candidate_rules: checkAssignCandidateRules_,
+  evaluation_skill_rules: checkEvaluationSkillRules_,
   member_field_visibility: checkMemberFieldVisibility_,
   department_tree_config: checkDepartmentTreeConfig_,
   org_storage_access: checkOrgStorageAccess_,

@@ -16,6 +16,9 @@ function authorizeAction_(acting, action, body) {
 
   // 代表 can do anything
   if (isDaihyo) return
+  // 評価は、管理者の役職でなくても、その人を見る立場の人(上長・部署長・メンター・プロジェクトの責任者)が書ける。
+  // その時は自分が書いた評価だけを変え・消せる(42-evaluation-skills.gs の checkSupervisorEvaluationEntries_)。印はここで付け直す
+  if (action === 'updateEvaluationHistory' && body) body._evaluationSupervisorOnly = false
   // 日報・週報の読み取りは、ログインしている全員が呼べる。返す範囲は fetchDailyReports_ が閲覧者で絞る
   // (日報を見る権限の人〈管理者・権限の例外〉はすべて、ほかの人は本人と、公開範囲の daily_reports で見せる相手の分だけ)
   if (action === 'fetchDailyReports') return
@@ -140,6 +143,7 @@ function authorizeAction_(acting, action, body) {
     if (!isLeader) {
       // ロールで弾かれた場合でも permission_overrides_json に該当する例外があれば許可（OR条件）
       if (checkPermissionOverride_(acting, action, body)) return
+      if (evaluationBySupervisor_(acting, action, body)) return
       throw userError_('この操作は代表または管理者（班長以上）のみ実行できます。')
     }
     // approveTask: importance に応じた承認者チェック（lib/ohsumi/permissions.ts の canApproveTask と同じロジック）
@@ -239,6 +243,7 @@ function authorizeAction_(acting, action, body) {
         for (var mi = 0; mi < memberIdsToCheck.length; mi++) {
           if (!scopedMemberIdSet[memberIdsToCheck[mi]]) {
             if (checkPermissionOverride_(acting, action, body)) return
+            if (evaluationBySupervisor_(acting, action, body)) return
             throw userError_('この操作は担当プロジェクトのメンバーにのみ実行できます。')
           }
         }

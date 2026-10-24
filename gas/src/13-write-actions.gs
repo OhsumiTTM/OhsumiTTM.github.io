@@ -638,11 +638,15 @@ function runWriteAction_(body, actingMember) {
         qualifications_json: JSON.stringify(checkQualifications_(String(body.memberId || ''), body.entries || [], actingMember)),
       })
       break
-    case 'updateEvaluationHistory':
-      result = updateMemberFields_(body.memberId, {
-        evaluation_history_json: JSON.stringify(stampEvaluators_(String(body.memberId || ''), body.entries || [], actingMember)),
-      })
+    case 'updateEvaluationHistory': {
+      // 評価に付けたスキルの見立ての点数を、スキルの点数に足し引きして、一緒に書く(42-evaluation-skills.gs)
+      var evalEntries = stampEvaluators_(String(body.memberId || ''), body.entries || [], actingMember)
+      if (body._evaluationSupervisorOnly === true) checkSupervisorEvaluationEntries_(String(body.memberId || ''), evalEntries, actingMember)
+      var evalFields = applyEvaluationSkills_(String(body.memberId || ''), evalEntries, actingMember)
+      evalFields.evaluation_history_json = JSON.stringify(evalEntries)
+      result = updateMemberFields_(body.memberId, evalFields)
       break
+    }
     case 'updateTransferHistory':
       ;(body.entries || []).forEach(function (e) { if (e) checkDate_(e.date, '異動の日') })
       result = updateMemberFields_(body.memberId, {

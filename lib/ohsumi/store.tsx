@@ -1,6 +1,7 @@
 'use client'
 
 import { serializeFieldAudiences } from './field-audiences'
+import { applyPointDelta, assessmentPointDelta, DEFAULT_EVALUATION_SKILL_RULES, evaluationApprovals, serializeEvaluationSkillRules, type EvaluationSkillRules } from './evaluation-skills'
 import { DEFAULT_ASSIGN_CANDIDATE_RULES, parseAssignCandidateRules, type AssignCandidateRules } from './assign-candidates'
 import { migrateAdminSections, sectionsForSave } from './admin-sections'
 import { revertTaskChange } from './optimistic'
@@ -503,6 +504,11 @@ interface OhsumiContextValue extends OhsumiState {
   memberFieldVisibility: import('./field-audiences').FieldAudienceSetting
   updateMemberFieldVisibility: (setting: import('./field-audiences').FieldAudienceSetting) => void
   fieldAudiencesSupported: boolean
+  // 評価に付けるスキルの見立ての上限(Settings の evaluation_skill_rules)と、それを変える操作(団体のルールを持つ人)
+  evaluationSkillRules: EvaluationSkillRules
+  updateEvaluationSkillRules: (rules: EvaluationSkillRules) => void
+  // 評価にスキルの見立てを付けられる GAS か(v1.2〜)
+  evaluationSkillsSupported: boolean
   quizDefinitions: QuizDefinition[]
   radarAxes: RadarAxis[]
   awardSkillPoints: (taskId: string, memberId: string, points: SkillPoints) => void
@@ -1102,6 +1108,8 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   const [assignCandidateRules, setAssignCandidateRules] = useState<AssignCandidateRules>(DEFAULT_ASSIGN_CANDIDATE_RULES)
   const [memberFieldVisibility, setMemberFieldVisibility] = useState<import('./field-audiences').FieldAudienceSetting>({})
   const [fieldAudiencesSupported, setFieldAudiencesSupported] = useState(false)
+  const [evaluationSkillRules, setEvaluationSkillRules] = useState<EvaluationSkillRules>(DEFAULT_EVALUATION_SKILL_RULES)
+  const [evaluationSkillsSupported, setEvaluationSkillsSupported] = useState(false)
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
   const [expenseApplications, setExpenseApplications] = useState<ExpenseApplication[]>([])
   const [customFormDefs, setCustomFormDefs] = useState<CustomFormDef[]>([])
@@ -1355,6 +1363,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     if (s.workloadRules) setWorkloadRules(s.workloadRules)
     if (s.assignCandidateRules) setAssignCandidateRules(s.assignCandidateRules)
     if (s.memberFieldVisibility) setMemberFieldVisibility(s.memberFieldVisibility)
+    if (s.evaluationSkillRules) setEvaluationSkillRules(s.evaluationSkillRules)
     if (s.quizDefinitions) setQuizDefinitions(s.quizDefinitions)
     if (s.radarAxes) setRadarAxes(s.radarAxes)
     if (s.customMemberColumns) setCustomMemberColumns(s.customMemberColumns)
@@ -1390,6 +1399,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
       if (res.adminLinks) setAdminLinks(res.adminLinks)
       if (res.recordRows) setRecordRows(res.recordRows)
       if (res.fieldAudiences) setFieldAudiencesSupported(true)
+      if (res.evaluationSkills) setEvaluationSkillsSupported(true)
       if (res.version) dataVersionRef.current = res.version
     },
     [applyLocalApprovalOverrides, applySettings],
@@ -2076,7 +2086,6 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     },
     [runRemote],
   )
-  // 担当の候補の決め方を変える(団体のルールを持つ人)。既定と同じなら設定を消す(空 = 既定)
   // 項目ごとの公開範囲を変える(団体のルールを持つ人)。空なら設定を消す(= 今までどおりの範囲)
   const updateMemberFieldVisibility = useCallback(
     (setting: import('./field-audiences').FieldAudienceSetting) => {
@@ -2085,6 +2094,15 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     },
     [runRemote],
   )
+  // 評価に付けるスキルの見立ての上限を変える(団体のルールを持つ人)。既定と同じなら設定を消す
+  const updateEvaluationSkillRules = useCallback(
+    (rules: EvaluationSkillRules) => {
+      setEvaluationSkillRules(rules)
+      if (isSettingsConfigured) runRemote(remoteApi.updateSetting('evaluation_skill_rules', serializeEvaluationSkillRules(rules)))
+    },
+    [runRemote],
+  )
+  // 担当の候補の決め方を変える(団体のルールを持つ人)。既定と同じなら設定を消す(空 = 既定)
   const updateAssignCandidateRules = useCallback(
     (rules: AssignCandidateRules) => {
       const next = parseAssignCandidateRules(JSON.stringify(rules))
@@ -2097,10 +2115,12 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
   // レベルの計算に使う、最新の決め方と、完了したタスク(条件「完了したタスクの数」)
   const levelInputsRef = useRef<{ rules: SkillLevelRules; tasks: Task[] }>({ rules: {}, tasks: [] })
   levelInputsRef.current = { rules: skillLevelRules, tasks }
-  const evidenceOf = (m: Member, qualifications = m.qualifications ?? []): SkillEvidence => ({
+  const evidenceOf = (m: Member, qualifications = m.qualifications ?? [], evaluations = m.evaluationHistory): SkillEvidence => ({
     qualifications,
     quizPasses: m.quizPasses ?? [],
     doneTaskCounts: doneTaskCountsOf(m.id, levelInputsRef.current.tasks),
+    // スキルのレベルの承認と、評価に付けたスキルの見立て(lib/ohsumi/evaluation-skills.ts)
+    approvals: [...(m.skillApprovals ?? []), ...evaluationApprovals(evaluations)],
   })
 
   // スキルポイント付与 — タスク完了後に管理者が各スキルに対してポイントを付与。
@@ -4157,8 +4177,25 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
 
   const updateEvaluationHistory = useCallback(
     (memberId: string, entries: EvaluationRecord[]) => {
+      // 評価に付けたスキルの見立ての点数を足し引きし、レベルを決め直す(GAS と同じ。レベルは下げない)
       setMembers((prev) =>
-        prev.map((m) => (m.id === memberId ? { ...m, evaluationHistory: entries } : m)),
+        prev.map((m) => {
+          if (m.id !== memberId) return m
+          const delta = assessmentPointDelta(m.evaluationHistory, entries)
+          const hasAssessments = entries.some((e) => e.skillAssessments?.length) || (m.evaluationHistory ?? []).some((e) => e.skillAssessments?.length)
+          if (!hasAssessments) return { ...m, evaluationHistory: entries }
+          const skillPoints = applyPointDelta(m.skillPoints, delta)
+          const evidence = evidenceOf(m, m.qualifications ?? [], entries)
+          const skillLevels = [...(m.skillLevels ?? [])]
+          Object.entries(skillPoints).forEach(([skill, pts]) => {
+            const earned = skillLevelOf(pts, skill, evidence, levelInputsRef.current.rules)
+            if (earned == null) return
+            const idx = skillLevels.findIndex((sl) => sl.skill === skill)
+            if (idx < 0) skillLevels.push({ skill, level: earned })
+            else if (earned > skillLevels[idx].level) skillLevels[idx] = { ...skillLevels[idx], level: earned }
+          })
+          return { ...m, evaluationHistory: entries, skillPoints, skillLevels }
+        }),
       )
       if (isRemoteConfigured) runRemote(remoteApi.updateEvaluationHistory(memberId, entries))
     },
@@ -5754,6 +5791,9 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     memberFieldVisibility,
     updateMemberFieldVisibility,
     fieldAudiencesSupported,
+    evaluationSkillRules,
+    updateEvaluationSkillRules,
+    evaluationSkillsSupported,
     quizDefinitions,
     radarAxes,
     awardSkillPoints,

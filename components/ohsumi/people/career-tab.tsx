@@ -14,6 +14,7 @@ import { computeTaskPerformanceScore, computeYearsOfExperience, formatTenure, to
 import { downloadPortableRecord, parsePortableRecordFile } from '@/lib/ohsumi/portable-record'
 import { doneTaskCountsOf, levelProgress } from '@/lib/ohsumi/skill-levels'
 import { conditionText } from '@/components/ohsumi/skill-condition-text'
+import { canAssessSkill, cooldownUntil, evaluationApprovals, EVALUATION_SKILL_NOTE_MAX, EVALUATION_SKILLS_MAX } from '@/lib/ohsumi/evaluation-skills'
 import { DIFFICULTY_LABEL } from '@/lib/ohsumi/types'
 import { cn } from '@/lib/utils'
 import { X, Plus, GraduationCap, CheckCircle2, Download, Upload } from 'lucide-react'
@@ -30,6 +31,7 @@ import type {
   SkillLevel,
   SkillLevelValue,
   SkillPoints,
+  SkillAssessment,
   TrainingRecord,
   TransferRecord,
 } from '@/lib/ohsumi/types'
@@ -231,6 +233,7 @@ export function CareerTab({
         onSave={updateEvaluationHistory}
         rid={rid}
         currentUserId={currentUserId}
+        skillOptions={skillOptions}
       />
       <TransferHistorySection
         member={member}
@@ -459,7 +462,12 @@ function SkillLevelsSection({
   const levels = member.skillLevels ?? []
   const { skillLevelRules, tasks } = useOhsumi()
   const hasPoints = Object.keys(member.skillPoints ?? {}).length > 0
-  const evidence = { qualifications: member.qualifications ?? [], quizPasses: member.quizPasses ?? [], doneTaskCounts: doneTaskCountsOf(member.id, tasks) }
+  // 評価に付けたスキルの見立ても、レベルの条件「承認」に数える(lib/ohsumi/evaluation-skills.ts)
+  const evalApprovals = evaluationApprovals(member.evaluationHistory)
+  const evidence = {
+    qualifications: member.qualifications ?? [], quizPasses: member.quizPasses ?? [], doneTaskCounts: doneTaskCountsOf(member.id, tasks),
+    approvals: [...(member.skillApprovals ?? []), ...evalApprovals],
+  }
   const [skill, setSkill] = useState('')
   // Lv.1を初期値に — 「やり始めたばかり」であって「何もできない」わけでは
   // ないので、まずは登録してみるハードルを下げる
@@ -488,6 +496,15 @@ function SkillLevelsSection({
           >
             <span className="font-medium">{l.skill}</span>
             <span className="ml-2 text-xs text-muted-foreground" data-skill-level={l.level}>Lv.{l.level}</span>
+            {(() => {
+              // 根拠: 評価(このスキルに付けた見立てのうち、いちばん高いレベル)
+              const best = evalApprovals.filter((a) => a.skill === l.skill).reduce((m, a) => Math.max(m, a.level), 0)
+              return best > 0 && (
+                <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary" data-skill-eval-evidence={best}>
+                  {t('career.skillLevels.evalEvidence', { level: best })}
+                </span>
+              )
+            })()}
             {/* 点数は本人と管理者だけが読める。読めない時(点数が届いていない時)は出さない */}
             {hasPoints && <SkillProgress stored={l.level} points={member.skillPoints?.[l.skill] ?? 0} skill={l.skill} evidence={evidence} rules={skillLevelRules} />}
           </EntryRow>
@@ -1414,41 +1431,72 @@ function OneOnOnesSection({
 
 function EvaluationHistorySection({
   member,
-  editable,
+  editable: adminEditable,
   onSave,
   rid,
   currentUserId,
+  skillOptions,
 }: {
   member: Member
   editable: boolean
   onSave: CareerTabProps['updateEvaluationHistory']
   rid: () => string
   currentUserId: string | null
+  skillOptions: string[]
 }) {
   const items = member.evaluationHistory ?? []
   const [date, setDate] = useState('')
   const [rating, setRating] = useState('')
   const [comment, setComment] = useState('')
-
-  const add = () => {
-    if (!date || !rating.trim() || !currentUserId) return
-    onSave(member.id, [
-      ...items,
-      { id: rid(), date, evaluatorId: currentUserId, rating: rating.trim(), comment: comment.trim() || undefined },
-    ])
-    setDate('')
-    setRating('')
-    setComment('')
-  }
+  const [drafts, setDrafts] = useState<AssessmentDraft[]>([])
 
   const { t } = useI18n()
   // ANL-004: 実績ベースの参考スコア — 評価入力欄は自動で埋めない、あくまで
   // 評価者向けの参考表示
-  const { visibleTasks } = useOhsumi()
+  const { visibleTasks, members, projects, departmentTreeConfig, isAdminRef, isTopRef, evaluationSkillRules, evaluationSkillsSupported } = useOhsumi()
+  // 評価にスキルの見立てを付けられるのは、代表と、上長・部署長・メンター・プロジェクトの責任者(GAS も確かめる)。
+  // 見る立場の人は、管理者の役職でなくても評価を書ける(自分が書いた評価だけを消せる。GAS 2026.10.24-2 から)
+  const canAssess = evaluationSkillsSupported && !!currentUserId && canAssessSkill(currentUserId, member.id, {
+    members, projects, departmentTree: departmentTreeConfig, isAdminRole: (r) => isAdminRef(r), isTopRole: (r) => isTopRef(r),
+  })
+  const editable = adminEditable || canAssess
+  const canRemove = (e: EvaluationRecord) => adminEditable || (canAssess && e.evaluatorId === currentUserId)
   const perf = editable ? computeTaskPerformanceScore(member.id, visibleTasks) : null
+  const blockedUntil = (skill: string) => (currentUserId ? cooldownUntil(items, currentUserId, skill, evaluationSkillRules) : null)
+  const draftError = (d: AssessmentDraft): string | null => {
+    if (!d.skill) return t('career.evaluation.skillPick')
+    const until = blockedUntil(d.skill)
+    if (until) return t('career.evaluation.skillCooldown', { days: evaluationSkillRules.cooldownDays, date: until.toLocaleDateString() })
+    const n = Number(d.points)
+    if (d.points === '' || !Number.isInteger(n) || n < 0 || n > evaluationSkillRules.maxPoints) return t('career.evaluation.skillPointsRange', { max: evaluationSkillRules.maxPoints })
+    return null
+  }
+  const draftsValid = drafts.every((d) => !draftError(d))
+
+  const add = () => {
+    if (!date || !rating.trim() || !currentUserId || !draftsValid) return
+    const at = new Date().toISOString()
+    const skillAssessments: SkillAssessment[] = drafts.map((d) => ({
+      skill: d.skill, level: d.level, points: Number(d.points), ...(d.note.trim() ? { note: d.note.trim() } : {}), at,
+    }))
+    onSave(member.id, [
+      ...items,
+      {
+        id: rid(), date, evaluatorId: currentUserId, rating: rating.trim(), comment: comment.trim() || undefined,
+        ...(skillAssessments.length ? { skillAssessments } : {}),
+      },
+    ])
+    setDate('')
+    setRating('')
+    setComment('')
+    setDrafts([])
+  }
+  const setDraft = (i: number, patch: Partial<AssessmentDraft>) => setDrafts((prev) => prev.map((d, j) => (j === i ? { ...d, ...patch } : d)))
+  const picked = new Set(drafts.map((d) => d.skill))
+  const hasAssessments = items.some((e) => e.skillAssessments?.length)
 
   return (
-    <Section title={t('career.evaluation.title')} description={t('career.adminOnlyDesc')}>
+    <Section title={t('career.evaluation.title')} description={t(evaluationSkillsSupported ? 'career.evaluation.desc' : 'career.adminOnlyDesc')}>
       {editable && perf && (
         <p className="mb-3 rounded-md bg-secondary/50 px-2.5 py-1.5 text-xs text-muted-foreground">
           {perf.onTimeRate != null
@@ -1468,30 +1516,95 @@ function EvaluationHistorySection({
           .slice()
           .sort((a, b) => b.date.localeCompare(a.date))
           .map((e) => (
-            <EntryRow key={e.id} editable={editable} onRemove={() => onSave(member.id, items.filter((x) => x.id !== e.id))}>
+            <EntryRow key={e.id} editable={canRemove(e)} onRemove={() => onSave(member.id, items.filter((x) => x.id !== e.id))}>
               <span className="font-medium">{e.rating}</span>
               <span className="ml-2 text-xs text-muted-foreground">{e.date}</span>
               {e.comment && <p className="mt-0.5 text-xs text-muted-foreground">{e.comment}</p>}
+              {(e.skillAssessments ?? []).length > 0 && (
+                <ul className="mt-1 flex flex-col gap-0.5" data-eval-assessments>
+                  {(e.skillAssessments ?? []).map((a) => (
+                    <li key={a.skill} className="min-w-0 break-words text-xs" data-eval-assessment={a.skill}>
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                        {t('career.evaluation.skillBadge', { skill: a.skill, level: a.level, points: a.points })}
+                      </span>
+                      {a.note && <span className="ml-1.5 text-muted-foreground">{a.note}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </EntryRow>
           ))}
       </EntryList>
+      {editable && hasAssessments && <p className="mt-1.5 text-[11px] text-muted-foreground">{t('career.evaluation.removeNote')}</p>}
       {editable && (
         <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} />
-          <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder={t('career.evaluation.ratingPlaceholder')} className={fieldClass} />
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={fieldClass} data-eval-date />
+          <input value={rating} onChange={(e) => setRating(e.target.value)} placeholder={t('career.evaluation.ratingPlaceholder')} className={fieldClass} data-eval-rating />
           <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder={t('career.evaluation.commentPlaceholder')} className={cn(fieldClass, 'sm:col-span-1')} />
           <button
             onClick={add}
-            disabled={!date || !rating.trim()}
+            disabled={!date || !rating.trim() || !draftsValid}
             className="flex h-8 items-center justify-center gap-1 rounded-md border border-dashed border-border-strong text-xs text-muted-foreground hover:bg-secondary disabled:opacity-40"
+            data-eval-add
           >
             <Plus className="size-3.5" />
             {t('common.add')}
           </button>
         </div>
       )}
+      {editable && canAssess && (
+        <div className="mt-2 rounded-md border border-border p-2" data-eval-skills>
+          <p className="text-xs font-medium">{t('career.evaluation.skillsTitle')}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {t('career.evaluation.skillsDesc', { max: evaluationSkillRules.maxPoints })}
+            {evaluationSkillRules.cooldownDays > 0 && t('career.evaluation.skillsCooldownDesc', { days: evaluationSkillRules.cooldownDays })}
+          </p>
+          {drafts.map((d, i) => {
+            const err = draftError(d)
+            return (
+              <div key={i} className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,3fr)_auto]" data-eval-skill-row={i}>
+                <select value={d.skill} onChange={(e) => setDraft(i, { skill: e.target.value })} className={cn(fieldClass, 'col-span-2 sm:col-span-1')} aria-label={t('career.evaluation.skillLabel')} data-eval-skill>
+                  <option value="">{t('career.evaluation.skillPick')}</option>
+                  {skillOptions.filter((s) => s === d.skill || !picked.has(s)).map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={d.level} onChange={(e) => setDraft(i, { level: Number(e.target.value) as SkillLevelValue })} className={fieldClass} aria-label={t('career.evaluation.skillLevelLabel')} data-eval-skill-level>
+                  {([1, 2, 3, 4, 5] as const).map((l) => <option key={l} value={l}>Lv.{l}</option>)}
+                </select>
+                <input
+                  type="number" inputMode="numeric" min={0} max={evaluationSkillRules.maxPoints} value={d.points}
+                  onChange={(e) => setDraft(i, { points: e.target.value })}
+                  className={fieldClass} aria-label={t('career.evaluation.skillPointsLabel')} placeholder={t('career.evaluation.skillPointsLabel')} data-eval-skill-points
+                />
+                <input value={d.note} maxLength={EVALUATION_SKILL_NOTE_MAX} onChange={(e) => setDraft(i, { note: e.target.value })} className={cn(fieldClass, 'col-span-2 sm:col-span-1')} placeholder={t('career.evaluation.skillNotePlaceholder')} />
+                <button type="button" onClick={() => setDrafts((prev) => prev.filter((_, j) => j !== i))} className="flex size-8 items-center justify-center text-muted-foreground hover:text-destructive" aria-label={t('common.delete')}>
+                  <X className="size-3.5" />
+                </button>
+                {err && d.skill && <p className="col-span-full text-[11px] text-warning" data-eval-skill-error>{err}</p>}
+              </div>
+            )
+          })}
+          {drafts.length < EVALUATION_SKILLS_MAX && (
+            <button
+              type="button"
+              onClick={() => setDrafts((prev) => [...prev, { skill: '', level: 1, points: '', note: '' }])}
+              className="mt-2 flex h-7 items-center gap-1 rounded-md border border-dashed border-border-strong px-2 text-xs text-muted-foreground hover:bg-secondary"
+              data-eval-skill-add
+            >
+              <Plus className="size-3.5" />
+              {t('career.evaluation.skillAdd')}
+            </button>
+          )}
+        </div>
+      )}
     </Section>
   )
+}
+
+interface AssessmentDraft {
+  skill: string
+  level: SkillLevelValue
+  points: string
+  note: string
 }
 
 function TransferHistorySection({
