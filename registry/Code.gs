@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.24-3'
+var REGISTRY_VERSION = '2026.10.24-4'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -264,7 +264,9 @@ var REGISTRY_SHEETS = {
     // この団体だけ止めている機能の ID(カンマ区切り。機能のスイッチ。PR W)
     'disabled_features',
     // この団体だけの上限・しきい値(JSON。全団体の値より優先。PR X)
-    'tunables_json'],
+    'tunables_json',
+    // この団体のログインを切った時刻(ISO。これより前に発行したログインを無効にする)と理由(v1.2)
+    'sessions_revoked_at', 'sessions_revoke_reason'],
   Contacts: ['org_id', 'name', 'email', 'phone'],
   Attributes: ['org_id', 'field', 'size', 'affiliation', 'started_year'],
   // 団体の GAS が週1回送る、個人を特定しない集計値(reportMetrics)。date は期間(その週の月曜日)。同じ団体・同じ期間は1行
@@ -341,6 +343,7 @@ var REGISTRY_ACTIONS = {
   getKpiSummary: function (body) { return getKpiSummary_(body, Date.now()) },
   getKpiOrgs: function (body) { return getKpiOrgs_(body, Date.now()) },
   setFeatureSwitches: function (body) { return setFeatureSwitches_(body, Date.now()) },
+  revokeSessions: function (body) { return revokeSessions_(body, Date.now()) },
   setTunables: function (body) { return setTunables_(body, Date.now()) },
   setGasVersionMarks: function (body) { return setGasVersionMarks_(body, Date.now()) },
   setPlanRelease: function (body) { return setPlanRelease_(body, Date.now()) },
@@ -779,6 +782,9 @@ function orgSummary_(values, nowMs) {
     disabledFeatures: parseFeatureList_(values.disabled_features),
     // この団体だけの上限・しきい値(全団体の値は含めない)
     tunables: parseTunableValues_(values.tunables_json),
+    // この団体のログインを最後に切った時刻と理由(全団体の分は含めない。切っていなければ '')
+    sessionsRevokedAt: isoOf_(values.sessions_revoked_at),
+    sessionsRevokeReason: String(values.sessions_revoke_reason || ''),
   }
 }
 
@@ -867,6 +873,8 @@ function adminOverview_(body, nowMs) {
       features: { catalog: featureCatalog_(), globalDisabled: globalDisabledFeatures_() },
       // 上限・しきい値: 項目の一覧(既定・範囲)と、全団体の値
       tunables: { catalog: tunableCatalog_(), global: globalTunables_() },
+      // 全団体のログインを最後に切った時刻と理由(切っていなければ '')
+      sessionsRevoke: { globalRevokedAt: isoOf_(registryProps_().SESSIONS_REVOKED_AT), globalReason: String(registryProps_().SESSIONS_REVOKE_REASON || '') },
     },
   }
 }
@@ -1798,6 +1806,8 @@ function checkIn_(body, nowMs) {
     disabledFeatures: disabledFeaturesFor_(row.values),
     // 上限・しきい値(全団体の値に、この団体の値を重ねたもの。団体の GAS は範囲に収めて使う)
     tunables: tunablesFor_(row.values),
+    // ログインを切る指示(全団体の分と、この団体の分の新しい方。切っていなければ null)
+    sessionsRevoke: sessionsRevokeFor_(row.values),
     // 団体の GAS に送ってもらうメール(対応した版だけ。古い版には返さない)
     mailTasks: mailTasks } }
 }
@@ -2962,6 +2972,56 @@ function setFeatureSwitches_(body, nowMs) {
   })
 }
 
+// ---- ログインを一斉に切る(v1.2) ----
+//
+// 鍵の漏れ・端末の紛失などの時に、団体の全員(代表も)のログインを切る。checkIn の返事の sessionsRevoke { at(秒), reason } で伝え、
+// 団体の GAS は、それより前に発行したログインを無効にする(SESSION_NOT_BEFORE。前にしか進めない)。
+// 団体の GAS は書き込みの前の確かめ直し(10分に1回まで)と1時間ごとの確認で受け取る(切ってから効くまで最大1時間ほど)。
+//   全団体: スクリプトプロパティ SESSIONS_REVOKED_AT(ISO)・SESSIONS_REVOKE_REASON
+//   団体ごと: Orgs の sessions_revoked_at・sessions_revoke_reason 列
+// 団体に伝えるのは、2つのうち新しい方。切るのは管理画面から(5分以内の Google でのログインが必要。理由は必須。操作の記録に残す)
+function sessionsRevokeFor_(values) {
+  var props = registryProps_()
+  var candidates = [
+    { at: timeOf_(props.SESSIONS_REVOKED_AT), reason: String(props.SESSIONS_REVOKE_REASON || '') },
+    { at: timeOf_(values && values.sessions_revoked_at), reason: String((values && values.sessions_revoke_reason) || '') },
+  ].filter(function (c) { return c.at > 0 })
+  if (!candidates.length) return null
+  candidates.sort(function (a, b) { return b.at - a.at })
+  return { at: Math.floor(candidates[0].at / 1000), reason: candidates[0].reason.slice(0, 500) }
+}
+
+// 管理画面: ログインを切る。{ session, scope: 'global' | 'org', orgId(scope が org の時), reason }
+function revokeSessions_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  requireAdminReauth_(session, nowMs, 'ログインを切る')
+  var reason = cleanText_(body.reason, 500)
+  if (!reason) throw registryError_('理由を書いてください(操作の記録に残し、団体の代表へのメールにも書きます)。')
+  var at = new Date(nowMs).toISOString()
+  return withRegistryLock_(function () {
+    if (body.scope === 'global') {
+      var before = String(props.SESSIONS_REVOKED_AT || '')
+      var sp = PropertiesService.getScriptProperties()
+      sp.setProperty('SESSIONS_REVOKED_AT', at)
+      sp.setProperty('SESSIONS_REVOKE_REASON', reason)
+      forgetRegistryProps_()
+      appendAudit_({ actor: session.sub, action: 'revokeSessions', target: '(全団体)', before: { revokedAt: before }, after: { revokedAt: at }, reason: reason })
+      return { ok: true, result: { scope: 'global', revokedAt: at } }
+    }
+    if (!registrySheetHasColumn_('Orgs', 'sessions_revoked_at') || !registrySheetHasColumn_('Orgs', 'sessions_revoke_reason')) {
+      throw registryError_('Orgs に sessions_revoked_at・sessions_revoke_reason の列がありません。レジストリのエディタで setupRegistry を実行してください。')
+    }
+    var row = findOrgRow_(String(body.orgId || ''))
+    if (!row) throw registryError_('その団体は見つかりません。')
+    var orgId = String(row.values.org_id)
+    var fields = { sessions_revoked_at: at, sessions_revoke_reason: reason, updated_at: at }
+    setRowFields_('Orgs', row.row, fields)
+    appendAudit_({ actor: session.sub, action: 'revokeSessions', target: orgId, before: { revokedAt: isoOf_(row.values.sessions_revoked_at) }, after: { revokedAt: at }, reason: reason })
+    return { ok: true, result: orgSummary_(merged_(row.values, fields), nowMs) }
+  })
+}
+
 // ---- 上限・しきい値(団体の GAS に配る。PR X) ----
 //
 // 回数の上限・しきい値を、団体の GAS を更新し直さずに変える。checkIn の返事の tunables で伝える。
@@ -3504,6 +3564,7 @@ function getKpiOrgs_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.24-3', security: false, required: false, released: true, note: 'v1.2(途中): レジストリからログインを一斉に切れる(checkIn の sessionsRevoke。全団体・1つの団体)。切った時は代表に理由をメールで知らせ、ログイン画面に「セキュリティ保護のため、もう一度ログインしてください」と出す。延長したトークンも、切る前のログインなら無効にする' },
   { version: '2026.10.24-2', security: false, required: false, released: true, note: 'v1.2(途中): 評価にスキルの見立て(スキル・レベル・点数・理由)を付けられる。点数をスキルの点数に足し、レベルの条件「承認」に数える。付けられるのは代表と上長・部署長・メンター・プロジェクトの責任者。1回の点数の上限と、同じスキルに付け直せるまでの日数は団体の設定で変えられる(既定 100点・30日)。評価を消すと点数を引く(レベルは下げない)。スキルのレベルの承認も部署長ができる。管理者の役職でない見る立場の人も評価を書ける(自分が書いた評価だけを変え・消せる)' },
   { version: '2026.10.24-1', security: false, required: false, released: true, note: 'v1.2(途中): 項目ごとの公開範囲を、見せる相手(上長・部署長・メンター・プロジェクトの責任者・幹部・全員)の組み合わせで決められる。部署長を部署のツリーで決める。団体が足した独自の項目をキーごとに、日報・週報も選べる(日報を見る権限の人はいつもすべて)。以前の設定は同じ意味で読む' },
   { version: '2026.10.19-1', security: false, required: false, released: true, note: '1つのタスクについての通知メール(確認の依頼・メンション・返信・1件の承認待ち・日程とフォームの回答・日程の変更・1件の期限超過)のリンクを、そのタスクを開くリンク(<サイト>/?org=<団体ID>&task=<タスクID>)にする。まとめのメールでは、1つのタスクについての1件ごとに、そのタスクのリンクを付ける' },

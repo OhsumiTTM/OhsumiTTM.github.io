@@ -72,6 +72,9 @@ export interface OrgSummary {
   demo?: boolean
   // この団体だけ止めている機能の ID(全団体の分は含めない。古いレジストリでは無い)
   disabledFeatures?: string[]
+  // この団体のログインを最後に切った時刻(ISO)と理由。古いレジストリは返さない
+  sessionsRevokedAt?: string
+  sessionsRevokeReason?: string
   // この団体だけの上限・しきい値(全団体の値は含めない。古いレジストリでは無い)
   tunables?: Record<string, number>
 }
@@ -194,6 +197,7 @@ export interface Overview {
   kpis?: OrgKpis
   // 機能のスイッチ(古いレジストリでは無い)
   features?: FeatureSwitches
+  sessionsRevoke?: SessionsRevoke
   // 上限・しきい値(古いレジストリでは無い)
   tunables?: Tunables
 }
@@ -224,6 +228,22 @@ export function setFeatureSwitches(
   reason: string,
 ): Promise<OrgSummary | { scope: 'global'; disabled: string[] }> {
   return callRegistry('setFeatureSwitches', { session: session.token, ...target, features, reason })
+}
+
+// ---- ログインを一斉に切る(v1.2) ----
+// 団体の全員(代表も)のログインを切る。団体に効くまで最大1時間ほど(団体の GAS が次にレジストリへ確かめた時)
+export interface SessionsRevoke {
+  globalRevokedAt: string
+  globalReason: string
+}
+
+/** ログインを切る(全団体・1つの団体)。5分以内のログインが必要。理由は必須。送り直さない */
+export function revokeSessions(
+  session: AdminSession,
+  target: { scope: 'global' } | { scope: 'org'; orgId: string },
+  reason: string,
+): Promise<OrgSummary | { scope: 'global'; revokedAt: string }> {
+  return callRegistry('revokeSessions', { session: session.token, ...target, reason })
 }
 
 // ---- 上限・しきい値(団体の GAS に配る。PR X) ----

@@ -33,7 +33,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.24-2'
+var OHSUMI_GAS_VERSION = '2026.10.24-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -913,7 +913,53 @@ function refreshContractState_(deps) {
     mailTasks: parseRegistryMailTasks_(out.mailTasks),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
+  // レジストリからの、ログインを一斉に切る指示(古いレジストリは返さない)
+  try { applyRegistrySessionsRevoke_(out.sessionsRevoke, Date.now()) } catch (e) { console.error('レジストリの指示でログインを切れませんでした: ' + e) }
   return state
+}
+
+// ---- レジストリからログインを一斉に切る(v1.2) ----
+//
+// checkIn の返事の sessionsRevoke { at(秒), reason } より前に発行したログインを無効にする(SESSION_NOT_BEFORE。前にしか進めない)。
+// 今より後の時刻は今に収める(ログインできない時間を作らない)。新しく切った時は、代表へのメールを
+// SESSIONS_REVOKE_NOTICE に残し、1時間ごとの checkContractStatus で1回だけ送る(SESSIONS_REVOKE_NOTIFIED に送った時刻)
+function applyRegistrySessionsRevoke_(revoke, nowMs) {
+  if (!revoke || typeof revoke !== 'object') return false
+  var at = Math.floor(Number(revoke.at))
+  if (!(at > 0)) return false
+  at = Math.min(at, Math.floor(nowMs / 1000))
+  var props = PropertiesService.getScriptProperties()
+  var current = Number(props.getProperty('SESSION_NOT_BEFORE') || 0)
+  if (at <= current) return false
+  setSessionNotBefore_(at)
+  props.setProperty('SESSIONS_REVOKE_NOTICE', JSON.stringify({ at: at, reason: String(revoke.reason || '').slice(0, 500) }))
+  return true
+}
+
+// 代表に、レジストリの指示でログインを切ったことをメールで知らせる(1回だけ)。送った時は true
+function sendSessionsRevokeMail_() {
+  var props = PropertiesService.getScriptProperties()
+  var notice = null
+  try { notice = JSON.parse(props.getProperty('SESSIONS_REVOKE_NOTICE') || 'null') } catch (e) { notice = null }
+  if (!notice || !(Number(notice.at) > 0)) return false
+  if (Number(props.getProperty('SESSIONS_REVOKE_NOTIFIED') || 0) >= Number(notice.at)) return false
+  var emails = getAllMemberEmails_()
+  var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  if (!to.length) {
+    console.warn('ログインを切ったことを知らせる代表のメールアドレスがありません')
+    return false
+  }
+  var orgName = getSettingValue_('org_name') || 'Ohsumi'
+  var ok = sendMail_({
+    to: to.join(','),
+    subject: '[Ohsumi] ' + orgName + ': セキュリティ保護のため、全員のログインを切りました',
+    body: orgName + ' 代表の方へ\n\nFSIF の指示で、' + new Date(Number(notice.at) * 1000).toISOString() +
+      ' より前の全員(代表の方も)のログインを切りました。Ohsumi を開くと、もう一度ログインする画面になります。\n\n' +
+      (notice.reason ? '理由: ' + notice.reason + '\n\n' : '') +
+      '書きかけの文章は、ログインし直した画面でコピーできます。ご不明な点は FSIF にお問い合わせください。',
+  })
+  if (ok) props.setProperty('SESSIONS_REVOKE_NOTIFIED', String(notice.at))
+  return ok
 }
 
 // リクエストの時の状態。レジストリに確かめ直すのは(上の説明):

@@ -510,7 +510,8 @@ Ohsumi のログインには Google アカウントでのサインインを使�
 |---|---|
 | `ORG_ID` | 団体ID(IDトークンの nonce とセッショントークンに入る) |
 | `SESSION_SIGNING_KEY` / `SESSION_KEY_ID` | セッショントークンの署名に使う秘密鍵と、その鍵のID。**この団体の Apps Script にだけ置き、FSIF を含め誰にも渡さないでください** |
-| `SESSION_NOT_BEFORE` | この時刻(秒)より前に発行されたセッションを無効にする |
+| `SESSION_NOT_BEFORE` | この時刻(秒)より前に Google でログインしたセッションを無効にする(延長したトークンも。画面はログイン画面に「セキュリティ保護のため、もう一度ログインしてください」と出す)。レジストリの指示(checkIn の `sessionsRevoke`。2026.10.24-3 から)でも進める |
+| `SESSIONS_REVOKE_NOTICE` / `SESSIONS_REVOKE_NOTIFIED` | レジストリの指示でログインを切った時の、代表へのメール(理由)と、送った時刻(1回だけ送る) |
 | `SESSION_GEN_<メンバーID>` | メンバーごとの世代番号(全端末でログアウト) |
 | `REGISTRY_URL` / `OHSUMI_WEBAPP_URL` | レジストリの URL と、この GAS のウェブアプリの URL(レジストリへの登録に使う。`registry/README.md` の 4.2)。`REGISTRY_URL` は、無ければコードの既定値(`DEFAULT_REGISTRY_URL`)を使う。`OHSUMI_WEBAPP_URL` は、無ければ自動で探す(「2.2.」) |
 | `DETECTED_WEBAPP_URL` | ウェブアプリの URL をブラウザで開いた時に GAS が覚えた URL(GAS が書く) |

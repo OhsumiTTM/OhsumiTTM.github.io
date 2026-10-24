@@ -73,7 +73,7 @@ import {
 } from './code-normalize'
 import { activateSession, applyRenewedSession, clearSession, getSessionToken, type StoredSession } from './session'
 import { GasTransportError, READ_ACTIONS, pingGas, sendToGas, writeGeneration, type GasResponse } from './gas-transport'
-import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg } from './org-directory'
+import { ORG_CHANGED_EVENT, REGISTRY_URL, getActiveGasUrl, getActiveOrg, setLoginNotice } from './org-directory'
 import { noteContractResponse } from './contract'
 import { extractUnsavedTexts } from './read-only'
 import { baseVersionsFor, listBaseOf, listOpsFor, rememberServerRows } from './sync-state'
@@ -1138,6 +1138,7 @@ async function postToGas<T = unknown>(action: string, rawPayload: Record<string,
   // (セッションの期限がこの端末で切れている場合も、トークンを送らずに同じ扱いにする)
   if (!json.ok && json.authError) {
     clearSession()
+    if (json.securityRelogin) setLoginNotice('securityRelogin')
     // 送ろうとした文章は、読み込み直した画面でコピーできるように渡す(書きかけの INPUT も消さない)
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: { error: json.error, texts: extractUnsavedTexts(payload) } }))
     throw new Error(json.error || 'ログインの有効期限が切れました。再ログインしてください。')

@@ -44,7 +44,8 @@ export interface SavedOrg {
   screen?: string
 }
 
-export type LoginNotice = 'orgMoved' | 'orgSuspended' | 'orgNotFound'
+// securityRelogin: ログインを一斉に切った後(団体の代表・レジストリの指示。GAS の securityRelogin)
+export type LoginNotice = 'orgMoved' | 'orgSuspended' | 'orgNotFound' | 'securityRelogin'
 
 // ---- 保存 ----------------------------------------------------------------------
 
@@ -130,7 +131,7 @@ export function takeLoginNotice(): LoginNotice | null {
     const s = storage('session')
     const v = s?.getItem(LOGIN_NOTICE_KEY) ?? null
     s?.removeItem(LOGIN_NOTICE_KEY)
-    return v === 'orgMoved' || v === 'orgSuspended' || v === 'orgNotFound' ? v : null
+    return v === 'orgMoved' || v === 'orgSuspended' || v === 'orgNotFound' || v === 'securityRelogin' ? v : null
   } catch {
     return null
   }

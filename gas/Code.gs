@@ -766,6 +766,12 @@ function checkContractStatus() {
       console.error('停止の予告のメールを送れませんでした: ' + e)
     }
   }
+  // ログインを切ったことの知らせは、停止中でも送る(送れなければ次の確認で送り直す)
+  try {
+    sendSessionsRevokeMail_()
+  } catch (e) {
+    console.error('ログインを切ったことを、代表にメールで送れませんでした: ' + maskEmailsIn_(String(e)))
+  }
   // 提供停止中は知らせない(機能停止中は知らせる)
   if (contractSuspendedNow_()) return
   try {
@@ -2165,6 +2171,7 @@ function authFindRow_(sheetName, rowId) {
 //   SESSION_GEN_<メンバーID>  メンバーごとの世代番号(全端末でログアウトで1増える)
 
 var SESSION_TOKEN_VERSION = 'v1'
+var SECURITY_RELOGIN_MESSAGE = 'セキュリティ保護のため、もう一度ログインしてください。'
 // チェックあり(この端末に保存): 1回14日、Googleでのログインから最長30日
 var SESSION_TTL_REMEMBER_SEC = 14 * 24 * 3600
 var SESSION_MAX_REMEMBER_SEC = 30 * 24 * 3600
@@ -2307,7 +2314,13 @@ function verifySessionToken_(token) {
   var now = nowSec_()
   if (!(Number(payload.exp) > now)) throw userError_('ログインの有効期限が切れました。再ログインしてください。')
   var notBefore = Number(props.SESSION_NOT_BEFORE || 0)
-  if (Number(payload.iat) < notBefore) throw userError_('ログイン情報が無効になりました。再ログインしてください。')
+  // Google でログインした時刻(auth)で比べる(延長で発行し直したトークンも、切る前のログインなら無効にする)
+  if (Number(payload.auth || payload.iat) < notBefore || Number(payload.iat) < notBefore) {
+    // ログインを一斉に切った後(revokeSessionsIssuedBefore・レジストリの指示)。画面はログイン画面に、この理由の知らせを出す
+    var revokedErr = userError_(SECURITY_RELOGIN_MESSAGE)
+    revokedErr.securityRelogin = true
+    throw revokedErr
+  }
   if (!payload.sub) throw userError_('ログイン情報の形式が不正です。再ログインしてください。')
   if (Number(payload.gen) !== sessionGeneration_(payload.sub)) {
     throw userError_('この端末のログインは無効になりました(全端末でログアウト済み)。再ログインしてください。')
@@ -2404,7 +2417,7 @@ var SETUP_CODE_LENGTH = 16
 // レジストリに伝える、この GAS の版(Orgs の gas_version)。日付の形「YYYY.MM.DD-N」。
 // このファイルを変えたら pnpm gas:version で上げる(上げ忘れると lib/ohsumi/gas-version.test.ts が失敗する)。
 // 出した版は、レジストリの KNOWN_GAS_VERSIONS にも足す
-var OHSUMI_GAS_VERSION = '2026.10.24-2'
+var OHSUMI_GAS_VERSION = '2026.10.24-3'
 
 function sha256HexOf_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8)
@@ -3284,7 +3297,53 @@ function refreshContractState_(deps) {
     mailTasks: parseRegistryMailTasks_(out.mailTasks),
   }
   setRequestProp_('CONTRACT_STATE', JSON.stringify(state))
+  // レジストリからの、ログインを一斉に切る指示(古いレジストリは返さない)
+  try { applyRegistrySessionsRevoke_(out.sessionsRevoke, Date.now()) } catch (e) { console.error('レジストリの指示でログインを切れませんでした: ' + e) }
   return state
+}
+
+// ---- レジストリからログインを一斉に切る(v1.2) ----
+//
+// checkIn の返事の sessionsRevoke { at(秒), reason } より前に発行したログインを無効にする(SESSION_NOT_BEFORE。前にしか進めない)。
+// 今より後の時刻は今に収める(ログインできない時間を作らない)。新しく切った時は、代表へのメールを
+// SESSIONS_REVOKE_NOTICE に残し、1時間ごとの checkContractStatus で1回だけ送る(SESSIONS_REVOKE_NOTIFIED に送った時刻)
+function applyRegistrySessionsRevoke_(revoke, nowMs) {
+  if (!revoke || typeof revoke !== 'object') return false
+  var at = Math.floor(Number(revoke.at))
+  if (!(at > 0)) return false
+  at = Math.min(at, Math.floor(nowMs / 1000))
+  var props = PropertiesService.getScriptProperties()
+  var current = Number(props.getProperty('SESSION_NOT_BEFORE') || 0)
+  if (at <= current) return false
+  setSessionNotBefore_(at)
+  props.setProperty('SESSIONS_REVOKE_NOTICE', JSON.stringify({ at: at, reason: String(revoke.reason || '').slice(0, 500) }))
+  return true
+}
+
+// 代表に、レジストリの指示でログインを切ったことをメールで知らせる(1回だけ)。送った時は true
+function sendSessionsRevokeMail_() {
+  var props = PropertiesService.getScriptProperties()
+  var notice = null
+  try { notice = JSON.parse(props.getProperty('SESSIONS_REVOKE_NOTICE') || 'null') } catch (e) { notice = null }
+  if (!notice || !(Number(notice.at) > 0)) return false
+  if (Number(props.getProperty('SESSIONS_REVOKE_NOTIFIED') || 0) >= Number(notice.at)) return false
+  var emails = getAllMemberEmails_()
+  var to = topMemberIds_().map(function (id) { return emails[id] }).filter(Boolean)
+  if (!to.length) {
+    console.warn('ログインを切ったことを知らせる代表のメールアドレスがありません')
+    return false
+  }
+  var orgName = getSettingValue_('org_name') || 'Ohsumi'
+  var ok = sendMail_({
+    to: to.join(','),
+    subject: '[Ohsumi] ' + orgName + ': セキュリティ保護のため、全員のログインを切りました',
+    body: orgName + ' 代表の方へ\n\nFSIF の指示で、' + new Date(Number(notice.at) * 1000).toISOString() +
+      ' より前の全員(代表の方も)のログインを切りました。Ohsumi を開くと、もう一度ログインする画面になります。\n\n' +
+      (notice.reason ? '理由: ' + notice.reason + '\n\n' : '') +
+      '書きかけの文章は、ログインし直した画面でコピーできます。ご不明な点は FSIF にお問い合わせください。',
+  })
+  if (ok) props.setProperty('SESSIONS_REVOKE_NOTIFIED', String(notice.at))
+  return ok
 }
 
 // リクエストの時の状態。レジストリに確かめ直すのは(上の説明):
@@ -7699,7 +7758,10 @@ function quotaMessage_(kind, login) {
 function authFailure_(err) {
   var kind = quotaKind_(err)
   if (kind) return { ok: false, error: quotaMessage_(kind, true), quotaExceeded: kind }
-  return { ok: false, error: toErrorMessage_(err), authError: true }
+  var out = { ok: false, error: toErrorMessage_(err), authError: true }
+  // ログインを一斉に切った後は、画面がログイン画面に「セキュリティ保護のため…」を出す(06-auth-session.gs)
+  if (err && err.securityRelogin) out.securityRelogin = true
+  return out
 }
 
 function sendMailUnmeasured_(options) {

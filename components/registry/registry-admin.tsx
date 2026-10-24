@@ -88,6 +88,8 @@ import {
   featureLabel,
   setFeatureSwitches,
   type FeatureSwitches,
+  revokeSessions,
+  type SessionsRevoke,
   parseTunableInput,
   setTunables,
   type Tunables,
@@ -138,6 +140,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   setOrgProfile: '団体の情報(団体名・契約・属性)の変更',
   setOrgContacts: '担当者の変更',
   setFeatureSwitches: '機能を止めた・再開した',
+  revokeSessions: 'ログインを切った',
   setTunables: '上限・しきい値を変えた',
   sendSuspensionNotice: '停止の予告を担当者に送った',
   testSuspendNow: '(テスト)今すぐ停止',
@@ -296,6 +299,7 @@ export function RegistryAdmin() {
         <>
           {overview.kpis && <KpiPanel kpis={overview.kpis} />}
           {overview.features && <FeatureSwitchControl features={overview.features} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
+          {overview.sessionsRevoke && <SessionsRevokeControl revoke={overview.sessionsRevoke} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.tunables && <TunablesControl tunables={overview.tunables} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.gasVersions && <GasVersionsPanel versions={overview.gasVersions} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
           {overview.planReleases && <PlanReleasesPanel releases={overview.planReleases} session={session} onChanged={() => void load(session)} onAuthError={endSession} />}
@@ -510,6 +514,7 @@ function OrgList({
           <PlanControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           <DemoControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           {features && <FeatureSwitchControl features={features} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
+          <SessionsRevokeControl org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />
           {tunables && <TunablesControl tunables={tunables} org={o} session={session} onChanged={onChanged} onAuthError={onAuthError} />}
           {o.gasStatus && o.gasStatus.versionState !== 'latest' && <GasUpdateRequest org={o} session={session} onAuthError={onAuthError} />}
           <SuspensionControl
@@ -2066,6 +2071,72 @@ function FeatureSwitchControl({ features, org, session, onChanged, onAuthError }
     <section data-feature-switches className="mb-4 rounded-lg border border-border p-3 text-xs">
       <h2 className="text-sm font-medium">機能のスイッチ(全団体)</h2>
       <p className="mt-0.5 text-muted-foreground">不具合が見つかった時に、団体の GAS を更新する前に、その機能だけを止めます。</p>
+      <div className="mt-1">{body}</div>
+    </section>
+  )
+}
+
+// ---- ログインを一斉に切る(v1.2) ----
+// 全団体(org を省く)・1つの団体の全員(代表も)のログインを切る。理由は必須(操作の記録と、団体の代表へのメールに書く)。
+// 5分以内の Google でのログインが必要。団体に効くまで最大1時間ほど
+function SessionsRevokeControl({ revoke, org, session, onChanged, onAuthError }: { revoke?: SessionsRevoke; org?: OrgSummary; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  if (org ? org.sessionsRevokedAt === undefined : !revoke) return null
+  const lastAt = org ? org.sessionsRevokedAt ?? '' : revoke?.globalRevokedAt ?? ''
+  const lastReason = org ? org.sessionsRevokeReason ?? '' : revoke?.globalReason ?? ''
+  const submit = async () => {
+    if (needsReauth(session)) {
+      onAuthError('ログインを切る前に、もう一度 Google でログインしてください(5分以内のログインが必要です)。')
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      await revokeSessions(session, org ? { scope: 'org', orgId: org.orgId } : { scope: 'global' }, reason)
+      setOpen(false)
+      setReason('')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && (err.authError || err.reauthRequired)) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const body = (
+    <>
+      {lastAt && <p className="break-words text-muted-foreground" data-sessions-revoked>最後に切った日時: {fmt(lastAt)}{lastReason ? `(理由: ${lastReason})` : ''}</p>}
+      {!open ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant="ghost" onClick={() => { setOpen(true); setMessage(null) }} data-sessions-revoke-open>{org ? 'この団体のログインを切る…' : '全団体のログインを切る…'}</Button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2 rounded-md bg-muted/50 p-2 text-xs" data-sessions-revoke-form>
+          <p className="text-amber-800 dark:text-amber-300">
+            {org ? 'この団体' : 'すべての団体'}の全員(代表も)のログインを切ります。全員がもう一度ログインする必要があります。
+            団体に効くまで、最大1時間ほどかかります。団体の代表には、理由を書いたメールで知らせます。
+          </p>
+          <label className="block">
+            理由(必須。操作の記録と、団体の代表へのメールに書きます)
+            <input className="w-full min-w-0 rounded-md border border-border bg-background px-2 py-1.5 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} data-sessions-revoke-reason />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="destructive" disabled={busy || !reason.trim()} onClick={() => void submit()} data-sessions-revoke-submit>{busy ? '切っています…' : 'ログインを切る'}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>やめる</Button>
+          </div>
+          {message && <p className="text-sm break-words text-destructive">{message}</p>}
+        </div>
+      )}
+    </>
+  )
+  if (org) return <div className="mt-2 text-xs" data-org-sessions-revoke>{body}</div>
+  return (
+    <section data-sessions-revoke className="mb-4 rounded-lg border border-border p-3 text-xs">
+      <h2 className="text-sm font-medium">ログインを一斉に切る(全団体)</h2>
+      <p className="mt-0.5 text-muted-foreground">鍵の漏れ・端末の紛失などの時に、全員のログインを切ります。</p>
       <div className="mt-1">{body}</div>
     </section>
   )
