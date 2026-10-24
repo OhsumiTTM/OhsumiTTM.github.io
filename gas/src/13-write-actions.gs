@@ -756,7 +756,7 @@ function runWriteAction_(body, actingMember) {
       result = getFiles_(actingMember, body.fileIds)
       break
     case 'fetchDailyReports':
-      result = fetchDailyReports_()
+      result = fetchDailyReports_(actingMember, body)
       break
     case 'bulkUpdateSkills':
       result = bulkUpdateSkillLevels_(body.updates || [])

@@ -105,6 +105,9 @@ function DepartmentTreeEditorModal({
   const [newParent, setNewParent] = useState('')
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  // 部署長を決める部署(lib/ohsumi/field-audiences.ts の「部署長」)
+  const [headsPath, setHeadsPath] = useState('')
+  const { members, fieldAudiencesSupported } = useOhsumi()
 
   // 開くたびに最新のinitialNodesで初期化し直す
   useEffect(() => {
@@ -161,6 +164,11 @@ function DepartmentTreeEditorModal({
     // (member側のフィールドは一切書き換えない — ツリー構成からの削除のみ)
     setDraft((prev) => prev.filter((n) => n.path !== path && !n.path.startsWith(`${path}>`)))
   }
+
+  const setHeads = (path: string, headIds: string[]) => {
+    setDraft((prev) => prev.map((n) => (n.path === path ? { ...n, headIds: headIds.length ? headIds : undefined } : n)))
+  }
+  const headsOf = (path: string) => draft.find((n) => n.path === path)?.headIds ?? []
 
   const renameNode = (path: string, label: string) => {
     setDraft((prev) => prev.map((n) => (n.path === path ? { ...n, label: label.trim() || undefined } : n)))
@@ -268,6 +276,59 @@ function DepartmentTreeEditorModal({
           {t('admin.orgTree.editModal.addButton')}
         </Button>
       </div>
+
+      {fieldAudiencesSupported && flatRows.length > 0 && (
+        <div className="mt-4 rounded-lg border border-border p-3" data-dept-heads>
+          <h3 className="text-sm font-semibold">{t('admin.orgTree.heads')}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('admin.orgTree.headsHint')}</p>
+          <select
+            value={headsPath}
+            onChange={(e) => setHeadsPath(e.target.value)}
+            className="mt-2 h-9 w-full min-w-0 cursor-pointer rounded-lg border border-border bg-card px-3 text-sm outline-none focus:border-primary"
+            data-dept-heads-path
+          >
+            <option value="">—</option>
+            {flatRows.map(({ path, depth, label }) => (
+              <option key={path} value={path}>
+                {'　'.repeat(depth) + label + (headsOf(path).length ? `(${headsOf(path).length})` : '')}
+              </option>
+            ))}
+          </select>
+          {headsPath && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {headsOf(headsPath).map((id) => {
+                const m = members.find((x) => x.id === id)
+                const name = m ? m.displayName || m.name : id
+                return (
+                  <span key={id} className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs" data-dept-head={id}>
+                    {name}
+                    <button
+                      type="button"
+                      onClick={() => setHeads(headsPath, headsOf(headsPath).filter((x) => x !== id))}
+                      className="text-muted-foreground hover:text-destructive"
+                      aria-label={t('admin.orgTree.removeHead', { name })}
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                )
+              })}
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) setHeads(headsPath, [...headsOf(headsPath), e.target.value]) }}
+                className="h-8 min-w-0 max-w-full cursor-pointer rounded-md border border-border bg-card px-2 text-xs"
+                aria-label={t('admin.orgTree.addHead')}
+                data-dept-head-add
+              >
+                <option value="">{t('admin.orgTree.addHead')}</option>
+                {members.filter((m) => !m.inactive && !headsOf(headsPath).includes(m.id)).map((m) => (
+                  <option key={m.id} value={m.id}>{m.displayName || m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-5 flex items-center justify-between gap-2">
         <button

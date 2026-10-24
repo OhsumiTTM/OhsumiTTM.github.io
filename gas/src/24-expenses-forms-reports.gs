@@ -621,8 +621,30 @@ function saveDailyReport_(report, acting) {
   return { id: id }
 }
 
-// REP-005: 管理者が日報・週報の閲覧画面を開いたときに呼ぶ読み取り専用action。
-function fetchDailyReports_() {
+// 日報・週報を見る権限(管理者の閲覧画面): 代表・一般以外の役職・権限の例外の人は、すべての日報を見られる
+// (項目ごとの公開範囲の設定に関わらず。設定は、ほかの人に見せる相手を足すだけ)
+function canViewAllDailyReports_(acting, body) {
+  if (!acting) return false
+  var roles = getRoles_()
+  if (isTopRoleRef_(roles, acting.role) || isAdminRoleRef_(roles, acting.role)) return true
+  return checkPermissionOverride_(acting, 'fetchDailyReports', body)
+}
+
+// REP-005: 日報・週報の読み取り専用action。日報を見る権限の人にはすべて、ほかの人には本人の分と、
+// 項目ごとの公開範囲(member_field_visibility の daily_reports)で見せる相手になっている人の分だけを返す
+function fetchDailyReports_(acting, body) {
+  var all = canViewAllDailyReports_(acting, body)
+  var allowedOf = null
+  if (!all) {
+    var data = loadSnapshot_().data
+    var rule = memberColumnRulesFromSnapshot_(data)[DAILY_REPORTS_AUDIENCE_KEY] || null
+    var viewer = makeViewer_(acting, rolesFromSnapshot_(data))
+    viewer.relations = viewerRelations_(data, viewer.id)
+    allowedOf = function (memberId) {
+      if (memberId === viewer.id) return true
+      return !!rule && fieldAudienceAllows_(rule, viewer, memberId)
+    }
+  }
   var sheet = ensureDailyReportsSheet_()
   var headers = headerRow_(sheet)
   var lastRow = sheet.getLastRow()
@@ -638,6 +660,7 @@ function fetchDailyReports_() {
   var createdCol = headers.indexOf('created_at')
 
   var rows = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues()
+  if (allowedOf) rows = rows.filter(function (r) { return allowedOf(String(r[memberCol])) })
   return rows.map(function (r) {
     return {
       id: String(r[idCol]),

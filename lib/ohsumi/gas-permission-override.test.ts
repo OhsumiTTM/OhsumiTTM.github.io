@@ -73,7 +73,7 @@ describe('採用の権限の例外', () => {
   })
 
   it('代表専用の操作や設定の変更など、採用と関係のない操作は実行できない', () => {
-    for (const action of [...DAIHYO_ONLY, 'updateSetting', 'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth', 'approveTask', 'updateTaskDetails', 'updateJudgment', 'approveExpenseStep', 'fetchDailyReports']) {
+    for (const action of [...DAIHYO_ONLY, 'updateSetting', 'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'testDiscordWebhook', 'testSlackWebhook', 'updateProjectHealth', 'approveTask', 'updateTaskDetails', 'updateJudgment', 'approveExpenseStep']) {
       expect(allowed(recruiter, action, SPOOFED_BODY), action).toBe(false)
     }
   })
@@ -90,7 +90,7 @@ describe('タスク・プロジェクト・部署の権限の例外', () => {
 
   it('設定・Webhook の変更、メンバー情報の変更、経費・フォームの承認は、どの例外でも実行できない', () => {
     for (const acting of [projectEditor, taskEditor, departmentApprover]) {
-      for (const action of ['updateSetting', 'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'updateJudgment', 'updateEvaluationHistory', 'updateOneOnOnes', 'awardSkillPoints', 'bulkUpdateSkills', 'approveExpenseStep', 'rejectExpense', 'approveFormStep', 'fetchDailyReports', 'createProject']) {
+      for (const action of ['updateSetting', 'updateDiscordWebhookUrl', 'updateSlackWebhookUrl', 'updateJudgment', 'updateEvaluationHistory', 'updateOneOnOnes', 'awardSkillPoints', 'bulkUpdateSkills', 'approveExpenseStep', 'rejectExpense', 'approveFormStep', 'createProject']) {
         expect(allowed(acting, action, SPOOFED_BODY), action).toBe(false)
       }
     }

@@ -824,6 +824,55 @@ describe.skipIf(!available)('タスクのリンク(?org=&task=): ログインし
   })
 })
 
+describe.skipIf(!available)('項目ごとの公開範囲: 部署長の一般のメンバーは、部署の人の日報を、その人のページで見られる', () => {
+  const REPORT = '部署の日報のE2E'
+  const openDeptMember = async () => {
+    await navigate('/')
+    await clearDevice()
+    await navigate('/?org=' + A.orgId)
+    await googleSignIn('base@a.example')
+    await waitFor(loggedIn, 'base@a.example がログインできません')
+    await page.evaluate(`[...document.querySelectorAll('button, a')].find((b) => b.textContent.trim() === 'OUTPUT')?.click(); true`)
+    const target = `[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '個人')`
+    await waitFor(() => page.evaluate<boolean>(`!!${target}`), 'OUTPUT に「個人」がありません')
+    await page.evaluate(`${target}.click(); true`)
+    const card = `[...document.querySelectorAll('button')].find((b) => b.textContent.includes('部署の人'))`
+    await waitFor(() => page.evaluate<boolean>(`!!${card}`), '「個人」に部署の人が出ません')
+    await page.evaluate(`${card}.click(); true`)
+  }
+  const reportsShown = () => page.evaluate<string>(`document.querySelector('[data-member-daily-reports]')?.textContent ?? ''`)
+
+  it('部署長にした一般のメンバーには、日報を返して個人ページに出す。部署長から外すと出さない', async () => {
+    const baseId = memberIdOf('base@a.example')
+    const added = world.call(A.org, topTokenA, 'addMember', { name: '部署の人', email: 'dept@a.example', affiliation: '', role: 'base', sendInvite: false })
+    expect(added.ok, added.error).toBe(true)
+    const deptId = memberIdOf('dept@a.example')
+    for (const [action, body] of [
+      ['updateMemberDepartmentPath', { memberId: deptId, departmentPath: '本部>開発' }],
+      ['updateSetting', { key: 'department_tree_config', value: JSON.stringify([{ path: '本部', headIds: [baseId] }]) }],
+      ['updateSetting', { key: 'member_field_visibility', value: JSON.stringify({ daily_reports: ['deptHead'] }) }],
+    ] as [string, Record<string, unknown>][]) {
+      const res = world.call(A.org, topTokenA, action, body)
+      expect(res.ok, action + ' ' + res.error).toBe(true)
+    }
+    const deptToken = String(world.googleLogin(A.org, 'dept@a.example').result.session.token)
+    const sent = world.call(A.org, deptToken, 'submitDailyReport', { report: { type: 'daily', date: '2026-10-20', done: REPORT } })
+    expect(sent.ok, sent.error).toBe(true)
+    A.org.cache.clear()
+
+    await openDeptMember()
+    await waitFor(async () => (await reportsShown()).includes(REPORT), '部署長に、部署の人の日報が出ません')
+
+    // 部署長から外すと、GAS が日報を返さない(個人ページに出ない)
+    const res = world.call(A.org, topTokenA, 'updateSetting', { key: 'department_tree_config', value: JSON.stringify([{ path: '本部', headIds: [] }]) })
+    expect(res.ok, res.error).toBe(true)
+    A.org.cache.clear()
+    await openDeptMember()
+    await sleep(2000)
+    expect(await reportsShown()).toBe('')
+  })
+})
+
 describe.skipIf(!available)('兼部の統合表示: 団体A と団体B の両方にログインしている人は、ホームで「すべての団体」を選べる', () => {
   const day = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
   const TITLE_A = '兼部のE2E(団体Aのタスク)'
