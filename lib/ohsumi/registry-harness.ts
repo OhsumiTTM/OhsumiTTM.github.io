@@ -107,7 +107,7 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
       getProperty: (k: string) => props[k] ?? null,
       setProperty: (k: string, v: string) => { props[k] = v },
     }) },
-    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string, ttl?: number) => { cache.set(k, v); cacheTtl.set(k, ttl ?? 600) }, remove: (k: string) => { cache.delete(k) } }) },
+    CacheService: { getScriptCache: () => ({ get: (k: string) => cache.get(k) ?? null, put: (k: string, v: string, ttl?: number) => { cache.set(k, v); cacheTtl.set(k, ttl ?? 600) }, remove: (k: string) => { cache.delete(k) }, removeAll: (ks: string[]) => { ks.forEach((k) => cache.delete(k)) } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: { MimeType: { JSON: 'json', TEXT: 'text' }, createTextOutput: (text: string) => ({ text, setMimeType() { return this } }) },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo' },

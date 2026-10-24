@@ -1,7 +1,7 @@
 {
   "registry/Code.gs": {
-    "version": "2026.10.24-1",
-    "sha256": "3d06e3f9e235c018696f71b52c3dc79b31fb191a3e3fa60c32427328c8ab3bf5"
+    "version": "2026.10.24-2",
+    "sha256": "c4641d78ca7bfd6a6f514313427f3c08ec35cb30dd5f8bd0d65b57075fd81208"
   },
   "registry/monitor/Monitor.gs": {
     "version": "2026.10.02-2",

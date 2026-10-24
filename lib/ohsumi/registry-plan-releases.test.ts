@@ -256,3 +256,39 @@ describe('プランごとに配る版', () => {
     expect(t.mails.at(-1)!.body).toContain('https://ohsumi.example.org/gas/' + V1 + '/Code.gs')
   })
 })
+
+describe('プランごとの画面の版(resolveOrg の siteVersion)', () => {
+  const site = (t: ReturnType<typeof ready>, orgId = ORGS[0]) => t.post({ action: 'resolveOrg', orgId }).result.siteVersion
+
+  it('一番新しい配る版のプラン・FSIF・デモの団体は main の画面(空)。古い版を配るプランは、その版', () => {
+    const t = ready({ plans: ['ohsumi', 'internal', 'cosmo_base'] })
+    // 行が無い時は全プランが一番新しい版 → どれも main の画面
+    expect([site(t, ORGS[0]), site(t, ORGS[1]), site(t, ORGS[2])]).toEqual(['', '', ''])
+    t.release('ohsumi', V1)
+    // 配る版を変えたら、覚えた答えを消すので、すぐに変わる
+    expect(site(t, ORGS[0])).toBe(V1)
+    // FSIF は、配る版に関わらず main の画面(先に試す)
+    t.release('internal', V2)
+    expect(site(t, ORGS[1])).toBe('')
+    // Cosmo Base(行が無い)は念のための既定(配る版のうち一番古い V1)
+    expect(site(t, ORGS[2])).toBe(V1)
+    // デモの団体は一番新しい版 = main の画面
+    expect(t.post({ action: 'setOrgDemo', session: t.session, orgId: ORGS[0], demo: true, reason: '立ち上げ' }).ok).toBe(true)
+    t.cache.clear()
+    expect(site(t, ORGS[0])).toBe('')
+  })
+
+  it('一番新しい版に上げたプランは main の画面に戻る。提供停止中の団体には返さない', () => {
+    const t = ready()
+    t.release('ohsumi', V2)
+    expect(site(t)).toBe(V2)
+    t.release('ohsumi', V3)
+    expect(site(t)).toBe('')
+    t.release('ohsumi', V1)
+    t.sheetRow('Orgs', 'org_id', ORGS[0]).set('status', 'suspended')
+    t.cache.clear()
+    const r = t.post({ action: 'resolveOrg', orgId: ORGS[0] }).result
+    expect(r.status).toBe('suspended')
+    expect(r.siteVersion).toBe('')
+  })
+})
