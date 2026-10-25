@@ -4,6 +4,7 @@
 // ログイン(許可リストの管理者だけ)・団体の一覧・停止の予定(提供停止・機能停止)の入力と取り消し・
 // 登録コードの発行と取り消し・操作の記録を表示する。
 // 判定はすべてレジストリの GAS が行い、この画面は表示と入力だけを受け持つ。
+import { loadManifest } from '@/lib/ohsumi/site-version'
 import { copySiteGasCode, newestGasVersion, siteGasCodePath } from '@/lib/ohsumi/gas-code-copy'
 import { ORG_TEMPLATE_COPY_URL } from '@/lib/ohsumi/org-template'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -103,6 +104,7 @@ import {
   releaseForOrg,
   releaseForPlan,
   setPlanRelease,
+  planScreenStatus,
   type PlanRelease,
   type PlanReleases,
 } from '@/lib/registry/admin-api'
@@ -862,6 +864,14 @@ const RELEASE_SOURCE_LABELS: Record<PlanRelease['source'], string> = { set: '', 
 // 変えるには5分以内の Google でのログインが要る(操作の記録に残る)。変えた後は、そのプランのテンプレートの貼り替えを知らせる
 function PlanReleasesPanel({ releases, session, onChanged, onAuthError }: { releases: PlanReleases; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
   const [open, setOpen] = useState(false)
+  // サイトに置いた版の画面の一覧(/_v/index.json)。読めない時は null
+  const [manifest, setManifest] = useState<string[] | null | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    loadManifest().then((m) => { if (alive) setManifest(m) }, () => { if (alive) setManifest(null) })
+    return () => { alive = false }
+  }, [])
+  const missingScreens = releases.plans.filter((r) => planScreenStatus(r.siteVersion, manifest ?? null) === 'missing')
   const [editing, setEditing] = useState<{ plan: Plan; version: string; templateUrl: string; note: string; reason: string } | null>(null)
   // FSIF に配っていない版を、ほかのプランに配る時の確かめ
   const [confirming, setConfirming] = useState(false)
@@ -919,6 +929,11 @@ function PlanReleasesPanel({ releases, session, onChanged, onAuthError }: { rele
           <button type="button" className="ml-2 underline" onClick={() => setChanged(null)}>閉じる</button>
         </p>
       )}
+      {manifest !== undefined && missingScreens.length > 0 && (
+        <p data-plan-screen-missing className="mt-2 text-xs break-words text-destructive">
+          {missingScreens.map((r) => `${label(r.plan)}(${r.siteVersion})`).join('・')}の画面がサイトにありません。これらの団体は main の画面を使っています。サイトを作り直して、その版の画面を置いてください。
+        </p>
+      )}
       {releases.pendingSecurity.length > 0 && (
         <ul data-plan-release-security className="mt-2 space-y-1 text-xs text-destructive">
           {releases.pendingSecurity.map((p) => (
@@ -940,6 +955,19 @@ function PlanReleasesPanel({ releases, session, onChanged, onAuthError }: { rele
                   {RELEASE_SOURCE_LABELS[r.source] && <Badge tone="muted">{RELEASE_SOURCE_LABELS[r.source]}</Badge>}
                   {r.problem === 'unreleased' && <Badge tone="bad">選んだ版 {r.setting} がサイトにありません</Badge>}
                 </div>
+                {r.siteVersion !== undefined && (
+                  <p className="mt-1 break-words" data-plan-screen={r.plan}>
+                    画面: <span className="font-mono">{r.siteVersion || 'main'}</span>{' '}
+                    {(() => {
+                      const st = planScreenStatus(r.siteVersion, manifest ?? null)
+                      if (st === 'main') return <span className="text-muted-foreground">(一番新しい画面)</span>
+                      if (manifest === undefined) return null
+                      if (st === 'built') return <Badge tone="ok">作成済み</Badge>
+                      if (st === 'missing') return <Badge tone="bad">この版の画面がありません(main の画面を使います)</Badge>
+                      return <span className="text-muted-foreground">(サイトの版の一覧を読めません)</span>
+                    })()}
+                  </p>
+                )}
                 <p className="mt-1 break-words text-muted-foreground">
                   団体 {r.orgs}(配る版より古い {r.outdated}・更新が要る {r.updateRequired})・テンプレート: <span className="break-all">{r.templateUrl || '既定のリンク'}</span>
                   {r.updatedAt && `・変えた人: ${r.updatedBy}(${fmt(r.updatedAt)})`}
@@ -949,6 +977,10 @@ function PlanReleasesPanel({ releases, session, onChanged, onAuthError }: { rele
               </li>
             ))}
           </ul>
+          <p data-plan-screen-built className="text-xs break-words text-muted-foreground">
+            サイトに置いた版の画面: {manifest === undefined ? '読み込み中…' : manifest === null ? '一覧を読めません(/_v/index.json)' : manifest.length ? manifest.join('・') : 'なし(すべて main の画面)'}。
+            画面の版は、そのプランの配る版が一番新しい版なら main、古い版ならその版の画面です(FSIF・デモの団体はいつも main)。
+          </p>
           {releases.removable.length > 0 && (
             <p data-plan-release-removable className="text-xs break-words text-muted-foreground">
               サイトから外してよい版(どのプランの配る版でもなく、一番新しい版でもない): {releases.removable.join('・')}。外す時は pnpm gas:release remove &lt;版&gt; を使い、レジストリ → サイトの順に入れ替えます。

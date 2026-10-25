@@ -690,6 +690,18 @@ export interface PlanRelease {
   orgs: number
   outdated: number
   updateRequired: number
+  // そのプランの団体が使う画面の版('' は main の画面。古いレジストリには無い)
+  siteVersion?: string
+}
+
+/**
+ * プランの画面の版が、サイトに置かれているか(/_v/index.json の一覧で確かめる)。
+ * main: main の画面を使う / built: その版の画面がある / missing: その版の画面が無い(団体は main の画面を使う) / unknown: 一覧を読めない
+ */
+export function planScreenStatus(siteVersion: string | undefined, manifest: string[] | null): 'main' | 'built' | 'missing' | 'unknown' {
+  if (!siteVersion) return 'main'
+  if (!manifest) return 'unknown'
+  return manifest.includes(siteVersion) ? 'built' : 'missing'
 }
 
 export interface PlanReleases {
