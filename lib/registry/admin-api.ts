@@ -185,6 +185,7 @@ export interface Overview {
   surveys?: SurveySummary[]
   // FSIF(internal)には上限が無い(値が無い)
   surveyLimits?: Partial<Record<Plan, number>>
+  surveyAutoCheck?: SurveyAutoCheck | null
   // 団体ごとの直近12か月の数(送付の予定を含む)
   survey12mCounts?: Record<string, number>
   // お知らせ(新しい順。古いレジストリでは無い)
@@ -448,7 +449,22 @@ export interface SurveySummary {
   // 「28日目に機能停止を入れる」を出せるか(期限を過ぎて未回答・有償プランでない・デモでない・ほかの停止の予定が無い)
   canRestrict: boolean
   demo?: boolean
+  // 回答の自動の確認(v1.2): 受付コード・回答先のスプレッドシートがあるか・回答済みにした方法
+  receiptCode?: string
+  autoCheck?: boolean
+  answeredHow?: '' | 'manual' | 'auto'
 }
+
+/** 回答の自動の確認の結果(毎日の処理・「今すぐ確かめる」) */
+export interface SurveyAutoCheck {
+  at: string
+  answered: { surveyId: string; orgId: string; title: string }[]
+  unmatched: { sheetId: string; count: number; rows: number[] }[]
+  errors: { sheetId: string; error: string }[]
+}
+
+/** 受付コードを入れるリンクのひな形で、受付コードの代わりに入れておく文字 */
+export const SURVEY_CODE_PLACEHOLDER = 'OHSUMI_CODE'
 
 export type SurveyTarget = { kind: 'all' } | { kind: 'plan'; plan: Plan } | { kind: 'orgs'; orgIds: string[] }
 
@@ -458,6 +474,9 @@ export interface SurveyInput {
   sendDate: string
   target: SurveyTarget
   reason: string
+  // 回答の自動の確認(任意。使う時は両方)
+  codeLinkTemplate?: string
+  responseSheetUrl?: string
 }
 
 export interface SendSurveyResult {
@@ -473,6 +492,11 @@ export function overdueSurveys(surveys: SurveySummary[]): SurveySummary[] {
 /** 日本時間の今日('YYYY-MM-DD') */
 export function todayJst(nowMs = Date.now()): string {
   return new Date(nowMs + 9 * 3600 * 1000).toISOString().slice(0, 10)
+}
+
+/** アンケートの回答を今すぐ確かめる(回答先のスプレッドシートの受付コードの列だけを読む) */
+export function checkSurveyResponses(session: AdminSession): Promise<SurveyAutoCheck> {
+  return callRegistry<SurveyAutoCheck>('checkSurveyResponses', { session: session.token })
 }
 
 /** アンケートを送る。送り直さない(二重に送らないため。失敗した時は一覧を読み直して確かめる) */

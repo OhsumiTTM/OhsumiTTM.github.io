@@ -448,7 +448,14 @@ export function registryResponse(body) {
             sendDate: '2026-09-10', dueDate: '2026-09-24', state: 'overdue', day: 21, remindersSent: [0, 7, 10, 14, 15, 21], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: false },
           { surveyId: 'sv_4', orgId: 'org_b', orgName: '停止予定の団体', plan: '', title: '冬のアンケート', formUrl: 'https://forms.gle/zzz',
             sendDate: '2026-10-20', dueDate: '2026-11-03', state: 'scheduled', day: -19, remindersSent: [], answeredAt: '', answeredBy: '', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: false },
+          // 回答の自動の確認(受付コード入りの長いリンク・自動で回答済み)
+          { surveyId: 'sv_5', orgId: 'org_b', orgName: '停止予定の団体', plan: 'ohsumi', title: '冬のアンケート(自動の確認)', formUrl: 'https://docs.google.com/forms/d/e/' + 'F'.repeat(56) + '/viewform?usp=pp_url&entry.1234567890=K7QD-M2XP',
+            sendDate: '2026-10-01', dueDate: '2026-10-15', state: 'answered', day: 24, remindersSent: [0, 7], answeredAt: iso(1), answeredBy: 'auto', createdBy: 'registry.admin.with.a.long.address@example.com', createdAt: iso(1), restrictAt: '', canRestrict: false,
+            receiptCode: 'K7QD-M2XP', autoCheck: true, answeredHow: 'auto' },
         ],
+        surveyAutoCheck: { at: iso(1), answered: [{ surveyId: 'sv_5', orgId: 'org_b', title: '冬のアンケート' }],
+          unmatched: [{ sheetId: 'RESPONSESHEET0123456789abcdef', count: 60, rows: Array.from({ length: 50 }, (_, i) => i + 2) }],
+          errors: [{ sheetId: 'OTHERSHEET0123456789abcdefgh', error: '回答先のスプレッドシートに「受付コード」の列が見つかりません。フォームに「受付コード」の質問があるか確かめてください。' }] },
         audit: [
           { at: iso(4), actor: 'registry.admin.with.a.long.address@example.com', action: 'scheduleSuspension', target: 'org_r', before: '', after: JSON.stringify({ kind: 'restrict', suspendAt: iso(2) }), reason: 'アンケートの未回答' },
           { at: iso(3), actor: 'registry.admin.with.a.long.address@example.com', action: 'issueRegistrationCode', target: 'rc_0abcdefghij', before: '', after: JSON.stringify({ orgName: long, contactEmail: 'contact.person.long.address@example.org', expiresAt: iso(14) }), reason: '' },

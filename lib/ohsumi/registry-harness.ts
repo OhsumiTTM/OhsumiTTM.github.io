@@ -51,6 +51,7 @@ export type TokenInfo = Record<string, unknown>
 
 export function setup(opts: { props?: Record<string, string>; now?: number; tokeninfo?: Record<string, TokenInfo> } = {}) {
   const sheets = new Map<string, FakeSheet>()
+  const external = new Map<string, FakeSheet[]>()
   const cache = new Map<string, string>()
   // スクリプトプロパティ。テストが直接書き換えた時は、キャッシュに置いた写し(registryProps_)を捨てる
   // (本物では、エディタで書き換えてから最大5分で反映される)
@@ -129,6 +130,12 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
         getSheetByName: (n: string) => sheets.get(n) ?? null,
         insertSheet: (n: string) => { const s = new FakeSheet(n); sheets.set(n, s); return s },
       }),
+      // ほかのスプレッドシート(アンケートの回答先など)。external に入れたものだけ開ける
+      openById: (id: string) => {
+        const list = external.get(id)
+        if (!list) throw new Error('Not found: ' + id)
+        return { getSheets: () => list }
+      },
     },
     UrlFetchApp: {
       fetch: (url: string) => {
@@ -158,6 +165,6 @@ export function setup(opts: { props?: Record<string, string>; now?: number; toke
   ctxRef = ctx as unknown as Record<string, unknown>
   const gas = ctx as unknown as Record<string, (...a: unknown[]) => unknown> & Record<string, unknown>
   const post = (body: unknown) => JSON.parse((gas.doPost as (e: object) => { text: string })({ postData: { contents: typeof body === 'string' ? body : JSON.stringify(body) } }).text)
-  return { gas, props, sheets, cache, cacheTtl, triggers, files, logs, mails, mailQuota, post, newFile }
+  return { gas, props, sheets, external, cache, cacheTtl, triggers, files, logs, mails, mailQuota, post, newFile }
 }
 
