@@ -578,6 +578,8 @@ interface OhsumiContextValue extends OhsumiState {
   setHoldReason: (id: string, note: string | null) => void
   // ナレッジのページをつなぐ(見られないページのリンクは GAS が残す。答えの並びで置き換える)
   setTaskWikiPages: (taskId: string, pageIds: string[]) => void
+  // スキルの引き継ぎの結果(GAS が計算し直した点数・レベル・資格・引き継いだ分)を、画面のメンバーに入れる
+  applySkillTransferState: (memberId: string, state: import('./remote').SkillTransferMemberState) => void
   setProjectWikiPages: (projectId: string, pageIds: string[]) => void
   updateEstimatedHours: (id: string, hours: number | null) => void
   updateActualHours: (id: string, hours: number | null) => void
@@ -4552,6 +4554,11 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     [runRemote],
   )
 
+  const applySkillTransferState = useCallback((memberId: string, state: import('./remote').SkillTransferMemberState) => {
+    setMembers((prev) => prev.map((m) => (m.id === memberId
+      ? { ...m, skillPoints: state.skillPoints, skillLevels: state.skillLevels, qualifications: state.qualifications, externalSkills: state.externalSkills }
+      : m)))
+  }, [])
   const setTaskWikiPages = useCallback(
     (taskId: string, pageIds: string[]) => {
       setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, wikiPageIds: pageIds } : t)))
@@ -5887,6 +5894,7 @@ export function OhsumiProvider({ children }: { children: React.ReactNode }) {
     setBlocker,
     setHoldReason,
     setTaskWikiPages,
+    applySkillTransferState,
     setProjectWikiPages,
     updateEstimatedHours,
     updateActualHours,

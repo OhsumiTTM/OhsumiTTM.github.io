@@ -63,6 +63,9 @@ var READ_POLICY = {
       grade_year: 'selfOrAdminRole',
       custom_fields_json: 'selfOrAdminRole',
       skill_points_json: 'selfOrAdminRole',
+      // 引き継いだ実績は、点数と同じ範囲(項目ごとの公開範囲も skill_points_json に従う)
+      external_skills_json: 'selfOrAdminRole',
+      skill_transfers_json: 'self',
       survey_responses_json: 'selfOrSupervisor',
       last_login: 'selfOrAdminRole',
       notify_new_task: 'self',
@@ -272,7 +275,7 @@ function filterTableForViewer_(sheetName, table, viewer) {
     var ownerId = sheetName === 'Members' && idCol >= 0 ? String(row[idCol]) : ''
     var overrides = sheetName === 'Members' ? (viewer.memberColumnRules || {}) : {}
     outRows.push(keepCols.map(function (c) {
-      var rule = overrides[headers[c]] || policy.columns[headers[c]]
+      var rule = overrides[headers[c] === 'external_skills_json' ? 'skill_points_json' : headers[c]] || policy.columns[headers[c]]
       var allowed = checkReadRule_(rule, viewer, ownerId)
       // 独自の項目は、キーごとの範囲でも絞る(列が見えない人にも、範囲を広げたキーだけは返す)
       if (sheetName === 'Members' && headers[c] === 'custom_fields_json') return filterCustomFieldsForViewer_(row[c], overrides, viewer, ownerId, allowed)

@@ -280,6 +280,7 @@ function authorizeAction_(acting, action, body) {
 
   // --- 本人のみ (selfOnly) ---
   var selfOnly = [
+    'removeTransferredSkills', // ほかの団体から引き継いだ実績を消す(本人。代表は上で許可済み)
     'updateWill',            // 得意分野・希望タグは本人のみ
     'updateNotify',          // 通知設定は本人のみ
     'updateNotifySettings',  // 通知設定詳細は本人のみ
@@ -315,6 +316,9 @@ function authorizeAction_(acting, action, body) {
     'notifyFormResult',
     'updateHistory',
     'updateDeliverables',
+    'createSkillTransferCode', // スキルの引き継ぎ(44-skill-transfer.gs): いつも本人(acting.id)の分だけ。body の memberId は見ない
+    'cancelSkillTransferCode',
+    'claimSkillTransferCode',
     'updateTaskWikiPages',     // タスクにつなぐナレッジのページ(担当者・確認者・作成者・全権管理者: TASK_OWNER_SCOPED_ACTIONS)
     'setHoldReason',           // 保留理由の設定は担当者(または管理者)が本人操作
     'submitQuizResult',        // 検定の受験はログイン済み誰でも

@@ -241,7 +241,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.24-7'
+var REGISTRY_VERSION = '2026.10.24-8'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -291,6 +291,12 @@ var REGISTRY_SHEETS = {
   // 上限で送れず、翌日以降に回したメール(PR R)。priority は送る順(0 停止の予告・1 リマインド・2 アンケートの送付・3 そのほか)
   MailQueue: ['mail_id', 'queued_at', 'priority', 'kind', 'org_id', 'to', 'subject', 'body', 'sent_at', 'attempts', 'last_error'],
   AuditLog: ['at', 'actor', 'action', 'target', 'before', 'after', 'reason'],
+  // 団体をまたいだスキルの引き継ぎ(v1.2)。名前・メールアドレスは持たない。code_hash は引き継ぎコードの SHA-256。
+  // payload_json は受け取られた・取り消された・期限を過ぎた時に消す。own_fingerprint(その団体で得た分の指紋)は残し、
+  // 後でほかの団体から転送されてきた時に、書き換えられていないかを確かめる
+  // origin_key は、元の団体が本人ごとに作る仮の印(団体の鍵で作るので、だれかは分からない)。同じ人の同じ団体の分を、受け取る側で1つにまとめる
+  SkillTransfers: ['id', 'code_hash', 'origin_org_id', 'origin_org_name', 'created_at', 'expires_at', 'status', 'payload_json',
+    'own_fingerprint', 'claimed_org_id', 'claimed_at', 'origin_key'],
   // 団体の GAS の版の印(管理画面で付ける。コードの KNOWN_GAS_VERSIONS より優先する)。
   // security: 安全の修正を含む(TRUE/FALSE) / required: これより古ければ更新が要る(TRUE/FALSE)
   GasVersions: ['version', 'security', 'required', 'note', 'updated_at', 'updated_by'],
@@ -309,7 +315,7 @@ var BACKUP_FOLDER_NAME = 'Ohsumi レジストリのバックアップ'
 // リクエストの本文の上限(文字数)
 var MAX_BODY_CHARS = 50000
 // 1分あたりの上限(レジストリ全体)。Apps Script では送り元を区別できないため、全体で数える
-var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120, fetchAnnouncements: 300, receiveDiagnostics: 30 }
+var RATE_LIMITS = { all: 600, health: 60, adminLogin: 30, registerOrg: 10, resolveOrg: 120, checkIn: 300, requestGasUpdate: 10, reportMetrics: 120, fetchAnnouncements: 300, receiveDiagnostics: 30, createSkillTransfer: 60, claimSkillTransfer: 60, cancelSkillTransfer: 60 }
 
 // ---- 入口 ----
 
@@ -354,6 +360,9 @@ var REGISTRY_ACTIONS = {
   scheduleSurveyRestriction: function (body) { return scheduleSurveyRestriction_(body, Date.now()) },
   fetchAnnouncements: function (body) { return fetchAnnouncements_(body, Date.now()) },
   receiveDiagnostics: function (body) { return receiveDiagnostics_(body, Date.now()) },
+  createSkillTransfer: function (body) { return createSkillTransfer_(body, Date.now()) },
+  claimSkillTransfer: function (body) { return claimSkillTransfer_(body, Date.now()) },
+  cancelSkillTransfer: function (body) { return cancelSkillTransfer_(body, Date.now()) },
   getDiagnosticsReport: function (body) { return getDiagnosticsReport_(body, Date.now()) },
   publishAnnouncement: function (body) { return publishAnnouncement_(body, Date.now()) },
   withdrawAnnouncement: function (body) { return withdrawAnnouncement_(body, Date.now()) },
@@ -3564,6 +3573,7 @@ function getKpiOrgs_(body, nowMs) {
 //   noCheck: 最後の確認から GAS_CHECK_STALE_HOURS 時間を超えた(または一度も無い。判定の列ではこちらを優先して出す)
 // 日付の形でない版(r1e-2 など、PR E より前)は、どの日付の版よりも古いとみなす
 var KNOWN_GAS_VERSIONS = [
+  { version: '2026.10.24-7', security: false, required: false, released: true, note: 'v1.2(途中): 団体をまたいだスキルの引き継ぎ。本人が引き継ぎコードを作り(本人のメールにも送る。180日・1回だけ)、新しい団体で本人がコードを入れると、共通スキルの点数・レベルと資格を出どころごとに受け取る(点数に足す。承認の条件は満たさない)。前の団体から引き継いだ分も、そのまま次の団体に送れる(同じ分は1回だけ足す)。管理者が退会させた時は、コードを自動で作って本人に送る。受け取った分は本人・代表が出どころごとに消せる。レジストリの 2026.10.24-8 が要る' },
   { version: '2026.10.24-6', security: false, required: false, released: true, note: 'v1.2(途中): タスク・プロジェクトにナレッジのページをつなげる(10ページまで。Tasks・Projects の wiki_page_ids 列)。タスクは担当者・確認者・作成者・全権管理者、プロジェクトは責任者・管理者が付け外しでき、見られないページは画面に出さない(その人が直しても残す)。プロジェクトのテンプレート・業務テンプレートのタスクにもページを付けられ、作ったタスクに引き継ぐ' },
   { version: '2026.10.24-5', security: false, required: false, released: true, note: 'v1.2(途中): ナレッジ(手順書・Wiki)。ページはフォルダ(5段まで)・タグ・公開範囲(全員・リーダー以上・プロジェクト・部署)を持ち、Markdown と画像で書ける。見られる人は誰でも作成・変更を提案でき、ナレッジの管理の権限(既定は代表だけ)を持つ人が承認すると反映する(管理する人の変更はすぐ反映)。前の版を20まで残し、承認の時に元の版が変わっていれば止める。提案と結果はメールで知らせる' },
   { version: '2026.10.24-4', security: false, required: false, released: true, note: 'v1.2(途中): Discord/Slack の、1つのタスクについての通知(確認待ち・日程調整とフォームの回答がそろった)に、そのタスクのリンクを埋め込む(Discord は [文字](URL)、Slack は <URL|文字>)。幹部限定・承認待ちのタスクも名前は出さずにリンクを付ける' },
@@ -4021,3 +4031,206 @@ function ensureAdminSessionKey_(props) {
     console.log('管理画面のセッションの鍵を作りました')
   }
 }
+
+// ---- 団体をまたいだスキルの引き継ぎ(v1.2) ----
+//
+// 元の団体の GAS が、本人の共通スキルの実績(点数・レベル・資格)を共有鍵の署名付きで預け(createSkillTransfer)、
+// 引き継ぎコードを受け取る(本人の画面に出し、本人のメールにも送る)。新しい団体の GAS が、本人の入れたコードで受け取る
+// (claimSkillTransfer。1回だけ)。名前・メールアドレスは受け取らない・持たない。
+// carried: 元の団体が前に引き継いだ分(A→B→C の A の分)。前の受け渡しの指紋(own_fingerprint)と同じ中身の時だけ受け付ける
+var SKILL_TRANSFER_TTL_DAYS = 180
+var SKILL_TRANSFER_CODE_LENGTH = 12
+var SKILL_TRANSFER_MAX_CHARS = 30000
+var SKILL_TRANSFER_CLAIM_FAILS_PER_HOUR = 20
+var SKILL_TRANSFER_INVALID = '引き継ぎの要求を受け付けられませんでした(署名・時刻を確かめてください)。'
+var SKILL_TRANSFER_CODE_INVALID = '引き継ぎコードが正しくないか、使えなくなっています(使用済み・期限切れ・取り消し済み)。'
+
+// 署名を確かめ、団体の行を返す。sig = base64url(HMAC-SHA256(共有鍵, 'skillTransfer.' + kind + '.' + orgId + '.' + ts + '.' + extra))
+function verifySkillTransferSig_(body, kind, extra, nowMs) {
+  var orgId = String(body.orgId || '')
+  var ts = Number(body.ts)
+  if (!ORG_ID_PATTERN.test(orgId) || !(ts > 0) || Math.abs(nowSecOf_(nowMs) - ts) > CHECKIN_MAX_SKEW_SEC) {
+    countRejected_(nowMs)
+    throw registryError_(SKILL_TRANSFER_INVALID, { authError: true })
+  }
+  var secret = findSecretRow_(orgId)
+  var row = findOrgRow_(orgId)
+  var key = secret ? String(secret.values.registry_key || '') : ''
+  var expected = key ? b64url_(Utilities.computeHmacSha256Signature('skillTransfer.' + kind + '.' + orgId + '.' + ts + '.' + extra, key)) : ''
+  if (!row || !expected || !safeEquals_(expected, String(body.sig || ''))) {
+    countRejected_(nowMs)
+    throw registryError_(SKILL_TRANSFER_INVALID, { authError: true })
+  }
+  return { orgId: orgId, row: row }
+}
+
+// 実績の形をそろえる(知らない項目は落とす。点数は0以上の整数、レベルは1〜5、資格は名前・取得日・発行元)
+function cleanSkillRecord_(r) {
+  r = r && typeof r === 'object' ? r : {}
+  var points = {}
+  var src = r.points && typeof r.points === 'object' && !Array.isArray(r.points) ? r.points : {}
+  Object.keys(src).sort().slice(0, 100).forEach(function (k) {
+    var skill = cleanText_(k, 40)
+    var v = Number(src[k])
+    if (!skill || typeof src[k] === 'boolean' || !isFinite(v) || v < 0 || Math.floor(v) !== v || v > 1000000) return
+    points[skill] = v
+  })
+  var levels = (Array.isArray(r.levels) ? r.levels : []).slice(0, 100).map(function (l) {
+    var level = Number(l && l.level)
+    return { skill: cleanText_(l && l.skill, 40), level: [1, 2, 3, 4, 5].indexOf(level) >= 0 ? level : 0 }
+  }).filter(function (l) { return l.skill && l.level })
+  var qualifications = (Array.isArray(r.qualifications) ? r.qualifications : []).slice(0, 100).map(function (q) {
+    var date = String((q && q.acquiredDate) || '')
+    return { name: cleanText_(q && q.name, 100), acquiredDate: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '', issuer: cleanText_(q && q.issuer, 100) }
+  }).filter(function (q) { return q.name })
+  return { points: points, levels: levels, qualifications: qualifications }
+}
+
+// 中身の指紋(キーの順をそろえた JSON の SHA-256)
+function skillRecordFingerprint_(rec) {
+  var canon = function (v) {
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']'
+    if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]) }).join(',') + '}'
+    return JSON.stringify(v)
+  }
+  return 'sha256:' + sha256Hex_(canon(cleanSkillRecord_(rec)))
+}
+
+function skillTransferCodeHash_(input) {
+  return 'sha256:' + sha256Hex_('skillTransfer:' + normalizeRegistrationCode_(input))
+}
+
+function generateSkillTransferCode_() {
+  var n = REGISTRATION_CODE_ALPHABET.length
+  var limit = Math.floor(256 / n) * n
+  var code = ''
+  while (code.length < SKILL_TRANSFER_CODE_LENGTH) {
+    randomBytes_(32).forEach(function (b) {
+      if (code.length < SKILL_TRANSFER_CODE_LENGTH && b < limit) code += REGISTRATION_CODE_ALPHABET.charAt(b % n)
+    })
+  }
+  return code
+}
+
+// 期限を過ぎた待ちの行は、中身を消して expired にする(ロックの中で呼ぶ)
+function expireSkillTransfers_(rows, nowMs) {
+  rows.forEach(function (r) {
+    if (String(r.values.status) !== 'pending') return
+    if ((timeOf_(r.values.expires_at) || 0) > nowMs) return
+    setRowFields_('SkillTransfers', r.row, { status: 'expired', payload_json: '' })
+    r.values.status = 'expired'
+    r.values.payload_json = ''
+  })
+}
+
+// { action: 'createSkillTransfer', orgId, ts, record: JSON の文字列({ originKey, own, carried: [{ transferId, points, levels, qualifications }] }), sig }
+//   sig の extra は record の文字列。返事: { transferId, code(XXXX-XXXX-XXXX), expiresAt }
+function createSkillTransfer_(body, nowMs) {
+  var text = typeof body.record === 'string' ? body.record : ''
+  var who = verifySkillTransferSig_(body, 'create', text, nowMs)
+  if (!text || text.length > SKILL_TRANSFER_MAX_CHARS) throw registryError_('引き継ぐ実績が大きすぎるか、空です。')
+  var parsed
+  try { parsed = JSON.parse(text) } catch (e) { parsed = null }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw registryError_('引き継ぐ実績の形が違います。')
+  var own = cleanSkillRecord_(parsed.own)
+  var originKey = String(parsed.originKey || '')
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(originKey)) throw registryError_('引き継ぐ実績の形が違います(originKey)。')
+  var carriedIn = Array.isArray(parsed.carried) ? parsed.carried : []
+  if (carriedIn.length > 50) throw registryError_('引き継ぐ実績が多すぎます(前の団体の分は50件まで)。')
+  return withRegistryLock_(function () {
+    var rows = readRows_('SkillTransfers')
+    expireSkillTransfers_(rows, nowMs)
+    var byId = {}
+    rows.forEach(function (r) { byId[String(r.values.id)] = r })
+    var seen = {}
+    var carried = carriedIn.map(function (c) {
+      var id = String((c && c.transferId) || '')
+      var prev = byId[id]
+      if (!prev || seen[id] || String(prev.values.own_fingerprint) !== skillRecordFingerprint_(c)) {
+        throw registryError_('前の団体から引き継いだ実績が、その団体が送った時の中身と違います。引き継げません。')
+      }
+      seen[id] = true
+      var rec = cleanSkillRecord_(c)
+      rec.transferId = id
+      return rec
+    })
+    var code = generateSkillTransferCode_()
+    var id = 'st_' + generateSecret_().replace(/[^A-Za-z0-9]/g, '').slice(0, 20)
+    var createdAt = new Date(nowMs).toISOString()
+    var expiresAt = new Date(nowMs + SKILL_TRANSFER_TTL_DAYS * 86400000).toISOString()
+    appendRowByHeaders_('SkillTransfers', {
+      id: id, code_hash: skillTransferCodeHash_(code), origin_org_id: who.orgId,
+      origin_org_name: cleanText_(who.row.values.display_name, 100) || who.orgId,
+      created_at: createdAt, expires_at: expiresAt, status: 'pending',
+      payload_json: JSON.stringify({ own: own, carried: carried }), own_fingerprint: skillRecordFingerprint_(own),
+      claimed_org_id: '', claimed_at: '', origin_key: who.orgId + ':' + originKey,
+    })
+    appendAudit_({ actor: 'org:' + who.orgId, action: 'createSkillTransfer', target: id, after: { carried: carried.length } })
+    return { ok: true, result: { transferId: id, code: formatRegistrationCode_(code), expiresAt: expiresAt } }
+  })
+}
+
+// { action: 'claimSkillTransfer', orgId, ts, code, sig }(sig の extra はそろえたコード)
+//   返事: { entries: [{ transferId, originKey, originOrgName, exportedAt, via, points, levels, qualifications }] }
+//   originKey は、レジストリが覚えている値を返す(転送されてきた中身の値は使わない)
+//   1件目はコードを作った団体で得た分、続きはその団体が前に引き継いだ分(via に経由した団体の名前)
+function claimSkillTransfer_(body, nowMs) {
+  var code = normalizeRegistrationCode_(body.code)
+  var who = verifySkillTransferSig_(body, 'claim', code, nowMs)
+  var cache = CacheService.getScriptCache()
+  var failKey = 'stfail:' + who.orgId + ':' + Math.floor(nowMs / 3600000)
+  var fails = Number(cache.get(failKey) || 0)
+  if (fails >= SKILL_TRANSFER_CLAIM_FAILS_PER_HOUR) throw registryError_('引き継ぎコードの入れまちがいが続いたため、1時間ほど受け付けません。')
+  var fail = function () {
+    try { cache.put(failKey, String(fails + 1), 3600) } catch (e) { /* 数えられなくても断る */ }
+    throw registryError_(SKILL_TRANSFER_CODE_INVALID)
+  }
+  if (!/^[A-Z0-9]{12}$/.test(code)) fail()
+  return withRegistryLock_(function () {
+    var rows = readRows_('SkillTransfers')
+    expireSkillTransfers_(rows, nowMs)
+    var hash = skillTransferCodeHash_(code)
+    var hit = null
+    var byId = {}
+    rows.forEach(function (r) {
+      byId[String(r.values.id)] = r
+      if (String(r.values.code_hash) === hash) hit = r
+    })
+    if (!hit || String(hit.values.status) !== 'pending') return fail()
+    if (String(hit.values.origin_org_id) === who.orgId) throw registryError_('同じ団体で作った引き継ぎコードは、この団体では使えません。')
+    var payload
+    try { payload = JSON.parse(String(hit.values.payload_json || '{}')) } catch (e) { payload = {} }
+    var originName = String(hit.values.origin_org_name || '')
+    var own = cleanSkillRecord_(payload.own)
+    var entries = [{ transferId: String(hit.values.id), originKey: String(hit.values.origin_key || ''), originOrgName: originName, exportedAt: isoOf_(hit.values.created_at), via: '',
+      points: own.points, levels: own.levels, qualifications: own.qualifications }]
+    ;(Array.isArray(payload.carried) ? payload.carried : []).forEach(function (c) {
+      var prev = byId[String(c.transferId || '')]
+      if (!prev) return
+      var rec = cleanSkillRecord_(c)
+      entries.push({ transferId: String(prev.values.id), originKey: String(prev.values.origin_key || ''), originOrgName: String(prev.values.origin_org_name || ''), exportedAt: isoOf_(prev.values.created_at),
+        via: originName, points: rec.points, levels: rec.levels, qualifications: rec.qualifications })
+    })
+    setRowFields_('SkillTransfers', hit.row, { status: 'claimed', payload_json: '', claimed_org_id: who.orgId, claimed_at: new Date(nowMs).toISOString() })
+    appendAudit_({ actor: 'org:' + who.orgId, action: 'claimSkillTransfer', target: String(hit.values.id), after: { entries: entries.length } })
+    return { ok: true, result: { entries: entries } }
+  })
+}
+
+// { action: 'cancelSkillTransfer', orgId, ts, transferId, sig }(sig の extra は transferId)。作った団体だけが、待ちのものを取り消せる
+function cancelSkillTransfer_(body, nowMs) {
+  var id = String(body.transferId || '')
+  var who = verifySkillTransferSig_(body, 'cancel', id, nowMs)
+  return withRegistryLock_(function () {
+    var rows = readRows_('SkillTransfers')
+    expireSkillTransfers_(rows, nowMs)
+    var hit = null
+    rows.forEach(function (r) { if (String(r.values.id) === id) hit = r })
+    if (!hit || String(hit.values.origin_org_id) !== who.orgId) throw registryError_('その引き継ぎコードは見つかりません。')
+    if (String(hit.values.status) !== 'pending') return { ok: true, result: { status: String(hit.values.status) } }
+    setRowFields_('SkillTransfers', hit.row, { status: 'cancelled', payload_json: '' })
+    appendAudit_({ actor: 'org:' + who.orgId, action: 'cancelSkillTransfer', target: id })
+    return { ok: true, result: { status: 'cancelled' } }
+  })
+}
+

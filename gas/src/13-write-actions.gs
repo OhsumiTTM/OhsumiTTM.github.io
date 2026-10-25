@@ -712,6 +712,18 @@ function runWriteAction_(body, actingMember) {
     case 'awardSkillPoints':
       result = awardSkillPoints_(body.taskId, body.memberId, body.points || {}, actingMember)
       break
+    case 'createSkillTransferCode':
+      result = createSkillTransferCode_(actingMember.id)
+      break
+    case 'cancelSkillTransferCode':
+      result = cancelSkillTransferCode_(actingMember.id, body.transferId)
+      break
+    case 'claimSkillTransferCode':
+      result = claimSkillTransferCode_(actingMember.id, body.code)
+      break
+    case 'removeTransferredSkills':
+      result = removeTransferredSkills_(body.memberId, body.transferId)
+      break
     case 'importPortableRecord':
       result = importPortableRecord_(body.memberId, body.skillPoints || {}, body.qualifications || [], actingMember)
       break
