@@ -243,7 +243,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.25-1'
+var REGISTRY_VERSION = '2026.10.25-2'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -3873,7 +3873,11 @@ function planReleasesView_(nowMs) {
     if (plans.length) pendingSecurity.push({ version: v.version, plans: plans })
   })
   return {
-    plans: PLANS.map(function (p) { return merged_(pr.byPlan[p], counts[p]) }),
+    // siteVersion: そのプランの団体が使う画面の版(resolveOrg と同じ決め方。'' は main の画面)
+    plans: PLANS.map(function (p) {
+      var v = pr.byPlan[p].version
+      return merged_(merged_(pr.byPlan[p], counts[p]), { siteVersion: p === 'internal' || !v || v === pr.newest ? '' : v })
+    }),
     newest: pr.newest,
     fallback: pr.fallback,
     released: pr.released,

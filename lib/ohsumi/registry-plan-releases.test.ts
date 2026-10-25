@@ -1,5 +1,6 @@
 // プランと配る版(レジストリ): 登録コードで選ぶプラン、FSIF の団体(internal)、プランごとに配る版(PlanReleases)と、
 // それを基準にした版の判定・checkIn の返事・管理画面の「プランごとに配る版」
+import { planScreenStatus } from '../registry/admin-api'
 import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { setup, type TokenInfo, checkInTs } from './registry-harness'
@@ -290,5 +291,26 @@ describe('プランごとの画面の版(resolveOrg の siteVersion)', () => {
     const r = t.post({ action: 'resolveOrg', orgId: ORGS[0] }).result
     expect(r.status).toBe('suspended')
     expect(r.siteVersion).toBe('')
+  })
+
+  it('管理画面の「プランと配る版」に、プランごとの画面の版を出す(resolveOrg と同じ決め方)', () => {
+    const t = ready({ plans: ['ohsumi', 'internal', 'cosmo_base'] })
+    t.release('ohsumi', V1)
+    t.release('internal', V2)
+    const plans = t.overview().planReleases.plans as { plan: string; siteVersion: string }[]
+    const screen = (p: string) => plans.find((x) => x.plan === p)!.siteVersion
+    expect(screen('ohsumi')).toBe(V1)
+    expect(screen('internal')).toBe('')
+    expect(screen('cosmo_base')).toBe(site(t, ORGS[2]))
+    t.release('ohsumi', V3)
+    expect((t.overview().planReleases.plans as { plan: string; siteVersion: string }[]).find((x) => x.plan === 'ohsumi')!.siteVersion).toBe('')
+  })
+
+  it('画面の版がサイトに置かれているか(/_v/index.json の一覧)', () => {
+    expect(planScreenStatus('', null)).toBe('main')
+    expect(planScreenStatus(undefined, [V1])).toBe('main')
+    expect(planScreenStatus(V1, [V1, V2])).toBe('built')
+    expect(planScreenStatus(V1, [V2])).toBe('missing')
+    expect(planScreenStatus(V1, null)).toBe('unknown')
   })
 })

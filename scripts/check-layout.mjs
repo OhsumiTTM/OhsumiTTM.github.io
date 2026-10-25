@@ -291,10 +291,11 @@ function planReleasesFake(versions = {}) {
   const row = (plan, version, extra = {}) => ({ plan, setting: version, version: versions[plan] ?? version, source: 'set', problem: '', templateUrl: '', note: '', updatedAt: '', updatedBy: '', orgs: 1, outdated: 0, updateRequired: 0, ...extra })
   return {
     plans: [
-      row('cosmo_base', '2026.10.01-1', { outdated: 1 }),
-      row('ohsumi', '2026.10.01-1', { templateUrl: 'https://docs.google.com/spreadsheets/d/' + 'T'.repeat(44) + '/copy', note: 'FSIF で1週間確かめてから広げる'.repeat(2), updatedAt: new Date(Date.UTC(2026, 9, 2)).toISOString(), updatedBy: 'registry.admin.with.a.long.address@example.com' }),
-      row('paid', '2026.10.01-1', { orgs: 0 }),
-      row('internal', 'latest', { version: versions.internal ?? GAS_CURRENT, source: 'latest' }),
+      // 画面の版: 置いてある版(LAYOUT_SITE_VERSION)と、置いていない版(注意を出す)
+      row('cosmo_base', '2026.10.01-1', { outdated: 1, siteVersion: '2026.10.01-1' }),
+      row('ohsumi', '2026.10.01-1', { siteVersion: LAYOUT_SITE_VERSION, templateUrl: 'https://docs.google.com/spreadsheets/d/' + 'T'.repeat(44) + '/copy', note: 'FSIF で1週間確かめてから広げる'.repeat(2), updatedAt: new Date(Date.UTC(2026, 9, 2)).toISOString(), updatedBy: 'registry.admin.with.a.long.address@example.com' }),
+      row('paid', '2026.10.01-1', { orgs: 0, siteVersion: '2026.10.01-1' }),
+      row('internal', 'latest', { version: versions.internal ?? GAS_CURRENT, source: 'latest', siteVersion: '' }),
     ],
     newest: GAS_CURRENT, fallback: '2026.10.01-1', released: [GAS_CURRENT, '2026.11.01-1', '2026.10.01-1'], removable: ['2026.11.01-1'],
     pendingSecurity: [{ version: GAS_CURRENT, plans: ['cosmo_base', 'ohsumi', 'paid'] }],
@@ -1437,6 +1438,11 @@ async function run({ build = true } = {}) {
           for (const want of ['FSIF で1週間確かめてから広げる', '一番新しい版に付いていく', 'サイトから外してよい版', '2026.11.01-1', 'TTTT']) {
             if (!(await panel()).includes(want)) throw new Error('プランごとに配る版に「' + want + '」が出ません')
           }
+          // プランごとの画面の版: 置いてある版は「作成済み」、置いていない版は注意(/_v/index.json は LAYOUT_SITE_VERSION だけ)
+          await sleep(300)
+          const screens = JSON.parse(await evaluate(`JSON.stringify({ ohsumi: document.querySelector('[data-plan-screen="ohsumi"]')?.textContent ?? '', cosmo: document.querySelector('[data-plan-screen="cosmo_base"]')?.textContent ?? '', internal: document.querySelector('[data-plan-screen="internal"]')?.textContent ?? '', missing: document.querySelector('[data-plan-screen-missing]')?.textContent ?? '', built: document.querySelector('[data-plan-screen-built]')?.textContent ?? '' })`))
+          if (!screens.ohsumi.includes('作成済み') || !screens.cosmo.includes('この版の画面がありません') || !screens.internal.includes('main')) throw new Error('プランごとの画面の版が出ません: ' + JSON.stringify(screens))
+          if (!screens.missing.includes('Cosmo Baseプラン') || !screens.built.includes(LAYOUT_SITE_VERSION)) throw new Error('画面の版が無い時の注意・置いた版の一覧が出ません: ' + JSON.stringify(screens))
           await evaluate(`[...document.querySelectorAll('[data-plan-release="ohsumi"] button')].find((b) => b.textContent.includes('変える'))?.click()`)
           await sleep(200)
           await evaluate(`(() => {
