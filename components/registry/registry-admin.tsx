@@ -60,6 +60,8 @@ import {
   SURVEY_STATE_LABELS,
   cancelSurvey,
   markSurveyAnswered,
+  checkSurveyResponses,
+  SURVEY_CODE_PLACEHOLDER,
   overdueSurveys,
   saveAdminTab,
   scheduleSurveyRestriction,
@@ -1423,6 +1425,7 @@ function SurveysPanel({ overview, session, onChanged, onAuthError }: { overview:
   return (
     <div className="space-y-5">
       <SendSurveyForm overview={overview} session={session} onChanged={onChanged} onAuthError={onAuthError} />
+      <SurveyAutoCheckPanel overview={overview} session={session} onChanged={onChanged} onAuthError={onAuthError} />
 
       <section data-survey-overdue className="rounded-lg border border-border p-3">
         <h2 className="text-sm font-medium">期限を過ぎて回答が無い団体({overdue.length})</h2>
@@ -1482,6 +1485,54 @@ function SurveysPanel({ overview, session, onChanged, onAuthError }: { overview:
   )
 }
 
+// 回答の自動の確認: 最後に確かめた結果(回答済みにした団体・照合できない回答の行番号・開けない回答先)と「今すぐ確かめる」
+function SurveyAutoCheckPanel({ overview, session, onChanged, onAuthError }: { overview: Overview; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+  const last = overview.surveyAutoCheck ?? null
+  const hasAuto = (overview.surveys ?? []).some((s) => s.autoCheck)
+  if (!hasAuto && !last) return null
+  const orgName = (id: string) => overview.orgs.find((o) => o.orgId === id)?.displayName || id
+  const run = async () => {
+    setBusy(true)
+    setMessage(null)
+    try {
+      const res = await checkSurveyResponses(session)
+      setMessage(res.answered.length ? `回答済みにしました: ${res.answered.map((a) => orgName(a.orgId)).join('、')}` : '新しく回答済みにした団体はありません。')
+      onChanged()
+    } catch (err) {
+      if (err instanceof RegistryError && err.authError) onAuthError(err.message)
+      else setMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section data-survey-autocheck className="space-y-2 rounded-lg border border-border p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-medium">回答の自動の確認</h2>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => void run()} data-survey-check-now>今すぐ確かめる</Button>
+      </div>
+      <p className="text-muted-foreground">毎日の処理で、回答先のスプレッドシートの「受付コード」の列を読み、回答のあった団体を回答済みにします。照合できない回答は、今までどおり手で「回答済みにする」を押してください。</p>
+      {message && <p className="break-words">{message}</p>}
+      {last && (
+        <dl className="space-y-0.5">
+          <Field label="最後に確かめた日時">{fmt(last.at)}</Field>
+          <Field label="自動で回答済み">{last.answered.length ? last.answered.map((a) => orgName(a.orgId)).join('、') : 'なし'}</Field>
+          {last.unmatched.map((u) => (
+            <Field key={u.sheetId} label="照合できない回答">
+              <span className="break-all">{u.count}件(行 {u.rows.join('・')}{u.count > u.rows.length ? ' …' : ''})</span>
+            </Field>
+          ))}
+          {last.errors.map((e) => (
+            <Field key={e.sheetId} label="確かめられない回答先"><span className="break-words text-destructive">{e.error}</span></Field>
+          ))}
+        </dl>
+      )}
+    </section>
+  )
+}
+
 function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overview: Overview; session: AdminSession; onChanged: () => void; onAuthError: (m?: string) => void }) {
   const [title, setTitle] = useState('')
   const [formUrl, setFormUrl] = useState('')
@@ -1490,6 +1541,8 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
   const [plan, setPlan] = useState<Plan>('ohsumi')
   const [orgIds, setOrgIds] = useState<string[]>([])
   const [reason, setReason] = useState('')
+  const [codeTemplate, setCodeTemplate] = useState('')
+  const [sheetUrl, setSheetUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [result, setResult] = useState<SendSurveyResult | null>(null)
@@ -1503,14 +1556,17 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
     if (!title.trim()) return setMessage('アンケートの名前を入れてください。')
     if (!/^https:\/\/(docs\.google\.com\/forms\/|forms\.gle\/)/.test(formUrl.trim())) return setMessage('Google フォームの URL(https://docs.google.com/forms/… か https://forms.gle/…)を入れてください。')
     if (kind === 'orgs' && !orgIds.length) return setMessage('送る団体を選んでください。')
+    if (!!codeTemplate.trim() !== !!sheetUrl.trim()) return setMessage('回答を自動で確かめるには、受付コードを入れたリンクと、回答先のスプレッドシートの両方を入れてください(使わない時は両方とも空にします)。')
+    if (codeTemplate.trim() && !codeTemplate.includes(SURVEY_CODE_PLACEHOLDER)) return setMessage(`受付コードを入れたリンクには、受付コードの質問に ${SURVEY_CODE_PLACEHOLDER} と入れて作ったリンクを貼ってください。`)
     setBusy(true)
     setMessage(null)
     setResult(null)
     try {
       const target = kind === 'plan' ? { kind, plan } : kind === 'orgs' ? { kind, orgIds } : { kind }
-      const res = await sendSurvey(session, { title: title.trim(), formUrl: formUrl.trim(), sendDate, target, reason })
+      const auto = codeTemplate.trim() ? { codeLinkTemplate: codeTemplate.trim(), responseSheetUrl: sheetUrl.trim() } : {}
+      const res = await sendSurvey(session, { title: title.trim(), formUrl: formUrl.trim(), sendDate, target, reason, ...auto })
       setResult(res)
-      if (res.sent.length) { setTitle(''); setFormUrl(''); setOrgIds([]); setReason('') }
+      if (res.sent.length) { setTitle(''); setFormUrl(''); setOrgIds([]); setReason(''); setCodeTemplate(''); setSheetUrl('') }
       onChanged()
     } catch (err) {
       if (err instanceof RegistryError && err.authError) onAuthError(err.message)
@@ -1539,6 +1595,23 @@ function SendSurveyForm({ overview, session, onChanged, onAuthError }: { overvie
         Google フォームの URL
         <input className={inputClass} type="url" inputMode="url" value={formUrl} onChange={(e) => setFormUrl(e.target.value)} maxLength={300} placeholder="https://docs.google.com/forms/d/e/…/viewform" />
       </label>
+      <fieldset data-survey-auto className="space-y-1.5 rounded-md bg-muted/40 p-2 text-xs">
+        <legend className="px-1">回答を自動で確かめる(任意)</legend>
+        <p className="text-muted-foreground">
+          フォームに「受付コード」という質問を作り、「事前入力したリンクを取得」で受付コードに {SURVEY_CODE_PLACEHOLDER} と入れたリンクを貼ってください。団体ごとに違う受付コードを入れたリンクを送り、
+          回答先のスプレッドシートの「受付コード」の列だけを毎日読んで、回答のあった団体を自動で回答済みにします(ほかの答えは読みません)。回答先のスプレッドシートは、レジストリのアカウントが見られるようにしてください。
+        </p>
+        <label className="block">
+          受付コードを入れたリンク
+          <input className={inputClass} type="url" inputMode="url" value={codeTemplate} onChange={(e) => setCodeTemplate(e.target.value)} maxLength={1000}
+            placeholder={`https://docs.google.com/forms/d/e/…/viewform?usp=pp_url&entry.123=${SURVEY_CODE_PLACEHOLDER}`} data-survey-code-template />
+        </label>
+        <label className="block">
+          回答先のスプレッドシート
+          <input className={inputClass} type="url" inputMode="url" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} maxLength={500}
+            placeholder="https://docs.google.com/spreadsheets/d/…" data-survey-sheet-url />
+        </label>
+      </fieldset>
       <label className="block text-xs">
         送付日(日本時間)
         <input className={inputClass} type="date" value={sendDate} min={todayJst()} onChange={(e) => setSendDate(e.target.value)} />
@@ -1629,7 +1702,8 @@ function SurveyItem({ survey: s, session, onChanged, onAuthError }: { survey: Su
         <Field label="送付日・期限">{s.sendDate} 〜 {s.dueDate}{s.state === 'open' || s.state === 'overdue' ? `(${s.day}日目)` : ''}</Field>
         <Field label="送ったメール">{s.remindersSent.length ? s.remindersSent.map((d) => (d === 0 ? '送付' : `${d}日目`)).join('・') : 'まだ'}</Field>
         {s.restrictAt && <Field label="機能停止">{fmt(s.restrictAt)}</Field>}
-        {s.state === 'answered' && <Field label="回答済み">{fmt(s.answeredAt)}({s.answeredBy})</Field>}
+        {s.receiptCode && <Field label="受付コード"><span className="font-mono">{s.receiptCode}</span></Field>}
+        {s.state === 'answered' && <Field label="回答済み">{fmt(s.answeredAt)}({s.answeredHow === 'auto' ? '自動で確認' : s.answeredBy})</Field>}
         <Field label="送った人">{s.createdBy}</Field>
       </dl>
       {active && !cancelling && (

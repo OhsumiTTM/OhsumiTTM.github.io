@@ -200,6 +200,8 @@ function dailyRegistryBackup() {
       // 停止の予告(14日前・7日前・1日前)
       try { sendSuspensionNotices_(Date.now()) } catch (noticeErr) { console.error('停止の予告を送れませんでした: ' + noticeErr) }
       // アンケート: 送付日になったものと、リマインド(7・10・14・15・21・26・27日目)
+      // 回答の自動の確認(回答済みになったアンケートには、この後のリマインドを送らない)
+      try { checkSurveyResponses_(Date.now(), 'system:dailyRegistryBackup') } catch (checkErr) { console.error('アンケートの回答を確かめられませんでした: ' + checkErr) }
       try { sendSurveyMails_(Date.now()) } catch (surveyErr) { console.error('アンケートのメールを送れませんでした: ' + surveyErr) }
     } finally {
       _mailBatch = false
@@ -241,7 +243,7 @@ function removeOrphanTriggers_() {
 }
 
 // レジストリの GAS の版(日付の形。変えたら pnpm gas:version で上げる。lib/ohsumi/gas-version.test.ts)
-var REGISTRY_VERSION = '2026.10.24-8'
+var REGISTRY_VERSION = '2026.10.25-1'
 
 // シートと列(1行目の見出し)。列は見出しの名前で探す
 //   Orgs の列(R1-c〜R1-e で使う列も、今のうちに用意する):
@@ -282,7 +284,10 @@ var REGISTRY_SHEETS = {
   Secrets: ['org_id', 'registry_key', 'key_gen', 'updated_at', 'register_nonce_hash'],
   // アンケート(管理画面から送る)。send_date は送付日(日本時間の YYYY-MM-DD)、status は open / answered / cancelled、
   // reminders_json は送ったメール(送付日から何日目か)の記録
-  Surveys: ['survey_id', 'org_id', 'title', 'form_url', 'send_date', 'status', 'reminders_json', 'answered_at', 'answered_by', 'created_by', 'created_at', 'note'],
+  // 回答の自動の確認(v1.2): form_base は送った時のフォームの URL(form_url は受付コード入りのリンクになる)。receipt_code は団体ごと・アンケートごとの受付コード、
+  // response_sheet_id はフォームの回答先のスプレッドシート、answered_how は回答済みにした方法(manual / auto)
+  Surveys: ['survey_id', 'org_id', 'title', 'form_url', 'send_date', 'status', 'reminders_json', 'answered_at', 'answered_by', 'created_by', 'created_at', 'note',
+    'form_base', 'receipt_code', 'response_sheet_id', 'answered_how'],
   // お知らせ(管理画面から出す)。importance は normal / important / urgent、target_kind は all / plan / orgs
   Announcements: ['announcement_id', 'title', 'body', 'importance', 'target_kind', 'target_plan', 'target_org_ids', 'published_at', 'expires_at', 'created_by',
     'withdrawn_at', 'withdrawn_by'],
@@ -356,6 +361,7 @@ var REGISTRY_ACTIONS = {
   requestGasUpdate: function (body) { return requestGasUpdate_(body, Date.now()) },
   sendSurvey: function (body) { return sendSurvey_(body, Date.now()) },
   markSurveyAnswered: function (body) { return closeSurvey_(body, Date.now(), 'answered') },
+  checkSurveyResponses: function (body) { return checkSurveyResponsesAction_(body, Date.now()) },
   cancelSurvey: function (body) { return closeSurvey_(body, Date.now(), 'cancelled') },
   scheduleSurveyRestriction: function (body) { return scheduleSurveyRestriction_(body, Date.now()) },
   fetchAnnouncements: function (body) { return fetchAnnouncements_(body, Date.now()) },
@@ -874,6 +880,7 @@ function adminOverview_(body, nowMs) {
       surveys: so.surveys,
       surveyLimits: so.surveyLimits,
       survey12mCounts: so.survey12mCounts,
+      surveyAutoCheck: lastSurveyAutoCheck_(),
       announcements: announcementList_(nowMs),
       diagnostics: diagnosticsList_(),
       mailQueue: mailQueueStatus_(),
@@ -2053,6 +2060,10 @@ function surveySummary_(values, orgValues, nowMs) {
     remindersSent: surveyRemindersSent_(values).map(function (r) { return Number(r.day) }),
     answeredAt: isoOf_(values.answered_at),
     answeredBy: String(values.answered_by || ''),
+    // 回答の自動の確認: 受付コード・回答先のスプレッドシートがあるか・回答済みにした方法(manual / auto)
+    receiptCode: String(values.receipt_code || ''),
+    autoCheck: !!String(values.response_sheet_id || ''),
+    answeredHow: String(values.answered_how || ''),
     createdBy: String(values.created_by || ''),
     createdAt: isoOf_(values.created_at),
     restrictAt: restrictAt ? new Date(restrictAt).toISOString() : '',
@@ -2151,8 +2162,20 @@ function sendSurvey_(body, nowMs) {
   var orgIds = kind === 'orgs' && Array.isArray(target.orgIds) ? target.orgIds.map(String) : []
   if (kind === 'orgs' && !orgIds.length) throw registryError_('送る団体を選んでください。')
   var reason = cleanText_(body.reason, 500)
+  // 回答の自動の確認(任意): 受付コードを入れたリンクのひな形(Google フォームの「事前入力したリンク」で、受付コードの質問に OHSUMI_CODE と入れたもの)と、回答先のスプレッドシート
+  var codeTemplate = cleanText_(body.codeLinkTemplate, 1000)
+  var sheetUrl = cleanText_(body.responseSheetUrl, 500)
+  if (codeTemplate && (!SURVEY_CODE_TEMPLATE_PATTERN.test(codeTemplate) || codeTemplate.indexOf(SURVEY_CODE_PLACEHOLDER) < 0)) {
+    throw registryError_('受付コードを入れたリンクは、Google フォームの「事前入力したリンクを取得」で、受付コードの質問に ' + SURVEY_CODE_PLACEHOLDER + ' と入れて作ったリンクを貼ってください。')
+  }
+  if (codeTemplate.replace(SURVEY_CODE_PLACEHOLDER, 'XXXX-XXXX').length > SURVEY_FORM_URL_MAX) throw registryError_('受付コードを入れたリンクは' + SURVEY_FORM_URL_MAX + '文字までにしてください。')
+  var sheetId = sheetUrl ? spreadsheetIdOf_(sheetUrl) : ''
+  if (sheetUrl && !sheetId) throw registryError_('回答先のスプレッドシートの URL(https://docs.google.com/spreadsheets/d/…)を入れてください。')
+  if (!!codeTemplate !== !!sheetId) throw registryError_('回答を自動で確かめるには、受付コードを入れたリンクと、回答先のスプレッドシートの両方を入れてください(使わない時は両方とも空にします)。')
   return withRegistryLock_(function () {
     var orgRows = readRows_('Orgs').filter(function (r) { return String(r.values.org_id || '') })
+    var usedCodes = {}
+    readRows_('Surveys').forEach(function (r) { if (String(r.values.receipt_code || '')) usedCodes[String(r.values.receipt_code)] = true })
     var targets = orgRows.filter(function (r) {
       if (kind === 'plan') return String(r.values.plan || '') === String(target.plan)
       if (kind === 'orgs') return orgIds.indexOf(String(r.values.org_id)) >= 0
@@ -2172,13 +2195,19 @@ function sendSurvey_(body, nowMs) {
       else if (PLANS.indexOf(plan) < 0) skip = 'プランが未設定です(先にプランを記録してください)。'
       else if (orgDisplayState_(r.values, nowMs).state === 'suspended') skip = '提供停止中です。'
       else if (SURVEY_YEAR_LIMITS[plan] && surveyPeak12m_(surveySendDates_(surveys, orgId), sendDate) > SURVEY_YEAR_LIMITS[plan]) skip = PLAN_LABELS[plan] + 'の上限(直近12か月で' + SURVEY_YEAR_LIMITS[plan] + '件)を超えます。'
-      else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
+      else if (surveys.some(function (s) { return String(s.values.org_id) === orgId && String(s.values.form_base || s.values.form_url) === formUrl && ['answered', 'cancelled'].indexOf(String(s.values.status)) < 0 })) {
         skip = '同じフォームのアンケートを、回答待ちで送っています。'
       }
       if (skip) { skipped.push({ orgId: orgId, reason: skip }); return }
       var surveyId = 'sv_' + generateSecret_().replace(/[^A-Za-z0-9]/g, '').slice(0, 12)
-      var values = { survey_id: surveyId, org_id: orgId, title: title, form_url: formUrl, send_date: sendDate, status: 'open', reminders_json: '[]',
-        created_by: session.sub, created_at: new Date(nowMs).toISOString(), note: reason }
+      var receiptCode = ''
+      if (codeTemplate) {
+        do { receiptCode = generateSurveyReceiptCode_() } while (usedCodes[receiptCode])
+        usedCodes[receiptCode] = true
+      }
+      var values = { survey_id: surveyId, org_id: orgId, title: title, form_url: codeTemplate ? codeTemplate.replace(SURVEY_CODE_PLACEHOLDER, receiptCode) : formUrl,
+        send_date: sendDate, status: 'open', reminders_json: '[]', created_by: session.sub, created_at: new Date(nowMs).toISOString(), note: reason,
+        form_base: formUrl, receipt_code: receiptCode, response_sheet_id: sheetId, answered_how: '' }
       appendRowByHeaders_('Surveys', values)
       var mailed = 0
       if (sendDate === today && !orgDeliversMail_(r.values, nowMs)) {
@@ -2193,7 +2222,7 @@ function sendSurvey_(body, nowMs) {
       sent.push({ orgId: orgId, surveyId: surveyId, mailed: mailed })
     })
     appendAudit_({ actor: session.sub, action: 'sendSurvey', target: kind === 'plan' ? 'plan:' + target.plan : kind === 'all' ? 'all' : orgIds.join(','),
-      after: { title: title, formUrl: formUrl, sendDate: sendDate, sent: sent.map(function (s) { return s.orgId }), skipped: skipped }, reason: reason })
+      after: { title: title, formUrl: formUrl, sendDate: sendDate, autoCheck: !!sheetId, sent: sent.map(function (s) { return s.orgId }), skipped: skipped }, reason: reason })
     return { ok: true, result: { sent: sent, skipped: skipped } }
   })
 }
@@ -2224,7 +2253,7 @@ function closeSurvey_(body, nowMs, status) {
     if (before === 'answered') throw registryError_('このアンケートは、回答済みです。')
     if (before === 'cancelled') throw registryError_('このアンケートは、取り消し済みです。')
     var fields = { status: status }
-    if (status === 'answered') { fields.answered_at = new Date(nowMs).toISOString(); fields.answered_by = session.sub }
+    if (status === 'answered') { fields.answered_at = new Date(nowMs).toISOString(); fields.answered_by = session.sub; fields.answered_how = 'manual' }
     setRowFields_('Surveys', row.row, fields)
     var lifted = clearSurveyRestriction_(row.values.survey_id, nowMs)
     var orgId = String(row.values.org_id)
@@ -4231,6 +4260,115 @@ function cancelSkillTransfer_(body, nowMs) {
     setRowFields_('SkillTransfers', hit.row, { status: 'cancelled', payload_json: '' })
     appendAudit_({ actor: 'org:' + who.orgId, action: 'cancelSkillTransfer', target: id })
     return { ok: true, result: { status: 'cancelled' } }
+  })
+}
+
+// ---- アンケートの回答の自動の確認(v1.2) ----
+//
+// 送る時に、団体ごと・アンケートごとの受付コードを入れたリンク(Google フォームの事前入力したリンク)を作って送る。
+// 毎日の処理と、管理画面の「今すぐ確かめる」で、フォームの回答先のスプレッドシートの「受付コード」の列だけを読み、
+// 回答のあった団体を自動で回答済みにする(手で回答済みにした時と同じく、リマインドとこのアンケートで入れた機能停止を止める)。
+// ほかの答えは読まない・残さない。コードの無い・合わない回答は、行番号だけを管理画面に出す
+var SURVEY_CODE_PLACEHOLDER = 'OHSUMI_CODE'
+var SURVEY_CODE_TEMPLATE_PATTERN = /^https:\/\/docs\.google\.com\/forms\/d\/e\/[A-Za-z0-9_-]+\/viewform\?[A-Za-z0-9_\-.=&%+]*entry\.\d+=OHSUMI_CODE[A-Za-z0-9_\-.=&%+]*$/
+var SURVEY_CODE_COLUMN = '受付コード'
+var SURVEY_UNMATCHED_SHOW = 50
+
+function generateSurveyReceiptCode_() {
+  var n = REGISTRATION_CODE_ALPHABET.length
+  var limit = Math.floor(256 / n) * n
+  var code = ''
+  while (code.length < 8) {
+    randomBytes_(16).forEach(function (b) { if (code.length < 8 && b < limit) code += REGISTRATION_CODE_ALPHABET.charAt(b % n) })
+  }
+  return code.slice(0, 4) + '-' + code.slice(4)
+}
+
+function normalizeReceiptCode_(v) {
+  var t = String(v === null || v === undefined ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  return t.length === 8 ? t.slice(0, 4) + '-' + t.slice(4) : ''
+}
+
+function spreadsheetIdOf_(url) {
+  var m = String(url || '').match(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]{20,100})(?:[\/?#].*)?$/)
+  return m ? m[1] : ''
+}
+
+// 回答先のスプレッドシートから、受付コードの列の値だけを読む。{ codes: [{ code, row }], error }
+function readSurveyReceiptCodes_(sheetId) {
+  var ss
+  try { ss = SpreadsheetApp.openById(sheetId) } catch (e) { return { codes: [], error: '回答先のスプレッドシートを開けません(レジストリのアカウントに閲覧の権限があるか確かめてください)。' } }
+  var sheets = ss.getSheets()
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i]
+    var width = sheet.getLastColumn()
+    var last = sheet.getLastRow()
+    if (width < 1 || last < 1) continue
+    var head = sheet.getRange(1, 1, 1, width).getValues()[0].map(String)
+    var col = -1
+    for (var c = 0; c < head.length; c++) if (head[c].indexOf(SURVEY_CODE_COLUMN) >= 0) { col = c; break }
+    if (col < 0) continue
+    if (last < 2) return { codes: [], error: '' }
+    var values = sheet.getRange(2, col + 1, last - 1, 1).getValues()
+    return { codes: values.map(function (r, j) { return { code: normalizeReceiptCode_(r[0]), row: j + 2 } }), error: '' }
+  }
+  return { codes: [], error: '回答先のスプレッドシートに「' + SURVEY_CODE_COLUMN + '」の列が見つかりません。フォームに「' + SURVEY_CODE_COLUMN + '」の質問があるか確かめてください。' }
+}
+
+// 確かめる(ロックの中で呼ぶ)。返事: { at, answered: [{ surveyId, orgId, title }], unmatched: [{ sheetId, count, rows }], errors: [{ sheetId, error }] }
+function checkSurveyResponses_(nowMs, actor) {
+  var today = jstDateKey_(nowMs)
+  var rows = readRows_('Surveys')
+  var bySheet = {}
+  rows.forEach(function (r) {
+    var sheetId = String(r.values.response_sheet_id || '')
+    if (!sheetId || !String(r.values.receipt_code || '')) return
+    ;(bySheet[sheetId] = bySheet[sheetId] || []).push(r)
+  })
+  var out = { at: new Date(nowMs).toISOString(), answered: [], unmatched: [], errors: [] }
+  Object.keys(bySheet).forEach(function (sheetId) {
+    var group = bySheet[sheetId]
+    var waiting = group.filter(function (r) {
+      return ['answered', 'cancelled'].indexOf(String(r.values.status || 'open')) < 0 && String(r.values.send_date || '') <= today
+    })
+    if (!waiting.length) return
+    var read = readSurveyReceiptCodes_(sheetId)
+    if (read.error) { out.errors.push({ sheetId: sheetId, error: read.error }); return }
+    var known = {}
+    group.forEach(function (r) { known[String(r.values.receipt_code)] = true })
+    var seen = {}
+    var unmatchedRows = []
+    // コードが無い・合わない回答は、行番号だけを残す
+    read.codes.forEach(function (c) {
+      if (c.code && known[c.code]) seen[c.code] = true
+      else unmatchedRows.push(c.row)
+    })
+    if (unmatchedRows.length) out.unmatched.push({ sheetId: sheetId, count: unmatchedRows.length, rows: unmatchedRows.slice(0, SURVEY_UNMATCHED_SHOW) })
+    waiting.forEach(function (r) {
+      if (!seen[String(r.values.receipt_code)]) return
+      var fields = { status: 'answered', answered_at: new Date(nowMs).toISOString(), answered_by: 'auto', answered_how: 'auto' }
+      setRowFields_('Surveys', r.row, fields)
+      var lifted = clearSurveyRestriction_(r.values.survey_id, nowMs)
+      appendAudit_({ actor: actor, action: 'markSurveyAnswered', target: String(r.values.org_id),
+        before: { surveyId: String(r.values.survey_id), status: String(r.values.status || 'open') }, after: { status: 'answered', how: 'auto', restrictionCleared: lifted } })
+      out.answered.push({ surveyId: String(r.values.survey_id), orgId: String(r.values.org_id), title: String(r.values.title || '') })
+    })
+  })
+  try { PropertiesService.getScriptProperties().setProperty('SURVEY_AUTO_CHECK', JSON.stringify(out)) } catch (e) { /* 覚えられなくても、今回の結果は返す */ }
+  return out
+}
+
+function lastSurveyAutoCheck_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('SURVEY_AUTO_CHECK') || 'null') } catch (e) { return null }
+}
+
+// 管理画面: 今すぐ確かめる。{ session }
+function checkSurveyResponsesAction_(body, nowMs) {
+  var props = registryProps_()
+  var session = verifyAdminSession_(body.session, props, nowMs)
+  return withRegistryLock_(function () {
+    var result = checkSurveyResponses_(nowMs, session.sub)
+    return { ok: true, result: result }
   })
 }
 
