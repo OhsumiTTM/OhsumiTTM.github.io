@@ -78,7 +78,7 @@ var READ_POLICY = {
     columns: {
       id: 'all', name: 'all', description: 'all', type: 'all', owner_id: 'all',
       member_ids: 'all', archived: 'all', parent_id: 'all', goal: 'all',
-      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all',
+      health_override: 'all', last_notified_health: 'all', start_date: 'all', end_date: 'all', wiki_page_ids: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },
@@ -99,7 +99,7 @@ var READ_POLICY = {
       completed_date: 'all', actual_hours: 'all', awarded_points_json: 'all',
       required_approvals: 'all', required_skill_levels_json: 'all', review_approvals_json: 'all',
       open_bid_applicant_ids: 'all', related_review_task_id: 'all', calendar_event_id: 'none',
-      deleted_at: 'all', deleted_by: 'all',
+      deleted_at: 'all', deleted_by: 'all', wiki_page_ids: 'all',
       row_version: 'all', row_updated_by: 'none',
     },
   },

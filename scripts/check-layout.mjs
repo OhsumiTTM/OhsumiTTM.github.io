@@ -61,6 +61,8 @@ export const STEPS = [
   { name: 'タスク詳細(長い名前・説明)', do: 'openTask', view: 'リスト', text: 'とても長いタスク名の例' },
   // タスクのリンク(?org=<団体>&task=<タスク>): 詳細を開くとアドレスバーに付き、閉じると消える。コピー・共有・リンクから開く・開けないタスク
   { name: 'タスク詳細(リンクのコピー・共有)', do: 'taskLink', view: 'リスト', text: '担当者が多いタスク' },
+  // ナレッジのページ(v1.2): つないだページの題(長い題)を出し、見る人が見られないページは出さない
+  { name: 'タスク詳細(ナレッジのページ)', do: 'taskWiki', view: 'リスト', text: '担当者が多いタスク' },
   // コメントへの返信: 「返信」で元のコメントの下に字下げして並べる
   { name: 'タスク詳細(コメントへの返信)', do: 'commentReply', view: 'リスト', text: 'コメントがとても多いタスク' },
   // 自分のページは「概要」から開く(「設定」のタブは無い。個人の設定は別の画面「個人設定」)
@@ -212,6 +214,19 @@ export const READ_ONLY_STEPS = [
 const WIKI_LAYOUT_BODY = ['# 経費精算', 'レシートを撮って、**その日のうちに**送ります。  ', '詳しくは [規程](https://example.com/a/very/long/url/that/should/wrap/' + 'x'.repeat(60) + ') を見てください。[危ないリンク](javascript:alert(1))',
   '## 手順', '1. 申請する', '2. 承認を待つ', '', '| 項目 | 説明 | とても長い列の名前の例 |', '| --- | --- | --- |', '| 交通費 | ' + 'とても長い説明'.repeat(10) + ' | 3 |', '',
   '```', 'const veryLongLineOfCode = "' + 'x'.repeat(120) + '"', '```', '> 引用の文', '---', '![レシートの例](wiki:layoutcheckimage01)'].join('\n')
+// ナレッジのページをつないだタスク(担当者が多いタスク)。wp_hidden は見る人の一覧に無いページで、画面には出さない
+function withWikiLinks(v) {
+  const t = v.Tasks
+  if (!t) return v
+  const headers = [...t.headers]
+  const rows = t.rows.map((r) => [...r])
+  let col = headers.indexOf('wiki_page_ids')
+  if (col < 0) { headers.push('wiki_page_ids'); rows.forEach((r) => r.push('')); col = headers.length - 1 }
+  const title = headers.indexOf('title')
+  rows.forEach((r) => { if (String(r[title]).includes('担当者が多いタスク')) r[col] = 'wp_1,wp_hidden' })
+  return { ...v, Tasks: { ...t, headers, rows } }
+}
+
 export const LAYOUT_READ_ACTIONS = ['ping', 'getLoginConfig', 'exchangeIdToken', 'getInitialData', 'getBackgroundData', 'getMyEmails', 'getMyStorage', 'getOrgStorage', 'searchArchivedTasks', 'getExpenses',
   'getFiles', 'getWebhookStatus', 'getMailQuotaStatus', 'getGasUpdateStatus', 'getBackupStatus', 'listBackups', 'createBackupNow', 'previewRestore', 'searchBackupTasks', 'getPersonalDataStatus', 'getRecordRowsStatus', 'getMyDigest', 'getOpsStatus', 'getUsageStatus', 'getMetricsStatus', 'getApprovalLog', 'listWikiPages', 'getWikiPage', 'getWikiRevision', 'getWikiProposal', 'searchWiki', 'getAnnouncements', 'getDiagnostics', 'sendDiagnostics', 'getCandidates', 'getFormSubmissions', 'fetchDailyReports', 'translateText', 'revokeMySessions',
   'revokeMemberSessions', 'updateLastLogin', 'getInviteMailStatus', 'sendInviteLinkToMe']
@@ -709,7 +724,7 @@ async function run({ build = true } = {}) {
   let member = MEMBER
   // レジストリへの呼び出しの数(操作ごと。KPI のタブが、選ぶまで読まないことを確かめる)
   const registryCalls = {}
-  let view = viewerData(MEMBER)
+  let view = withWikiLinks(viewerData(MEMBER))
   let caps = viewerCapabilities(MEMBER)
   const server = await serve(join(ROOT, 'out'))
   const base = `http://127.0.0.1:${server.address().port}`
@@ -980,7 +995,7 @@ async function run({ build = true } = {}) {
     const baseWidth = pass.width || WIDTH
     await send('Emulation.setDeviceMetricsOverride', { width: baseWidth, height: 800, deviceScaleFactor: baseWidth < 600 ? 2 : 1, mobile: baseWidth < 600 })
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: pass.dark ? 'dark' : 'light' }] })
-    view = viewerData(pass.member)
+    view = withWikiLinks(viewerData(pass.member))
     caps = viewerCapabilities(pass.member)
     for (const step of pass.steps) {
       try {
@@ -2032,6 +2047,14 @@ async function run({ build = true } = {}) {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
           await clickText(step.view); await sleep(800)
           await clickText(step.text, 'td, span, div, button'); await sleep(1200)
+        }
+        if (step.do === 'taskWiki') {
+          await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)
+          await clickText(step.view); await sleep(800)
+          await clickText(step.text, 'td, span, div, button'); await sleep(1500)
+          const got = JSON.parse(await evaluate(`JSON.stringify({ links: [...document.querySelectorAll('[data-task-wiki-links] [data-wiki-link]')].map((e) => e.getAttribute('data-wiki-link')) })`))
+          if (got.links.join(',') !== 'wp_1') throw new Error('タスクの詳細に、見られるナレッジのページだけが出ません: ' + JSON.stringify(got))
+          await evaluate(`document.querySelector('[data-task-wiki-links]').scrollIntoView({ block: 'center' }); true`); await sleep(300)
         }
         if (step.do === 'taskLink') {
           await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`); await sleep(300)

@@ -417,6 +417,8 @@ export interface Project {
   // PRJ-003: プロジェクトの期間(開始日/終了予定日)。任意項目
   startDate?: string // YYYY-MM-DD
   endDate?: string // YYYY-MM-DD
+  // つないだナレッジのページの ID(画面は、見られるページだけを出す。gas/src/43-wiki.gs)
+  wikiPageIds?: string[]
 }
 
 export type ProjectHealthLevel = 'good' | 'watch' | 'attention'
@@ -435,6 +437,7 @@ export interface ProjectTemplateTask {
   difficulty: Difficulty
   priority: Priority
   dependsOn?: string[] // template-local ids of prerequisite tasks in this template
+  wikiPageIds?: string[] // 作るタスクに引き継ぐナレッジのページ
 }
 
 // A reusable named task-set template (item 1: タスクのテンプレート化, e.g.
@@ -453,6 +456,7 @@ export interface TaskSetTemplateItem {
   difficulty: Difficulty
   priority: Priority
   dependsOn?: string[] // template-local ids of prerequisite items in this template
+  wikiPageIds?: string[] // 作るタスクに引き継ぐナレッジのページ
 }
 
 export interface TaskSetTemplate {
@@ -663,6 +667,8 @@ export interface Task {
   // APR-007: このタスクが「◯◯の確認待ち」タスクである場合、確認対象の
   // 元タスクのID。通常のタスクではundefined
   relatedReviewTaskId?: string
+  // つないだナレッジのページの ID(画面は、見られるページだけを出す。gas/src/43-wiki.gs)
+  wikiPageIds?: string[]
   // ゴミ箱に入れた日時(ISO)と、入れた人。ゴミ箱のタスクは代表・全権管理者にだけ届き、store の trashedTasks に入る
   deletedAt?: string
   deletedById?: string

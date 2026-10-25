@@ -72,6 +72,9 @@ function authorizeAction_(acting, action, body) {
     throw userError_(capabilityDeniedMessage_(capability))
   }
 
+  // プロジェクトにつなぐナレッジのページは、プロジェクトの責任者なら役職によらず付け外しできる
+  if (action === 'updateProjectWikiPages' && isProjectOwner_(body && body.projectId, acting)) return
+
   // --- 代表 or 班長 (任意の管理者ロール) ---
   var daihyoOrLeader = [
     'approveTask',          // タスク承認
@@ -84,6 +87,7 @@ function authorizeAction_(acting, action, body) {
     'removeTask',           // タスク削除
     'createProject',        // プロジェクト作成
     'updateProjectDetails', // プロジェクト詳細編集
+    'updateProjectWikiPages', // プロジェクトにつなぐナレッジのページ(責任者は上で許可済み)
     'updateProjectOwner',   // オーナー変更
     'updateProjectParent',  // 親プロジェクト変更
     'updateProjectArchived',// アーカイブ操作
@@ -311,6 +315,7 @@ function authorizeAction_(acting, action, body) {
     'notifyFormResult',
     'updateHistory',
     'updateDeliverables',
+    'updateTaskWikiPages',     // タスクにつなぐナレッジのページ(担当者・確認者・作成者・全権管理者: TASK_OWNER_SCOPED_ACTIONS)
     'setHoldReason',           // 保留理由の設定は担当者(または管理者)が本人操作
     'submitQuizResult',        // 検定の受験はログイン済み誰でも
     'submitExpenseApplication',// 経費申請はログイン済み誰でも
