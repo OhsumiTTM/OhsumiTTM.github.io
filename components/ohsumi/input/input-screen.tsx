@@ -903,10 +903,12 @@ export function InputScreen() {
                   return (
                     <li
                       key={tid}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-2.5 py-1.5"
+                      className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card px-2.5 py-1.5"
+                      data-input-history-task={tid}
                     >
-                      <span className="truncate text-sm">{t.name}</span>
-                      <StatusBadge status={t.status} />
+                      {/* 名前は切らずに折り返す(長い名前も中身が分かるように) */}
+                      <span className="min-w-0 break-words text-sm">{t.name}</span>
+                      <span className="shrink-0"><StatusBadge status={t.status} /></span>
                     </li>
                   )
                 })}
@@ -1566,7 +1568,8 @@ function parseText(text: string, projects: Project[]): ParsedTask[] {
     .filter((l) => l.length >= 3)
 
   return lines.map((line) => {
-    const name = line.length > 24 ? line.slice(0, 24) + '…' : line
+    // 1行(1文)をそのまま名前にする(切ると中身が分からなくなる。長い時は、登録の前に枠の中で直せる)
+    const name = line
     // left for the user to pick from the おすすめ chips in ParsedTaskCard —
     // auto-guessing a required skill from keywords was more often wrong
     // than right, so this only infers the department, not skills
