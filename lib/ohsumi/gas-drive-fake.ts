@@ -9,7 +9,9 @@ export function withDrive(h: H, opts: { failCopy?: boolean } = {}) {
   type File = { id: string; name: string; created: number; trashed: boolean; folder: string; sheets: Record<string, Cell[][]>; editorsRemoved: string[]; sharing: unknown[] }
   const files: File[] = []
   const copies: string[] = []
-  let now = Date.parse('2026-10-01T06:00:00+09:00')
+  // 作成日の既定は今の時刻(GAS のコードの Date.now() とそろえる。固定の日付だと、30日を過ぎると「戻す前」の分が片付けられてしまう)。
+  // 日付を決めたいテストは setNow で変える
+  let now = Date.now()
   const handle = (f: File) => noop({
     getId: () => f.id, getName: () => f.name, getDateCreated: () => new Date(f.created),
     setTrashed: (v: boolean) => { f.trashed = v },
