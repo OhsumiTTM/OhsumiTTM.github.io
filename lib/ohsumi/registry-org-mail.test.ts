@@ -140,13 +140,16 @@ describe('団体の GAS がメールを送る(対応した版)', () => {
 })
 
 describe('版で分ける', () => {
-  it('対応した版(ORG_MAIL_DELIVERY_SINCE)は、レジストリの版の一覧にあり、今の団体の GAS はその版以降で mailDone を送る', () => {
+  it('対応した版(ORG_MAIL_DELIVERY_SINCE)は、更新が要らない版(一番古い必須の版)より古く、今の団体の GAS はその版以降で mailDone を送る', () => {
     const root = join(__dirname, '..', '..')
     const registry = readFileSync(join(root, 'registry', 'Code.gs'), 'utf8')
     const code = readFileSync(join(root, 'gas', 'Code.gs'), 'utf8')
     const since = registry.match(/^var ORG_MAIL_DELIVERY_SINCE = '([^']+)'$/m)![1]
-    expect(registry).toContain(`{ version: '${since}',`)
     const t = ready()
+    // 一覧の一番古い必須の版(これより古い団体は更新が要る)が、対応した版以降(更新の要らない団体は、みな mailDone を送る)
+    const list = registry.slice(registry.indexOf('var KNOWN_GAS_VERSIONS = ['), registry.indexOf('\n]\n', registry.indexOf('var KNOWN_GAS_VERSIONS = [')))
+    const required = [...list.matchAll(/\{ version: '([^']+)', security: \w+, required: true/g)].map((m) => m[1])
+    expect(t.gas.compareGasVersions_(required.at(-1), since)).toBeGreaterThanOrEqual(0)
     const current = code.match(/^var OHSUMI_GAS_VERSION = '([^']+)'$/m)![1]
     expect(t.gas.compareGasVersions_(current, since)).toBeGreaterThanOrEqual(0)
     expect(code).toContain('mailDone: mailDone')
