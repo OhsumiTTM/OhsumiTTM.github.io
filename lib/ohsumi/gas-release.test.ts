@@ -33,8 +33,8 @@ describe('リポジトリの版ごとのコード', () => {
     if (folders.includes(current)) expect(read(`gas/releases/${current}/Code.gs`)).toBe(read('gas/Code.gs'))
   })
 
-  it('配る版の始まりは 2026.10.12-2(それより古い版はさかのぼって置かない)', () => {
-    expect(folders.at(-1)).toBe('2026.10.12-2')
+  it('サイトに置く版は 2026.10.12-2 以降(それより古い版はさかのぼって置かない。使わなくなった版は外す)', () => {
+    expect(folders.at(-1)! >= '2026.10.12-2').toBe(true)
   })
 
   it('ビルドの時に、版ごとの Code.gs・一番新しい Code.gs・一番新しい SampleData.gs をサイトに置く', () => {
